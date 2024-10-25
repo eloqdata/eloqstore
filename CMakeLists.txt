@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 
 find_package(Threads REQUIRED)
+find_package(glog REQUIRED)
 
 find_path(URING_INCLUDE_PATH NAMES liburing.h)
 find_library(URING_LIB NAMES uring)
@@ -52,6 +53,16 @@ target_link_libraries(btree_test PRIVATE ${URING_LIB} eloqstore)
 
 add_executable(io_test io_test.cpp)
 target_link_libraries(io_test ${URING_LIB})
+
+add_executable(queue_sync_test queue_sync_test.cpp)
+
+add_executable(cache_q_test cache_q_test.cpp)
+# target_compile_options(cache_q_test PRIVATE -fsanitize=address)
+# target_link_options(cache_q_test PRIVATE -fsanitize=address)
+target_link_libraries (cache_q_test glog::glog)
+
+# add_executable(proxy proxy.cc helpers.cc)
+# target_link_libraries(proxy ${URING_LIB})
 
 if (WITH_UNIT_TESTS)
     add_subdirectory(tests)
