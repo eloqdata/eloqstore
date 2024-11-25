@@ -1,6 +1,8 @@
 #include "write_task.h"
 
 #include <algorithm>
+#include <cassert>
+#include <cstdint>
 
 #include "global_variables.h"
 #include "index_page_manager.h"
@@ -313,8 +315,26 @@ void WriteTask::FinishDataPage(std::string_view page_view,
     io_req->page_.emplace<1>(&new_page);
     io_req->task_ = this;
     AllocatePage(io_req, page_id, file_page_id);
+    new_page.SetPageId(io_req->page_id_);
 
-    storage_manager->Write(io_req);
+    if (prev_req_ == nullptr)
+    {
+        uint32_t next =
+            stack_[stack_.size() - 1]->idx_page_iter_.PageId() == UINT32_MAX
+                ? UINT32_MAX
+                : data_page_.NextPageId();
+        new_page.SetNextPageId(next);
+        prev_req_ = io_req;
+    }
+    else
+    {
+        DataPage &prev_page = pending_pages_[pending_pages_.size() - 2];
+        assert(std::get<1>(prev_req_->page_) == &prev_page);
+        new_page.SetNextPageId(prev_page.NextPageId());
+        prev_page.SetNextPageId(io_req->page_id_);
+        storage_manager->Write(prev_req_);
+        prev_req_ = io_req;
+    }
 
     if (page_id == UINT32_MAX)
     {
@@ -433,7 +453,6 @@ void WriteTask::ApplyOnePage(size_t &cidx)
         if (!success)
         {
             // Finishes the current page.
-
             std::string_view page_view = data_page_builder_.Finish();
             FinishDataPage(
                 page_view, std::move(curr_page_key), page_id, file_page_id);
@@ -509,9 +528,16 @@ void WriteTask::ApplyOnePage(size_t &cidx)
         else
         {
             adv_type = AdvanceType::Changes;
-            new_key = change_key;
-            new_val = change_val;
-            new_ts = change_ts;
+            if (change_it->op_ == WriteOp::Delete)
+            {
+                new_key = std::string_view{};
+            }
+            else
+            {
+                new_key = change_key;
+                new_val = change_val;
+                new_ts = change_ts;
+            }
         }
 
         if (!new_key.empty())
@@ -557,9 +583,10 @@ void WriteTask::ApplyOnePage(size_t &cidx)
         ++change_it;
     }
 
-    assert(!data_page_builder_.IsEmpty());
     std::string_view page_view = data_page_builder_.Finish();
     FinishDataPage(page_view, std::move(curr_page_key), page_id, file_page_id);
+    storage_manager->Write(prev_req_);
+    prev_req_ = nullptr;
 
     cidx = cidx + std::distance(data_.begin() + cidx, change_end_it);
 }

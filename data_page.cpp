@@ -40,6 +40,16 @@ uint32_t DataPage::NextPageId() const
     return DecodeFixed32(page_.get() + next_page_offset);
 }
 
+void DataPage::SetPrevPageId(uint32_t page_id)
+{
+    EncodeFixed32(page_.get() + prev_page_offset, page_id);
+}
+
+void DataPage::SetNextPageId(uint32_t page_id)
+{
+    EncodeFixed32(page_.get() + next_page_offset, page_id);
+}
+
 void DataPage::Reset()
 {
     page_id_ = 0;
@@ -72,6 +82,24 @@ DataPageIter::DataPageIter(const DataPage *data_page,
       curr_offset_(DataPage::content_offset),
       curr_restart_idx_(0)
 {
+}
+
+void DataPageIter::Reset(const DataPage *data_page)
+{
+    if (data_page)
+    {
+        page_ = data_page->Page();
+        restart_num_ = data_page->RestartNum();
+        restart_offset_ =
+            data_page->ContentLength() - (1 + restart_num_) * sizeof(uint16_t);
+    }
+    else
+    {
+        page_ = std::string_view{};
+        restart_num_ = 0;
+        restart_offset_ = 0;
+    }
+    Reset();
 }
 
 void DataPageIter::Reset()

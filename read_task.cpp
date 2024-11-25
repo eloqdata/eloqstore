@@ -73,20 +73,29 @@ uint32_t ReadTask::SeekIndex(const TableIdent &tbl_ident,
                              MemIndexPage *node,
                              std::string_view key)
 {
-    IndexPageIter idx_it{node, idx_page_manager_->GetComparator()};
+    return ::kvstore::SeekIndex(
+        idx_page_manager_, page_mapping_.get(), tbl_ident, node, key);
+}
+
+uint32_t SeekIndex(IndexPageManager *idx_page_mgr,
+                   MappingSnapshot *mapping,
+                   const TableIdent &tbl_ident,
+                   MemIndexPage *node,
+                   std::string_view key)
+{
+    IndexPageIter idx_it{node, idx_page_mgr->GetComparator()};
     idx_it.Seek(key);
     uint32_t page_id = idx_it.PageId();
     if (node->IsPointingToLeaf() || page_id == UINT32_MAX)
     {
         // Updates the cache replacement list.
-        idx_page_manager_->EnqueuIndexPage(node);
+        idx_page_mgr->EnqueuIndexPage(node);
         return page_id;
     }
     else
     {
-        MemIndexPage *child =
-            idx_page_manager_->FindPage(page_mapping_.get(), page_id);
-        return SeekIndex(tbl_ident, child, key);
+        MemIndexPage *child = idx_page_mgr->FindPage(mapping, page_id);
+        return SeekIndex(idx_page_mgr, mapping, tbl_ident, child, key);
     }
 }
 }  // namespace kvstore

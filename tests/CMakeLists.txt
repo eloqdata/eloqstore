@@ -10,6 +10,7 @@ set(UTEST_SOURCES
     insert.cpp
     upsert.cpp
     small_pool.cpp
+    scan.cpp
 )
 
 string( REPLACE ".cpp" "" BASENAMES_UTEST "${UTEST_SOURCES}" )

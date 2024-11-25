@@ -14,6 +14,14 @@ class IndexPageManager;
 class MemIndexPage;
 class MappingSnapshot;
 
+// Given the table id, tree root and the input key, returns the logical page id
+// of the data page that might contain the key.
+uint32_t SeekIndex(IndexPageManager *idx_page_mgr,
+                   MappingSnapshot *mapping,
+                   const TableIdent &tbl_ident,
+                   MemIndexPage *node,
+                   std::string_view key);
+
 class ReadTask : public KvTask
 {
 public:

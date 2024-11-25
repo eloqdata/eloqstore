@@ -35,6 +35,7 @@ set(ELOQ_STORE_SOURCES
     index_page_manager.cpp
     write_task.cpp
     read_task.cpp
+    scan_task.cpp
     write_tree_stack.cpp
     async_io_manager.cpp
     data_page.cpp

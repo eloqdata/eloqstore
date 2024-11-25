@@ -20,6 +20,7 @@ enum class TaskStatus : uint8_t
 enum struct TaskType
 {
     Read = 0,
+    Scan,
     Write
 };
 

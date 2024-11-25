@@ -28,6 +28,8 @@ public:
     uint16_t RestartNum() const;
     uint32_t PrevPageId() const;
     uint32_t NextPageId() const;
+    void SetPrevPageId(uint32_t page_id);
+    void SetNextPageId(uint32_t page_id);
     void Reset();
     void SetPageId(uint32_t page_id);
     uint32_t PageId() const;
@@ -44,6 +46,7 @@ public:
     DataPageIter() = delete;
     DataPageIter(const DataPage *data_page, const Comparator *comparator);
 
+    void Reset(const DataPage *data_page);
     void Reset();
     std::string_view Key() const;
     std::string_view Value() const;
@@ -65,9 +68,9 @@ private:
                                    uint32_t *value_length);
 
     const Comparator *const cmp_;
-    std::string_view const page_;
-    uint16_t const restart_num_;
-    uint16_t const restart_offset_;
+    std::string_view page_;
+    uint16_t restart_num_;
+    uint16_t restart_offset_;
 
     uint16_t curr_offset_{DataPage::content_offset};
     uint16_t curr_restart_idx_{0};

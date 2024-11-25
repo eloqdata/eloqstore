@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <string>
 #include <variant>
 #include <vector>
@@ -145,7 +146,8 @@ private:
 
     std::vector<std::unique_ptr<IndexStackEntry>> stack_;
     DataPage data_page_;
-    std::vector<DataPage> pending_pages_;
+    std::deque<DataPage> pending_pages_;
+    WriteReq *prev_req_{nullptr};
 
     std::unique_ptr<PageMapper> mapper_{nullptr};
     MappingSnapshot *new_mapping_{nullptr};
