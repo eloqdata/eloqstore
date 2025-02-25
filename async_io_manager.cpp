@@ -116,7 +116,7 @@ KvError IouringMgr::ReadPage(const TableIdent &tbl_id,
     LruFD::Ref fd_ref = GetFD(tbl_id, file_id);
     if (fd_ref == nullptr)
     {
-        return KvError::IoFail;
+        return KvError::NotFound;
     }
     assert(buf_ring_);
     int res;
@@ -124,7 +124,7 @@ KvError IouringMgr::ReadPage(const TableIdent &tbl_id,
         ;
     if (res < options_->data_page_size)
     {
-        return KvError::IoFail;
+        return res < 0 ? ToKvError(res) : KvError::TryAgain;
     }
 
     if (!ValidPageCrc32(*ptr, options_->data_page_size))
@@ -151,7 +151,7 @@ KvError IouringMgr::WritePage(WriteReq *req)
     LruFD::Ref fd_ref = GetOrCreateFD(*req->tbl_ident_, file_id);
     if (fd_ref == nullptr)
     {
-        return KvError::IoFail;
+        return KvError::OpenFileLimit;
     }
 
     const char *ptr = req->page_.index() == 0
@@ -176,7 +176,7 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id)
     auto it_tbl = tables_.find(tbl_id);
     if (it_tbl == tables_.end())
     {
-        LOG(INFO) << "sync table partition was evicted " << tbl_id;
+        LOG(WARNING) << "sync table partition not found " << tbl_id;
         return KvError::NoError;
     }
 
@@ -202,7 +202,7 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id)
     if (err < 0)
     {
         LOG(ERROR) << "fsync data files failed " << tbl_id << ':' << err;
-        return KvError::IoFail;
+        return ToKvError(err);
     }
     return KvError::NoError;
 }
@@ -229,9 +229,31 @@ std::string IouringMgr::DataFileName(uint32_t file_id)
 {
     std::string name = "data_";
     std::stringstream ss;
-    ss << std::setw(6) << std::setfill('0') << file_id;
+    ss << std::setw(3) << std::setfill('0') << file_id;
     name.append(ss.str());
     return name;
+}
+
+KvError IouringMgr::ToKvError(int err_no)
+{
+    assert(err_no < 0);
+    switch (err_no)
+    {
+    case -ENOENT:
+        return KvError::NotFound;
+    case -EAGAIN:
+        return KvError::TryAgain;
+    case -ENOMEM:
+        return KvError::OutOfMem;
+    case -EBUSY:
+        return KvError::Busy;
+    case -EMFILE:
+        return KvError::OpenFileLimit;
+    case -ENOSPC:
+        return KvError::OutOfSpace;
+    default:
+        return KvError::IoFail;
+    }
 }
 
 std::pair<void *, IouringMgr::UserDataType> IouringMgr::DecodeUserData(
@@ -772,21 +794,21 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
     LruFD::Ref fd_ref = GetOrCreateFD(tbl_id, LruFD::kManifest);
     if (fd_ref == nullptr)
     {
-        return KvError::IoFail;
+        return KvError::OpenFileLimit;
     }
 
     int res = Write(fd_ref.FdPair(), log.data(), log.size(), manifest_size);
     if (res < 0)
     {
         LOG(ERROR) << "append manifest failed " << tbl_id;
-        return KvError::IoFail;
+        return ToKvError(res);
     }
 
     res = Fdatasync(fd_ref.FdPair());
     if (res < 0)
     {
         LOG(ERROR) << "fsync manifest failed " << tbl_id;
-        return KvError::IoFail;
+        return ToKvError(res);
     }
     return KvError::NoError;
 }
@@ -799,7 +821,7 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
     LruFD::Ref fd_ref = GetCachedFD(tbl_id, LruFD::kManifest);
     if (fd_ref == nullptr)
     {
-        return KvError::ReachLimit;
+        return KvError::OpenFileLimit;
     }
     auto [old_fd, registered] = fd_ref.FdPair();
     if (old_fd >= 0)
@@ -818,13 +840,13 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
     if (res < 0)
     {
         LOG(ERROR) << "init temporary manifest write failed " << res;
-        return KvError::IoFail;
+        return ToKvError(res);
     }
     res = Fdatasync(tmp_ref.FdPair());
     if (res < 0)
     {
         LOG(ERROR) << "init temporary manifest fsync failed " << res;
-        return KvError::IoFail;
+        return ToKvError(res);
     }
 
     // Switch manifest on disk
@@ -837,13 +859,13 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
     if (res < 0)
     {
         LOG(ERROR) << "switch manifest rename failed " << res;
-        return KvError::IoFail;
+        return ToKvError(res);
     }
     res = Fdatasync(dfd_ref.FdPair());
     if (res < 0)
     {
         LOG(ERROR) << "switch manifest fsync directory failed " << res;
-        return KvError::IoFail;
+        return ToKvError(res);
     }
 
     // Switch manifest in memory

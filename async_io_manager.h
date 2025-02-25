@@ -82,6 +82,7 @@ public:
     void CleanTable(const TableIdent &tbl_id) override;
 
     KvError SyncFiles(const TableIdent &tbl_id);
+    static std::string DataFileName(uint32_t file_id);
 
     static constexpr char mani_file[] = "manifest";
     static constexpr char mani_tmpfile[] = "manifest.tmp";
@@ -174,7 +175,7 @@ private:
         // char *buff_; // options_->data_page_size
     };
 
-    static std::string DataFileName(uint32_t file_id);
+    static KvError ToKvError(int err_no);
     static std::pair<void *, UserDataType> DecodeUserData(uint64_t user_data);
     static void *EncodeUserData(void *ptr, UserDataType type);
     std::pair<uint32_t, uint64_t> ConvFilePageId(uint32_t file_page_id) const;

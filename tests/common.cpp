@@ -188,7 +188,7 @@ void MapVerifier::Validate()
     REQUIRE(it == answer_.end());
 }
 
-std::string MapVerifier::Key(uint64_t k)
+std::string Key(uint64_t k)
 {
     constexpr int sz = 16;
     std::stringstream ss;

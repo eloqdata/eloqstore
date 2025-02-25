@@ -3,10 +3,14 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <iostream>
 #include <memory>
+#include <string>
+#include <utility>
 #include <vector>
 
-#include "eloq_store.h"
+#include "error.h"
 #include "kv_options.h"
 #include "table_ident.h"
 #include "tests/common.h"
@@ -146,4 +150,46 @@ TEST_CASE("complex LRU for opened fd", "[persist]")
             tbl->Upsert(0, 5000);
         }
     }
+}
+
+TEST_CASE("detect corrupted page", "[checksum]")
+{
+    InitStore();
+    kvstore::TableIdent tbl_id = {"detect-corrupted", 1};
+    kvstore::KvRequest req;
+    std::vector<kvstore::WriteDataEntry> entries;
+    for (size_t idx = 0; idx < 10; ++idx)
+    {
+        entries.emplace_back(
+            Key(idx), std::to_string(idx), 1, kvstore::WriteOp::Upsert);
+    }
+    req.SetWrite(tbl_id, std::move(entries));
+    req.ExecSync(eloqstore.get());
+
+    // corrupt it
+    std::string datafile = std::string(test_path) + '/' + tbl_id.ToString() +
+                           '/' + kvstore::IouringMgr::DataFileName(0);
+    std::fstream file(datafile,
+                      std::ios::binary | std::ios::out | std::ios::in);
+    REQUIRE(file);
+    char c;
+    file.seekg(10, std::ios::beg);
+    file.read(&c, 1);
+    REQUIRE(file);
+    c += 1;
+    file.seekp(10, std::ios::beg);
+    file.write(&c, 1);
+    REQUIRE(file);
+    file.sync();
+    REQUIRE(file);
+    file.close();
+
+    kvstore::KvError err;
+    req.SetScan(tbl_id, Key(0), Key(10));
+    err = req.ExecSync(eloqstore.get());
+    REQUIRE(err == kvstore::KvError::Corrupted);
+    // can't read success if the target key locate on the same page
+    req.SetRead(tbl_id, Key(0));
+    err = req.ExecSync(eloqstore.get());
+    REQUIRE(err == kvstore::KvError::Corrupted);
 }

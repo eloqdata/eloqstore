@@ -11,8 +11,8 @@
 
 #define MAPPING_BITS 2
 #define MAPPING_MASK ((1 << MAPPING_BITS) - 1)
-#define MAPPING_PHY_ID 1
-#define MAPPING_FREE (1 << 1)
+#define MAPPING_PHYSICAL 1
+#define MAPPING_LOGICAL (1 << 1)
 
 namespace kvstore
 {
@@ -36,10 +36,12 @@ struct MappingSnapshot
      * @param page
      */
     void Unswizzling(MemIndexPage *page);
-
     MemIndexPage *GetSwizzlingPointer(uint32_t page_id) const;
-
     void AddSwizzling(uint32_t page_id, MemIndexPage *idx_page);
+    static bool IsSwizzlingPointer(uint64_t val);
+
+    static bool IsFilePageId(uint64_t val);
+    static bool IsLogicalPageId(uint64_t val);
 
     void Serialize(std::string &dst) const;
 
@@ -76,9 +78,9 @@ public:
     uint32_t UseCount();
     void FreeMappingSnapshot();
 
-    static uint64_t EncodeFilePage(uint32_t file_page_id);
-    static uint32_t DecodeFilePage(uint64_t val);
-    static bool IsSwizzlingPointer(uint64_t val);
+    static uint64_t EncodeFilePageId(uint32_t file_page_id);
+    static uint64_t EncodeLogicalPageId(uint32_t page_id);
+    static uint32_t DecodePageId(uint64_t val);
 
     void Serialize(std::string &dst) const;
     std::string_view Deserialize(std::string_view src);
@@ -87,10 +89,9 @@ public:
 private:
     std::vector<uint64_t> &Mapping();
 
-    uint32_t ExpFilePage();
-    bool DequeFree(uint32_t page_id);
-    uint32_t PeekFree();
-    bool GetFreeFilePage(uint32_t fp_id);
+    uint32_t ExpandFilePage();
+    bool DequeFreePage(uint32_t page_id);
+    bool DelFreeFilePage(uint32_t file_page_id);
 
     /**
      * @brief Gets a free file page. The implementation now returns the smaller
@@ -107,7 +108,7 @@ private:
     uint32_t free_page_head_{UINT32_MAX};
 
     std::set<uint32_t> free_file_pages_;
-    uint32_t min_file_page_id_{1};
+    uint32_t min_file_page_id_{UINT32_MAX};
     uint32_t max_file_page_id_{0};
 
     friend class Replayer;

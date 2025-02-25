@@ -22,8 +22,9 @@ enum struct KvError : uint8_t
     BadOption,
     BadDir,
     WriteConflict,
-    ReachLimit,
-
+    OpenFileLimit,
+    TryAgain,
+    Busy,
     IoFail
 };
 }  // namespace kvstore

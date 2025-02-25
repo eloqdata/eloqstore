@@ -28,6 +28,8 @@ inline uint64_t ConvertIntKey(std::string_view key)
     return __builtin_bswap64(big_endian);
 }
 
+std::string Key(uint64_t k);
+
 class MapVerifier
 {
 public:
@@ -49,7 +51,6 @@ public:
     void SetStore(kvstore::EloqStore *store);
 
 private:
-    std::string Key(uint64_t k);
     void DoWriteReq();
 
     const kvstore::TableIdent tid_;

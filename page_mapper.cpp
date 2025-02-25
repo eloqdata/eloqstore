@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <unordered_set>
 
 #include "coding.h"
 #include "index_page_manager.h"
@@ -49,7 +50,7 @@ void PageMapper::FreePage(uint32_t page_id)
     assert(page_id < map.size());
     map[page_id] = free_page_head_ == UINT32_MAX
                        ? UINT32_MAX
-                       : (free_page_head_ << MAPPING_BITS) | MAPPING_FREE;
+                       : EncodeLogicalPageId(free_page_head_);
     free_page_head_ = page_id;
 }
 
@@ -92,13 +93,13 @@ uint32_t PageMapper::GetFilePage()
     }
     else
     {
-        fp_id = ExpFilePage();
+        fp_id = ExpandFilePage();
     }
 
     return fp_id;
 }
 
-uint32_t PageMapper::ExpFilePage()
+uint32_t PageMapper::ExpandFilePage()
 {
     uint32_t fp_id;
     if (min_file_page_id_ <= max_file_page_id_)
@@ -152,7 +153,8 @@ std::vector<uint64_t> &PageMapper::Mapping()
 void PageMapper::UpdateMapping(uint32_t page_id, uint32_t file_page_id)
 {
     assert(page_id < mapping_->mapping_tbl_.size());
-    mapping_->mapping_tbl_[page_id] = PageMapper::EncodeFilePage(file_page_id);
+    mapping_->mapping_tbl_[page_id] =
+        PageMapper::EncodeFilePageId(file_page_id);
 }
 
 uint32_t PageMapper::GetFreeFilePage()
@@ -171,27 +173,27 @@ uint32_t PageMapper::GetFreeFilePage()
     }
 }
 
-bool PageMapper::GetFreeFilePage(uint32_t fp_id)
+bool PageMapper::DelFreeFilePage(uint32_t file_page_id)
 {
-    return free_file_pages_.erase(fp_id);
+    return free_file_pages_.erase(file_page_id);
 }
 
-uint64_t PageMapper::EncodeFilePage(uint32_t file_page_id)
+uint64_t PageMapper::EncodeFilePageId(uint32_t file_page_id)
 {
-    return (file_page_id << MAPPING_BITS) | MAPPING_PHY_ID;
+    return (file_page_id << MAPPING_BITS) | MAPPING_PHYSICAL;
 }
 
-uint32_t PageMapper::DecodeFilePage(uint64_t val)
+uint64_t PageMapper::EncodeLogicalPageId(uint32_t page_id)
+{
+    return (page_id << MAPPING_BITS) | MAPPING_LOGICAL;
+}
+
+uint32_t PageMapper::DecodePageId(uint64_t val)
 {
     return val >> MAPPING_BITS;
 }
 
-bool PageMapper::IsSwizzlingPointer(uint64_t val)
-{
-    return (val & MAPPING_MASK) == 0;
-}
-
-bool PageMapper::DequeFree(uint32_t page_id)
+bool PageMapper::DequeFreePage(uint32_t page_id)
 {
     auto &map = Mapping();
     uint32_t prev = free_page_head_;
@@ -221,53 +223,51 @@ bool PageMapper::DequeFree(uint32_t page_id)
     return true;
 }
 
-uint32_t PageMapper::PeekFree()
-{
-    return free_page_head_;
-}
-
 void PageMapper::Serialize(std::string &dst) const
 {
     mapping_->Serialize(dst);
     PutVarint32(&dst, free_page_head_);
 
-    PutVarint32(&dst, free_file_pages_.size());
-    for (uint32_t id : free_file_pages_)
-    {
-        PutVarint32(&dst, id);
-    }
     PutVarint32(&dst, min_file_page_id_);
     PutVarint32(&dst, max_file_page_id_);
 }
 
 std::string_view PageMapper::Deserialize(std::string_view src)
 {
-    uint32_t sz, fp_id;
+    uint32_t sz, val;
+    std::unordered_set<uint32_t> used_file_pages;
 
     GetVarint32(&src, &sz);
     mapping_->mapping_tbl_.resize(sz);
     for (uint32_t i = 0; i < sz; i++)
     {
-        GetVarint32(&src, &fp_id);
-        mapping_->mapping_tbl_[i] = fp_id;
+        GetVarint32(&src, &val);
+        mapping_->mapping_tbl_[i] = val;
+
+        if (MappingSnapshot::IsFilePageId(val))
+        {
+            uint32_t fp_id = DecodePageId(val);
+            used_file_pages.insert(fp_id);
+        }
     }
     GetVarint32(&src, &free_page_head_);
 
-    GetVarint32(&src, &sz);
-    for (uint32_t i = 0; i < sz; i++)
-    {
-        GetVarint32(&src, &fp_id);
-        free_file_pages_.insert(fp_id);
-    }
     GetVarint32(&src, &min_file_page_id_);
     GetVarint32(&src, &max_file_page_id_);
+
+    for (uint32_t i = min_file_page_id_; i < max_file_page_id_; i++)
+    {
+        if (!used_file_pages.contains(i))
+        {
+            free_file_pages_.insert(i);
+        }
+    }
     return src;
 }
 
 bool PageMapper::EqualTo(const PageMapper &rhs) const
 {
     return free_page_head_ == rhs.free_page_head_ &&
-           free_file_pages_ == rhs.free_file_pages_ &&
            min_file_page_id_ == rhs.min_file_page_id_ &&
            max_file_page_id_ == rhs.max_file_page_id_ &&
            free_file_pages_ == rhs.free_file_pages_ &&
@@ -293,13 +293,12 @@ uint32_t MappingSnapshot::ToFilePage(uint32_t page_id) const
 {
     assert(page_id < mapping_tbl_.size());
     uint64_t val = mapping_tbl_[page_id];
-    assert(val & MAPPING_PHY_ID);
-    return PageMapper::DecodeFilePage(val);
+    assert(IsFilePageId(val));
+    return PageMapper::DecodePageId(val);
 }
 
 uint32_t MappingSnapshot::GetFilePage(uint32_t page_id) const
 {
-    assert((mapping_tbl_[page_id] & MAPPING_FREE) == 0);
     MemIndexPage *p = GetSwizzlingPointer(page_id);
     return p ? p->FilePageId() : ToFilePage(page_id);
 }
@@ -312,8 +311,8 @@ uint32_t MappingSnapshot::GetNextFree(uint32_t page_id) const
     {
         return UINT32_MAX;
     }
-    assert(val & MAPPING_FREE);
-    return val >> MAPPING_BITS;
+    assert(IsLogicalPageId(val));
+    return PageMapper::DecodePageId(val);
 }
 
 void MappingSnapshot::AddFreeFilePage(uint32_t file_page)
@@ -325,13 +324,12 @@ void MappingSnapshot::Unswizzling(MemIndexPage *page)
 {
     uint32_t page_id = page->PageId();
     uint32_t file_page_id = page->FilePageId();
-    assert((mapping_tbl_[page_id] & MAPPING_FREE) == 0);
 
     if (page_id < mapping_tbl_.size() &&
-        PageMapper::IsSwizzlingPointer(mapping_tbl_[page_id]) &&
+        IsSwizzlingPointer(mapping_tbl_[page_id]) &&
         reinterpret_cast<MemIndexPage *>(mapping_tbl_[page_id]) == page)
     {
-        mapping_tbl_[page_id] = PageMapper::EncodeFilePage(file_page_id);
+        mapping_tbl_[page_id] = PageMapper::EncodeFilePageId(file_page_id);
     }
 }
 
@@ -339,7 +337,7 @@ MemIndexPage *MappingSnapshot::GetSwizzlingPointer(uint32_t page_id) const
 {
     assert(page_id < mapping_tbl_.size());
     uint64_t val = mapping_tbl_[page_id];
-    if (PageMapper::IsSwizzlingPointer(val))
+    if (IsSwizzlingPointer(val))
     {
         MemIndexPage *idx_page = reinterpret_cast<MemIndexPage *>(val);
         return idx_page;
@@ -355,15 +353,30 @@ void MappingSnapshot::AddSwizzling(uint32_t page_id, MemIndexPage *idx_page)
     assert(page_id < mapping_tbl_.size());
 
     uint64_t val = mapping_tbl_[page_id];
-    if (PageMapper::IsSwizzlingPointer(val))
+    if (IsSwizzlingPointer(val))
     {
         assert(reinterpret_cast<MemIndexPage *>(val) == idx_page);
     }
     else
     {
-        assert(PageMapper::DecodeFilePage(val) == idx_page->FilePageId());
+        assert(PageMapper::DecodePageId(val) == idx_page->FilePageId());
         mapping_tbl_[page_id] = reinterpret_cast<uint64_t>(idx_page);
     }
+}
+
+bool MappingSnapshot::IsSwizzlingPointer(uint64_t val)
+{
+    return (val & MAPPING_MASK) == 0;
+}
+
+bool MappingSnapshot::IsFilePageId(uint64_t val)
+{
+    return val != UINT32_MAX && (val & MAPPING_PHYSICAL);
+}
+
+bool MappingSnapshot::IsLogicalPageId(uint64_t val)
+{
+    return val != UINT32_MAX && (val & MAPPING_LOGICAL);
 }
 
 void MappingSnapshot::Serialize(std::string &dst) const
@@ -373,9 +386,9 @@ void MappingSnapshot::Serialize(std::string &dst) const
     {
         uint32_t val = mapping_tbl_[i];
         MemIndexPage *p = GetSwizzlingPointer(i);
-        if (p)
+        if (p != nullptr)
         {
-            val = PageMapper::EncodeFilePage(p->FilePageId());
+            val = PageMapper::EncodeFilePageId(p->FilePageId());
         }
         PutVarint32(&dst, val);
     }

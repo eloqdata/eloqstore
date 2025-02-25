@@ -110,7 +110,7 @@ KvError Replayer::ReplayMapping(std::string_view bat)
                 // Insert new mapping. Allocate a new logical page id
                 mapping.emplace_back(UINT32_MAX);
             }
-            else if (mapper_->DequeFree(page_id))
+            else if (mapper_->DequeFreePage(page_id))
             {
                 // Insert new mapping. Reuse freed logical page id
             }
@@ -121,9 +121,9 @@ KvError Replayer::ReplayMapping(std::string_view bat)
                 mapper_->FreeFilePage(old_fp);
             }
             // Allocate new physical page id
-            if (!mapper_->GetFreeFilePage(file_page))
+            if (!mapper_->DelFreeFilePage(file_page))
             {
-                uint32_t fp = mapper_->ExpFilePage();
+                uint32_t fp = mapper_->ExpandFilePage();
                 assert(fp == file_page);
             }
             mapper_->UpdateMapping(page_id, file_page);
