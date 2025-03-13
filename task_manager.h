@@ -5,7 +5,6 @@
 #include <unordered_map>
 #include <vector>
 
-#include "circular_queue.h"
 #include "read_task.h"
 #include "scan_task.h"
 #include "table_ident.h"
@@ -13,12 +12,11 @@
 
 namespace kvstore
 {
-using boost::context::continuation;
-
 class TaskManager
 {
 public:
-    WriteTask *GetWriteTask(const TableIdent &tbl_id);
+    BatchWriteTask *GetBatchWriteTask(const TableIdent &tbl_id);
+    TruncateTask *GetTruncateTask(const TableIdent &tbl_id);
     ReadTask *GetReadTask();
     ScanTask *GetScanTask();
     void FreeTask(KvTask *task);
@@ -30,9 +28,11 @@ public:
     CircularQueue<KvTask *> finished_;
 
 private:
-    std::vector<std::unique_ptr<WriteTask>> write_tasks_;
     std::unordered_map<TableIdent, WriteTask *> writing_;
-    std::vector<WriteTask *> free_write_;
+    std::vector<std::unique_ptr<BatchWriteTask>> batch_write_tasks_;
+    std::vector<BatchWriteTask *> free_batch_write_;
+    std::vector<std::unique_ptr<TruncateTask>> truncate_tasks_;
+    std::vector<TruncateTask *> free_truncate_;
     std::vector<std::unique_ptr<ReadTask>> read_tasks_;
     std::vector<ReadTask *> free_read_;
     std::vector<std::unique_ptr<ScanTask>> scan_tasks_;

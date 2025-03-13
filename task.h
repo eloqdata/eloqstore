@@ -5,6 +5,9 @@
 #include <cstdint>
 
 #include "comparator.h"
+#include "data_page.h"
+#include "error.h"
+#include "table_ident.h"
 
 namespace kvstore
 {
@@ -14,6 +17,7 @@ class IndexPageManager;
 class AsyncIoManager;
 class KvOptions;
 class TaskManager;
+class PagePool;
 
 inline thread_local IndexPageManager *index_mgr;
 inline thread_local TaskManager *task_mgr;
@@ -29,7 +33,6 @@ enum class TaskStatus : uint8_t
     Ongoing,
     Blocked,
     WaitSyncIo,
-    WaitAnyAsynIo,
     WaitAllAsynIo
 };
 
@@ -37,8 +40,11 @@ enum struct TaskType
 {
     Read = 0,
     Scan,
-    Write,
+    BatchWrite,
+    Truncate
 };
+
+using boost::context::continuation;
 
 class KvTask
 {
@@ -54,8 +60,12 @@ public:
     void Resume();
 
     int WaitSyncIo();
-    int WaitAsynIo(bool all = true);
+    int WaitAsynIo();
     void FinishIo(bool is_sync_io);
+
+    std::pair<DataPage, KvError> LoadDataPage(const TableIdent &tbl_id,
+                                              uint32_t page_id,
+                                              uint32_t file_page_id);
 
     TaskStatus status_{TaskStatus::Idle};
 
@@ -67,6 +77,5 @@ public:
     KvRequest *req_{nullptr};
     boost::context::continuation main_;
     boost::context::continuation coro_;
-    boost::context::stack_context stack_ctx_;
 };
 }  // namespace kvstore

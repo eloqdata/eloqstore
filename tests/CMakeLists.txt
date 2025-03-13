@@ -26,7 +26,7 @@ include(CTest)
 include(Catch)
 
 foreach( name ${ALL_TARGETS} )
-   add_executable( ${name} ${UTEST_DIR}/${name}.cpp common.cpp)
+   add_executable( ${name} ${UTEST_DIR}/${name}.cpp common.cpp test_utils.cpp)
    catch_discover_tests(${name})
 endforeach()
 

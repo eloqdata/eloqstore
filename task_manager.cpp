@@ -12,20 +12,40 @@ using namespace boost::context;
 
 namespace kvstore
 {
-WriteTask *TaskManager::GetWriteTask(const TableIdent &tbl_id)
+BatchWriteTask *TaskManager::GetBatchWriteTask(const TableIdent &tbl_id)
 {
     if (writing_.find(tbl_id) != writing_.end())
     {
         return nullptr;
     }
-    if (free_write_.empty())
+    if (free_batch_write_.empty())
     {
-        auto task = std::make_unique<WriteTask>(tbl_id);
-        free_write_.push_back(task.get());
-        write_tasks_.emplace_back(std::move(task));
+        auto task = std::make_unique<BatchWriteTask>(tbl_id);
+        free_batch_write_.push_back(task.get());
+        batch_write_tasks_.emplace_back(std::move(task));
     }
-    WriteTask *task = free_write_.back();
-    free_write_.pop_back();
+    BatchWriteTask *task = free_batch_write_.back();
+    free_batch_write_.pop_back();
+    assert(task->status_ == TaskStatus::Idle);
+    writing_.emplace(tbl_id, task);
+    task->Reset(tbl_id);
+    return task;
+}
+
+TruncateTask *TaskManager::GetTruncateTask(const TableIdent &tbl_id)
+{
+    if (writing_.find(tbl_id) != writing_.end())
+    {
+        return nullptr;
+    }
+    if (free_truncate_.empty())
+    {
+        auto task = std::make_unique<TruncateTask>(tbl_id);
+        free_truncate_.push_back(task.get());
+        truncate_tasks_.emplace_back(std::move(task));
+    }
+    TruncateTask *task = free_truncate_.back();
+    free_truncate_.pop_back();
     assert(task->status_ == TaskStatus::Idle);
     writing_.emplace(tbl_id, task);
     task->Reset(tbl_id);
@@ -68,11 +88,18 @@ void TaskManager::FreeTask(KvTask *task)
     case TaskType::Scan:
         free_scan_.push_back(static_cast<ScanTask *>(task));
         break;
-    case TaskType::Write:
+    case TaskType::BatchWrite:
     {
-        WriteTask *wtask = static_cast<WriteTask *>(task);
+        BatchWriteTask *wtask = static_cast<BatchWriteTask *>(task);
         writing_.erase(wtask->TableId());
-        free_write_.push_back(wtask);
+        free_batch_write_.push_back(wtask);
+        break;
+    }
+    case TaskType::Truncate:
+    {
+        TruncateTask *wtask = static_cast<TruncateTask *>(task);
+        writing_.erase(wtask->TableId());
+        free_truncate_.push_back(wtask);
         break;
     }
     }
@@ -100,6 +127,7 @@ void TaskManager::RecycleFinished()
     {
         KvTask *task = finished_.Peek();
         finished_.Dequeue();
+        // You can recycle the stack of the task here.
         FreeTask(task);
     }
 }

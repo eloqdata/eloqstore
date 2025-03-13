@@ -33,19 +33,13 @@ public:
      * @param page_size The maximal allowed page size is 64KB
      */
     explicit MemIndexPage(uint16_t page_size);
-    ~MemIndexPage();
 
     uint16_t ContentLength() const;
     uint16_t RestartNum() const;
 
     char *PagePtr() const
     {
-        return page_;
-    }
-
-    char **PagePtrPtr()
-    {
-        return &page_;
+        return page_.get();
     }
 
     void Deque();
@@ -86,6 +80,16 @@ public:
         return file_page_id_;
     }
 
+    void SetPageId(uint32_t page_id)
+    {
+        page_id_ = page_id;
+    }
+
+    void SetFilePageId(uint32_t file_page_id)
+    {
+        file_page_id_ = file_page_id;
+    }
+
     bool IsPageIdValid() const
     {
         return page_id_ < UINT32_MAX;
@@ -114,7 +118,7 @@ private:
      */
     uint32_t ref_cnt_{0};
 
-    char *page_{nullptr};
+    std::unique_ptr<char[]> page_{nullptr};
 
     /**
      * @brief A doubly-linked list of in-memory pages for cache replacement. An

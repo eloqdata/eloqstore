@@ -25,10 +25,10 @@ struct MappingSnapshot
     ~MappingSnapshot();
 
     uint32_t ToFilePage(uint32_t page_id) const;
-    uint32_t GetFilePage(uint32_t page_id) const;
     uint32_t GetNextFree(uint32_t page_id) const;
 
     void AddFreeFilePage(uint32_t file_page);
+    void AbortFreeFilePage();
 
     /**
      * @brief Replaces the swizzling pointer with the file page Id.
@@ -73,7 +73,7 @@ public:
     void FreeFilePage(uint32_t file_page);
 
     std::shared_ptr<MappingSnapshot> GetMappingSnapshot();
-    MappingSnapshot *GetMapping();
+    MappingSnapshot *GetMapping() const;
     void UpdateMapping(uint32_t page_id, uint32_t file_page_id);
     uint32_t UseCount();
     void FreeMappingSnapshot();

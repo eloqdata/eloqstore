@@ -35,6 +35,7 @@ public:
      * @return MemIndexPage*
      */
     MemIndexPage *AllocIndexPage();
+    void FreeIndexPage(MemIndexPage *page);
 
     /**
      * @brief Enqueues the index page into the cache replacement list.
@@ -43,29 +44,25 @@ public:
      */
     void EnqueuIndexPage(MemIndexPage *page);
 
-    std::tuple<MemIndexPage *, PageMapper *, KvError> FindRoot(
-        const TableIdent &tbl_ident);
+    std::pair<RootMeta *, KvError> FindRoot(const TableIdent &tbl_ident);
 
     KvError MakeCowRoot(const TableIdent &tbl_ident, CowRootMeta &cow_meta);
 
-    RootMeta &UpdateRoot(const TableIdent &tbl_ident,
-                         MemIndexPage *new_root,
-                         std::unique_ptr<PageMapper> new_mapper);
+    void UpdateRoot(const TableIdent &tbl_ident,
+                    MemIndexPage *new_root,
+                    std::unique_ptr<PageMapper> new_mapper,
+                    uint64_t manifest_size);
 
     KvError LoadTablePartition(const TableIdent &tbl_id);
 
-    KvError FindPage(MappingSnapshot *mapping,
-                     uint32_t page_id,
-                     MemIndexPage **result);
+    std::pair<MemIndexPage *, KvError> FindPage(MappingSnapshot *mapping,
+                                                uint32_t page_id);
 
     void FreeMappingSnapshot(MappingSnapshot *mapping);
 
     void Unswizzling(MemIndexPage *page);
 
-    void FinishIo(MappingSnapshot *mapping,
-                  MemIndexPage *idx_page,
-                  uint32_t page_id,
-                  uint32_t file_page_id);
+    void FinishIo(MappingSnapshot *mapping, MemIndexPage *idx_page);
 
     // Given the table id, tree root and the input key, returns the logical page
     // id of the data page that might contain the key.
@@ -77,6 +74,8 @@ public:
 
     const KvOptions *Options() const;
     AsyncIoManager *IoMgr() const;
+
+    void CleanStubRoot(const TableIdent &tbl_id);
 
 private:
     /**
@@ -124,6 +123,7 @@ private:
      *
      */
     std::unordered_map<TableIdent, RootMeta> tbl_roots_;
+    std::unordered_map<TableIdent, std::vector<KvTask *>> tbl_loading_;
 
     struct ReadReq
     {

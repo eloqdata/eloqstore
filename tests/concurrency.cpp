@@ -5,12 +5,12 @@
 #include <cstdlib>
 
 #include "common.h"
-#include "table_ident.h"
+#include "test_utils.h"
 
 TEST_CASE("concurrent tasks with memory store", "[concurrency]")
 {
     InitMemStore();
-    ConcurrentTester tester(memstore.get(), test_tbl_id, 16, 32, 20);
+    ConcurrencyTester tester(memstore.get(), "t1", 1, 16, 32, 20);
     tester.Init();
     tester.Run(5);
 }

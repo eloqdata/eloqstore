@@ -10,15 +10,16 @@
 #include <utility>
 #include <vector>
 
+#include "common.h"
 #include "error.h"
 #include "kv_options.h"
 #include "table_ident.h"
-#include "tests/common.h"
+#include "test_utils.h"
 
 static std::unique_ptr<kvstore::EloqStore> eloqstore = nullptr;
 constexpr char test_path[] = "/tmp/eloqstore";
 kvstore::KvOptions opts = {
-    .data_path = test_path,
+    .db_path = test_path,
 };
 
 void InitStore()
@@ -90,7 +91,7 @@ TEST_CASE("persist with restart", "[persist]")
 TEST_CASE("easy concurrent tasks with iouring", "[concurrency]")
 {
     InitStore();
-    ConcurrentTester tester(eloqstore.get(), test_tbl_id, 16, 32, 20);
+    ConcurrencyTester tester(eloqstore.get(), "t1", 1, 16, 32, 20);
     tester.Init();
     tester.Run(5);
 }
@@ -98,7 +99,7 @@ TEST_CASE("easy concurrent tasks with iouring", "[concurrency]")
 TEST_CASE("hard concurrent tasks with iouring", "[concurrency][slow]")
 {
     InitStore();
-    ConcurrentTester tester(eloqstore.get(), test_tbl_id, 32, 8192, 1000);
+    ConcurrencyTester tester(eloqstore.get(), "t1", 8, 16, 1024, 1000);
     tester.Init();
     tester.Run(5);
 }
@@ -109,10 +110,10 @@ TEST_CASE("simple LRU for opened fd", "[persist]")
     std::filesystem::remove_all(path);
 
     kvstore::KvOptions opts1 = opts;
-    opts1.data_path = path;
+    opts1.db_path = path;
     opts1.fd_limit = 12;
     opts1.data_page_size = kvstore::page_align;
-    opts1.data_file_pages = 1;
+    opts1.num_file_pages_shift = 1;
     kvstore::EloqStore store1(opts1);
     store1.Start();
 
@@ -129,10 +130,10 @@ TEST_CASE("complex LRU for opened fd", "[persist]")
     std::filesystem::remove_all(path);
 
     kvstore::KvOptions opts1 = opts;
-    opts1.data_path = path;
+    opts1.db_path = path;
     opts1.fd_limit = 12;
     opts1.data_page_size = kvstore::page_align;
-    opts1.data_file_pages = 1;
+    opts1.num_file_pages_shift = 1;
     kvstore::EloqStore store1(opts1);
     store1.Start();
 
@@ -156,15 +157,17 @@ TEST_CASE("detect corrupted page", "[checksum]")
 {
     InitStore();
     kvstore::TableIdent tbl_id = {"detect-corrupted", 1};
-    kvstore::KvRequest req;
-    std::vector<kvstore::WriteDataEntry> entries;
-    for (size_t idx = 0; idx < 10; ++idx)
     {
-        entries.emplace_back(
-            Key(idx), std::to_string(idx), 1, kvstore::WriteOp::Upsert);
+        std::vector<kvstore::WriteDataEntry> entries;
+        for (size_t idx = 0; idx < 10; ++idx)
+        {
+            entries.emplace_back(
+                Key(idx), std::to_string(idx), 1, kvstore::WriteOp::Upsert);
+        }
+        kvstore::WriteRequest req;
+        req.SetArgs(tbl_id, std::move(entries));
+        eloqstore->ExecSync(&req);
     }
-    req.SetWrite(tbl_id, std::move(entries));
-    req.ExecSync(eloqstore.get());
 
     // corrupt it
     std::string datafile = std::string(test_path) + '/' + tbl_id.ToString() +
@@ -184,12 +187,18 @@ TEST_CASE("detect corrupted page", "[checksum]")
     REQUIRE(file);
     file.close();
 
-    kvstore::KvError err;
-    req.SetScan(tbl_id, Key(0), Key(10));
-    err = req.ExecSync(eloqstore.get());
-    REQUIRE(err == kvstore::KvError::Corrupted);
-    // can't read success if the target key locate on the same page
-    req.SetRead(tbl_id, Key(0));
-    err = req.ExecSync(eloqstore.get());
-    REQUIRE(err == kvstore::KvError::Corrupted);
+    {
+        kvstore::ScanRequest req;
+        req.SetArgs(tbl_id, Key(0), Key(10));
+        eloqstore->ExecSync(&req);
+        REQUIRE(req.Error() == kvstore::KvError::Corrupted);
+    }
+
+    {
+        // can't read success if the target key locate on the same page
+        kvstore::ReadRequest req;
+        req.SetArgs(tbl_id, Key(0));
+        eloqstore->ExecSync(&req);
+        REQUIRE(req.Error() == kvstore::KvError::Corrupted);
+    }
 }

@@ -1,31 +1,78 @@
+// clang-format off
+#include "concurrentqueue.h"
 #include "eloq_store.h"
+// clang-format on
 
 #include <glog/logging.h>
 
 #include <atomic>
-#include <chrono>
+#include <boost/context/pooled_fixedsize_stack.hpp>
+#include <cassert>
 #include <cstddef>
 #include <filesystem>
-#include <iterator>
+#include <memory>
 #include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
 
-#include "async_io_manager.h"
-#include "error.h"
-#include "index_page_manager.h"
+#include "task_manager.h"
 
 namespace fs = std::filesystem;
 
 namespace kvstore
 {
-EloqStore::EloqStore(KvOptions opts) : options_(opts), stopped_(true)
+class Worker
+{
+public:
+    Worker(const EloqStore *store);
+    ~Worker();
+    KvError Init(int dir_fd);
+    void Start();
+    void Stop();
+    bool AddRequest(KvRequest *req);
+
+private:
+    void Loop();
+    void HandleReq(KvRequest *req);
+
+    template <typename F>
+    void StartTask(KvTask *task, KvRequest *req, F lbd)
+    {
+        task->req_ = req;
+        task->status_ = TaskStatus::Ongoing;
+        thd_task = task;
+        task->coro_ =
+            boost::context::callcc(std::allocator_arg,
+                                   stack_pool_,
+                                   [task, lbd](continuation &&sink)
+                                   {
+                                       task->main_ = std::move(sink);
+                                       KvError err = lbd();
+                                       task->req_->SetDone(err);
+                                       task->req_ = nullptr;
+                                       task->status_ = TaskStatus::Idle;
+                                       task_mgr->finished_.Enqueue(task);
+                                       return std::move(task->main_);
+                                   });
+    }
+
+    const EloqStore *store_;
+    moodycamel::ConcurrentQueue<KvRequest *> requests_;
+    std::thread thd_;
+    PagePool page_pool_;
+    std::unique_ptr<AsyncIoManager> io_mgr_;
+    IndexPageManager index_mgr_;
+    TaskManager task_mgr_;
+    boost::context::pooled_fixedsize_stack stack_pool_;
+};
+
+EloqStore::EloqStore(const KvOptions &opts) : options_(opts), stopped_(true)
 {
     assert(!(options_.data_page_size & (page_align - 1)));
 
-    workers_.reserve(options_.num_workers);
-    for (size_t i = 0; i < options_.num_workers; i++)
+    workers_.reserve(options_.num_threads);
+    for (size_t i = 0; i < options_.num_threads; i++)
     {
         workers_.emplace_back(std::make_unique<Worker>(this));
     }
@@ -47,7 +94,7 @@ EloqStore::~EloqStore()
 KvError EloqStore::Start()
 {
     LOG(INFO) << "EloqStore is starting...";
-    if (!options_.data_path.empty())
+    if (!options_.db_path.empty())
     {
         KvError err = InitDBDir();
         CHECK_KV_ERR(err);
@@ -69,14 +116,14 @@ KvError EloqStore::Start()
 
 KvError EloqStore::InitDBDir()
 {
-    if (fs::exists(options_.data_path))
+    if (fs::exists(options_.db_path))
     {
-        if (!fs::is_directory(options_.data_path))
+        if (!fs::is_directory(options_.db_path))
         {
-            LOG(ERROR) << "path " << options_.data_path << " is not directory";
+            LOG(ERROR) << "path " << options_.db_path << " is not directory";
             return KvError::BadDir;
         }
-        for (auto &ent : fs::directory_iterator{options_.data_path})
+        for (auto &ent : fs::directory_iterator{options_.db_path})
         {
             if (!ent.is_directory())
             {
@@ -101,9 +148,9 @@ KvError EloqStore::InitDBDir()
     }
     else
     {
-        fs::create_directories(options_.data_path);
+        fs::create_directories(options_.db_path);
     }
-    dir_fd_ = open(options_.data_path.c_str(), IouringMgr::oflags_dir);
+    dir_fd_ = open(options_.db_path.c_str(), IouringMgr::oflags_dir);
     if (dir_fd_ < 0)
     {
         return KvError::IoFail;
@@ -123,14 +170,30 @@ void EloqStore::CloseDBDir()
     }
 }
 
+bool EloqStore::ExecSync(KvRequest *req)
+{
+    req->user_data_ = 0;
+    req->callback_ = nullptr;
+    if (!SendRequest(req))
+    {
+        return false;
+    }
+    req->Wait();
+    return true;
+}
+
 bool EloqStore::SendRequest(KvRequest *req)
 {
+    req->err_ = KvError::NoError;
+    req->done_.store(false, std::memory_order_relaxed);
+
     if (stopped_.load(std::memory_order_relaxed))
     {
         return false;
     }
 
-    Worker *worker = workers_[req->TableId().Hash() % workers_.size()].get();
+    Worker *worker =
+        workers_[req->TableId().partition_id_ % workers_.size()].get();
     return worker->AddRequest(req);
 }
 
@@ -154,15 +217,86 @@ bool EloqStore::IsStopped() const
     return stopped_.load(std::memory_order_relaxed);
 }
 
-Worker::Worker(const EloqStore *global)
-    : global_(global),
-      io_mgr_(global->options_.data_path.empty()
-                  ? static_cast<std::unique_ptr<AsyncIoManager>>(
-                        std::make_unique<MemStoreMgr>(&global->options_))
-                  : static_cast<std::unique_ptr<AsyncIoManager>>(
-                        std::make_unique<IouringMgr>(&global->options_))),
+KvError KvRequest::Error() const
+{
+    return err_;
+}
+
+const char *KvRequest::ErrMessage() const
+{
+    return ErrorString(err_);
+}
+
+uint64_t KvRequest::UserData() const
+{
+    return user_data_;
+}
+
+void KvRequest::Wait()
+{
+    CHECK(callback_ == nullptr);
+    done_.wait(false, std::memory_order_acquire);
+}
+
+void ReadRequest::SetArgs(TableIdent tid, std::string_view key)
+{
+    tbl_id_ = std::move(tid);
+    key_ = key;
+}
+
+void ScanRequest::SetArgs(TableIdent tid,
+                          std::string_view begin,
+                          std::string_view end)
+{
+    tbl_id_ = std::move(tid);
+    begin_key_ = begin;
+    end_key_ = end;
+}
+
+void WriteRequest::SetArgs(TableIdent tid, std::vector<WriteDataEntry> &&batch)
+{
+    tbl_id_ = std::move(tid);
+    batch_ = std::move(batch);
+}
+
+void TruncateRequest::SetArgs(TableIdent tid, std::string_view position)
+{
+    tbl_id_ = std::move(tid);
+    position_ = position;
+}
+
+const TableIdent &KvRequest::TableId() const
+{
+    return tbl_id_;
+}
+
+bool KvRequest::IsDone() const
+{
+    return done_.load(std::memory_order_acquire);
+}
+
+void KvRequest::SetDone(KvError err)
+{
+    err_ = err;
+    done_.store(true, std::memory_order_release);
+    if (callback_)
+    {
+        // Asynchronous request
+        callback_(this);
+    }
+    else
+    {
+        // Synchronous request
+        done_.notify_one();
+    }
+}
+
+Worker::Worker(const EloqStore *store)
+    : store_(store),
+      page_pool_(store->options_.data_page_size),
+      io_mgr_(AsyncIoManager::New(&store->options_)),
       index_mgr_(io_mgr_.get()),
-      stack_pool_(global->options_.coroutine_stack_size)
+      stack_pool_(store->options_.coroutine_stack_size)
 {
 }
 
@@ -181,8 +315,6 @@ KvError Worker::Init(int dir_fd)
 
 void Worker::Loop()
 {
-    index_mgr = &index_mgr_;
-    task_mgr = &task_mgr_;
     while (true)
     {
         KvRequest *reqs[128];
@@ -194,7 +326,7 @@ void Worker::Loop()
         }
         if (nreqs == 0 && !task_mgr_.IsActive())
         {
-            if (global_->IsStopped())
+            if (store_->IsStopped())
             {
                 break;
             }
@@ -212,7 +344,15 @@ void Worker::Loop()
 
 void Worker::Start()
 {
-    thd_ = std::thread(&Worker::Loop, this);
+    thd_ = std::thread(
+        [this]
+        {
+            // Set thread-local variables
+            page_pool = &page_pool_;
+            index_mgr = &index_mgr_;
+            task_mgr = &task_mgr_;
+            Loop();
+        });
 }
 
 void Worker::Stop()
@@ -227,135 +367,83 @@ bool Worker::AddRequest(KvRequest *req)
 
 void Worker::HandleReq(KvRequest *req)
 {
-    switch (req->typ_)
+    switch (req->Type())
     {
-    case KvRequest::Type::Read:
+    case RequestType::Read:
     {
         ReadTask *task = task_mgr_.GetReadTask();
         auto lbd = [task, req]() -> KvError
         {
-            KvRequest::Read &args =
-                std::get<int(KvRequest::Type::Read)>(req->args_);
-            std::string_view ret;
-            KvError err = task->Read(req->tbl_id_, args.key, ret, args.ts);
-            args.val = ret;
+            auto read_req = static_cast<ReadRequest *>(req);
+            KvError err = task->Read(req->TableId(),
+                                     read_req->key_,
+                                     read_req->value_,
+                                     read_req->ts_);
             return err;
         };
         StartTask(task, req, lbd);
         break;
     }
-    case KvRequest::Type::Scan:
+    case RequestType::Scan:
     {
         ScanTask *task = task_mgr_.GetScanTask();
         auto lbd = [task, req]() -> KvError
         {
-            KvRequest::Scan &args =
-                std::get<int(KvRequest::Type::Scan)>(req->args_);
-            return task->Scan(
-                req->tbl_id_, args.begin_key, args.end_key, args.results);
+            auto scan_req = static_cast<ScanRequest *>(req);
+            return task->Scan(req->TableId(),
+                              scan_req->begin_key_,
+                              scan_req->end_key_,
+                              scan_req->entries_);
         };
         StartTask(task, req, lbd);
         break;
     }
-    case KvRequest::Type::Write:
+    case RequestType::Write:
     {
-        WriteTask *task = task_mgr_.GetWriteTask(std::move(req->tbl_id_));
+        BatchWriteTask *task = task_mgr_.GetBatchWriteTask(req->TableId());
         if (!task)
         {
-            req->Done(KvError::WriteConflict);
+            req->SetDone(KvError::WriteConflict);
             break;
         }
         auto lbd = [task, req]() -> KvError
         {
-            KvRequest::Write &args =
-                std::get<int(KvRequest::Type::Write)>(req->args_);
-            task->BulkAddData(std::move(args.entries));
-            return task->Apply();
+            auto write_req = static_cast<WriteRequest *>(req);
+            if (!task->SetBatch(std::move(write_req->batch_)))
+            {
+                return KvError::InvalidArgs;
+            }
+            KvError err = task->Apply();
+            if (err != KvError::NoError)
+            {
+                task->Abort();
+            }
+            return err;
         };
         StartTask(task, req, lbd);
         break;
     }
-    }
-}
-
-KvError KvRequest::ExecSync(EloqStore *store)
-{
-    wake_ = [](KvRequest *req) { req->done_.notify_one(); };
-    store->SendRequest(this);
-    done_.wait(false, std::memory_order_acquire);
-    return err_;
-}
-
-void KvRequest::Reset()
-{
-    user_data_ = 0;
-    wake_ = nullptr;
-    err_ = KvError::NoError;
-    done_.store(false, std::memory_order_relaxed);
-}
-
-KvRequest::Read &KvRequest::SetRead(TableIdent tid, std::string_view key)
-{
-    Reset();
-    typ_ = Type::Read;
-    tbl_id_ = std::move(tid);
-
-    Read &args = args_.emplace<int(Type::Read)>();
-    args.key = key;
-    return args;
-}
-
-KvRequest::Scan &KvRequest::SetScan(TableIdent tid,
-                                    std::string_view begin,
-                                    std::string_view end)
-{
-    Reset();
-    typ_ = Type::Scan;
-    tbl_id_ = std::move(tid);
-
-    Scan &args = args_.emplace<int(Type::Scan)>();
-    args.begin_key = begin;
-    args.end_key = end;
-    return args;
-}
-
-void KvRequest::SetWrite(TableIdent tid, std::vector<WriteDataEntry> &&entries)
-{
-    Reset();
-    typ_ = Type::Write;
-    tbl_id_ = std::move(tid);
-
-    Write &args = args_.emplace<int(Type::Write)>();
-    args.entries = std::move(entries);
-}
-
-const TableIdent &KvRequest::TableId() const
-{
-    return tbl_id_;
-}
-
-KvError KvRequest::Error() const
-{
-    return err_;
-}
-
-bool KvRequest::IsDone() const
-{
-    return done_.load(std::memory_order_acquire);
-}
-
-KvRequest::Type KvRequest::Typ() const
-{
-    return typ_;
-}
-
-void KvRequest::Done(KvError err)
-{
-    err_ = err;
-    done_.store(true, std::memory_order_release);
-    if (wake_)
+    case RequestType::Truncate:
     {
-        wake_(this);
+        TruncateTask *task = task_mgr_.GetTruncateTask(req->TableId());
+        if (!task)
+        {
+            req->SetDone(KvError::WriteConflict);
+            break;
+        }
+        auto lbd = [task, req]() -> KvError
+        {
+            auto trunc_req = static_cast<TruncateRequest *>(req);
+            KvError err = task->Truncate(trunc_req->position_);
+            if (err != KvError::NoError)
+            {
+                task->Abort();
+            }
+            return err;
+        };
+        StartTask(task, req, lbd);
+        break;
+    }
     }
 }
 

@@ -5,10 +5,8 @@
 #include <string_view>
 #include <unordered_set>
 
-#include "error.h"
 #include "mem_index_page.h"
 #include "page_mapper.h"
-#include "task.h"
 
 namespace kvstore
 {
@@ -40,8 +38,9 @@ private:
 
 struct CowRootMeta
 {
+    std::unique_ptr<PageMapper> mapper_;
+    uint64_t manifest_size_;
     MemIndexPage *root_;
-    std::unique_ptr<PageMapper> new_mapper_;
     std::shared_ptr<MappingSnapshot> old_mapping_;
 };
 
@@ -57,9 +56,6 @@ struct RootMeta
     std::unordered_set<MappingSnapshot *> mapping_snapshots_;
     uint32_t ref_cnt_{0};
     uint64_t manifest_size_{0};
-
-    std::unordered_set<KvTask *> waiting_load_;
-    KvError load_err_{KvError::NoError};
 };
 
 }  // namespace kvstore

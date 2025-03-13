@@ -1,7 +1,9 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
+#include <vector>
 
 #include "comparator.h"
 #include "kv_options.h"
@@ -9,11 +11,25 @@
 
 namespace kvstore
 {
+class PagePool
+{
+public:
+    PagePool(uint16_t page_size);
+    std::unique_ptr<char[]> Allocate();
+    void Free(std::unique_ptr<char[]> page);
+
+private:
+    const uint16_t page_size_;
+    std::vector<std::unique_ptr<char[]>> pages_;
+};
+
+inline thread_local PagePool *page_pool;
+
 class DataPage
 {
 public:
-    DataPage() : page_id_(UINT32_MAX){};
-    DataPage(uint32_t page_id, uint32_t page_size);
+    DataPage() = default;
+    DataPage(uint32_t page_id, uint32_t page_size = 0);
     DataPage(const DataPage &) = delete;
     DataPage(DataPage &&rhs);
     DataPage &operator=(DataPage &&);
@@ -26,7 +42,7 @@ public:
         prev_page_offset + sizeof(uint32_t);
     static uint16_t const content_offset = next_page_offset + sizeof(uint32_t);
 
-    void Init(uint32_t id, uint32_t size);
+    bool IsEmpty() const;
     uint16_t ContentLength() const;
     uint16_t RestartNum() const;
     uint32_t PrevPageId() const;
@@ -36,11 +52,13 @@ public:
     void SetPageId(uint32_t page_id);
     uint32_t PageId() const;
     char *PagePtr() const;
-    char **PagePtrPtr();
+    std::unique_ptr<char[]> GetPtr();
+    void SetPtr(std::unique_ptr<char[]> ptr);
+    void Clear();
 
 private:
-    uint32_t page_id_;
-    char *page_{nullptr};
+    uint32_t page_id_{UINT32_MAX};
+    std::unique_ptr<char[]> page_{nullptr};
 };
 
 std::ostream &operator<<(std::ostream &out, DataPage const &page);
@@ -84,4 +102,5 @@ private:
     std::string_view value_;
     uint64_t timestamp_;
 };
+
 }  // namespace kvstore

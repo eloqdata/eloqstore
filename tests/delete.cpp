@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
-#include "tests/common.h"
+#include "common.h"
+#include "test_utils.h"
 
 TEST_CASE("simple delete", "[delete]")
 {
@@ -45,7 +46,8 @@ TEST_CASE("random upsert/delete and scan", "[delete]")
 {
     InitMemStore();
     MapVerifier verify(test_tbl_id, memstore.get());
-    constexpr uint64_t max_val = 100000;
+    verify.SetValueLength(100);
+    constexpr uint64_t max_val = 50000;
     for (int i = 0; i < 10; i++)
     {
         verify.WriteRnd(1, max_val, 20, 30);
@@ -55,4 +57,33 @@ TEST_CASE("random upsert/delete and scan", "[delete]")
             verify.Scan(start, start + 100);
         }
     }
+}
+
+TEST_CASE("easy truncate table partition", "[truncate]")
+{
+    InitMemStore();
+    MapVerifier verify(test_tbl_id, memstore.get());
+    verify.SetValueLength(1000);
+
+    verify.Upsert(0, 10);
+    verify.Truncate(5);
+    verify.Truncate(0);
+}
+
+TEST_CASE("truncate table partition", "[truncate]")
+{
+    InitMemStore();
+    MapVerifier verify(test_tbl_id, memstore.get());
+    verify.SetValueLength(100);
+
+    verify.Upsert(1, 100000);
+    verify.Truncate(100000);
+    verify.Truncate(50000);
+    verify.Truncate(10000);
+    verify.Truncate(1);
+    verify.Truncate(0);
+
+    verify.Upsert(1, 100000);
+    verify.Truncate(50000);
+    verify.Truncate(0);
 }

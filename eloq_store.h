@@ -1,152 +1,140 @@
 #pragma once
 
 #include <atomic>
-#include <boost/context/pooled_fixedsize_stack.hpp>
-#include <cstdint>
-#include <memory>
-#include <thread>
-#include <vector>
 
-#include "concurrentqueue.h"
 #include "error.h"
-#include "index_page_manager.h"
-#include "task_manager.h"
+#include "scan_task.h"
+#include "table_ident.h"
+#include "write_task.h"
 
 namespace kvstore
 {
+class Worker;
 
-class EloqStore;
+enum class RequestType : uint8_t
+{
+    Read,
+    Scan,
+    Write,
+    Truncate
+};
 
 class KvRequest
 {
 public:
-    KvError ExecSync(EloqStore *store);
-    const TableIdent &TableId() const;
+    virtual RequestType Type() const = 0;
     KvError Error() const;
+    const char *ErrMessage() const;
+    const TableIdent &TableId() const;
+    uint64_t UserData() const;
+
+    /**
+     * @brief Test if this request is done.
+     */
     bool IsDone() const;
 
-    enum class Type : uint8_t
-    {
-        Read,
-        Scan,
-        Write
-    };
-    Type Typ() const;
+protected:
+    void Wait();
+    void SetDone(KvError err);
 
-    struct Read
-    {
-        // input
-        std::string_view key;
-        // output
-        std::string val;
-        uint64_t ts;
-    };
-
-    struct Scan
-    {
-        // input
-        std::string_view begin_key;
-        std::string_view end_key;
-        // output
-        std::vector<KvEntry> results;
-    };
-
-    struct Write
-    {
-        // input
-        std::vector<WriteDataEntry> entries;
-    };
-
-    void Reset();
-    Read &SetRead(TableIdent tid, std::string_view key);
-    Scan &SetScan(TableIdent tid, std::string_view begin, std::string_view end);
-    void SetWrite(TableIdent tid, std::vector<WriteDataEntry> &&entries);
-
-    template <typename T>
-    T &Args()
-    {
-        return std::get<T>(args_);
-    }
-
-    uint64_t user_data_;
-    std::function<void(KvRequest *)> wake_;
-
-private:
-    void Done(KvError err);
-
-    Type typ_;
     TableIdent tbl_id_;
-    std::variant<Read, Scan, Write> args_;
-
-    KvError err_{KvError::NoError};
+    uint64_t user_data_{0};
+    std::function<void(KvRequest *)> callback_{nullptr};
     std::atomic<bool> done_{false};
+    KvError err_{KvError::NoError};
 
     friend class Worker;
-    friend class KvTask;
+    friend class EloqStore;
 };
 
-class Worker
+class ReadRequest : public KvRequest
 {
 public:
-    Worker(const EloqStore *global);
-    ~Worker();
-    KvError Init(int dir_fd);
-    void Start();
-    void Stop();
-    bool AddRequest(KvRequest *req);
-
-private:
-    void Loop();
-    void HandleReq(KvRequest *req);
-
-    template <typename F>
-    void StartTask(KvTask *task, KvRequest *req, F lbd)
+    RequestType Type() const override
     {
-        task->req_ = req;
-        task->status_ = TaskStatus::Ongoing;
-        thd_task = task;
-        task->coro_ =
-            boost::context::callcc(std::allocator_arg,
-                                   stack_pool_,
-                                   [task, lbd](continuation &&sink)
-                                   {
-                                       task->main_ = std::move(sink);
-                                       KvError err = lbd();
-                                       task->req_->Done(err);
-                                       task->req_ = nullptr;
-                                       task->status_ = TaskStatus::Idle;
-                                       task_mgr->finished_.Enqueue(task);
-                                       return std::move(task->main_);
-                                   });
+        return RequestType::Read;
     }
+    void SetArgs(TableIdent tid, std::string_view key);
 
-    const EloqStore *global_;
-    moodycamel::ConcurrentQueue<KvRequest *> requests_;
-    std::thread thd_;
-    std::unique_ptr<AsyncIoManager> io_mgr_;
-    IndexPageManager index_mgr_;
-    TaskManager task_mgr_;
-    boost::context::pooled_fixedsize_stack stack_pool_;
+    // input
+    std::string_view key_;
+    // output
+    std::string value_;
+    uint64_t ts_{0};
+};
+
+class ScanRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::Scan;
+    }
+    void SetArgs(TableIdent tid, std::string_view begin, std::string_view end);
+
+    // input
+    std::string_view begin_key_;
+    std::string_view end_key_;
+    // output
+    std::vector<KvEntry> entries_;
+};
+
+class WriteRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::Write;
+    }
+    void SetArgs(TableIdent tid, std::vector<WriteDataEntry> &&batch);
+
+    // input
+    std::vector<WriteDataEntry> batch_;
+};
+
+class TruncateRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::Truncate;
+    }
+    void SetArgs(TableIdent tid, std::string_view position);
+
+    // input
+    std::string_view position_;
 };
 
 class EloqStore
 {
 public:
-    EloqStore(KvOptions opts);
+    EloqStore(const KvOptions &opts);
+    EloqStore(const EloqStore &) = delete;
+    EloqStore(EloqStore &&) = delete;
     ~EloqStore();
     KvError Start();
-    bool SendRequest(KvRequest *req);
     void Stop();
-    bool IsStopped() const;
 
-    const KvOptions options_;
+    template <typename F>
+    bool ExecAsyn(KvRequest *req, uint64_t data, F callback)
+    {
+        req->user_data_ = data;
+        req->callback_ = std::move(callback);
+        return SendRequest(req);
+    }
+
+    bool ExecSync(KvRequest *req);
 
 private:
+    bool SendRequest(KvRequest *req);
+    bool IsStopped() const;
     KvError InitDBDir();
     void CloseDBDir();
 
     int dir_fd_{-1};
     std::vector<std::unique_ptr<Worker>> workers_;
     std::atomic<bool> stopped_;
+    const KvOptions options_;
+    friend Worker;
 };
 }  // namespace kvstore

@@ -39,7 +39,7 @@ inline static void SetPageCrc32(char *p, uint16_t pgsz)
     EncodeFixed32(p + page_crc_offset, crc32::Mask(crc));
 }
 
-inline static bool ValidPageCrc32(char *p, uint16_t pgsz)
+inline static bool ValidatePageCrc32(char *p, uint16_t pgsz)
 {
     uint32_t crc = crc32::Value(p + page_type_offset, pgsz - page_type_offset);
     return crc == Crc32OfPage(p);

@@ -8,33 +8,28 @@
 namespace kvstore
 {
 
-void ReadTask::Reset(IndexPageManager *idx_page_manager)
-{
-}
-
 KvError ReadTask::Read(const TableIdent &tbl_ident,
                        std::string_view search_key,
-                       std::string_view &value,
+                       std::string &value,
                        uint64_t &timestamp)
 {
-    auto [root, mapper, err] = index_mgr->FindRoot(tbl_ident);
+    auto [meta, err] = index_mgr->FindRoot(tbl_ident);
     CHECK_KV_ERR(err);
-    if (root == nullptr)
+    if (meta->root_page_ == nullptr)
     {
         return KvError::NotFound;
     }
-    auto mapping = mapper->GetMappingSnapshot();
+    auto mapping = meta->mapper_->GetMappingSnapshot();
 
-    uint32_t data_page_id;
+    uint32_t page_id;
     err = index_mgr->SeekIndex(
-        mapping.get(), tbl_ident, root, search_key, data_page_id);
+        mapping.get(), tbl_ident, meta->root_page_, search_key, page_id);
     CHECK_KV_ERR(err);
-    uint32_t file_page = mapping->ToFilePage(data_page_id);
-    data_page_.Init(data_page_id, Options()->data_page_size);
-    err = IoMgr()->ReadPage(tbl_ident, file_page, data_page_.PagePtrPtr());
-    CHECK_KV_ERR(err);
+    uint32_t file_page = mapping->ToFilePage(page_id);
+    auto [page, err_load] = LoadDataPage(tbl_ident, page_id, file_page);
+    CHECK_KV_ERR(err_load);
 
-    DataPageIter data_iter{&data_page_, Options()};
+    DataPageIter data_iter{&page, Options()};
     data_iter.Seek(search_key);
     std::string_view seek_key = data_iter.Key();
     if (!seek_key.empty() && seek_key == search_key)

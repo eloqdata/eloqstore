@@ -28,6 +28,13 @@ target_link_libraries(io_uring_test ${URING_LIB})
 add_executable(uring_register_test uring_register_test.cpp)
 target_link_libraries(uring_register_test ${URING_LIB})
 
+option(WITH_ASAN "build with ASAN" OFF)
+if(WITH_ASAN)
+  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=address")
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address")
+  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fsanitize=address")
+endif()
+
 SET(ELOQ_STORE_SOURCE_DIR ${CMAKE_SOURCE_DIR})
 SET(ELOQ_STORE_INCLUDE
     ${ELOQ_KV_SOURCE_DIR}

@@ -29,6 +29,14 @@
 
 namespace kvstore
 {
+std::unique_ptr<AsyncIoManager> AsyncIoManager::New(const KvOptions *opts)
+{
+    if (opts->db_path.empty())
+    {
+        return std::make_unique<MemStoreMgr>(opts);
+    }
+    return std::make_unique<IouringMgr>(opts);
+}
 
 IouringMgr::IouringMgr(const KvOptions *opts) : AsyncIoManager(opts)
 {
@@ -49,10 +57,6 @@ IouringMgr::~IouringMgr()
 
     io_uring_free_buf_ring(
         &ring_, buf_ring_, options_->buf_ring_size, buf_group_);
-    for (char *buf : bufs_pool_)
-    {
-        free(buf);
-    }
 
     io_uring_queue_exit(&ring_);
 }
@@ -99,7 +103,7 @@ KvError IouringMgr::Init(int dir_fd)
             io_uring_queue_exit(&ring_);
             return KvError::OutOfMem;
         }
-        bufs_pool_.push_back(buf);
+        bufs_pool_.emplace_back(std::unique_ptr<char[]>(buf));
         io_uring_buf_ring_add(buf_ring_, buf, buf_size, i, mask, i);
     }
     io_uring_buf_ring_advance(buf_ring_, num_bufs);
@@ -108,31 +112,36 @@ KvError IouringMgr::Init(int dir_fd)
     return KvError::NoError;
 }
 
-KvError IouringMgr::ReadPage(const TableIdent &tbl_id,
-                             uint32_t fp_id,
-                             char **ptr)
+std::pair<std::unique_ptr<char[]>, KvError> IouringMgr::ReadPage(
+    const TableIdent &tbl_id, uint32_t fp_id, std::unique_ptr<char[]> page)
 {
     auto [file_id, offset] = ConvFilePageId(fp_id);
     LruFD::Ref fd_ref = GetFD(tbl_id, file_id);
     if (fd_ref == nullptr)
     {
-        return KvError::NotFound;
-    }
-    assert(buf_ring_);
-    int res;
-    while ((res = Read(fd_ref.FdPair(), ptr, offset)) == -ENOBUFS)
-        ;
-    if (res < options_->data_page_size)
-    {
-        return res < 0 ? ToKvError(res) : KvError::TryAgain;
+        return {std::move(page), KvError::NotFound};
     }
 
-    if (!ValidPageCrc32(*ptr, options_->data_page_size))
+    int res;
+    do
+    {
+        auto ret_pair = Read(fd_ref.FdPair(), std::move(page), offset);
+        page = std::move(ret_pair.first);
+        res = ret_pair.second;
+    } while (res == -ENOBUFS);
+
+    if (res < options_->data_page_size)
+    {
+        KvError err = res < 0 ? ToKvError(res) : KvError::TryAgain;
+        return {std::move(page), err};
+    }
+
+    if (!ValidatePageCrc32(page.get(), options_->data_page_size))
     {
         LOG(ERROR) << "corrupted " << tbl_id << " page " << fp_id;
-        return KvError::Corrupted;
+        return {std::move(page), KvError::Corrupted};
     }
-    return KvError::NoError;
+    return {std::move(page), KvError::NoError};
 }
 
 ManifestFilePtr IouringMgr::GetManifest(const TableIdent &tbl_id)
@@ -145,34 +154,45 @@ ManifestFilePtr IouringMgr::GetManifest(const TableIdent &tbl_id)
     return std::make_unique<Manifest>(this, std::move(fd));
 }
 
-KvError IouringMgr::WritePage(WriteReq *req)
+KvError IouringMgr::WritePage(const TableIdent &tbl_id,
+                              VarPage page,
+                              uint32_t file_page_id)
 {
-    auto [file_id, offset] = ConvFilePageId(req->file_page_id_);
-    LruFD::Ref fd_ref = GetOrCreateFD(*req->tbl_ident_, file_id);
+    auto [file_id, offset] = ConvFilePageId(file_page_id);
+    LruFD::Ref fd_ref = GetOrCreateFD(tbl_id, file_id);
     if (fd_ref == nullptr)
     {
         return KvError::OpenFileLimit;
     }
 
-    const char *ptr = req->page_.index() == 0
-                          ? std::get<0>(req->page_)->PagePtr()
-                          : std::get<1>(req->page_).PagePtr();
-    assert(!((uint64_t) ptr & (page_align - 1)));
-    assert(!(offset & (page_align - 1)));
     auto [fd, registered] = fd_ref.FdPair();
-    io_uring_sqe *sqe = GetSQE(UserDataType::WriteReq, req);
+    io_uring_sqe *sqe = GetSQE();
     if (registered)
     {
         sqe->flags |= IOSQE_FIXED_FILE;
     }
+    // We allocate a AsynWriteReq after we get a SQE so that the size of
+    // WriteReq object pool is limited too.
+    WriteReq *req = AllocWriteReq();
+    req->page_.swap(page);
+    EncodeUserData(sqe, req, UserDataType::AsynWriteReq);
+
+    char *ptr = req->PagePtr();
+    SetPageCrc32(ptr, Options()->data_page_size);
     io_uring_prep_write(sqe, fd, ptr, options_->data_page_size, offset);
-    // assert(req->fd_ref_.Get() == nullptr);
     req->fd_ref_ = std::move(fd_ref);
     return KvError::NoError;
 }
 
-KvError IouringMgr::SyncFiles(const TableIdent &tbl_id)
+KvError IouringMgr::FlushData(const TableIdent &tbl_id)
 {
+    int err = thd_task->WaitAsynIo();
+    if (err < 0)
+    {
+        LOG(ERROR) << "write data files failed " << tbl_id << " : " << err;
+        return ToKvError(err);
+    }
+
     auto it_tbl = tables_.find(tbl_id);
     if (it_tbl == tables_.end())
     {
@@ -180,7 +200,7 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id)
         return KvError::NoError;
     }
 
-    std::vector<AsynFsyncReq> fsync_reqs;
+    std::vector<FsyncReq> fsync_reqs;
     for (auto &[id, fd] : it_tbl->second.fds_)
     {
         if (fd.dirty_)
@@ -188,7 +208,7 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id)
             fsync_reqs.emplace_back(thd_task, &fd, this);
         }
     }
-    for (AsynFsyncReq &req : fsync_reqs)
+    for (FsyncReq &req : fsync_reqs)
     {
         auto [fd, registered] = req.fd_ref_.FdPair();
         io_uring_sqe *sqe = GetSQE(UserDataType::AsynFsyncReq, &req);
@@ -198,7 +218,7 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id)
         }
         io_uring_prep_fsync(sqe, fd, IORING_FSYNC_DATASYNC);
     }
-    int err = thd_task->WaitAsynIo();
+    err = thd_task->WaitAsynIo();
     if (err < 0)
     {
         LOG(ERROR) << "fsync data files failed " << tbl_id << ':' << err;
@@ -264,9 +284,12 @@ std::pair<void *, IouringMgr::UserDataType> IouringMgr::DecodeUserData(
     return {ptr, type};
 }
 
-void *IouringMgr::EncodeUserData(void *ptr, IouringMgr::UserDataType type)
+void IouringMgr::EncodeUserData(io_uring_sqe *sqe,
+                                void *ptr,
+                                IouringMgr::UserDataType type)
 {
-    return (void *) ((uint64_t(ptr) << 8) | uint64_t(type));
+    void *user_data = (void *) ((uint64_t(ptr) << 8) | uint64_t(type));
+    io_uring_sqe_set_data(sqe, user_data);
 }
 
 IouringMgr::LruFD::Ref IouringMgr::GetCachedFD(const TableIdent &tbl_id,
@@ -443,12 +466,14 @@ IouringMgr::LruFD::Ref IouringMgr::GetOrCreateFD(const TableIdent &tbl_id,
     return std::move(lru_fd);
 }
 
-std::pair<uint32_t, uint64_t> IouringMgr::ConvFilePageId(
+std::pair<uint32_t, uint32_t> IouringMgr::ConvFilePageId(
     uint32_t file_page_id) const
 {
-    uint32_t file_id = file_page_id >> options_->data_file_pages;
-    uint64_t offset = (file_page_id & ((1 << options_->data_file_pages) - 1)) *
-                      options_->data_page_size;
+    uint32_t file_id = file_page_id >> options_->num_file_pages_shift;
+    uint32_t offset =
+        (file_page_id & ((1 << options_->num_file_pages_shift) - 1)) *
+        options_->data_page_size;
+    assert(!(offset & (page_align - 1)));
     return {file_id, offset};
 }
 
@@ -489,7 +514,7 @@ void IouringMgr::PollComplete()
             task = static_cast<KvTask *>(ptr);
             is_sync_io = true;
             break;
-        case UserDataType::WriteReq:
+        case UserDataType::AsynWriteReq:
         {
             WriteReq *req = static_cast<WriteReq *>(ptr);
             LruFD::Ref ref = std::move(req->fd_ref_);
@@ -497,19 +522,22 @@ void IouringMgr::PollComplete()
             {
                 ref.Get()->dirty_ = true;
             }
-            req->task_->FinishReq(req);
+            req->task_->WritePageCallback(std::move(req->page_));
+            FreeWriteReq(req);
+
             task = req->task_;
             is_sync_io = false;
             break;
         }
         case UserDataType::AsynFsyncReq:
         {
-            AsynFsyncReq *req = static_cast<AsynFsyncReq *>(ptr);
+            FsyncReq *req = static_cast<FsyncReq *>(ptr);
             LruFD::Ref ref = std::move(req->fd_ref_);
             if (cqe->res >= 0)
             {
                 ref.Get()->dirty_ = false;
             }
+
             task = req->task_;
             is_sync_io = false;
             break;
@@ -590,7 +618,8 @@ int IouringMgr::Read(FdIdx fd, char *dst, size_t n, uint64_t offset)
     return thd_task->WaitSyncIo();
 }
 
-int IouringMgr::Read(FdIdx fd, char **dst, uint64_t offset)
+std::pair<std::unique_ptr<char[]>, int> IouringMgr::Read(
+    FdIdx fd, std::unique_ptr<char[]> page, uint32_t offset)
 {
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, thd_task);
     if (fd.second)
@@ -606,19 +635,19 @@ int IouringMgr::Read(FdIdx fd, char **dst, uint64_t offset)
         assert(ret > 0);
         uint16_t buf_id = thd_task->io_flags_ >> IORING_CQE_BUFFER_SHIFT;
         assert(buf_id < bufs_pool_.size());
+        page.swap(bufs_pool_[buf_id]);
+
         uint16_t buf_size = options_->data_page_size;
         int mask = io_uring_buf_ring_mask(options_->buf_ring_size);
-        char *free_addr = *dst;
-        io_uring_buf_ring_add(buf_ring_, free_addr, buf_size, buf_id, mask, 0);
+        io_uring_buf_ring_add(
+            buf_ring_, bufs_pool_[buf_id].get(), buf_size, buf_id, mask, 0);
         io_uring_buf_ring_advance(buf_ring_, 1);
-        *dst = bufs_pool_[buf_id];
-        bufs_pool_[buf_id] = free_addr;
     }
     else
     {
         assert(ret <= 0);
     }
-    return ret;
+    return {std::move(page), ret};
 }
 
 int IouringMgr::Write(FdIdx fd, const char *src, size_t n, uint64_t offset)
@@ -886,11 +915,42 @@ io_uring_sqe *IouringMgr::GetSQE(UserDataType type, void *user_ptr)
         thd_task->Yield();
     }
 
-    void *user_data = EncodeUserData(user_ptr, type);
-    io_uring_sqe_set_data(sqe, user_data);
+    if (user_ptr != nullptr)
+    {
+        EncodeUserData(sqe, user_ptr, type);
+    }
     thd_task->inflight_io_++;
     not_submitted_sqe_++;
     return sqe;
+}
+
+void IouringMgr::FreeWriteReq(WriteReq *req)
+{
+    assert(req->fd_ref_.Get() == nullptr);
+    WriteReq *first = free_asyn_write_.next_;
+    free_asyn_write_.next_ = req;
+    req->next_ = first;
+}
+
+IouringMgr::WriteReq *IouringMgr::AllocWriteReq()
+{
+    WriteReq *first = free_asyn_write_.next_;
+    if (first != nullptr)
+    {
+        free_asyn_write_.next_ = first->next_;
+        first->next_ = nullptr;
+    }
+    else
+    {
+        // IO uring submission queue entry is acquired first and the submission
+        // queue size is fixed, so the maximal ongoing write requests is capped.
+        asyn_write_reqs_.emplace_back(std::make_unique<WriteReq>());
+        first = asyn_write_reqs_.back().get();
+        assert(asyn_write_reqs_.size() <= options_->io_queue_size);
+    }
+
+    first->task_ = static_cast<WriteTask *>(thd_task);
+    return first;
 }
 
 int IouringMgr::Manifest::Read(char *dst, size_t n)
@@ -1062,6 +1122,14 @@ void IouringMgr::LruFD::Ref::Clear()
     io_mgr_ = nullptr;
 }
 
+char *IouringMgr::WriteReq::PagePtr() const
+{
+    char *ptr = page_.index() == 0 ? std::get<0>(page_)->PagePtr()
+                                   : std::get<1>(page_).PagePtr();
+    assert(!((uint64_t) ptr & (page_align - 1)));
+    return ptr;
+}
+
 MemStoreMgr::MemStoreMgr(const KvOptions *opts) : AsyncIoManager(opts)
 {
 }
@@ -1071,23 +1139,22 @@ KvError MemStoreMgr::Init(int dir_fd)
     return KvError::NoError;
 }
 
-KvError MemStoreMgr::ReadPage(const TableIdent &tbl_ident,
-                              uint32_t file_page_id,
-                              char **ptr)
+std::pair<std::unique_ptr<char[]>, KvError> MemStoreMgr::ReadPage(
+    const TableIdent &tbl_id, uint32_t fp_id, std::unique_ptr<char[]> page)
 {
-    auto it = store_.find(tbl_ident);
+    auto it = store_.find(tbl_id);
     if (it == store_.end())
     {
-        return KvError::NotFound;
+        return {std::move(page), KvError::NotFound};
     }
 
     Partition &part = it->second;
-    if (file_page_id >= part.pages.size())
+    if (fp_id >= part.pages.size())
     {
-        return KvError::NotFound;
+        return {std::move(page), KvError::NotFound};
     }
-    memcpy(*ptr, part.pages[file_page_id].get(), options_->data_page_size);
-    return KvError::NoError;
+    memcpy(page.get(), part.pages[fp_id].get(), options_->data_page_size);
+    return {std::move(page), KvError::NoError};
 }
 
 ManifestFilePtr MemStoreMgr::GetManifest(const TableIdent &tbl_ident)
@@ -1100,31 +1167,35 @@ ManifestFilePtr MemStoreMgr::GetManifest(const TableIdent &tbl_ident)
     return std::make_unique<Manifest>(it->second.wal);
 }
 
-KvError MemStoreMgr::WritePage(WriteReq *req)
+KvError MemStoreMgr::WritePage(const TableIdent &tbl_id,
+                               VarPage page,
+                               uint32_t file_page_id)
 {
-    auto it = store_.find(*req->tbl_ident_);
+    auto it = store_.find(tbl_id);
     if (it == store_.end())
     {
-        auto [it1, _] = store_.try_emplace(*req->tbl_ident_);
+        auto [it1, _] = store_.try_emplace(tbl_id);
         it = it1;
     }
     Partition &part = it->second;
 
     char *dst;
-    if (req->file_page_id_ >= part.pages.size())
+    if (file_page_id >= part.pages.size())
     {
-        assert(req->file_page_id_ == part.pages.size());
+        assert(file_page_id == part.pages.size());
         part.pages.emplace_back(
             std::make_unique<char[]>(options_->data_page_size));
         dst = part.pages.back().get();
     }
     else
     {
-        dst = part.pages[req->file_page_id_].get();
+        dst = part.pages[file_page_id].get();
     }
-    memcpy(dst, req->PagePtr(), options_->data_page_size);
+    char *ptr = page.index() == 0 ? std::get<0>(page)->PagePtr()
+                                  : std::get<1>(page).PagePtr();
+    memcpy(dst, ptr, options_->data_page_size);
 
-    req->task_->FinishReq(req);
+    static_cast<WriteTask *>(thd_task)->WritePageCallback(std::move(page));
     return KvError::NoError;
 }
 

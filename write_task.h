@@ -3,11 +3,11 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
-#include <variant>
 #include <vector>
 
 #include "data_page.h"
 #include "data_page_builder.h"
+#include "error.h"
 #include "index_page_builder.h"
 #include "index_page_manager.h"
 #include "mem_index_page.h"
@@ -27,24 +27,6 @@ class PageMapper;
 class MappingSnapshot;
 class IouringMgr;
 
-struct WriteReq
-{
-    char *PagePtr() const
-    {
-        return page_.index() == 0 ? std::get<0>(page_)->PagePtr()
-                                  : std::get<1>(page_).PagePtr();
-    }
-
-    const TableIdent *tbl_ident_{nullptr};
-    uint32_t page_id_{UINT32_MAX};
-    uint32_t file_page_id_{UINT32_MAX};
-    std::variant<MemIndexPage *, DataPage> page_;
-
-    IouringMgr::LruFD::Ref fd_ref_;
-    WriteTask *task_{nullptr};
-    WriteReq *next_{nullptr};
-};
-
 struct WriteDataEntry
 {
     std::string key_;
@@ -60,54 +42,19 @@ public:
     WriteTask(const TableIdent &tid);
     WriteTask(const WriteTask &) = delete;
 
-    TaskType Type() const override
-    {
-        return TaskType::Write;
-    }
-    const TableIdent &TableId() const
-    {
-        return tbl_ident_;
-    }
-
+    virtual void Abort();
     void Reset(const TableIdent &tbl_id);
-
-    void AddData(std::string key, std::string val, uint64_t ts, WriteOp op);
-    void BulkAddData(std::vector<WriteDataEntry> &&entries);
+    const TableIdent &TableId() const;
 
     /**
-     * @brief The index page has been flushed. If the index page has been
-     * attached to its parent, enqueues the page into the cache replacement list
-    (so that the page is allowed to be evicted). If the index page has not been
-    attached, defers enqueuing until it is attached.
-     *
-     * @param req
+     * @brief The index/data page has been flushed.
+     * Enqueues the page into the cache replacement list (so that the page is
+     * allowed to be evicted) if it is a index page.
      */
-    void FinishReq(WriteReq *req);
+    void WritePageCallback(VarPage page);
 
-    KvError Apply();
-
-private:
-    bool IsWriteBufferFull() const
-    {
-        return free_req_cnt_ == 0;
-    }
-    bool IsWriteBufferEmpty() const
-    {
-        return free_req_cnt_ == write_reqs_.size();
-    }
-
-    KvError Pop(MemIndexPage **root);
-
-    KvError FinishIndexPage(MemIndexPage *new_page,
-                            std::string idx_page_key,
-                            uint32_t page_id,
-                            uint32_t file_page_id,
-                            bool elevate);
-
-    KvError FinishDataPage(std::string_view page_view,
-                           std::string page_key,
-                           uint32_t page_id,
-                           uint32_t file_page_id);
+protected:
+    KvError DeleteTree(uint32_t page_id);
 
     /**
      * @brief Calculates the left boundary of the data page or the top index
@@ -127,10 +74,58 @@ private:
      */
     std::string RightBound(bool is_data_page);
 
-    KvError ApplyOnePage(size_t &cidx);
-    void AdvanceDataPageIter(DataPageIter &iter, bool &is_valid);
-    void AdvanceIndexPageIter(IndexPageIter &iter, bool &is_valid);
+    static void AdvanceDataPageIter(DataPageIter &iter, bool &is_valid);
+    static void AdvanceIndexPageIter(IndexPageIter &iter, bool &is_valid);
 
+    KvError FlushManifest(const MemIndexPage *root);
+    KvError UpdateMeta(MemIndexPage *root);
+
+    std::pair<uint32_t, KvError> Seek(std::string_view key);
+
+    std::pair<uint32_t, uint32_t> AllocatePage(uint32_t page_id);
+    void FreePage(uint32_t page_id);
+
+    uint32_t ToFilePage(uint32_t page_id);
+
+    KvError WritePage(DataPage &&page);
+    KvError WritePage(MemIndexPage *page);
+
+    TableIdent tbl_ident_;
+
+    IndexPageBuilder idx_page_builder_;
+    DataPageBuilder data_page_builder_;
+
+    std::vector<std::unique_ptr<IndexStackEntry>> stack_;
+
+    CowRootMeta cow_meta_;
+    ManifestBuilder wal_builder_;
+};
+
+class BatchWriteTask : public WriteTask
+{
+public:
+    BatchWriteTask(const TableIdent &tid) : WriteTask(tid) {};
+    TaskType Type() const override
+    {
+        return TaskType::BatchWrite;
+    }
+    void Abort() override;
+
+    bool SetBatch(std::vector<WriteDataEntry> &&entries);
+    KvError Apply();
+
+private:
+    KvError LoadApplyingPage(uint32_t page_id);
+    KvError ApplyOnePage(size_t &cidx);
+    std::pair<MemIndexPage *, KvError> Pop();
+
+    KvError FinishIndexPage(MemIndexPage *new_page,
+                            std::string idx_page_key,
+                            uint32_t page_id,
+                            bool elevate);
+    KvError FinishDataPage(std::string_view page_view,
+                           std::string page_key,
+                           uint32_t page_id);
     /**
      * @brief Pops up the index stack such that the top index entry contains the
      * search key.
@@ -139,41 +134,16 @@ private:
      */
     KvError SeekStack(std::string_view search_key);
 
-    KvError Seek(std::string_view key);
+    std::vector<WriteDataEntry> batch_;
+    DataPage applying_page_;
 
-    void AllocatePage(WriteReq *req, uint32_t page_id, uint32_t file_page_id);
-    void FreePage(uint32_t page_id);
-
-    uint32_t ToFilePage(uint32_t page_id);
-
-    TableIdent tbl_ident_;
-    std::vector<WriteDataEntry> data_;
-
-    IndexPageBuilder idx_page_builder_;
-    DataPageBuilder data_page_builder_;
-
-    std::vector<std::unique_ptr<IndexStackEntry>> stack_;
-    DataPage data_page_;
-
-    /**
-     * @brief Get a DataPage from the free pages pool or allocate a new page.
-     */
-    DataPage AllocDataPage(uint32_t page_id);
-    void FreeDataPage(DataPage &&page);
-    std::vector<DataPage> data_pages_pool_;
-
-    struct DirtyLeaf
-    {
-        DataPage page;
-        uint32_t old_file_page;
-    };
     /**
      * @brief To maintain the double link list between bottom data pages, we
      * keep at most three adjacent data pages in memory. [1] is the page
      * ApplyOnePage currently writing to, [0] is the previous page of [1], and
      * [2] is the next page of [1].
      */
-    DirtyLeaf leaf_triple_[3];
+    DataPage leaf_triple_[3];
     /**
      * @brief Get triple element at position idx.
      *
@@ -189,13 +159,13 @@ private:
 
     /**
      * @brief Update element in leaf link list. Replace the old page at
-     * data_page_ with new page. The new page is the first page generated by
+     * applying_page_ with new page. The new page is the first page generated by
      * ApplyOnePage.
      *
      * @param page The new page.
      * @param old_fp File page id of the old page.
      */
-    KvError LeafLinkUpdate(DataPage &&page, uint32_t old_fp);
+    KvError LeafLinkUpdate(DataPage &&page);
     /**
      * @brief Insert new page into leaf link list.
      *
@@ -203,21 +173,26 @@ private:
      */
     KvError LeafLinkInsert(DataPage &&page);
     /**
-     * @brief Delete the old data page at data_page_ from leaf link list.
+     * @brief Delete the old data page at applying_page_ from leaf link list.
      */
     KvError LeafLinkDelete();
     KvError ShiftLeafLink();
+};
 
-    std::unique_ptr<PageMapper> mapper_{nullptr};
-    std::shared_ptr<MappingSnapshot> old_mapping_{nullptr};
+class TruncateTask : public WriteTask
+{
+public:
+    TruncateTask(const TableIdent &tid) : WriteTask(tid) {};
+    TaskType Type() const override
+    {
+        return TaskType::Truncate;
+    }
+    KvError Truncate(std::string_view trunc_pos);
 
-    void RecycleWriteReq(WriteReq *req);
-    WriteReq *GetWriteReq();
-
-    std::vector<WriteReq> write_reqs_;
-    WriteReq free_req_head_;
-    size_t free_req_cnt_{0};
-
-    ManifestBuilder wal_builder_;
+private:
+    std::pair<bool, KvError> TruncateDataPage(uint32_t page_id,
+                                              std::string_view trunc_pos);
+    std::pair<MemIndexPage *, KvError> TruncateIndexPage(
+        uint32_t page_id, std::string_view trunc_pos);
 };
 }  // namespace kvstore

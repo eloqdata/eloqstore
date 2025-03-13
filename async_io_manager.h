@@ -24,6 +24,7 @@ namespace kvstore
 {
 class WriteReq;
 class WriteTask;
+class MemIndexPage;
 
 class ManifestFile
 {
@@ -34,21 +35,28 @@ public:
 
 using ManifestFilePtr = std::unique_ptr<ManifestFile>;
 
+using VarPage = std::variant<MemIndexPage *, DataPage>;
+
 class AsyncIoManager
 {
 public:
-    AsyncIoManager(const KvOptions *opts) : options_(opts){};
+    AsyncIoManager(const KvOptions *opts) : options_(opts) {};
     virtual ~AsyncIoManager() = default;
+    static std::unique_ptr<AsyncIoManager> New(const KvOptions *opts);
     /** These methods are used by worker thread. */
     virtual KvError Init(int dir_fd) = 0;
     virtual void Submit() = 0;
     virtual void PollComplete() = 0;
 
     /** These methods are used by read/write task. */
-    virtual KvError ReadPage(const TableIdent &tbl_id,
-                             uint32_t fp_id,
-                             char **ptr) = 0;
-    virtual KvError WritePage(WriteReq *req) = 0;
+    virtual std::pair<std::unique_ptr<char[]>, KvError> ReadPage(
+        const TableIdent &tbl_id,
+        uint32_t fp_id,
+        std::unique_ptr<char[]> page) = 0;
+    virtual KvError WritePage(const TableIdent &tbl_id,
+                              VarPage page,
+                              uint32_t file_page_id) = 0;
+    virtual KvError FlushData(const TableIdent &tbl_id) = 0;
     virtual KvError AppendManifest(const TableIdent &tbl_id,
                                    std::string_view log,
                                    uint64_t manifest_size) = 0;
@@ -69,10 +77,14 @@ public:
     void Submit() override;
     void PollComplete() override;
 
-    KvError ReadPage(const TableIdent &tbl_id,
-                     uint32_t fp_id,
-                     char **ptr) override;
-    KvError WritePage(WriteReq *req) override;
+    std::pair<std::unique_ptr<char[]>, KvError> ReadPage(
+        const TableIdent &tbl_id,
+        uint32_t fp_id,
+        std::unique_ptr<char[]> page) override;
+    KvError WritePage(const TableIdent &tbl_id,
+                      VarPage page,
+                      uint32_t file_page_id) override;
+    KvError FlushData(const TableIdent &tbl_id) override;
     KvError AppendManifest(const TableIdent &tbl_id,
                            std::string_view log,
                            uint64_t manifest_size) override;
@@ -81,17 +93,17 @@ public:
     ManifestFilePtr GetManifest(const TableIdent &tbl_id) override;
     void CleanTable(const TableIdent &tbl_id) override;
 
-    KvError SyncFiles(const TableIdent &tbl_id);
     static std::string DataFileName(uint32_t file_id);
 
     static constexpr char mani_file[] = "manifest";
     static constexpr char mani_tmpfile[] = "manifest.tmp";
     static constexpr uint64_t oflags_dir = O_DIRECTORY | O_RDONLY;
 
+private:
     enum class UserDataType : uint8_t
     {
         KvTask,
-        WriteReq,
+        AsynWriteReq,
         AsynFsyncReq
     };
 
@@ -145,13 +157,24 @@ public:
         LruFD *prev_{nullptr};
         LruFD *next_{nullptr};
     };
-    struct AsynFsyncReq
+
+    struct FsyncReq
     {
-        AsynFsyncReq(KvTask *task, LruFD *fd_ptr, IouringMgr *io_mgr)
-            : task_(task), fd_ref_(fd_ptr, io_mgr){};
+        FsyncReq(KvTask *task, LruFD *fd_ptr, IouringMgr *io_mgr)
+            : task_(task), fd_ref_(fd_ptr, io_mgr) {};
         KvTask *task_;
         LruFD::Ref fd_ref_;
     };
+
+    struct WriteReq
+    {
+        char *PagePtr() const;
+        VarPage page_;
+        LruFD::Ref fd_ref_;
+        WriteTask *task_{nullptr};
+        WriteReq *next_{nullptr};
+    };
+
     class PartitionFiles
     {
     public:
@@ -159,12 +182,11 @@ public:
         std::unordered_map<uint32_t, LruFD> fds_;
     };
 
-private:
     class Manifest : public ManifestFile
     {
     public:
         Manifest(IouringMgr *io_mgr, LruFD::Ref &&fd)
-            : io_mgr_(io_mgr), fd_(std::move(fd)){};
+            : io_mgr_(io_mgr), fd_(std::move(fd)) {};
         int Read(char *dst, size_t n) override;
 
     private:
@@ -177,12 +199,16 @@ private:
 
     static KvError ToKvError(int err_no);
     static std::pair<void *, UserDataType> DecodeUserData(uint64_t user_data);
-    static void *EncodeUserData(void *ptr, UserDataType type);
-    std::pair<uint32_t, uint64_t> ConvFilePageId(uint32_t file_page_id) const;
+    static void EncodeUserData(io_uring_sqe *sqe, void *ptr, UserDataType type);
+    /**
+     * @brief Convert file page id to <file_id, file_offset>
+     */
+    std::pair<uint32_t, uint32_t> ConvFilePageId(uint32_t file_page_id) const;
     uint32_t AllocRegisterIndex();
     void FreeRegisterIndex(uint32_t idx);
 
-    io_uring_sqe *GetSQE(UserDataType type, void *user_ptr);
+    io_uring_sqe *GetSQE(UserDataType type = UserDataType::KvTask,
+                         void *user_ptr = nullptr);
     // Low-level io operation
     int CreateDir(FdIdx dir_fd, const char *path);
     int OpenAt(FdIdx dir_fd,
@@ -190,7 +216,9 @@ private:
                uint64_t flags,
                uint64_t mode = 0);
     int Read(FdIdx fd, char *dst, size_t n, uint64_t offset);
-    int Read(FdIdx fd, char **dst, uint64_t offset);
+    std::pair<std::unique_ptr<char[]>, int> Read(FdIdx fd,
+                                                 std::unique_ptr<char[]> ptr,
+                                                 uint32_t offset);
     int Write(FdIdx fd, const char *src, size_t n, uint64_t offset);
     int Fdatasync(FdIdx fd);
     int Rename(FdIdx dir_fd, const char *old_path, const char *new_path);
@@ -205,6 +233,11 @@ private:
                              bool create = true);
     bool EvictFDIfFull();
 
+    WriteReq *AllocWriteReq();
+    void FreeWriteReq(WriteReq *req);
+    std::vector<std::unique_ptr<WriteReq>> asyn_write_reqs_;
+    WriteReq free_asyn_write_;
+
     FdIdx dir_fd_idx_{-1, false};
     std::unordered_map<TableIdent, PartitionFiles> tables_;
     LruFD lru_fd_head_{nullptr, UINT32_MAX};
@@ -215,7 +248,7 @@ private:
     std::vector<uint32_t> free_reg_slots_;
 
     io_uring_buf_ring *buf_ring_{nullptr};
-    std::vector<char *> bufs_pool_;
+    std::vector<std::unique_ptr<char[]>> bufs_pool_;
     const int buf_group_{0};
 
     io_uring ring_;
@@ -231,10 +264,17 @@ public:
     void Submit() override {};
     void PollComplete() override {};
 
-    KvError ReadPage(const TableIdent &tbl_id,
-                     uint32_t fp_id,
-                     char **ptr) override;
-    KvError WritePage(WriteReq *req) override;
+    std::pair<std::unique_ptr<char[]>, KvError> ReadPage(
+        const TableIdent &tbl_id,
+        uint32_t file_page_id,
+        std::unique_ptr<char[]> page) override;
+    KvError WritePage(const TableIdent &tbl_id,
+                      VarPage page,
+                      uint32_t file_page_id) override;
+    KvError FlushData(const TableIdent &tbl_id) override
+    {
+        return KvError::NoError;
+    }
     void CleanTable(const TableIdent &tbl_id) override;
 
     KvError AppendManifest(const TableIdent &tbl_id,
@@ -247,7 +287,7 @@ public:
     class Manifest : public ManifestFile
     {
     public:
-        Manifest(std::string_view content) : content_(content){};
+        Manifest(std::string_view content) : content_(content) {};
         int Read(char *dst, size_t n) override;
         void Skip(size_t n);
 

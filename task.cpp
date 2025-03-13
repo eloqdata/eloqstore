@@ -14,8 +14,11 @@ void KvTask::Yield()
 
 void KvTask::Resume()
 {
-    status_ = TaskStatus::Ongoing;
-    task_mgr->scheduled_.Enqueue(this);
+    if (status_ != TaskStatus::Ongoing)
+    {
+        status_ = TaskStatus::Ongoing;
+        task_mgr->scheduled_.Enqueue(this);
+    }
 }
 
 int KvTask::WaitSyncIo()
@@ -28,16 +31,14 @@ int KvTask::WaitSyncIo()
     return io_res_;
 }
 
-int KvTask::WaitAsynIo(bool all)
+int KvTask::WaitAsynIo()
 {
-    if (inflight_io_ == 0)
-    {
-        return 0;
-    }
-    status_ = all ? TaskStatus::WaitAllAsynIo : TaskStatus::WaitAnyAsynIo;
     asyn_io_err_ = 0;
-    Yield();
-    assert(inflight_io_ == 0 || !all);
+    while (inflight_io_ > 0)
+    {
+        status_ = TaskStatus::WaitAllAsynIo;
+        Yield();
+    }
     return asyn_io_err_;
 }
 
@@ -53,12 +54,6 @@ void KvTask::FinishIo(bool is_sync_io)
             Resume();
         }
         break;
-    case TaskStatus::WaitAnyAsynIo:
-        if (!is_sync_io)
-        {
-            Resume();
-        }
-        break;
     case TaskStatus::WaitAllAsynIo:
         if (inflight_io_ == 0)
         {
@@ -68,6 +63,20 @@ void KvTask::FinishIo(bool is_sync_io)
     default:
         break;
     }
+}
+
+std::pair<DataPage, KvError> KvTask::LoadDataPage(const TableIdent &tbl_id,
+                                                  uint32_t page_id,
+                                                  uint32_t file_page_id)
+{
+    DataPage page(page_id, Options()->data_page_size);
+    auto [ptr, err] = IoMgr()->ReadPage(tbl_id, file_page_id, page.GetPtr());
+    page.SetPtr(std::move(ptr));
+    if (err != KvError::NoError)
+    {
+        return {DataPage(), err};
+    }
+    return {std::move(page), KvError::NoError};
 }
 
 AsyncIoManager *IoMgr()

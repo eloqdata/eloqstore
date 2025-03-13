@@ -77,6 +77,13 @@ MemIndexPage *IndexPageManager::AllocIndexPage()
     return next_free;
 }
 
+void IndexPageManager::FreeIndexPage(MemIndexPage *page)
+{
+    assert(page->IsDetached());
+    assert(!page->IsPinned());
+    free_head_.EnqueNext(page);
+}
+
 void IndexPageManager::EnqueuIndexPage(MemIndexPage *page)
 {
     if (page->prev_ != nullptr)
@@ -93,80 +100,56 @@ bool IndexPageManager::IsFull() const
     return index_pages_.size() >= Options()->index_buffer_pool_size;
 }
 
-std::tuple<MemIndexPage *, PageMapper *, KvError> IndexPageManager::FindRoot(
+std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
     const TableIdent &tbl_ident)
 {
-    RootMeta *meta = nullptr;
     auto it = tbl_roots_.find(tbl_ident);
-    if (it != tbl_roots_.end())
+    while (it == tbl_roots_.end())
     {
-        meta = &it->second;
-        KvError err = meta->load_err_;
-        if (meta->mapper_ == nullptr && err == KvError::NoError)
-        {
-            // This table is loading
-            meta->waiting_load_.emplace(thd_task);
-            thd_task->status_ = TaskStatus::Blocked;
-            thd_task->Yield();
-            meta->waiting_load_.erase(thd_task);
-            if (err != KvError::NoError && meta->waiting_load_.empty())
-            {
-                // Clean the RootMeta entry, because it can't be loaded
-                tbl_roots_.erase(tbl_ident);
-                return {nullptr, nullptr, err};
-            }
-        }
-        if (meta->root_page_)
-        {
-            EnqueuIndexPage(meta->root_page_);
-        }
-    }
-    else
-    {
-        tbl_roots_.try_emplace(tbl_ident);
         KvError err = LoadTablePartition(tbl_ident);
+        if (err != KvError::NoError)
+        {
+            return {nullptr, err};
+        }
         it = tbl_roots_.find(tbl_ident);
-        assert(it != tbl_roots_.end());
-        meta = &it->second;
-        meta->load_err_ = err;
-        for (KvTask *task : meta->waiting_load_)
-        {
-            task->Resume();
-        }
-        if (err != KvError::NoError && meta->waiting_load_.empty())
-        {
-            // Clean the RootMeta entry, because it can't be loaded
-            tbl_roots_.erase(tbl_ident);
-            return {nullptr, nullptr, err};
-        }
     }
-    return {meta->root_page_, meta->mapper_.get(), meta->load_err_};
+
+    RootMeta *meta = &it->second;
+    if (meta->root_page_)
+    {
+        EnqueuIndexPage(meta->root_page_);
+    }
+    return {meta, KvError::NoError};
 }
 
 KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
                                       CowRootMeta &cow_meta)
 {
-    auto [root_page, mapper, err] = FindRoot(tbl_ident);
+    auto [meta, err] = FindRoot(tbl_ident);
     if (err == KvError::NoError)
     {
-        assert(mapper != nullptr);
         // Makes a copy of the mapper.
         std::unique_ptr<PageMapper> new_mapper =
-            std::make_unique<PageMapper>(*mapper);
-        cow_meta.root_ = root_page;
-        cow_meta.new_mapper_ = std::move(new_mapper);
-        cow_meta.old_mapping_ = mapper->GetMappingSnapshot();
+            std::make_unique<PageMapper>(*meta->mapper_);
+        cow_meta.root_ = meta->root_page_;
+        cow_meta.mapper_ = std::move(new_mapper);
+        cow_meta.old_mapping_ = meta->mapper_->GetMappingSnapshot();
+        cow_meta.manifest_size_ = meta->manifest_size_;
         return KvError::NoError;
     }
     else if (err == KvError::NotFound)
     {
+        // TODO(zhanghao): This will leave a empty RootMeta entry if WriteTask
+        // do not call UpdateRoot
         auto [tbl_it, _] = tbl_roots_.try_emplace(tbl_ident);
+        const TableIdent *tbl_id = &tbl_it->first;
         std::unique_ptr<PageMapper> mapper =
-            std::make_unique<PageMapper>(this, &tbl_it->first);
+            std::make_unique<PageMapper>(this, tbl_id);
         std::shared_ptr<MappingSnapshot> mapping = mapper->GetMappingSnapshot();
         cow_meta.root_ = nullptr;
-        cow_meta.new_mapper_ = std::move(mapper);
+        cow_meta.mapper_ = std::move(mapper);
         cow_meta.old_mapping_ = std::move(mapping);
+        cow_meta.manifest_size_ = 0;
         return KvError::NoError;
     }
     else
@@ -175,9 +158,10 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
     }
 }
 
-RootMeta &IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
-                                       MemIndexPage *new_root,
-                                       std::unique_ptr<PageMapper> new_mapper)
+void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
+                                  MemIndexPage *new_root,
+                                  std::unique_ptr<PageMapper> new_mapper,
+                                  uint64_t manifest_size)
 {
     auto tbl_it = tbl_roots_.find(tbl_ident);
     assert(tbl_it != tbl_roots_.end());
@@ -185,44 +169,90 @@ RootMeta &IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
     meta.root_page_ = new_root;
     meta.mapper_ = std::move(new_mapper);
     meta.mapping_snapshots_.insert(meta.mapper_->GetMapping());
-    return meta;
+    meta.manifest_size_ = manifest_size;
 }
 
 KvError IndexPageManager::LoadTablePartition(const TableIdent &tbl_id)
 {
-    ManifestFilePtr manifest = IoMgr()->GetManifest(tbl_id);
-    if (manifest == nullptr)
+    auto [it_loading, success] = tbl_loading_.try_emplace(tbl_id);
+    auto &loading = it_loading->second;
+    if (!success)
     {
-        return KvError::NotFound;
+        loading.emplace_back(thd_task);
+        thd_task->status_ = TaskStatus::Blocked;
+        thd_task->Yield();
+        return KvError::NoError;
     }
 
-    Replayer replayer;
-    KvError err = replayer.Replay(std::move(manifest), Options());
-    if (err != KvError::NoError)
+    auto load_func = [this](const TableIdent &tbl_id)
     {
-        LOG(ERROR) << "load evicted table: replay failed";
-        return err;
-    }
+        // load manifest file
+        ManifestFilePtr manifest = IoMgr()->GetManifest(tbl_id);
+        if (manifest == nullptr)
+        {
+            return KvError::NotFound;
+        }
 
-    auto it = tbl_roots_.find(tbl_id);
-    assert(it != tbl_roots_.end());
-    RootMeta &meta = it->second;
-    auto mapper = replayer.Mapper(this, &it->first);
-    MappingSnapshot *mapping = mapper->GetMapping();
-    meta.mapper_ = std::move(mapper);
-    meta.mapping_snapshots_.insert(mapping);
-    if (replayer.root_ != UINT32_MAX)
+        // replay
+        Replayer replayer;
+        KvError err = replayer.Replay(std::move(manifest), Options());
+        if (err != KvError::NoError)
+        {
+            LOG(ERROR) << "load evicted table: replay failed";
+            return err;
+        }
+
+        // load root page
+        uint32_t root_id = replayer.root_;
+        uint32_t root_fp_id;
+        MemIndexPage *root_page = nullptr;
+        if (root_id != UINT32_MAX)
+        {
+            root_page = AllocIndexPage();
+            if (root_page == nullptr)
+            {
+                return KvError::OutOfMem;
+            }
+            root_fp_id = replayer.mapper_->GetMapping()->ToFilePage(root_id);
+            auto [page, err] = IoMgr()->ReadPage(
+                tbl_id, root_fp_id, std::move(root_page->page_));
+            root_page->page_ = std::move(page);
+            if (err != KvError::NoError)
+            {
+                FreeIndexPage(root_page);
+                return err;
+            }
+            root_page->SetPageId(root_id);
+            root_page->SetFilePageId(root_fp_id);
+        }
+
+        auto [it, b] = tbl_roots_.try_emplace(tbl_id);
+        assert(b);
+        RootMeta &meta = it->second;
+        auto mapper = replayer.Mapper(this, &it->first);
+        MappingSnapshot *mapping = mapper->GetMapping();
+        meta.mapper_ = std::move(mapper);
+        meta.mapping_snapshots_.insert(mapping);
+        meta.manifest_size_ = replayer.file_size_;
+        if (root_page)
+        {
+            meta.root_page_ = root_page;
+            FinishIo(mapping, root_page);
+        }
+        return KvError::NoError;
+    };
+
+    KvError err = load_func(tbl_id);
+    for (KvTask *task : loading)
     {
-        err = FindPage(mapping, replayer.root_, &meta.root_page_);
-        CHECK_KV_ERR(err);
+        task->Resume();
     }
-    meta.manifest_size_ = replayer.file_size_;
-    return KvError::NoError;
+    tbl_loading_.erase(tbl_id);
+    return err;
 }
 
-KvError IndexPageManager::FindPage(MappingSnapshot *mapping,
-                                   uint32_t page_id,
-                                   MemIndexPage **result)
+std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
+    MappingSnapshot *mapping, uint32_t page_id)
 {
     // First checks swizzling pointers.
     MemIndexPage *idx_page = mapping->GetSwizzlingPointer(page_id);
@@ -237,7 +267,7 @@ KvError IndexPageManager::FindPage(MappingSnapshot *mapping,
             thd_task->status_ = TaskStatus::Blocked;
             thd_task->Yield();
             // When resumed, the read request should have loaded the page,
-            // unless the page is evicted again.
+            // unless the page is evicted again or corrupted.
             idx_page = mapping->GetSwizzlingPointer(page_id);
         }
         else
@@ -252,9 +282,6 @@ KvError IndexPageManager::FindPage(MappingSnapshot *mapping,
             MemIndexPage *new_page = AllocIndexPage();
             if (new_page == nullptr)
             {
-                // No page can be found because all pages are pinned. Rollback
-                // the current task to unpin pages and avoid a deadlock.
-
                 for (auto &task : req->pending_tasks_)
                 {
                     // This task is about to rollback. Resumes other tasks
@@ -265,16 +292,22 @@ KvError IndexPageManager::FindPage(MappingSnapshot *mapping,
                 req->pending_tasks_.clear();
                 RecycleReadReq(req);
                 loading_zone_.erase(it.first);
-                return KvError::OutOfMem;
+                return {nullptr, KvError::OutOfMem};
             }
 
             // Read the page async.
             uint32_t file_page_id = mapping->ToFilePage(page_id);
-            KvError err = IoMgr()->ReadPage(
-                *mapping->tbl_ident_, file_page_id, new_page->PagePtrPtr());
-            CHECK_KV_ERR(err);
-
-            FinishIo(mapping, new_page, page_id, file_page_id);
+            auto [page, err] = IoMgr()->ReadPage(
+                *mapping->tbl_ident_, file_page_id, std::move(new_page->page_));
+            new_page->page_ = std::move(page);
+            if (err != KvError::NoError)
+            {
+                FreeIndexPage(new_page);
+                return {nullptr, err};
+            }
+            new_page->SetPageId(page_id);
+            new_page->SetFilePageId(file_page_id);
+            FinishIo(mapping, new_page);
 
             for (auto &task : read_req->pending_tasks_)
             {
@@ -285,13 +318,11 @@ KvError IndexPageManager::FindPage(MappingSnapshot *mapping,
             read_req->pending_tasks_.clear();
             RecycleReadReq(read_req);
 
-            *result = new_page;
-            return KvError::NoError;
+            return {new_page, KvError::NoError};
         }
     }
     EnqueuIndexPage(idx_page);
-    *result = idx_page;
-    return KvError::NoError;
+    return {idx_page, KvError::NoError};
 }
 
 void IndexPageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
@@ -342,6 +373,15 @@ bool IndexPageManager::Evict()
     return true;
 }
 
+void IndexPageManager::CleanStubRoot(const TableIdent &tbl_id)
+{
+    auto it = tbl_roots_.find(tbl_id);
+    if (it != tbl_roots_.end())
+    {
+        EvictRootIfEmpty(it);
+    }
+}
+
 void IndexPageManager::EvictRootIfEmpty(
     std::unordered_map<TableIdent, RootMeta>::iterator root_it)
 {
@@ -365,7 +405,6 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
         {
             return false;
         }
-        tbl_roots_.erase(tbl_it);
     }
     else
     {
@@ -377,8 +416,8 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
         {
             mapping->Unswizzling(page);
         }
-        EvictRootIfEmpty(tbl_it);
     }
+    EvictRootIfEmpty(tbl_it);
 
     // Removes the page from the active list.
     page->Deque();
@@ -388,19 +427,15 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
     page->file_page_id_ = UINT32_MAX;
     page->tbl_ident_ = nullptr;
 
-    free_head_.EnqueNext(page);
+    FreeIndexPage(page);
     return true;
 }
 
 void IndexPageManager::FinishIo(MappingSnapshot *mapping,
-                                MemIndexPage *idx_page,
-                                uint32_t page_id,
-                                uint32_t file_page_id)
+                                MemIndexPage *idx_page)
 {
-    idx_page->page_id_ = page_id;
-    idx_page->file_page_id_ = file_page_id;
     idx_page->tbl_ident_ = mapping->tbl_ident_;
-    mapping->AddSwizzling(page_id, idx_page);
+    mapping->AddSwizzling(idx_page->PageId(), idx_page);
 
     auto tbl_it = tbl_roots_.find(*mapping->tbl_ident_);
     assert(tbl_it != tbl_roots_.end());
@@ -458,8 +493,7 @@ KvError IndexPageManager::SeekIndex(MappingSnapshot *mapping,
     }
     else
     {
-        MemIndexPage *child;
-        KvError err = FindPage(mapping, page_id, &child);
+        auto [child, err] = FindPage(mapping, page_id);
         CHECK_KV_ERR(err);
         return SeekIndex(mapping, tbl_ident, child, key, result);
     }

@@ -14,76 +14,77 @@ namespace kvstore
 {
 DataPage::DataPage(uint32_t page_id, uint32_t page_size) : page_id_(page_id)
 {
-    page_ = (char *) std::aligned_alloc(page_align, page_size);
+    if (page_size == 0)
+    {
+        return;
+    }
+
+    if (page_pool != nullptr)
+    {
+        page_ = page_pool->Allocate();
+    }
+    else
+    {
+        char *p = (char *) std::aligned_alloc(page_align, page_size);
+        assert(p != nullptr);
+        page_ = std::unique_ptr<char[]>(p);
+    }
 }
 
-DataPage::DataPage(DataPage &&rhs) : page_id_(rhs.page_id_), page_(rhs.page_)
+DataPage::DataPage(DataPage &&rhs)
+    : page_id_(rhs.page_id_), page_(std::move(rhs.page_))
 {
-    rhs.page_ = nullptr;
 }
 
 DataPage &DataPage::operator=(DataPage &&other)
 {
     if (this != &other)
     {
-        if (page_)
-        {
-            free(page_);
-        }
+        Clear();
         page_id_ = other.page_id_;
-        page_ = other.page_;
-        other.page_id_ = UINT32_MAX;
-        other.page_ = nullptr;
+        page_ = std::move(other.page_);
     }
     return *this;
 }
 
 DataPage::~DataPage()
 {
-    if (page_)
-    {
-        free(page_);
-        page_ = nullptr;
-    }
+    Clear();
+}
+
+bool DataPage::IsEmpty() const
+{
+    return page_ == nullptr;
 }
 
 uint16_t DataPage::ContentLength() const
 {
-    return DecodeFixed16(page_ + page_size_offset);
+    return DecodeFixed16(page_.get() + page_size_offset);
 }
 
 uint16_t DataPage::RestartNum() const
 {
-    return DecodeFixed16(page_ + ContentLength() - sizeof(uint16_t));
+    return DecodeFixed16(page_.get() + ContentLength() - sizeof(uint16_t));
 }
 
 uint32_t DataPage::PrevPageId() const
 {
-    return DecodeFixed32(page_ + prev_page_offset);
+    return DecodeFixed32(page_.get() + prev_page_offset);
 }
 
 uint32_t DataPage::NextPageId() const
 {
-    return DecodeFixed32(page_ + next_page_offset);
+    return DecodeFixed32(page_.get() + next_page_offset);
 }
 
 void DataPage::SetPrevPageId(uint32_t page_id)
 {
-    EncodeFixed32(page_ + prev_page_offset, page_id);
+    EncodeFixed32(page_.get() + prev_page_offset, page_id);
 }
 
 void DataPage::SetNextPageId(uint32_t page_id)
 {
-    EncodeFixed32(page_ + next_page_offset, page_id);
-}
-
-void DataPage::Init(uint32_t id, uint32_t size)
-{
-    page_id_ = id;
-    if (!page_)
-    {
-        page_ = (char *) std::aligned_alloc(page_align, size);
-    }
+    EncodeFixed32(page_.get() + next_page_offset, page_id);
 }
 
 void DataPage::SetPageId(uint32_t page_id)
@@ -98,12 +99,32 @@ uint32_t DataPage::PageId() const
 
 char *DataPage::PagePtr() const
 {
-    return page_;
+    return page_.get();
 }
 
-char **DataPage::PagePtrPtr()
+std::unique_ptr<char[]> DataPage::GetPtr()
 {
-    return &page_;
+    return std::move(page_);
+}
+
+void DataPage::SetPtr(std::unique_ptr<char[]> ptr)
+{
+    page_ = std::move(ptr);
+}
+
+void DataPage::Clear()
+{
+    if (page_ != nullptr)
+    {
+        if (page_pool != nullptr)
+        {
+            page_pool->Free(std::move(page_));
+        }
+        else
+        {
+            page_ = nullptr;
+        }
+    }
 }
 
 std::ostream &operator<<(std::ostream &out, DataPage const &page)
@@ -373,5 +394,30 @@ const char *DataPageIter::DecodeEntry(const char *p,
         return nullptr;
     }
     return p;
+}
+
+PagePool::PagePool(uint16_t page_size) : page_size_(page_size)
+{
+}
+
+std::unique_ptr<char[]> PagePool::Allocate()
+{
+    if (pages_.empty())
+    {
+        char *p = (char *) std::aligned_alloc(page_align, page_size_);
+        assert(p != nullptr);
+        return std::unique_ptr<char[]>(p);
+    }
+    else
+    {
+        std::unique_ptr<char[]> page = std::move(pages_.back());
+        pages_.pop_back();
+        return page;
+    }
+}
+
+void PagePool::Free(std::unique_ptr<char[]> page)
+{
+    pages_.emplace_back(std::move(page));
 }
 }  // namespace kvstore
