@@ -417,6 +417,10 @@ void Worker::HandleReq(KvRequest *req)
         auto lbd = [task, req]() -> KvError
         {
             auto write_req = static_cast<WriteRequest *>(req);
+            if (write_req->batch_.empty())
+            {
+                return KvError::NoError;
+            }
             if (!task->SetBatch(std::move(write_req->batch_)))
             {
                 return KvError::InvalidArgs;

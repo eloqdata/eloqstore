@@ -8,6 +8,7 @@ set(UTEST_INCLUDE
 
 set(UTEST_SOURCES
     scan.cpp
+    batch_write.cpp
     delete.cpp
     persist.cpp
     manifest.cpp

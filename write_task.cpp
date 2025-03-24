@@ -406,17 +406,20 @@ KvError WriteTask::UpdateMeta(MemIndexPage *root)
 
 bool BatchWriteTask::SetBatch(std::vector<WriteDataEntry> &&entries)
 {
+#ifndef NDEBUG
     const Comparator *cmp = Comp();
-    bool sorted = std::is_sorted(
-        entries.begin(),
-        entries.end(),
-        [cmp](const WriteDataEntry &lhs, const WriteDataEntry &rhs)
-        { return cmp->Compare(lhs.key_, rhs.key_) < 0; });
-    if (!sorted)
+    if (entries.size() > 1)
     {
-        return false;
+        // Ensure the input batch keys are unique and ordered
+        for (uint64_t i = 1; i < entries.size(); i++)
+        {
+            if (cmp->Compare(entries[i - 1].key_, entries[i].key_) >= 0)
+            {
+                return false;
+            }
+        }
     }
-
+#endif
     batch_ = std::move(entries);
     return true;
 }
