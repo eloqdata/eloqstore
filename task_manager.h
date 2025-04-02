@@ -2,7 +2,6 @@
 #pragma once
 
 #include <memory>
-#include <unordered_map>
 #include <vector>
 
 #include "read_task.h"
@@ -20,15 +19,13 @@ public:
     ReadTask *GetReadTask();
     ScanTask *GetScanTask();
     void FreeTask(KvTask *task);
-    bool IsActive() const;
+    uint32_t NumActive() const;
     void ResumeScheduled();
-    void RecycleFinished();
 
     CircularQueue<KvTask *> scheduled_;
     CircularQueue<KvTask *> finished_;
 
 private:
-    std::unordered_map<TableIdent, WriteTask *> writing_;
     std::vector<std::unique_ptr<BatchWriteTask>> batch_write_tasks_;
     std::vector<BatchWriteTask *> free_batch_write_;
     std::vector<std::unique_ptr<TruncateTask>> truncate_tasks_;

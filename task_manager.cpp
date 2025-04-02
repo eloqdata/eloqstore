@@ -14,10 +14,6 @@ namespace kvstore
 {
 BatchWriteTask *TaskManager::GetBatchWriteTask(const TableIdent &tbl_id)
 {
-    if (writing_.find(tbl_id) != writing_.end())
-    {
-        return nullptr;
-    }
     if (free_batch_write_.empty())
     {
         auto task = std::make_unique<BatchWriteTask>(tbl_id);
@@ -26,18 +22,12 @@ BatchWriteTask *TaskManager::GetBatchWriteTask(const TableIdent &tbl_id)
     }
     BatchWriteTask *task = free_batch_write_.back();
     free_batch_write_.pop_back();
-    assert(task->status_ == TaskStatus::Idle);
-    writing_.emplace(tbl_id, task);
     task->Reset(tbl_id);
     return task;
 }
 
 TruncateTask *TaskManager::GetTruncateTask(const TableIdent &tbl_id)
 {
-    if (writing_.find(tbl_id) != writing_.end())
-    {
-        return nullptr;
-    }
     if (free_truncate_.empty())
     {
         auto task = std::make_unique<TruncateTask>(tbl_id);
@@ -46,8 +36,6 @@ TruncateTask *TaskManager::GetTruncateTask(const TableIdent &tbl_id)
     }
     TruncateTask *task = free_truncate_.back();
     free_truncate_.pop_back();
-    assert(task->status_ == TaskStatus::Idle);
-    writing_.emplace(tbl_id, task);
     task->Reset(tbl_id);
     return task;
 }
@@ -91,24 +79,24 @@ void TaskManager::FreeTask(KvTask *task)
     case TaskType::BatchWrite:
     {
         BatchWriteTask *wtask = static_cast<BatchWriteTask *>(task);
-        writing_.erase(wtask->TableId());
         free_batch_write_.push_back(wtask);
         break;
     }
     case TaskType::Truncate:
     {
         TruncateTask *wtask = static_cast<TruncateTask *>(task);
-        writing_.erase(wtask->TableId());
         free_truncate_.push_back(wtask);
         break;
     }
     }
 }
 
-bool TaskManager::IsActive() const
+uint32_t TaskManager::NumActive() const
 {
-    return free_read_.size() < read_tasks_.size() ||
-           free_scan_.size() < scan_tasks_.size() || !writing_.empty();
+    return (read_tasks_.size() - free_read_.size()) +
+           (scan_tasks_.size() - free_scan_.size()) +
+           (batch_write_tasks_.size() - free_batch_write_.size()) +
+           (truncate_tasks_.size() - free_truncate_.size());
 }
 
 void TaskManager::ResumeScheduled()
@@ -118,17 +106,6 @@ void TaskManager::ResumeScheduled()
         thd_task = scheduled_.Peek();
         scheduled_.Dequeue();
         thd_task->coro_ = thd_task->coro_.resume();
-    }
-}
-
-void TaskManager::RecycleFinished()
-{
-    while (finished_.Size() > 0)
-    {
-        KvTask *task = finished_.Peek();
-        finished_.Dequeue();
-        // You can recycle the stack of the task here.
-        FreeTask(task);
     }
 }
 

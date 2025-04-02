@@ -1,7 +1,4 @@
-// clang-format off
-#include "concurrentqueue.h"
 #include "eloq_store.h"
-// clang-format on
 
 #include <glog/logging.h>
 
@@ -17,6 +14,10 @@
 #include <vector>
 
 #include "task_manager.h"
+
+// https://github.com/cameron314/concurrentqueue/issues/280
+#undef BLOCK_SIZE
+#include "concurrentqueue.h"
 
 namespace fs = std::filesystem;
 
@@ -34,7 +35,9 @@ public:
 
 private:
     void Loop();
+    void OnReceiveReq(KvRequest *req);
     void HandleReq(KvRequest *req);
+    void PollFinished();
 
     template <typename F>
     void StartTask(KvTask *task, KvRequest *req, F lbd)
@@ -65,6 +68,7 @@ private:
     IndexPageManager index_mgr_;
     TaskManager task_mgr_;
     boost::context::pooled_fixedsize_stack stack_pool_;
+    std::unordered_map<TableIdent, CircularQueue<KvRequest *>> write_queue_;
 };
 
 EloqStore::EloqStore(const KvOptions &opts) : options_(opts), stopped_(true)
@@ -329,10 +333,10 @@ void Worker::Loop()
         size_t nreqs = requests_.try_dequeue_bulk(reqs, std::size(reqs));
         for (size_t i = 0; i < nreqs; i++)
         {
-            KvRequest *req = reqs[i];
-            HandleReq(req);
+            OnReceiveReq(reqs[i]);
         }
-        if (nreqs == 0 && !task_mgr_.IsActive())
+
+        if (nreqs == 0 && task_mgr_.NumActive() == 0)
         {
             if (store_->IsStopped())
             {
@@ -346,7 +350,7 @@ void Worker::Loop()
         io_mgr_->PollComplete();
 
         task_mgr_.ResumeScheduled();
-        task_mgr_.RecycleFinished();
+        PollFinished();
     }
 }
 
@@ -371,6 +375,25 @@ void Worker::Stop()
 bool Worker::AddRequest(KvRequest *req)
 {
     return requests_.enqueue(req);
+}
+
+void Worker::OnReceiveReq(KvRequest *req)
+{
+    if (req->Type() == RequestType::Write ||
+        req->Type() == RequestType::Truncate)
+    {
+        // Try acquire lock to ensure write operation is executed
+        // sequentially on each table partition.
+        auto [it, ok] = write_queue_.try_emplace(req->tbl_id_);
+        if (!ok)
+        {
+            // blocked on queue
+            it->second.Enqueue(req);
+            return;
+        }
+    }
+
+    HandleReq(req);
 }
 
 void Worker::HandleReq(KvRequest *req)
@@ -409,11 +432,6 @@ void Worker::HandleReq(KvRequest *req)
     case RequestType::Write:
     {
         BatchWriteTask *task = task_mgr_.GetBatchWriteTask(req->TableId());
-        if (!task)
-        {
-            req->SetDone(KvError::WriteConflict);
-            break;
-        }
         auto lbd = [task, req]() -> KvError
         {
             auto write_req = static_cast<WriteRequest *>(req);
@@ -438,11 +456,6 @@ void Worker::HandleReq(KvRequest *req)
     case RequestType::Truncate:
     {
         TruncateTask *task = task_mgr_.GetTruncateTask(req->TableId());
-        if (!task)
-        {
-            req->SetDone(KvError::WriteConflict);
-            break;
-        }
         auto lbd = [task, req]() -> KvError
         {
             auto trunc_req = static_cast<TruncateRequest *>(req);
@@ -456,6 +469,37 @@ void Worker::HandleReq(KvRequest *req)
         StartTask(task, req, lbd);
         break;
     }
+    }
+}
+
+void Worker::PollFinished()
+{
+    while (task_mgr_.finished_.Size() > 0)
+    {
+        KvTask *task = task_mgr_.finished_.Peek();
+        task_mgr_.finished_.Dequeue();
+
+        if (WriteTask *wtask = dynamic_cast<WriteTask *>(task);
+            wtask != nullptr)
+        {
+            auto it = write_queue_.find(wtask->TableId());
+            assert(it != write_queue_.end());
+            if (it->second.Size() == 0)
+            {
+                // release lock
+                write_queue_.erase(it);
+            }
+            else
+            {
+                // continue execute blocked write request
+                KvRequest *req = it->second.Peek();
+                it->second.Dequeue();
+                HandleReq(req);
+            }
+        }
+
+        // Note: You can recycle the stack of this coroutine now.
+        task_mgr_.FreeTask(task);
     }
 }
 
