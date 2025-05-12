@@ -148,12 +148,11 @@ private:
         public:
             Ref(LruFD *fd_ptr = nullptr, IouringMgr *io_mgr = nullptr);
             Ref(Ref &&other) noexcept;
+            Ref(const Ref &);
+            Ref &operator=(const Ref &) = delete;
             Ref &operator=(Ref &&other) noexcept;
             ~Ref();
             bool operator==(const Ref &other) const;
-            // Delete copy operations to ensure RAII semantics
-            Ref(const Ref &) = delete;
-            Ref &operator=(const Ref &) = delete;
             FdIdx FdPair() const;
             LruFD *Get() const;
 
@@ -170,7 +169,7 @@ private:
         LruFD *DequePrev();
         void EnqueNext(LruFD *new_fd);
 
-        static constexpr FileId kDirectiry = MaxFileId;
+        static constexpr FileId kDirectory = MaxFileId;
         static constexpr FileId kManifest = MaxFileId - 1;
         static constexpr FileId kTmpFile = MaxFileId - 2;
         static constexpr FileId kMaxDataFile = MaxFileId - 3;
@@ -229,7 +228,7 @@ private:
     {
     public:
         const TableIdent *tbl_id_ = nullptr;
-        std::unordered_map<uint32_t, LruFD> fds_;
+        std::unordered_map<FileId, LruFD> fds_;
     };
 
     class Manifest : public ManifestFile
@@ -272,6 +271,7 @@ private:
     void ReadPage(ReadReq *req);
     Page SwapPage(Page page, uint16_t buf_id);
     int Write(FdIdx fd, const char *src, size_t n, uint64_t offset);
+    int Fdatasync(LruFD::Ref fd);
     int Fdatasync(FdIdx fd);
     int Rename(FdIdx dir_fd, const char *old_path, const char *new_path);
     int CloseFile(int fd);
@@ -284,13 +284,21 @@ private:
                             std::string_view content,
                             LruFD::Ref result);
 
-    LruFD::Ref GetCachedFD(const TableIdent &tbl_id, FileId file_id);
-    std::pair<LruFD::Ref, KvError> GetFD(const TableIdent &tbl_id,
-                                         FileId file_id);
-    std::pair<LruFD::Ref, KvError> GetOrCreateFD(const TableIdent &tbl_id,
-                                                 FileId file_id,
-                                                 bool create = true);
-    bool EvictFDIfFull();
+    /**
+     * @brief Get file descripter if it is already opened.
+     */
+    LruFD::Ref GetOpenedFD(const TableIdent &tbl_id, FileId file_id);
+    /**
+     * @brief Get a file descripter slot for the file, evict the least recently
+     * used file if the limit is reached.
+     */
+    LruFD::Ref GetFDSlot(const TableIdent &tbl_id, FileId file_id);
+    std::pair<LruFD::Ref, KvError> OpenFD(const TableIdent &tbl_id,
+                                          FileId file_id);
+    std::pair<LruFD::Ref, KvError> OpenOrCreateFD(const TableIdent &tbl_id,
+                                                  FileId file_id,
+                                                  bool create = true);
+    bool EvictFD();
 
     WriteReq *AllocWriteReq(LruFD::Ref fd, VarPage page);
     void FreeWriteReq(WriteReq *req);

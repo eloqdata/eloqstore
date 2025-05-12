@@ -136,7 +136,7 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
                                               Page page)
 {
     auto [file_id, offset] = ConvFilePageId(fp_id);
-    auto [fd_ref, err] = GetFD(tbl_id, file_id);
+    auto [fd_ref, err] = OpenFD(tbl_id, file_id);
     if (err != KvError::NoError)
     {
         return {std::move(page), err};
@@ -177,7 +177,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
     for (uint8_t i = 0; FilePageId fp_id : page_ids)
     {
         auto [file_id, offset] = ConvFilePageId(fp_id);
-        auto [fd_ref, err] = GetFD(tbl_id, file_id);
+        auto [fd_ref, err] = OpenFD(tbl_id, file_id);
         if (err != KvError::NoError)
         {
             return err;
@@ -240,7 +240,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
 std::pair<ManifestFilePtr, KvError> IouringMgr::GetManifest(
     const TableIdent &tbl_id)
 {
-    auto [fd, err] = GetFD(tbl_id, LruFD::kManifest);
+    auto [fd, err] = OpenFD(tbl_id, LruFD::kManifest);
     if (err != KvError::NoError)
     {
         return {nullptr, err};
@@ -254,7 +254,7 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
 {
     TEST_KILL_POINT("WritePage:0")
     auto [file_id, offset] = ConvFilePageId(file_page_id);
-    auto [fd_ref, err] = GetOrCreateFD(tbl_id, file_id);
+    auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id);
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;
     TEST_KILL_POINT("WritePage:1")
@@ -277,7 +277,7 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
                                FilePageId first_fp_id)
 {
     auto [file_id, offset] = ConvFilePageId(first_fp_id);
-    auto [fd_ref, err] = GetOrCreateFD(tbl_id, file_id);
+    auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id);
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;
 
@@ -319,17 +319,30 @@ KvError IouringMgr::SyncData(const TableIdent &tbl_id)
         return KvError::NoError;
     }
 
-    std::vector<FsyncReq> fsync_reqs;
-    fsync_reqs.reserve(16);
-    for (auto &[id, fd] : it_tbl->second.fds_)
+    // Scan all dirty files/directory.
+    std::vector<FileId> dirty_files;
+    dirty_files.reserve(32);
+    for (auto &[file_id, fd] : it_tbl->second.fds_)
     {
         if (fd.dirty_)
         {
-            fsync_reqs.emplace_back(thd_task, LruFD::Ref(&fd, this));
+            dirty_files.emplace_back(file_id);
         }
     }
-    for (const FsyncReq &req : fsync_reqs)
+
+    // Fsync all dirty files/directory.
+    std::vector<FsyncReq> reqs;
+    reqs.reserve(dirty_files.size());
+    for (FileId file_id : dirty_files)
     {
+        LruFD::Ref fd_ref = GetOpenedFD(tbl_id, file_id);
+        if (fd_ref == nullptr)
+        {
+            continue;
+        }
+        // reqs vector has reserved enough space, so it will never reallocate.
+        // FsyncReq element has pointer stability.
+        const FsyncReq &req = reqs.emplace_back(thd_task, std::move(fd_ref));
         auto [fd, registered] = req.fd_ref_.FdPair();
         io_uring_sqe *sqe = GetSQE(UserDataType::FsyncReq, &req);
         if (registered)
@@ -340,15 +353,15 @@ KvError IouringMgr::SyncData(const TableIdent &tbl_id)
     }
     thd_task->WaitAsynIo();
 
+    // Check results.
     KvError err = KvError::NoError;
-    for (const FsyncReq &req : fsync_reqs)
+    for (const FsyncReq &req : reqs)
     {
         if (req.io_res_ < 0)
         {
             err = ToKvError(req.io_res_);
             LOG(ERROR) << "fsync file failed " << tbl_id << '@'
-                       << req.fd_ref_.Get()->file_id_ << " : "
-                       << ErrorString(err);
+                       << req.fd_ref_.Get()->file_id_ << " : " << req.io_res_;
         }
         else
         {
@@ -437,8 +450,40 @@ void IouringMgr::EncodeUserData(io_uring_sqe *sqe,
     io_uring_sqe_set_data(sqe, user_data);
 }
 
-IouringMgr::LruFD::Ref IouringMgr::GetCachedFD(const TableIdent &tbl_id,
+IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(const TableIdent &tbl_id,
                                                FileId file_id)
+{
+    auto it_tbl = tables_.find(tbl_id);
+    if (it_tbl == tables_.end())
+    {
+        return nullptr;
+    }
+    auto it_fd = it_tbl->second.fds_.find(file_id);
+    if (it_fd == it_tbl->second.fds_.end())
+    {
+        return nullptr;
+    }
+    LruFD::Ref fd_ref(&it_fd->second, this);
+    while (fd_ref.Get()->fd_ < 0)
+    {
+        switch (fd_ref.Get()->fd_)
+        {
+        case LruFD::FdEmpty:
+            return nullptr;
+        case LruFD::FdLocked:
+            fd_ref.Get()->loading_.push_back(thd_task);
+            thd_task->status_ = TaskStatus::Blocked;
+            thd_task->Yield();
+            break;
+        default:
+            assert(false);
+        }
+    }
+    return fd_ref;
+}
+
+IouringMgr::LruFD::Ref IouringMgr::GetFDSlot(const TableIdent &tbl_id,
+                                             FileId file_id)
 {
     auto get_tbl_partition = [this](const TableIdent &tbl_id)
     {
@@ -459,11 +504,11 @@ IouringMgr::LruFD::Ref IouringMgr::GetCachedFD(const TableIdent &tbl_id,
     {
         if (lru_fd_count_ >= options_->fd_limit)
         {
-            if (!EvictFDIfFull())
+            if (!EvictFD())
             {
                 return nullptr;
             }
-            // EvictFDIfFull will give up the cpu and resume, so tbl has a
+            // EvictFD will give up the cpu and resume, so tbl has a
             // chance to become invalid.
             tbl = get_tbl_partition(tbl_id);
         }
@@ -475,16 +520,16 @@ IouringMgr::LruFD::Ref IouringMgr::GetCachedFD(const TableIdent &tbl_id,
     return {&it_fd->second, this};
 }
 
-std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::GetFD(
+std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenFD(
     const TableIdent &tbl_id, FileId file_id)
 {
-    return GetOrCreateFD(tbl_id, file_id, false);
+    return OpenOrCreateFD(tbl_id, file_id, false);
 }
 
-std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::GetOrCreateFD(
+std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     const TableIdent &tbl_id, FileId file_id, bool create)
 {
-    LruFD::Ref lru_fd = GetCachedFD(tbl_id, file_id);
+    LruFD::Ref lru_fd = GetFDSlot(tbl_id, file_id);
     if (lru_fd == nullptr)
     {
         return {nullptr, KvError::OpenFileLimit};
@@ -500,7 +545,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::GetOrCreateFD(
 
             int fd;
             KvError error = KvError::NoError;
-            if (file_id == LruFD::kDirectiry)
+            if (file_id == LruFD::kDirectory)
             {
                 std::string dirname = tbl_id.ToString();
                 fd = OpenAt(dir_fd_idx_, dirname.c_str(), oflags_dir);
@@ -520,7 +565,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::GetOrCreateFD(
                 if (fd == -ENOENT && create)
                 {
                     auto [dfd_ref, err] =
-                        GetOrCreateFD(tbl_id, LruFD::kDirectiry);
+                        OpenOrCreateFD(tbl_id, LruFD::kDirectory);
                     error = err;
                     if (dfd_ref != nullptr)
                     {
@@ -528,11 +573,9 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::GetOrCreateFD(
                                     filename,
                                     O_CREAT | O_TRUNC | O_RDWR,
                                     0644);
-                        if (fd >= 0 && Fdatasync(dfd_ref.FdPair()) < 0)
-                        {
-                            LOG(ERROR) << "create " << path
-                                       << " can't fsync directory";
-                        }
+                        assert(file_id == LruFD::kTmpFile);
+                        // AtomicWriteFile will fsync the directory after
+                        // rename.
                     }
                 }
             }
@@ -546,7 +589,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::GetOrCreateFD(
                 if (fd == -ENOENT && create)
                 {
                     auto [dfd_ref, err] =
-                        GetOrCreateFD(tbl_id, LruFD::kDirectiry);
+                        OpenOrCreateFD(tbl_id, LruFD::kDirectory);
                     error = err;
                     assert(dfd_ref != nullptr);
                     if (dfd_ref != nullptr)
@@ -597,7 +640,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::GetOrCreateFD(
                 return {nullptr, error};
             }
 
-            if (file_id != LruFD::kDirectiry)
+            if (file_id != LruFD::kDirectory)
             {
                 lru_fd.Get()->reg_idx_ = RegisterFile(fd);
             }
@@ -841,6 +884,16 @@ int IouringMgr::Write(FdIdx fd, const char *src, size_t n, uint64_t offset)
     return thd_task->WaitSyncIo();
 }
 
+int IouringMgr::Fdatasync(LruFD::Ref fd)
+{
+    int res = Fdatasync(fd.FdPair());
+    if (res >= 0)
+    {
+        fd.Get()->dirty_ = false;
+    }
+    return res;
+}
+
 int IouringMgr::Fdatasync(FdIdx fd)
 {
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, thd_task);
@@ -878,8 +931,8 @@ int IouringMgr::CloseFile(int fd)
 
 KvError IouringMgr::CloseFile(LruFD::Ref fd_ref)
 {
-    // This LruFD will be removed by ~Guard if succeed to close, otherwise be
-    // enqueued back to LRU.
+    // This LruFD will be removed by ~LruFD::Ref if succeed to close, otherwise
+    // be enqueued back to LRU.
     LruFD *lru_fd = fd_ref.Get();
     assert(lru_fd->ref_count_ == 1);
     FdIdx fd_idx = lru_fd->FdPair();
@@ -890,12 +943,11 @@ KvError IouringMgr::CloseFile(LruFD::Ref fd_ref)
 
     if (lru_fd->dirty_)
     {
-        if (int res = Fdatasync(fd_idx); res < 0)
+        if (int res = Fdatasync(fd_ref); res < 0)
         {
             lru_fd->fd_ = fd;
             return ToKvError(res);
         }
-        lru_fd->dirty_ = false;
     }
 
     if (fd_idx.second)
@@ -913,7 +965,7 @@ KvError IouringMgr::CloseFile(LruFD::Ref fd_ref)
     return KvError::NoError;
 }
 
-bool IouringMgr::EvictFDIfFull()
+bool IouringMgr::EvictFD()
 {
     while (lru_fd_count_ >= options_->fd_limit)
     {
@@ -1009,7 +1061,7 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
 {
     TEST_KILL_POINT("AppendManifest:GetOrCreateFD")
     assert(manifest_size > 0);
-    auto [fd_ref, err] = GetOrCreateFD(tbl_id, LruFD::kManifest);
+    auto [fd_ref, err] = OpenFD(tbl_id, LruFD::kManifest);
     CHECK_KV_ERR(err);
 
     TEST_KILL_POINT("AppendManifest:Write")
@@ -1036,7 +1088,7 @@ KvError IouringMgr::AtomicWriteFile(const TableIdent &tbl_id,
                                     LruFD::Ref result)
 {
     // Generate temporary file.
-    auto [tmp_ref, err] = GetOrCreateFD(tbl_id, LruFD::kTmpFile);
+    auto [tmp_ref, err] = OpenOrCreateFD(tbl_id, LruFD::kTmpFile);
     CHECK_KV_ERR(err);
     int res = Write(tmp_ref.FdPair(), content.data(), content.size(), 0);
     if (res < 0)
@@ -1054,7 +1106,7 @@ KvError IouringMgr::AtomicWriteFile(const TableIdent &tbl_id,
     TEST_KILL_POINT("AtomicWriteFile:after_fsync")
 
     // Switch file on disk.
-    auto [dfd_ref, dir_err] = GetOrCreateFD(tbl_id, LruFD::kDirectiry);
+    auto [dfd_ref, dir_err] = OpenFD(tbl_id, LruFD::kDirectory);
     CHECK_KV_ERR(dir_err);
     TEST_KILL_POINT("AtomicWriteFile:before_name")
     res = Rename(dfd_ref.FdPair(), FileNameTmpfile, name);
@@ -1064,7 +1116,7 @@ KvError IouringMgr::AtomicWriteFile(const TableIdent &tbl_id,
         return ToKvError(res);
     }
     TEST_KILL_POINT("AtomicWriteFile:fsync_dir")
-    res = Fdatasync(dfd_ref.FdPair());
+    res = Fdatasync(std::move(dfd_ref));
     if (res < 0)
     {
         LOG(ERROR) << "fsync directory failed " << res;
@@ -1093,7 +1145,7 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
 {
     LOG(INFO) << "switch manifest file for " << tbl_id;
     // Unregister and close the old manifest if it is opened
-    LruFD::Ref fd_ref = GetCachedFD(tbl_id, LruFD::kManifest);
+    LruFD::Ref fd_ref = GetFDSlot(tbl_id, LruFD::kManifest);
     if (fd_ref == nullptr)
     {
         return KvError::OpenFileLimit;
@@ -1301,6 +1353,17 @@ IouringMgr::LruFD::Ref::Ref(Ref &&other) noexcept
 {
     other.fd_ = nullptr;
     other.io_mgr_ = nullptr;
+}
+
+IouringMgr::LruFD::Ref::Ref(const Ref &other)
+    : fd_(other.fd_), io_mgr_(other.io_mgr_)
+{
+    if (fd_)
+    {
+        assert(io_mgr_);
+        assert(fd_->ref_count_ > 0);
+        fd_->ref_count_++;
+    }
 }
 
 IouringMgr::LruFD::Ref &IouringMgr::LruFD::Ref::operator=(Ref &&other) noexcept
