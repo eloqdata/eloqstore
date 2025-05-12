@@ -124,19 +124,23 @@ public:
     std::unique_ptr<FilePageAllocator> Clone() override;
 
     void UpdateStat(FileId min_file_id, uint32_t hole_cnt);
+    FileId MinFileId() const;
     /**
-     * @brief Calculates how many file pages this allocator used.
+     * @brief Calculates number of pages this allocator occupied.
+     * This result includes pages that is not actually used by mapping but
+     * belong to a file used by mapping.
      */
     size_t SpaceSize() const;
 
 private:
     /**
-     * @brief The first file that is not empty after last compaction.
+     * @brief The oldest file that is not empty.
+     * This is a statistic for calculating space size.
      */
-    FilePageId min_file_id_;
+    FileId min_file_id_;
     /**
-     * @brief The number of empty file id bigger than min_file_id_ after last
-     * compaction.
+     * @brief The number of empty file newer than min_file_id_.
+     * This is a statistic for calculating space size.
      */
     uint32_t empty_file_cnt_;
 };
@@ -190,7 +194,9 @@ public:
     void UpdateMapping(PageId page_id, FilePageId file_page_id);
     uint32_t UseCount();
     void FreeMappingSnapshot();
-
+#ifndef NDEBUG
+    bool DebugStat() const;
+#endif
 private:
     const KvOptions *Options() const;
     std::vector<uint64_t> &Mapping();

@@ -99,6 +99,31 @@ std::vector<uint64_t> &PageMapper::Mapping()
     return mapping_->mapping_tbl_;
 }
 
+#ifndef NDEBUG
+bool PageMapper::DebugStat() const
+{
+    FilePageId min_fp_id = MaxFilePageId;
+    uint32_t cnt = 0;
+    for (uint64_t val : mapping_->mapping_tbl_)
+    {
+        FilePageId fp_id = mapping_->ToFilePage(val);
+        if (fp_id != MaxFilePageId)
+        {
+            cnt++;
+            min_fp_id = std::min(min_fp_id, fp_id);
+        }
+    }
+    assert(cnt == mapping_->mapping_tbl_.size() - free_page_cnt_);
+    auto allocator = dynamic_cast<AppendAllocator *>(FilePgAllocator());
+    if (allocator != nullptr && min_fp_id != MaxFilePageId)
+    {
+        FileId min_file_id = min_fp_id >> Options()->pages_per_file_shift;
+        assert(allocator->MinFileId() <= min_file_id);
+    }
+    return true;
+}
+#endif
+
 void PageMapper::UpdateMapping(PageId page_id, FilePageId file_page_id)
 {
     assert(page_id < mapping_->mapping_tbl_.size());
@@ -311,6 +336,11 @@ void AppendAllocator::UpdateStat(FileId min_file_id, uint32_t hole_cnt)
     assert((min_file_id << pages_per_file_shift_) <= max_fp_id_);
     min_file_id_ = min_file_id;
     empty_file_cnt_ = hole_cnt;
+}
+
+FileId AppendAllocator::MinFileId() const
+{
+    return min_file_id_;
 }
 
 size_t AppendAllocator::SpaceSize() const

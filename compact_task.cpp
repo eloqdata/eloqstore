@@ -72,15 +72,15 @@ KvError CompactTask::CompactDataFile()
     move_batch_buf.reserve(max_move_batch);
     std::vector<FilePageId> move_batch_fp_ids;
     move_batch_fp_ids.reserve(max_move_batch);
-    FileId min_file_id = MaxFileId;
-    uint32_t empty_file_cnt = 0;
 
     auto it_low = fp_ids.begin();
     auto it_high = fp_ids.begin();
     FileId begin_file_id = fp_ids.front().first >> opts->pages_per_file_shift;
     // Do not compact the data file that is currently being written to and is
     // not yet full.
-    FileId end_file_id = allocator->CurrentFileId();
+    const FileId end_file_id = allocator->CurrentFileId();
+    FileId min_file_id = end_file_id;
+    uint32_t empty_file_cnt = 0;
     for (FileId file_id = begin_file_id; file_id < end_file_id; file_id++)
     {
         FilePageId end_fp_id = (file_id + 1) << opts->pages_per_file_shift;
@@ -90,7 +90,7 @@ KvError CompactTask::CompactDataFile()
         }
         if (it_low == it_high)
         {
-            if (min_file_id != MaxFileId)
+            if (min_file_id != end_file_id)
             {
                 empty_file_cnt++;
             }
@@ -102,9 +102,9 @@ KvError CompactTask::CompactDataFile()
             factor <= file_saf_limit)
         {
             // This file don't need compaction.
-            if (min_file_id == MaxFileId)
+            if (min_file_id == end_file_id)
             {
-                // Record the first file that don't need compaction.
+                // Record the oldest file that don't need compaction.
                 min_file_id = file_id;
             }
             it_low = it_high;
@@ -143,13 +143,16 @@ KvError CompactTask::CompactDataFile()
                 }
             }
         }
-        if (min_file_id != MaxFileId)
+        if (min_file_id != end_file_id)
         {
             empty_file_cnt++;
         }
         it_low = it_high;
     }
     allocator->UpdateStat(min_file_id, empty_file_cnt);
+    assert(mapping_cnt == cow_meta_.mapper_->MappingCount());
+    assert(allocator->SpaceSize() >= mapping_cnt);
+    assert(meta->mapper_->DebugStat());
 
     err = UpdateMeta(cow_meta_.root_);
     root->Unpin();
