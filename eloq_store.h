@@ -1,10 +1,10 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 
-#include "batch_write_task.h"
 #include "error.h"
-#include "scan_task.h"
+#include "kv_options.h"
 #include "types.h"
 
 namespace kvstore
@@ -180,6 +180,7 @@ public:
 
 class FileGarbageCollector;
 class ArchiveCrond;
+class ObjectStore;
 
 class EloqStore
 {

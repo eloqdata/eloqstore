@@ -1,11 +1,9 @@
 #pragma once
 
-#include <string_view>
 #include <vector>
 
 #include "kv_options.h"
 #include "mem_index_page.h"
-#include "write_op.h"
 
 namespace kvstore
 {
@@ -31,19 +29,5 @@ public:
     IndexPageIter idx_page_iter_;
     std::vector<IndexOp> changes_{};
     bool is_leaf_index_{false};
-};
-
-class WriteIndexStack
-{
-public:
-    WriteIndexStack(IndexPageManager *idx_page_manager);
-
-    void Seek(MemIndexPage *root, std::string_view key);
-
-    void Pop();
-
-private:
-    std::vector<IndexStackEntry> stack_;
-    IndexPageManager *idx_page_manager_{nullptr};
 };
 }  // namespace kvstore

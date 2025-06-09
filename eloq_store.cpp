@@ -14,6 +14,7 @@
 
 #include "archive_crond.h"
 #include "file_gc.h"
+#include "object_store.h"
 #include "shard.h"
 
 namespace kvstore

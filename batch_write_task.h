@@ -4,13 +4,6 @@
 
 namespace kvstore
 {
-struct WriteDataEntry
-{
-    std::string key_;
-    std::string val_;
-    uint64_t timestamp_;
-    WriteOp op_;
-};
 
 class BatchWriteTask : public WriteTask
 {

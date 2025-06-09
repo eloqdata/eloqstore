@@ -110,6 +110,22 @@ struct FileKey
     std::string filename_;
 };
 
+using KvEntry = std::tuple<std::string, std::string, uint64_t>;
+
+enum class WriteOp : uint8_t
+{
+    Upsert = 0,
+    Delete
+};
+
+struct WriteDataEntry
+{
+    std::string key_;
+    std::string val_;
+    uint64_t timestamp_;
+    WriteOp op_;
+};
+
 }  // namespace kvstore
 
 template <>

@@ -1,5 +1,7 @@
 #include "archive_crond.h"
 
+#include <glog/logging.h>
+
 #include <cassert>
 #include <filesystem>
 #include <mutex>

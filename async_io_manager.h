@@ -17,7 +17,6 @@
 
 #include "error.h"
 #include "kv_options.h"
-#include "object_store.h"
 #include "task.h"
 #include "types.h"
 
@@ -26,6 +25,7 @@ namespace kvstore
 class WriteReq;
 class WriteTask;
 class MemIndexPage;
+class ObjectStore;
 
 class ManifestFile
 {

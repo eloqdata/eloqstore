@@ -5,7 +5,7 @@
 #include <string>
 
 #include "eloq_store.h"
-#include "types.h"
+#include "index_page_manager.h"
 
 // https://github.com/cameron314/concurrentqueue/issues/280
 #undef BLOCK_SIZE

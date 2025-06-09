@@ -1,9 +1,6 @@
 #pragma once
 
-#include <cstdint>
-#include <string>
 #include <string_view>
-#include <tuple>
 #include <vector>
 
 #include "data_page.h"
@@ -16,8 +13,6 @@ namespace kvstore
 class IndexPageManager;
 class MemIndexPage;
 class MappingSnapshot;
-
-using KvEntry = std::tuple<std::string, std::string, uint64_t>;
 
 class ScanTask : public KvTask
 {

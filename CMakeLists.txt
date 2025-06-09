@@ -46,23 +46,14 @@ add_subdirectory(abseil)
 
 set(INI_SOURCES ${PROJECT_SOURCE_DIR}/inih/ini.c ${PROJECT_SOURCE_DIR}/inih/cpp/INIReader.cpp)
 
-add_executable(io_uring_test io_uring_test.cpp)
-target_link_libraries(io_uring_test ${URING_LIB})
-
-add_executable(uring_register_test uring_register_test.cpp)
-target_link_libraries(uring_register_test ${URING_LIB})
-
 option(WITH_ASAN "build with ASAN" OFF)
 if(WITH_ASAN)
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=undefined -fsanitize=address -fno-omit-frame-pointer")
 endif()
 
-SET(ELOQ_STORE_SOURCE_DIR ${CMAKE_SOURCE_DIR})
 SET(ELOQ_STORE_INCLUDE
-    ${ELOQ_KV_SOURCE_DIR}
     ${URING_INCLUDE_PATH}
-    ${Boost_INCLUDE_DIRS}
-    )
+    ${Boost_INCLUDE_DIRS})
 
 set(ELOQ_STORE_SOURCES
     coding.cpp
@@ -79,7 +70,6 @@ set(ELOQ_STORE_SOURCES
     truncate_task.cpp
     compact_task.cpp
     archive_task.cpp
-    write_tree_stack.cpp
     async_io_manager.cpp
     data_page.cpp
     page.cpp
@@ -103,19 +93,6 @@ target_link_libraries(eloqstore PRIVATE ${URING_LIB} Boost::context glog::glog a
 
 add_library(test_util STATIC test_utils.cpp)
 target_link_libraries(test_util PUBLIC eloqstore)
-
-add_executable(io_test io_test.cpp)
-target_link_libraries(io_test ${URING_LIB})
-
-add_executable(queue_sync_test queue_sync_test.cpp)
-
-add_executable(cache_q_test cache_q_test.cpp)
-# target_compile_options(cache_q_test PRIVATE -fsanitize=address)
-# target_link_options(cache_q_test PRIVATE -fsanitize=address)
-target_link_libraries (cache_q_test glog::glog)
-
-# add_executable(proxy proxy.cc helpers.cc)
-# target_link_libraries(proxy ${URING_LIB})
 
 if (WITH_UNIT_TESTS)
     add_subdirectory(tests)

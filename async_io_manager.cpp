@@ -24,6 +24,7 @@
 #include "error.h"
 #include "kill_point.h"
 #include "kv_options.h"
+#include "object_store.h"
 #include "read_task.h"
 #include "shard.h"
 #include "task.h"
