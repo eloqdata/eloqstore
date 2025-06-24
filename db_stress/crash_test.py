@@ -30,124 +30,40 @@ import time
 
 
 default_params = {
-    "num_threads" : lambda:random.randint(1,4),#default 1
+    "num_threads" : 4,#default 1
     "data_page_size" : lambda:1 << 12,#default 1<<12
-    "data_page_restart_interval" : 16,# lambda:random.choice([8,16,32])
-    "index_page_restart_interval" : 16,
-    "index_page_read_queue" : lambda:random.randint(500,1000),#default 1024
-    "index_buffer_pool_size" : lambda:random.randint(32768,8388608),#default UINT32_MAX
+    "data_page_restart_interval" : 16,# default 16
+    "index_page_restart_interval" : 16,#default 16
+    "index_page_read_queue" : 1024,#default 1024
+    "index_buffer_pool_size" : 0xFFFFFFFF,#default UINT32_MAX
     "init_page_count" : 1 << 15,#default 1<<15
     "pages_per_file_shift" : lambda:11,   #default 11  
-    "manifest_limit" : lambda:random.randint(2,16) <<20,#default 8<<20
-    "fd_limit" : lambda:random.randint(500,2000),#default 1024
-    "io_queue_size" : lambda:random.choice([1024, 2048,4096]),#default 4096
-    "buf_ring_size" :lambda:1 << random.choice([8,9,10]),#default 1<<10
-    "coroutine_stack_size" :lambda:1024*128,#default 8*1024
+    "manifest_limit" : lambda:16 <<20,#default 8<<20
+    "fd_limit" : 10000,#default 10000
+    "io_queue_size" : 4096,#default 4096
+    "buf_ring_size" :lambda:1 << 10,#default 1<<10
+    "coroutine_stack_size" :lambda:1<<14,#default 8*1024
+    "max_inflight_write":4096,#default 4096
+    "file_amplify_factor":4,#default 4
+    "num_gc_threads":1,#default 1
+    "local_space_limit":1<<40,#default 1<<40
+    "reserve_space_ratio":100,#default 100
+    "rclone_threads":1,#default 1
+    "overflow_pointers":16,#default 16
+    "open_wfile":True
 }
 
-_TEST_DIR_ENV_VAR = "TEST_TMPDIR"
-# If TEST_TMPDIR_EXPECTED is not specified, default value will be TEST_TMPDIR
-_TEST_EXPECTED_DIR_ENV_VAR = "TEST_TMPDIR_EXPECTED"
-_DEBUG_LEVEL_ENV_VAR = "DEBUG_LEVEL"
-
 stress_cmd = "../build/db_stress/db_stress"
-cleanup_cmd = None
-
-
-def is_release_mode():
-    return os.environ.get(_DEBUG_LEVEL_ENV_VAR) == "0"
-
-
-def get_dbname(test_name):
-    test_dir_name = "kvstore_crashtest_" + test_name
-    test_tmpdir = os.environ.get(_TEST_DIR_ENV_VAR)
-    if test_tmpdir is None or test_tmpdir == "":
-        dbname = tempfile.mkdtemp(prefix=test_dir_name)
-    else:
-        dbname = test_tmpdir + "/" + test_dir_name
-        shutil.rmtree(dbname, True)
-        if cleanup_cmd is not None:
-            print("Running DB cleanup command - %s\n" % cleanup_cmd)
-            # Ignore failure
-            os.system(cleanup_cmd)
-        try:
-            os.mkdir(dbname)
-        except OSError:
-            pass
-    return dbname
-
-
-expected_values_dir = None
-
-
-def setup_expected_values_dir():
-    global expected_values_dir
-    if expected_values_dir is not None:
-        return expected_values_dir
-    expected_dir_prefix = "rocksdb_crashtest_expected_"
-    test_exp_tmpdir = os.environ.get(_TEST_EXPECTED_DIR_ENV_VAR)
-
-    # set the value to _TEST_DIR_ENV_VAR if _TEST_EXPECTED_DIR_ENV_VAR is not
-    # specified.
-    if test_exp_tmpdir is None or test_exp_tmpdir == "":
-        test_exp_tmpdir = os.environ.get(_TEST_DIR_ENV_VAR)
-
-    if test_exp_tmpdir is None or test_exp_tmpdir == "":
-        expected_values_dir = tempfile.mkdtemp(prefix=expected_dir_prefix)
-    else:
-        # if tmpdir is specified, store the expected_values_dir under that dir
-        expected_values_dir = test_exp_tmpdir + "/rocksdb_crashtest_expected"
-        if os.path.exists(expected_values_dir):
-            shutil.rmtree(expected_values_dir)
-        os.mkdir(expected_values_dir)
-    return expected_values_dir
-
-
-multiops_txn_key_spaces_file = None
-
-
-def setup_multiops_txn_key_spaces_file():
-    global multiops_txn_key_spaces_file
-    if multiops_txn_key_spaces_file is not None:
-        return multiops_txn_key_spaces_file
-    key_spaces_file_prefix = "rocksdb_crashtest_multiops_txn_key_spaces"
-    test_exp_tmpdir = os.environ.get(_TEST_EXPECTED_DIR_ENV_VAR)
-
-    # set the value to _TEST_DIR_ENV_VAR if _TEST_EXPECTED_DIR_ENV_VAR is not
-    # specified.
-    if test_exp_tmpdir is None or test_exp_tmpdir == "":
-        test_exp_tmpdir = os.environ.get(_TEST_DIR_ENV_VAR)
-
-    if test_exp_tmpdir is None or test_exp_tmpdir == "":
-        multiops_txn_key_spaces_file = tempfile.mkstemp(prefix=key_spaces_file_prefix)[
-            1
-        ]
-    else:
-        if not os.path.exists(test_exp_tmpdir):
-            os.mkdir(test_exp_tmpdir)
-        multiops_txn_key_spaces_file = tempfile.mkstemp(
-            prefix=key_spaces_file_prefix, dir=test_exp_tmpdir
-        )[1]
-    return multiops_txn_key_spaces_file
-
-
-def is_direct_io_supported(dbname):
-    with tempfile.NamedTemporaryFile(dir=dbname) as f:
-        try:
-            os.open(f.name, os.O_DIRECT)
-        except BaseException:
-            return False
-        return True
-
+cleanup_cmd = "../build/db_stress/clean_up"
 
 blackbox_default_params = {
     "duration": 6000,
-    "interval": 60,
+    "interval":random.randint(60,90),
 }
 
 whitebox_default_params={
-    "duration":6000,
-    "kill_odds":100000,
+    "duration":3000,
+    "kill_odds":800000,
 }
 
 
@@ -242,8 +158,8 @@ def print_output_and_exit_on_error(stdout, stderr, print_stderr_separately=False
         print("stderr:\n", stderr)
 
 
-def cleanup_after_success(dbname):
-    shutil.rmtree(dbname, True)
+def cleanup_after_success():
+    #shutil.rmtree(dbname, True)
     if cleanup_cmd is not None:
         print("Running DB cleanup command - %s\n" % cleanup_cmd)
         ret = os.system(cleanup_cmd)
@@ -255,7 +171,8 @@ def cleanup_after_success(dbname):
 # in case of unsafe crashes in RocksDB.
 def blackbox_crash_main(args, unknown_args):
     cmd_params = gen_cmd_params(args)
-    dbname = get_dbname("blackbox")
+#    dbname = get_dbname("blackbox")
+    start_time=time.time()
     exit_time = time.time() + cmd_params["duration"]
 
     print(
@@ -269,8 +186,9 @@ def blackbox_crash_main(args, unknown_args):
         cmd = gen_cmd(
             dict(list(cmd_params.items())), unknown_args
         )
-
-        interval=random.randint(50,70)
+        process_rate=round((time.time()-start_time)/cmd_params["duration"]*100,2)
+        print("crash_test process rate:",process_rate,"%")
+        interval=random.randint(30,40)
         hit_timeout, retcode, outs, errs = execute_cmd(cmd, interval)
 
         if not hit_timeout:
@@ -286,12 +204,12 @@ def blackbox_crash_main(args, unknown_args):
         time.sleep(1)  # time to stabilize before the next run
     print("blackbox crash test has succeeded!!!")
     # we need to clean up after ourselves -- only do this on test success
-    cleanup_after_success(dbname)
+    cleanup_after_success()
 
 
 def whitebox_crash_main(args, unknown_args):
     cmd_params = gen_cmd_params(args)
-    dbname = get_dbname("whitebox")
+    #dbname = get_dbname("whitebox")
 
     cur_time = time.time()
     exit_time = cur_time + cmd_params["duration"]
@@ -305,7 +223,10 @@ def whitebox_crash_main(args, unknown_args):
     odd=cmd_params["kill_odds"]
     succeeded = True
     hit_timeout = False
+    start_time=time.time()
     while time.time() < exit_time:
+        process_rate=round((time.time()-start_time)/cmd_params["duration"]*100,2)
+        print("crash_test process rate:",process_rate,"%")
         cmd = gen_cmd(
             dict(
                 list(cmd_params.items())
@@ -330,7 +251,7 @@ def whitebox_crash_main(args, unknown_args):
             break
 
         succeeded = False
-        if odd>0 and (retncode == 100):
+        if odd>0 and (retncode == -15):
             succeeded = True
             print("killed process at KillPoint successfully\n\n\n\n")
 
@@ -344,7 +265,7 @@ def whitebox_crash_main(args, unknown_args):
 
     # Clean up after ourselves
     if succeeded or hit_timeout:
-        cleanup_after_success(dbname)
+        cleanup_after_success()
 
 
 def main():
@@ -380,20 +301,6 @@ def main():
         parser.add_argument("--" + k, type=type(v() if callable(v) else v))
     # unknown_args are passed directly to db_stress
     args, unknown_args = parser.parse_known_args()
-
-    test_tmpdir = os.environ.get(_TEST_DIR_ENV_VAR)
-    if test_tmpdir is not None and not args.skip_tmpdir_check:
-        isdir = False
-        try:
-            isdir = os.path.isdir(test_tmpdir)
-            if not isdir:
-                print(
-                    "ERROR: %s env var is set to a non-existent directory: %s. Update it to correct directory path."
-                    % (_TEST_DIR_ENV_VAR, test_tmpdir)
-                )
-                sys.exit(1)
-        except OSError:
-            pass
 
     if args.stress_cmd:
         stress_cmd = args.stress_cmd

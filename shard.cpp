@@ -1,6 +1,6 @@
 #include "shard.h"
 
-#include <bthread/eloq_module.h>
+// #include <bthread/eloq_module.h>
 
 namespace eloqstore
 {

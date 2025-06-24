@@ -29,7 +29,7 @@ void KillPoint::TestKillRandom(std::string kill_point,
     {
         fprintf(stdout, "Crashing at %s:%d, function %s\n", file, line, fn);
         fflush(stdout);
-        exit(100);
+        kill(getpid(), SIGTERM);
     }
 }
 }  // namespace eloqstore

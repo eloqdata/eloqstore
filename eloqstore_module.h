@@ -1,5 +1,5 @@
 #pragma once
-
+#ifdef ELOQ_MODULE_ENABLED
 #include <bthread/eloq_module.h>
 
 #include <vector>
@@ -8,7 +8,7 @@
 
 namespace eloqstore
 {
-#ifdef ELOQ_MODULE_ENABLED
+
 class EloqStoreModule : public eloq::EloqModule
 {
 public:
@@ -26,6 +26,5 @@ public:
 
     std::vector<std::unique_ptr<Shard>> *shards_;
 };
-#endif
 
 }  // namespace eloqstore
