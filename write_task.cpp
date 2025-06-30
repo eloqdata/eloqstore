@@ -312,7 +312,6 @@ void WriteTask::TriggerTTL()
     auto [meta, err] = shard->IndexManager()->FindRoot(tbl_ident_);
     if (err != KvError::NoError)
     {
-        LOG(WARNING) << "failed trigger TTL task: " << ErrorString(err);
         return;
     }
     if (meta->next_expire_ts_ == 0)

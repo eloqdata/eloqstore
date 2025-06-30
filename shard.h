@@ -2,6 +2,7 @@
 
 #include <boost/context/pooled_fixedsize_stack.hpp>
 
+#include "circular_queue.h"
 #include "eloq_store.h"
 #include "task_manager.h"
 

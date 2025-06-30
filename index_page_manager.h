@@ -6,7 +6,6 @@
 #include <vector>
 
 #include "async_io_manager.h"
-#include "circular_queue.h"
 #include "comparator.h"
 #include "error.h"
 #include "kv_options.h"
