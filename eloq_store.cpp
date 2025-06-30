@@ -378,7 +378,7 @@ std::span<KvEntry> ScanRequest::Entries()
     return std::span<KvEntry>(entries_.data(), num_entries_);
 }
 
-size_t ScanRequest::ResultSize() const
+std::pair<size_t, size_t> ScanRequest::ResultSize() const
 {
     size_t size = 0;
     for (size_t i = 0; i < num_entries_; i++)
@@ -387,7 +387,7 @@ size_t ScanRequest::ResultSize() const
         size += entry.key_.size() + entry.value_.size();
         size += sizeof(entry.timestamp_) + sizeof(entry.expire_ts_);
     }
-    return size;
+    return {num_entries_, size};
 }
 
 bool ScanRequest::HasRemaining() const

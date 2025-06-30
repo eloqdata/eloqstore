@@ -119,7 +119,13 @@ public:
     void SetPagination(size_t entries, size_t size);
 
     std::span<KvEntry> Entries();
-    size_t ResultSize() const;
+
+    /**
+     * @brief Get the size of the scan result.
+     * @return A pair of size_t, where the first element is the number of
+     * entries and the second element is the total size in bytes of all entries.
+     */
+    std::pair<size_t, size_t> ResultSize() const;
     /**
      * @brief Check if there are more entries to scan.
      * @return true if there are more entries to scan, false otherwise.

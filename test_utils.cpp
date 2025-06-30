@@ -335,8 +335,9 @@ void MapVerifier::Scan(std::string_view begin,
         }
 
         // Verify scan result
-        CHECK(req.Entries().size() <= page_entries);
-        CHECK(req.ResultSize() <= page_size || req.Entries().size() == 1);
+        auto [n_entries, n_bytes] = req.ResultSize();
+        CHECK(n_entries <= page_entries);
+        CHECK(n_bytes <= page_size || n_entries == 1);
         for (auto &entry : req.Entries())
         {
             clean_expired(entry.key_);

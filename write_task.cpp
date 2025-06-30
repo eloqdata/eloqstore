@@ -330,6 +330,7 @@ void WriteTask::TriggerFileGC(const PageMapper *mapper) const
     if (eloqstore->file_gc_ == nullptr)
     {
         // File garbage collector is not enabled.
+        return;
     }
 
     auto mapping = mapper->GetMappingSnapshot();
