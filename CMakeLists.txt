@@ -88,8 +88,7 @@ set(ELOQ_STORE_SOURCES
     types.cpp
     kv_options.cpp
     eloqstore_module.cpp
-    external/xxhash.c
-    async_io_listener.cpp)
+    external/xxhash.c)
 
 add_library(eloqstore STATIC ${ELOQ_STORE_SOURCES} ${INI_SOURCES})
 

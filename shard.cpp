@@ -17,12 +17,6 @@ Shard::Shard(const EloqStore *store, size_t shard_id, uint32_t fd_limit)
 KvError Shard::Init()
 {
     KvError res = io_mgr_->Init(this);
-#ifdef ELOQ_MODULE_ENABLED
-    if (res == KvError::NoError)
-    {
-        async_io_listener_ = std::make_unique<AsyncIOListener>(this);
-    }
-#endif
     return res;
 }
 
@@ -88,9 +82,7 @@ void Shard::Start()
 
 void Shard::Stop()
 {
-#ifdef ELOQ_MODULE_ENABLED
-    async_io_listener_.reset(nullptr);
-#else
+#ifndef ELOQ_MODULE_ENABLED
     thd_.join();
 #endif
 }
@@ -339,7 +331,8 @@ void Shard::OnWriteFinished(const TableIdent &tbl_id)
     ProcessReq(req);
 }
 
-void Shard::WorkOneRound(size_t &req_cnt)
+#ifdef ELOQ_MODULE_ENABLED
+void Shard::WorkOneRound()
 {
     KvRequest *reqs[128];
     size_t nreqs = requests_.try_dequeue_bulk(reqs, std::size(reqs));
@@ -348,32 +341,19 @@ void Shard::WorkOneRound(size_t &req_cnt)
         OnReceivedReq(reqs[i]);
     }
 
-    if (nreqs == 0 && task_mgr_.NumActive() == 0)
+    if (nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle())
     {
-        // No request.
-        req_cnt = 0;
+        // No request and no active task and no active io.
         return;
     }
 
-#ifdef ELOQ_MODULE_ENABLED
-    req_queue_size_.fetch_sub(nreqs, std::memory_order_acq_rel);
-#endif
-
-    req_cnt = nreqs;
+    req_queue_size_.fetch_sub(nreqs, std::memory_order_relaxed);
 
     io_mgr_->Submit();
     io_mgr_->PollComplete();
 
     ResumeScheduled();
     PollFinished();
-
-    io_mgr_->CheckAndSetIOStatus(false);
-}
-
-#ifdef ELOQ_MODULE_ENABLED
-void Shard::NotifyListener()
-{
-    async_io_listener_->StartListening();
 }
 #endif
 

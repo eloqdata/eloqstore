@@ -6,12 +6,6 @@
 #include "eloq_store.h"
 #include "task_manager.h"
 
-#ifdef ELOQ_MODULE_ENABLED
-#include <condition_variable>
-
-#include "async_io_listener.h"
-#endif
-
 // https://github.com/cameron314/concurrentqueue/issues/280
 #undef BLOCK_SIZE
 #include "concurrentqueue/blockingconcurrentqueue.h"
@@ -58,18 +52,19 @@ private:
     void ProcessReq(KvRequest *req);
     void OnWriteFinished(const TableIdent &tbl_id);
 
-    void WorkOneRound(size_t &req_cnt);
 #ifdef ELOQ_MODULE_ENABLED
+    void WorkOneRound();
     bool IsIdle() const
     {
+        // No request in the queue and no active task(coroutine) and no active
+        // io.
         return req_queue_size_.load(std::memory_order_relaxed) == 0 &&
-               !io_mgr_->HasValidIO();
+               task_mgr_.NumActive() == 0 && io_mgr_->IsIdle();
     }
     void BindExtThd()
     {
         shard = this;
     }
-    void NotifyListener();
 #endif
 
     template <typename F>
@@ -126,11 +121,8 @@ private:
 
 #ifdef ELOQ_MODULE_ENABLED
     std::atomic<size_t> req_queue_size_{0};
-    std::atomic<bool> ext_proc_running_{true};
-    std::unique_ptr<AsyncIOListener> async_io_listener_{nullptr};
 #endif
 
     friend class EloqStoreModule;
-    friend class AsyncIOListener;
 };
 }  // namespace kvstore

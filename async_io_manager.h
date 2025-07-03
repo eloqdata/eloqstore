@@ -95,10 +95,6 @@ public:
         const TableIdent &tbl_id) = 0;
     virtual void CleanTable(const TableIdent &tbl_id) = 0;
 
-    virtual int WaitCompletedIO() = 0;
-    virtual void CheckAndSetIOStatus(bool has_completed_io) = 0;
-    virtual bool HasValidIO() = 0;
-
     const KvOptions *options_;
 };
 
@@ -140,10 +136,6 @@ public:
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
     void CleanTable(const TableIdent &tbl_id) override;
-
-    int WaitCompletedIO() override;
-    void CheckAndSetIOStatus(bool has_completed_io) override;
-    bool HasValidIO() override;
 
     static constexpr uint64_t oflags_dir = O_DIRECTORY | O_RDONLY;
 
@@ -355,8 +347,6 @@ protected:
     io_uring ring_;
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};
-    // True if there are SQE or there are CQE.
-    std::atomic<bool> has_valid_io_{false};
 };
 
 class CloudStoreMgr : public IouringMgr
@@ -491,19 +481,6 @@ public:
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
     void CleanTable(const TableIdent &tbl_id) override;
-
-    int WaitCompletedIO() override
-    {
-        return 0;
-    }
-    void CheckAndSetIOStatus(bool has_completed_io) override
-    {
-        (void) has_completed_io;
-    }
-    bool HasValidIO() override
-    {
-        return true;
-    }
 
     class Manifest : public ManifestFile
     {

@@ -484,24 +484,6 @@ void IouringMgr::CleanTable(const TableIdent &tbl_id)
     assert(false);
 }
 
-int IouringMgr::WaitCompletedIO()
-{
-    struct io_uring_cqe *cqe = nullptr;
-    return io_uring_wait_cqe(&ring_, &cqe);
-}
-
-void IouringMgr::CheckAndSetIOStatus(bool has_completed_io)
-{
-    bool has_valid =
-        has_completed_io || prepared_sqe_ > 0 || io_uring_cq_ready(&ring_) > 0;
-    has_valid_io_.store(has_valid, std::memory_order_relaxed);
-}
-
-bool IouringMgr::HasValidIO()
-{
-    return has_valid_io_.load(std::memory_order_relaxed);
-}
-
 KvError ToKvError(int err_no)
 {
     if (err_no >= 0)
