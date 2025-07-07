@@ -28,3 +28,4 @@ public:
 };
 
 }  // namespace eloqstore
+#endif

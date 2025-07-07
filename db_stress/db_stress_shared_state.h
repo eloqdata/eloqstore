@@ -21,8 +21,9 @@ DECLARE_uint32(num_readers_per_partition);
 DECLARE_uint32(max_verify_ops_per_write);
 DECLARE_uint64(ops_per_partition);
 DECLARE_bool(open_wfile);
-DECLARE_uint32(value_sz_mode);
-
+// DECLARE_uint32(value_sz_mode);
+DECLARE_uint32(shortest_value);
+DECLARE_uint32(longest_value);
 namespace StressTest
 {
 
@@ -97,26 +98,37 @@ public:
 class FileThreadState : public ThreadState
 {
 public:
-    FileThreadState()
+    // question: default construct should be deleted?,must set tablename?
+    FileThreadState() : ThreadState()
     {
+        LOG(INFO) << "FileThreadState default constructor, table_name_: '"
+                  << table_name_ << "'";
+        LOG(INFO) << "shared_state_dir: " << shared_state_dir;
+        LOG(INFO) << "shared_state_file_path: " << shared_state_file_path;
+
         if (!std::filesystem::exists(shared_state_dir))
         {
-            std::filesystem::create_directory(shared_state_dir);
+            std::filesystem::create_directories(shared_state_dir);
         }
         CHECK(std::filesystem::exists(shared_state_dir));
         seqno_ = GetSeqno();
     }
 
-    FileThreadState(std::string table_name)
+    FileThreadState(std::string table_name) : ThreadState(table_name)
     {
+        LOG(INFO) << "FileThreadState constructor with table_name: '"
+                  << table_name << "'";
+        LOG(INFO) << "table_name_ after init: '" << table_name_ << "'";
+        LOG(INFO) << "shared_state_dir: " << shared_state_dir;
+        LOG(INFO) << "shared_state_file_path: " << shared_state_file_path;
+
         if (!std::filesystem::exists(shared_state_dir))
         {
-            std::filesystem::create_directory(shared_state_dir);
+            std::filesystem::create_directories(shared_state_dir);
         }
         CHECK(std::filesystem::exists(shared_state_dir));
         seqno_ = GetSeqno();
     }
-
     void Init() override
     {
         ValuesFromFileToMem();

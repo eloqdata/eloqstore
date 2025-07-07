@@ -20,14 +20,18 @@ uint64_t UnixTimestamp()
     return std::chrono::duration_cast<std::chrono::nanoseconds>(dur).count();
 }
 
+
+// using it to convert int to string
 std::string Key(int64_t k)
 {
     constexpr int sz = 8;
     std::stringstream ss;
+    // first fill with 0 to make sure the string is 8 characters long
     ss << std::setw(sz) << std::setfill('0') << k;
     std::string kstr = ss.str();
     assert(kstr.size() == sz);
 
+    // second The number of suffix xs to be appended is determined by JudgeKeyLevel
     uint8_t level = JudgeKeyLevel(k);
     assert(level < 4);
     std::string post_fix(level * 8, 'x');
@@ -35,6 +39,7 @@ std::string Key(int64_t k)
     return kstr;
 }
 
+// using it to set all key to delete,it usually be used when init(initDB)
 void ThreadState::ResetValues()
 {
     const uint32_t del_mask = ExpectedValue::GetDelMask();
@@ -163,7 +168,7 @@ void FileThreadState::SaveAtAndAfter()
 
     FileWriter.open(GetFileNameForSeqno());
     assert(FileWriter.is_open());
-    FileWriter << seqno_;
+    FileWriter << seqno_;  // 其实包括这些写版本号的操作也可能没完成
     FileWriter.close();
 
     if (seqno_ > 0)

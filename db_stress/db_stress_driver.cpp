@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 
+#include "batched_ops_stress.h"
 #include "db_stress_common.h"
 #include "db_stress_shared_state.h"
 #include "db_stress_test_base.h"
@@ -19,14 +20,15 @@
 #include "error.h"
 #include "kill_point.h"
 #include "kv_options.h"
+#include "non_batched_ops_stress.h"
 
 namespace StressTest
 {
 
 void print_test_params()
 {
-    std::vector<std::string> v_sz_mode = {
-        "32B-160B", "1KB-4KB", "100KB-1001KB", "50MB-301MB"};
+    // std::vector<std::string> v_sz_mode = {
+    //     "32B-160B", "1KB-4KB", "100KB-1001KB", "50MB-301MB"};
     LOG(INFO) << "test_params-------"
               << "\nn_tables:" << FLAGS_n_tables
               << "\nn_partitions:" << FLAGS_n_partitions
@@ -36,8 +38,11 @@ void print_test_params()
               << "\nactive_width:" << FLAGS_active_width
               << "\nnum_readers_per_partition:"
               << FLAGS_num_readers_per_partition
-              << "\nmax_verify_ops_per_write:" << FLAGS_max_verify_ops_per_write
-              << "\nvalue_sz_mode:" << v_sz_mode[FLAGS_value_sz_mode];
+              << "\nmax_verify_ops_per_write:"
+              << FLAGS_max_verify_ops_per_write
+              //   << "\nvalue_sz_mode:" << v_sz_mode[FLAGS_value_sz_mode];
+              << "\nshortest_value:" << FLAGS_shortest_value
+              << "\nlongest_value:" << FLAGS_longest_value;
 
     if (FLAGS_active_width < FLAGS_keys_per_batch)
     {
@@ -49,23 +54,25 @@ void print_test_params()
         LOG(FATAL) << "num_readers_per_partition <= 0,test cannot continue.";
     }
 
-    uint64_t value_sz = 0;
-    if (FLAGS_value_sz_mode == 0)
-    {
-        value_sz = 100;
-    }
-    else if (FLAGS_value_sz_mode == 1)
-    {
-        value_sz = 3 * KB;
-    }
-    else if (FLAGS_value_sz_mode == 2)
-    {
-        value_sz = 600 * KB;
-    }
-    else
-    {
-        value_sz = 200 * MB;
-    }
+    // uint64_t value_sz = 0;
+    // if (FLAGS_value_sz_mode == 0)
+    // {
+    //     value_sz = 100;
+    // }
+    // else if (FLAGS_value_sz_mode == 1)
+    // {
+    //     value_sz = 3 * KB;
+    // }
+    // else if (FLAGS_value_sz_mode == 2)
+    // {
+    //     value_sz = 600 * KB;
+    // }
+    // else
+    // {
+    //     value_sz = 200 * MB;
+    // }
+    // use (shortest_value + longest_value) /2
+    uint64_t value_sz = (FLAGS_shortest_value + FLAGS_longest_value) / 2;
     double mem = 0.0;
     int max_key = FLAGS_max_key;
     int readers = FLAGS_num_readers_per_partition;
@@ -94,13 +101,6 @@ void print_test_params()
     LOG(INFO) << "The data DB contains would be about " << storage << " GB.";
 }
 
-void OperateTest(ThreadState *thread, StressTest *stress)
-{
-    stress->InitDb(thread);
-    stress->OperateDb(thread);
-    stress->ClearDb(thread);
-}
-
 void RunStressTest(int argc, char **argv)
 {
     gflags::ParseCommandLineFlags(&argc, &argv, true);
@@ -111,7 +111,7 @@ void RunStressTest(int argc, char **argv)
     FLAGS_stderrthreshold = google::GLOG_WARNING;
     FLAGS_logbuflevel = google::GLOG_INFO;
 
-    kvstore::KvOptions opts;
+    eloqstore::KvOptions opts;
     if (!FLAGS_options.empty())
     {
         if (int res = opts.LoadFromIni(FLAGS_options.c_str()); res != 0)
@@ -148,19 +148,26 @@ void RunStressTest(int argc, char **argv)
         opts.data_append_mode = FLAGS_data_append_mode;
     }
 
-    kvstore::KillPoint::GetInstance().kill_odds_ = FLAGS_kill_odds;
+    eloqstore::KillPoint::GetInstance().kill_odds_ = FLAGS_kill_odds;
 
-    kvstore::EloqStore store(opts);
-    kvstore::KvError err = store.Start();
-    CHECK(err == kvstore::KvError::NoError);
+    eloqstore::EloqStore store(opts);
+    eloqstore::KvError err = store.Start();
+    CHECK(err == eloqstore::KvError::NoError);
 
-    std::vector<ThreadState *> threads(FLAGS_n_tables);
-    std::vector<StressTest *> stress(FLAGS_n_tables);
+    std::vector<std::unique_ptr<StressTest>> stress(FLAGS_n_tables);
+
+    // 根据实际线程数设置,下面两条其实不用,因为stress_test只会被初始化一次
+    StressTest::total_threads_.store(FLAGS_n_tables);
+    StressTest::init_completed_count_.store(0);
+    StressTest::all_init_done_.store(false);
+
+
     if (FLAGS_test_batched_ops_stress)
     {
         for (size_t i = 0; i < stress.size(); ++i)
         {
-            stress[i] = CreateBatchedOpsStressTest();
+            std::string table_name = "stress_test" + std::to_string(i);
+            stress[i] = std::make_unique<BatchedOpsStressTest>(table_name);
         }
         LOG(INFO) << "Current TestType:BatchedOpsStressTest";
     }
@@ -168,23 +175,8 @@ void RunStressTest(int argc, char **argv)
     {
         for (size_t i = 0; i < stress.size(); ++i)
         {
-            stress[i] = CreateNonBatchedOpsStressTest();
-        }
-        if (!FLAGS_open_wfile)
-        {
-            for (size_t i = 0; i < threads.size(); ++i)
-            {
-                std::string table_name = "stress_test" + std::to_string(i);
-                threads[i] = new ThreadState(table_name);
-            }
-        }
-        else
-        {
-            for (size_t i = 0; i < threads.size(); ++i)
-            {
-                std::string table_name = "stress_test" + std::to_string(i);
-                threads[i] = new FileThreadState(table_name);
-            }
+            std::string table_name = "stress_test" + std::to_string(i);
+            stress[i] = std::make_unique<NonBatchedOpsStressTest>(table_name);
         }
 
         LOG(INFO) << "Current TestType:NonBatchedOpsStressTest";
@@ -198,17 +190,16 @@ void RunStressTest(int argc, char **argv)
     print_test_params();
 
     InitializeHotKeyGenerator(FLAGS_hot_key_alpha);
-    std::vector<std::thread> th;
-    for (size_t i = 0; i < threads.size(); ++i)
+
+    for (size_t i = 0; i < stress.size(); ++i)
     {
-        th.emplace_back(OperateTest, threads[i], stress[i]);
+        stress[i]->Start();
     }
 
-    for (size_t i = 0; i < th.size(); ++i)
+    for (size_t i = 0; i < stress.size(); ++i)
     {
-        th[i].join();
+        stress[i]->Join();
     }
-
     store.Stop();
 
     LOG(INFO) << "StressTest ends.";

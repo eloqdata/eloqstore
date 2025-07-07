@@ -73,6 +73,43 @@ uint32_t ExpectedValue::GetFinalDelCounter() const
     return PendingDelete() ? NextDelCounter() : GetDelCounter();
 }
 
+bool ExpectedValueHelper::MustHaveNotExisted(ExpectedValue pre,
+                                             ExpectedValue post)
+{
+    bool pre_deleted = pre.IsDeleted();
+
+    bool no_write_during_read =
+        (pre.GetValueBase() == post.GetFinalValueBase());
+    return pre_deleted && no_write_during_read;
+}
+
+bool ExpectedValueHelper::MustHaveExisted(ExpectedValue pre, ExpectedValue post)
+{
+    bool pre_not_deleted = !pre.IsDeleted();
+    bool no_delete_during_read =
+        (pre.GetDelCounter() == post.GetFinalDelCounter());
+    return pre_not_deleted && no_delete_during_read;
+}
+
+bool ExpectedValueHelper::InExpectedValueBaseRange(uint32_t value_base,
+                                                   ExpectedValue pre,
+                                                   ExpectedValue post)
+{
+    uint32_t pre_base = pre.GetValueBase();
+    uint32_t post_final_base = post.GetFinalValueBase();
+
+    if (pre_base <= post_final_base)
+    {
+        return pre_base <= value_base && value_base <= post_final_base;
+    }
+    else
+    {
+        return (value_base <= post_final_base) ||
+               (pre_base <= value_base &&
+                value_base <= ExpectedValue::GetValueBaseMask());
+    }
+}
+/* old namestyle
 bool ExpectedValueHelper::MustHaveNotExisted(
     ExpectedValue pre_read_expected_value,
     ExpectedValue post_read_expected_value)
@@ -135,4 +172,5 @@ bool ExpectedValueHelper::InExpectedValueBaseRange(
                (lower_bound_2 <= value_base && value_base <= upper_bound_2);
     }
 }
+*/
 }  // namespace StressTest

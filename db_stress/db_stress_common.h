@@ -17,6 +17,7 @@ DECLARE_int64(active_width);
 DECLARE_double(hot_key_alpha);
 DECLARE_uint64(seed);
 DECLARE_uint32(write_percent);
+DECLARE_uint32(point_read_percent);
 DECLARE_bool(test_batched_ops_stress);
 DECLARE_uint32(num_readers_per_partition);
 DECLARE_uint32(max_verify_ops_per_write);
@@ -71,8 +72,5 @@ std::vector<int64_t> GenerateNKeys(StressTest::Partition *partition,
                                    uint64_t iteration);
 uint8_t JudgeKeyLevel(int64_t key);
 int64_t KeyStringToInt(std::string k);
-
-StressTest *CreateBatchedOpsStressTest();
-StressTest *CreateNonBatchedOpsStressTest();
 
 }  // namespace StressTest

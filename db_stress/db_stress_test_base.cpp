@@ -21,28 +21,68 @@
 
 namespace StressTest
 {
+std::atomic<int> StressTest::init_completed_count_{0};
+std::atomic<int> StressTest::total_threads_{0};
+std::condition_variable StressTest::init_barrier_cv_;
+std::mutex StressTest::init_barrier_mutex_;
+std::atomic<bool> StressTest::all_init_done_{false};
 
-void StressTest::InitDb(ThreadState *thread)
+
+void StressTest::InitDb()
 {
-    LOG(INFO) << "Start Initing Db.";
+    LOG(INFO) << "Start Initing verify table.";
     if (FLAGS_test_batched_ops_stress)
     {
     }
     else if (!FLAGS_open_wfile)
     {
-        VerifyAndSyncValues(thread);
-        VerifyDb(thread);
+        // 存疑,好像不用调用,直接reset
+        // VerifyAndSyncValues();
+        thread_state_-> ResetValues();
+
+        VerifyDb();
     }
     else
-    {
-        thread->Init();
-        VerifyAndSyncValues(thread);
-        thread->FinishInit();
+    { //ps: seqno从seqno表中拿(构造函数中),拿到之后++就是当前表
+        thread_state_->Init();// 这个地方会先调用filetomem载入latest.state表,然后调用replay把trace表来还原验证表
+        VerifyAndSyncValues();// 扫描一遍数据库验证
+        thread_state_->FinishInit(); //调用memtofile回写latest,然后savaAtAfter把latest.state拷贝到seqno.state,同时删除历史表,最后把seqno.trace启动了
     }
-    LOG(INFO) << "Db has been Inited.";
+    // LOG(INFO) << "Db has been Inited.";  //这个地方日志不对,只是验证表准备好了
+
+    // fetch_add用于把init_completed_count_加1,并返回加之前的值,故要+1是实际完成的
+    int completed = init_completed_count_.fetch_add(1) + 1;
+    LOG(INFO) << "Thread initialization completed. Progress: " 
+              << completed << "/" << total_threads_.load();
 }
 
-void StressTest::OperateDb(ThreadState *thread)
+
+void StressTest::WaitForAllInitComplete()
+{
+    // mutex用于和条件变量相配合
+    std::unique_lock<std::mutex> lock(init_barrier_mutex_);
+    
+    // 如果已经全部完成，直接返回
+    if (all_init_done_.load()) {
+        return;
+    }
+    
+    // 等待所有线程完成初始化
+    init_barrier_cv_.wait(lock, [] {
+        return init_completed_count_.load() >= total_threads_.load() || 
+               all_init_done_.load();
+    });
+    
+    // 最后一个到达的线程负责唤醒所有等待的线程
+    if (init_completed_count_.load() >= total_threads_.load() && 
+        !all_init_done_.exchange(true)) { 
+        //不会每个线程都执行一遍notify_all,因为exchange会设置为true,并且返回旧值,所以只有之前是false的才能进入这个if
+        LOG(INFO) << "All threads initialization completed. Starting operations DB...";
+        init_barrier_cv_.notify_all();
+    }
+}
+
+void StressTest::OperateDb()
 {
     LOG(INFO) << "Start operating Db.";
     uint64_t ts1 = UnixTimestamp();
@@ -68,36 +108,51 @@ void StressTest::OperateDb(ThreadState *thread)
             {
                 auto reader = readers_[id];
                 uint64_t ts22 = UnixTimestamp();
-                reader->VerifyGet(thread);
+                reader->VerifyGet(thread_state_);
                 ts_verify += UnixTimestamp() - ts22;
             }
         }
-
+        // the rand_keys is vector so the TestPut is a batch operator
+        // GenerateNKeys will generate a vector of randow keys, 
+        // The number is determined by FLAGS_keys_per_batch, 
+        // which defaults to a random value between 100 and 500.
+        // support slice window(Flags_hot_key_alpha == 0)
+        // support hot key(FLAGS_hot_key_alpha > 0)
         for (auto partition_id : unfinished_id_)
         {
             auto partition = partitions_[partition_id];
 
             if (!partition->IsWriting() && !partition->should_stop)
             {
-                if (partition->rand_.PercentTrue(FLAGS_write_percent))
-                {
-                    uint64_t ts11 = UnixTimestamp();
-                    std::vector<int64_t> rand_keys =
-                        GenerateNKeys(partition, partition->FinishedRounds());
-                    ts_rand += UnixTimestamp() - ts11;
+                // // now the percent set 75% it means 75% of the time it will write
+                // if (partition->rand_.PercentTrue(FLAGS_write_percent))
+                // {
+                //     uint64_t ts11 = UnixTimestamp();
 
-                    TestPut(thread, partition_id, rand_keys);
-                }
+                //     std::vector<int64_t> rand_keys =
+                //         GenerateNKeys(partition, partition->FinishedRounds());
+                //     ts_rand += UnixTimestamp() - ts11;
+                    
+                //     // in Batchtest ,it will generate key0~key9 and do upsert
+                //     // in nonBatch , it will  do upsert for every key
+                //     TestPut(partition_id, rand_keys);
+                // }
+                // // 25% of the time it will delete
+                // else
+                // {
+                //     uint64_t ts11 = UnixTimestamp();
+                //     std::vector<int64_t> rand_keys =
+                //         GenerateNKeys(partition, partition->FinishedRounds());
+                //     ts_rand += UnixTimestamp() - ts11;
 
-                else
-                {
-                    uint64_t ts11 = UnixTimestamp();
-                    std::vector<int64_t> rand_keys =
-                        GenerateNKeys(partition, partition->FinishedRounds());
-                    ts_rand += UnixTimestamp() - ts11;
-
-                    TestDelete(thread, partition_id, rand_keys);
-                }
+                //     TestDelete(partition_id, rand_keys);
+                // }
+                uint64_t ts11 = UnixTimestamp();
+                std::vector<int64_t> rand_keys =GenerateNKeys(partition, partition->FinishedRounds());
+                // ts_rand use to count the time cost of GenerateNKeys ,it will be cout in the log
+                //LOG(INFO) << "Rand keys for " << ts_rand << ","<< (double) ts_rand * 100 / (ts2 - ts1) << "%";  // 生成随机key的耗时和占比
+                ts_rand += UnixTimestamp() - ts11;
+                TestMixedOps(partition_id, rand_keys);
             }
 
             for (uint32_t i = partition_id * FLAGS_num_readers_per_partition;
@@ -111,7 +166,15 @@ void StressTest::OperateDb(ThreadState *thread)
                 {
                     int64_t rand_key =
                         GenerateOneKey(partition, partition->FinishedRounds());
-                    TestGet(thread, i, rand_key);
+                    if (partition->rand_.PercentTrue(FLAGS_point_read_percent))
+                    {
+                        TestGet(i, rand_key);
+                    }
+                    else
+                    {
+                       TestScan(i, rand_key);
+                        //TestGet(i, rand_key);
+                    }
                 }
             }
         }
@@ -133,22 +196,23 @@ void StressTest::OperateDb(ThreadState *thread)
               << (double) ts_gen_v * 100 / (ts2 - ts1) << "%";
 }
 
-void StressTest::ClearDb(ThreadState *thread)
+void StressTest::ClearDb()
 {
     LOG(INFO) << "Start Clearing Db.";
-    VerifyDb(thread);
+    VerifyDb();
     uint64_t ts1 = UnixTimestamp();
     uint64_t user_data;
     while (finished_reqs_.try_dequeue(user_data))
         ;
     for (auto partition : partitions_)
     {
-        partition->trun_req_.SetArgs({thread->table_name_, partition->id_}, {});
+        partition->trun_req_.SetArgs(
+            {thread_state_->table_name_, partition->id_}, {});
         user_data = partition->id_;
         bool ok =
             store_->ExecAsyn(&partition->trun_req_,
                              user_data,
-                             [this](kvstore::KvRequest *req) { Wake(req); });
+                             [this](eloqstore::KvRequest *req) { Wake(req); });
         CHECK(ok);
     }
 
@@ -160,14 +224,14 @@ void StressTest::ClearDb(ThreadState *thread)
             uint32_t id = user_data;
             auto partition = partitions_[id];
             auto reader = readers_[id * FLAGS_num_readers_per_partition];
-            reader->scan_req_.SetArgs({thread->table_name_, id}, {}, {});
-            CHECK(reader->scan_req_.Error() == kvstore::KvError::NotFound ||
-                  reader->scan_req_.Error() == kvstore::KvError::NoError);
+            reader->scan_req_.SetArgs({thread_state_->table_name_, id}, {}, {});
+            CHECK(reader->scan_req_.Error() == eloqstore::KvError::NotFound ||
+                  reader->scan_req_.Error() == eloqstore::KvError::NoError);
             --cnt;
         }
     }
 
-    thread->Clear();
+    thread_state_->Clear();
     LOG(INFO) << "Truncate cost " << UnixTimestamp() - ts1;
     LOG(INFO) << "Db has been cleared.";
 }
@@ -192,25 +256,41 @@ void StressTest::Partition::CheckIfAllFinished()
 
 std::string StressTest::Partition::GenerateValue(uint32_t base)
 {
+    // size_t value_sz;
+    // if (FLAGS_value_sz_mode == 0)
+    // {
+    //     value_sz = (rand_.Uniform(5) + 1) * 32;
+    // }
+    // else if (FLAGS_value_sz_mode == 1)
+    // {
+    //     value_sz = (rand_.Uniform(3) + 1) * KB + rand_.Uniform(1024);
+    // }
+    // else if (FLAGS_value_sz_mode == 2)
+    // {
+    //     value_sz = (rand_.Uniform(900) + 100) * KB + rand_.Uniform(1024);
+    // }
+    // else
+    // {
+    //     value_sz = (rand_.Uniform(250) + 50) * MB + rand_.Uniform(1024) * KB
+    //     +
+    //                rand_.Uniform(1024);
+    // }
+    // assert(value_sz >= 32);
+    // make sure parameter is valid
+    assert(FLAGS_longest_value >= FLAGS_shortest_value);
+    assert(FLAGS_shortest_value >= 32);
+
     size_t value_sz;
-    if (FLAGS_value_sz_mode == 0)
+    if (FLAGS_longest_value == FLAGS_shortest_value)
     {
-        value_sz = (rand_.Uniform(5) + 1) * 32;
-    }
-    else if (FLAGS_value_sz_mode == 1)
-    {
-        value_sz = (rand_.Uniform(3) + 1) * KB + rand_.Uniform(1024);
-    }
-    else if (FLAGS_value_sz_mode == 2)
-    {
-        value_sz = (rand_.Uniform(900) + 100) * KB + rand_.Uniform(1024);
+        value_sz = FLAGS_shortest_value;
     }
     else
     {
-        value_sz = (rand_.Uniform(250) + 50) * MB + rand_.Uniform(1024) * KB +
-                   rand_.Uniform(1024);
+        value_sz =
+            FLAGS_shortest_value +
+            rand_.Uniform(FLAGS_longest_value - FLAGS_shortest_value + 1);
     }
-    assert(value_sz >= 32);
 
     char post_fix_ch = '0' + rand_.Uniform(10);
     std::string ret(value_sz, post_fix_ch);
@@ -224,7 +304,7 @@ std::string StressTest::Partition::GenerateValue(uint32_t base)
 
 void StressTest::Partition::FinishWrite()
 {
-    CHECK(req_.Error() == kvstore::KvError::NoError);
+    CHECK(req_.Error() == eloqstore::KvError::NoError);
     ticks_++;
     verify_cnt = 0;
     if (table->type == TestType::NonBatchedOpsStressTest)
@@ -246,12 +326,12 @@ void StressTest::Partition::FinishWrite()
     CheckIfAllFinished();
 }
 
-void StressTest::Reader::VerifyGet(ThreadState *thread)
+void StressTest::Reader::VerifyGet(ThreadState *thread_state_)
 {
     if (partition_->table->type == TestType::BatchedOpsStressTest)
     {
-        CHECK(scan_req_.Error() == kvstore::KvError::NoError ||
-              scan_req_.Error() == kvstore::KvError::NotFound);
+        CHECK(scan_req_.Error() == eloqstore::KvError::NoError ||
+              scan_req_.Error() == eloqstore::KvError::NotFound);
         partition_->verify_cnt++;
         if (scan_req_.Entries().empty())
             return;
@@ -273,31 +353,96 @@ void StressTest::Reader::VerifyGet(ThreadState *thread)
             CHECK(v_res[i] == v_res[0]);
         }
 
-        IsReading = false;
+        IsReading = false; //存疑,没懂为什么要把IsReading设置为false
     }
 
-    else
-    {
-        partition_->verify_cnt++;
-        post_read_expected_value =
-            thread->Load(partition_->id_, KeyStringToInt(key_reading_));
-        if (read_req_.Error() == kvstore::KvError::NotFound)
-        {
-            assert(!ExpectedValueHelper::MustHaveExisted(
-                pre_read_expected_value, post_read_expected_value));
-        }
-        else
-        {
-            CHECK(read_req_.Error() == kvstore::KvError::NoError);
-            assert(!ExpectedValueHelper::MustHaveNotExisted(
-                pre_read_expected_value, post_read_expected_value));
-            uint32_t value_base = std::stoi(read_req_.value_.substr(0, 32));
-            assert(ExpectedValueHelper::InExpectedValueBaseRange(
-                value_base, pre_read_expected_value, post_read_expected_value));
-        }
-        IsReading = false;
-    }
-
+    // else
+    // {
+    //     partition_->verify_cnt++;
+    //     //在这里出问题,而且这个post好像是不需要存储的,每次去拿一下就行
+    //     post_read_expected_value =
+    //         thread_state_->Load(partition_->id_, KeyStringToInt(key_reading_));
+    //     if (read_req_.Error() == eloqstore::KvError::NotFound)
+    //     {
+    //         assert(!ExpectedValueHelper::MustHaveExisted(
+    //             pre_read_expected_value, post_read_expected_value));
+    //     }
+    //     else
+    //     {
+    //         CHECK(read_req_.Error() == eloqstore::KvError::NoError);
+    //         assert(!ExpectedValueHelper::MustHaveNotExisted(
+    //             pre_read_expected_value, post_read_expected_value));
+    //         uint32_t value_base = std::stoi(read_req_.value_.substr(0, 32));
+    //         assert(ExpectedValueHelper::InExpectedValueBaseRange(
+    //             value_base, pre_read_expected_value, post_read_expected_value));
+    //     }
+    //     IsReading = false;
+    // }
+    else // NonBatchedOpsStressTest 
+    { 
+        partition_->verify_cnt++; 
+        
+        if (is_scan_mode_) { 
+            CHECK(scan_req_.Error() == eloqstore::KvError::NoError || 
+                  scan_req_.Error() == eloqstore::KvError::NotFound); 
+            
+            auto entries = scan_req_.Entries();
+            size_t entry_idx = 0;
+            
+            // 遍历所有期望的key，按顺序验证
+            for (size_t i = 0; i < key_readings_.size(); ++i) { 
+                const std::string& expected_key = key_readings_[i]; 
+                int64_t key_int = KeyStringToInt(expected_key); 
+                
+                ExpectedValue post_expected = thread_state_->Load(partition_->id_, key_int); 
+                ExpectedValue pre_expected = (i < pre_read_expected_values.size()) ? 
+                    pre_read_expected_values[i] : ExpectedValue(); 
+                
+                // 检查当前entry是否对应当前期望的key
+                if (entry_idx < entries.size() && 
+                    entries[entry_idx].key_ == expected_key) {
+                    // 找到了对应的entry，验证value
+                    const std::string& actual_value = entries[entry_idx].value_;
+                    assert(!actual_value.empty());
+                    assert(!ExpectedValueHelper::MustHaveNotExisted(pre_expected, post_expected)); 
+                    
+                    uint32_t value_base = std::stoi(actual_value.substr(0, 32)); 
+                    assert(ExpectedValueHelper::InExpectedValueBaseRange( 
+                        value_base, pre_expected, post_expected)); 
+                    
+                    entry_idx++; // 移动到下一个entry
+                } else {
+                    // 没有找到对应的entry，验证是否应该不存在
+                    assert(!ExpectedValueHelper::MustHaveExisted(pre_expected, post_expected)); 
+                }
+            }
+        } else { 
+            // 点读模式：直接处理单个结果 
+            assert(key_readings_.size() == 1); // 点读只有一个key 
+            const std::string& expected_key = key_readings_[0]; 
+            int64_t key_int = KeyStringToInt(expected_key); 
+            
+            ExpectedValue post_expected = thread_state_->Load(partition_->id_, key_int); 
+            ExpectedValue pre_expected = (!pre_read_expected_values.empty()) ? 
+                pre_read_expected_values[0] : ExpectedValue(); 
+            
+            if (read_req_.Error() == eloqstore::KvError::NoError) { 
+                // 读到了值，验证正确性 
+                const std::string& actual_value = read_req_.value_; 
+                assert(!actual_value.empty()); 
+                assert(!ExpectedValueHelper::MustHaveNotExisted(pre_expected, post_expected)); 
+                
+                uint32_t value_base = std::stoi(actual_value.substr(0, 32)); 
+                assert(ExpectedValueHelper::InExpectedValueBaseRange( 
+                    value_base, pre_expected, post_expected)); 
+            } else { 
+                // 没有读到值，验证是否不必须存在 
+                assert(!ExpectedValueHelper::MustHaveExisted(pre_expected, post_expected)); 
+            } 
+        } 
+        
+        IsReading = false; 
+    } 
     if (partition_->should_stop == true)
     {
         should_stop = true;
@@ -314,26 +459,31 @@ bool StressTest::AllPartitionsFinished()
     return unfinished_id_.empty();
 }
 
-void StressTest::VerifyAndSyncValues(ThreadState *thread)
+void StressTest::VerifyAndSyncValues()
 {
-    if (!thread->HasHistory())
+    if (!thread_state_->HasHistory())
     {
-        thread->ResetValues();
+        thread_state_->ResetValues();
         return;
     }
+    // change to use assert to make sure call it only have history
+    // assert(thread_state_->HasHistory());
+
     if (FLAGS_syn_scan)
     {
         for (auto partition : partitions_)
         {
             auto reader = readers_[0];
+            // table_name+partition_id = B+ tree id, {}{} means scan all
             reader->scan_req_.SetArgs(
-                {thread->table_name_, partition->id_}, {}, {});
+                {thread_state_->table_name_, partition->id_}, {}, {});
             store_->ExecSync(&reader->scan_req_);
             size_t idx = 0;
             auto ents = reader->scan_req_.Entries();
             for (size_t j = 0; j < FLAGS_max_key; ++j)
             {
-                ExpectedValue expected_value(thread->Load(partition->id_, j));
+                ExpectedValue expected_value(
+                    thread_state_->Load(partition->id_, j));
                 if (!expected_value.IsDeleted())
                 {
                     if (idx < ents.size())
@@ -341,26 +491,27 @@ void StressTest::VerifyAndSyncValues(ThreadState *thread)
                         const auto &[k, v, ts, _] = ents[idx];
                         if (KeyStringToInt(k) == j)
                         {
+                            // crash test bug in this check 
                             CHECK(stoi(v.substr(0, 32)) ==
                                       expected_value.GetValueBase() ||
                                   stoi(v.substr(0, 32)) ==
                                       expected_value.GetValueBase() - 1);
                             expected_value.SetValueBase(stoi(v.substr(0, 32)));
-                            thread->Value(partition->id_, j) =
+                            thread_state_->Value(partition->id_, j) =
                                 expected_value.Read();
                             ++idx;
                         }
                         else
                         {
                             expected_value.SetDeleted();
-                            thread->Value(partition->id_, j) =
+                            thread_state_->Value(partition->id_, j) =
                                 expected_value.Read();
                         }
                     }
                     else
                     {
                         expected_value.SetDeleted();
-                        thread->Value(partition->id_, j) =
+                        thread_state_->Value(partition->id_, j) =
                             expected_value.Read();
                     }
                 }
@@ -374,7 +525,7 @@ void StressTest::VerifyAndSyncValues(ThreadState *thread)
                         CHECK(stoi(v.substr(17, 15)) ==
                               expected_value.GetValueBase());
                         expected_value.ClearDeleted();
-                        thread->Value(partition->id_, j) =
+                        thread_state_->Value(partition->id_, j) =
                             expected_value.Read();
                         ++idx;
                     }
@@ -390,11 +541,11 @@ void StressTest::VerifyAndSyncValues(ThreadState *thread)
         {
             auto reader = readers_[reader_id];
             reader->scan_req_.SetArgs(
-                {thread->table_name_, reader->partition_->id_}, {}, {});
+                {thread_state_->table_name_, reader->partition_->id_}, {}, {});
             uint64_t user_data = reader->id_;
             bool ok = store_->ExecAsyn(&reader->scan_req_,
                                        user_data,
-                                       [this](kvstore::KvRequest *req) -> void
+                                       [this](eloqstore::KvRequest *req) -> void
                                        { Wake(req); });
             CHECK(ok);
         }
@@ -412,7 +563,7 @@ void StressTest::VerifyAndSyncValues(ThreadState *thread)
                 for (size_t j = 0; j < FLAGS_max_key; ++j)
                 {
                     ExpectedValue expected_value(
-                        thread->Load(partition->id_, j));
+                        thread_state_->Load(partition->id_, j));
                     if (!expected_value.IsDeleted())
                     {
                         if (idx < ents.size())
@@ -426,21 +577,21 @@ void StressTest::VerifyAndSyncValues(ThreadState *thread)
                                           expected_value.GetValueBase() - 1);
                                 expected_value.SetValueBase(
                                     stoi(v.substr(0, 32)));
-                                thread->Value(partition->id_, j) =
+                                thread_state_->Value(partition->id_, j) =
                                     expected_value.Read();
                                 ++idx;
                             }
                             else
                             {
                                 expected_value.SetDeleted();
-                                thread->Value(partition->id_, j) =
+                                thread_state_->Value(partition->id_, j) =
                                     expected_value.Read();
                             }
                         }
                         else
                         {
                             expected_value.SetDeleted();
-                            thread->Value(partition->id_, j) =
+                            thread_state_->Value(partition->id_, j) =
                                 expected_value.Read();
                         }
                     }
@@ -454,7 +605,7 @@ void StressTest::VerifyAndSyncValues(ThreadState *thread)
                             CHECK(stoi(v.substr(17, 15)) ==
                                   expected_value.GetValueBase());
                             expected_value.ClearDeleted();
-                            thread->Value(partition->id_, j) =
+                            thread_state_->Value(partition->id_, j) =
                                 expected_value.Read();
                             ++idx;
                         }

@@ -33,7 +33,8 @@ DEFINE_string(options, "", "path to ini config file");
 DEFINE_string(db_path, "/tmp/stress_test", "Path to database");
 DEFINE_uint32(n_tables, 2, "nums of threads/tables");
 DEFINE_uint32(n_partitions, 300, "nums of partitions");
-DEFINE_uint64(ops_per_partition, 300, "ops of batch write on each partition");
+// 我认为压力测试不应该结束,所以这里设置的很大
+DEFINE_uint64(ops_per_partition, 3000000, "ops of batch write on each partition");
 DEFINE_uint32(kill_odds, 0, "odds (1/this) of each killpoint to crash");
 DEFINE_uint32(num_client_threads, 1, "Amount of client threads");
 DEFINE_int64(max_key, 1000, "the value of the max key");
@@ -41,6 +42,7 @@ DEFINE_int64(active_width, 500, "width of active range");
 DEFINE_double(hot_key_alpha, 0, "alpha of hot key,recommend:[0.8,1.5]");
 DEFINE_uint64(seed, 2341234, "seed for random");
 DEFINE_uint32(write_percent, 75, "percentage of upsert in upsert/delete");
+DEFINE_uint32(point_read_percent, 25, "percentage of point read in point_read/scan_read");
 DEFINE_bool(test_batched_ops_stress, false, "whether test batched ops");
 DEFINE_uint32(num_readers_per_partition,
               10,
@@ -56,11 +58,13 @@ DEFINE_bool(
     false,
     "using file to store and verify,it should be open when testing crash");
 DEFINE_bool(syn_scan, true, "choose scan syn or asyn");
-DEFINE_uint32(
-    value_sz_mode,
-    0,
-    "0: 32B - 160B, 1: 1KB - 4KB, 2: 100KB - 1001KB, 3: 50MB - 301MB");
-
+// DEFINE_uint32(
+//     value_sz_mode,
+//     0,
+//     "0: 32B - 160B, 1: 1KB - 4KB, 2: 100KB - 1001KB, 3: 50MB - 301MB");
+// I think it is better to define two flags shortest_value and longest_value
+DEFINE_uint32(shortest_value, 32, "minimum value size in bytes");
+DEFINE_uint32(longest_value, 160, "maximum value size in bytes");
 // random params for crash_test
 DEFINE_uint32(num_threads, 4, "Amount of threads");
 DEFINE_uint32(data_page_restart_interval, 16, "interval of datapage restart");
