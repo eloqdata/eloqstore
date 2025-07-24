@@ -226,7 +226,7 @@ default_params = {
     "reserve_space_ratio":100,#default 100
     "rclone_threads":1,#default 1
     "overflow_pointers":16,#default 16
-    "open_wfile":True
+    "open_wfile":True,
 }
 
 stress_cmd = "../build/db_stress/db_stress"
