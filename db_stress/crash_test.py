@@ -27,7 +27,7 @@ def setup_core_dump():
 
     print(f"当前core文件限制: {resource.getrlimit(resource.RLIMIT_CORE)}")
     # 尝试设置core文件模式（需要root权限，可能失败）
-    try:
+    try:   # w表示写入模式,会覆盖原先内容,后续考虑加上仅在当前进程生效的参数
         with open('/proc/sys/kernel/core_pattern', 'w') as f:
             f.write(core_pattern)
     except PermissionError:
@@ -57,14 +57,22 @@ def get_recent_core_files(pid, start_time):
     
     return recent_cores
 def manage_core_files(pid, start_time, exit_code, hit_timeout, test_type):
-    """根据退出码管理core文件"""
+    """根据退出码管理core文件 ps: 如果希望保存10个,则下面要填写>10,不能等于,因为第十个生成的时候是希望保留的"""
     recent_cores = get_recent_core_files(pid, start_time)
-    
+    # 检查./log/core目录中现有文件数量
+    core_dir = "./log/core"
+    os.makedirs(core_dir, exist_ok=True)
+    existing_core_files = [f for f in os.listdir(core_dir) if os.path.isfile(os.path.join(core_dir, f))]
+    existing_count = len(existing_core_files)
     # 判断是否应该保留core文件
     should_keep_core = False
     reason = ""
     
-    if exit_code == -6:  # SIGABRT - 断言失败
+    # 首先检查目录中文件数量限制
+    if existing_count > 10:
+        should_keep_core = False
+        reason = f"core目录已有{existing_count}个文件，超过限制(10个)"
+    elif exit_code == -6:  # SIGABRT - 断言失败
         should_keep_core = True
         reason = "断言失败"
     elif exit_code == -15:  # SIGTERM - 正常被kill或埋点死亡
@@ -141,7 +149,7 @@ def init_csv_file(test_type):
                 'num_threads', 'data_page_restart_interval', 'index_page_restart_interval',
                 'index_buffer_pool_size', 'fd_limit', 'io_queue_size', 'max_inflight_write',
                 'max_write_batch_pages', 'buf_ring_size', 'file_amplify_factor',
-                'reserve_space_ratio', 'rclone_threads', 'open_wfile'
+                'reserve_space_ratio', 'rclone_threads', 'open_wfile','command'
             ]
             
             # 根据测试类型添加特定字段
@@ -155,7 +163,7 @@ def init_csv_file(test_type):
     
     return filename
 
-def record_test_result(test_type, start_time, end_time, exit_code, hit_timeout, cmd_params, extra_params=None):
+def record_test_result(test_type, start_time, end_time, exit_code, hit_timeout, cmd_params, extra_params=None, cmd_str=None):
     """记录测试结果到CSV文件"""
     filename = init_csv_file(test_type)
     
@@ -181,7 +189,8 @@ def record_test_result(test_type, start_time, end_time, exit_code, hit_timeout, 
         'file_amplify_factor': cmd_params.get('file_amplify_factor', ''),
         'reserve_space_ratio': cmd_params.get('reserve_space_ratio', ''),
         'rclone_threads': cmd_params.get('rclone_threads', ''),
-        'open_wfile': cmd_params.get('open_wfile', '')
+        'open_wfile': cmd_params.get('open_wfile', ''),
+        'command': cmd_str if cmd_str else ''
     }
     
     # 添加额外参数
@@ -209,7 +218,7 @@ default_params = {
     "fd_limit" : 10000,#default 10000
     "io_queue_size" : 4096,#default 4096
     "buf_ring_size" :lambda:1 << 10,#default 1<<10
-    "coroutine_stack_size" :lambda:1<<14,#default 8*1024
+#    "coroutine_stack_size" :lambda:1<<14,#default 8*1024
     "max_inflight_write":4096,#default 4096
     "file_amplify_factor":4,#default 4
     "num_gc_threads":1,#default 1
@@ -363,9 +372,11 @@ def blackbox_crash_main(args, unknown_args):
         cmd = gen_cmd(
             dict(list(cmd_params.items())), unknown_args
         )
+        # 生成命令字符串用于记录
+        cmd_str = " ".join(cmd)
         process_rate=round((time.time()-start_time)/cmd_params["duration"]*100,2)
         print("crash_test process rate:",process_rate,"%")
-        interval=random.randint(360, cmd_params["interval"])
+        interval=random.randint(1000, cmd_params["interval"])
 
         # 记录单次测试开始时间
         test_start_time = time.time()
@@ -381,13 +392,14 @@ def blackbox_crash_main(args, unknown_args):
             retcode, 
             hit_timeout, 
             cmd_params,
-            {'interval': interval}
+            {'interval': interval},
+            cmd_str
         )
 
         if not hit_timeout:
             print("Exit Before Killing")
             print_output_and_exit_on_error(outs, errs, args.print_stderr_separately)
-            sys.exit(2)
+            sys.exit(retcode)
 
         print_output_and_exit_on_error(outs, errs, args.print_stderr_separately)
         print("\n\n\n")
@@ -424,6 +436,8 @@ def whitebox_crash_main(args, unknown_args):
             ),
             unknown_args,
         )
+        # 生成命令字符串用于记录
+        cmd_str = " ".join(cmd)
         # 记录单次测试开始时间
         test_start_time = time.time()
         # hit_timeout, retcode, stdoutdata, stderrdata = execute_cmd(
@@ -444,7 +458,8 @@ def whitebox_crash_main(args, unknown_args):
             retcode, 
             hit_timeout, 
             cmd_params,
-            {'kill_odds': odd}
+            {'kill_odds': odd},
+            cmd_str
         )
         msg = "kill_odds=1/{}, exitcode={}\n".format(
                  odd,   retcode
@@ -465,7 +480,7 @@ def whitebox_crash_main(args, unknown_args):
         if not succeeded:
             # 测试失败,请查看上方的 kill 选项和退出码！
             print("TEST FAILED. See kill option and exit code above!!!\n")
-            sys.exit(1)
+            sys.exit(retcode)
 
         time.sleep(1)  # time to stabilize after a kill
 

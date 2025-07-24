@@ -24,6 +24,7 @@ DECLARE_bool(open_wfile);
 // DECLARE_uint32(value_sz_mode);
 DECLARE_uint32(shortest_value);
 DECLARE_uint32(longest_value);
+DECLARE_string(shared_state_path);
 namespace StressTest
 {
 
@@ -183,9 +184,10 @@ public:
     void Clear() override;
 
 private:
-    const std::string shared_state_dir = "/tmp/db_stress_helper/" + table_name_;
+    const std::string shared_state_dir =
+        FLAGS_shared_state_path + "/" + table_name_;
     const std::string shared_state_file_path =
-        "/tmp/db_stress_helper/" + table_name_ + "/";
+        FLAGS_shared_state_path + "/" + table_name_ + "/";
     const std::string latest_state_file_name = "latest";
     const std::string suffix_of_state_file = ".state";
     const std::string suffix_of_trace_file = ".trace";

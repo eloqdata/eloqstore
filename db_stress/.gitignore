@@ -10,3 +10,7 @@ nohup.out
 UML/
 
 .vscode
+
+data/
+
+bug

@@ -108,11 +108,11 @@ start_whitebox_test() {
     # 启动白盒测试，传入计算出的duration
     stdbuf -oL -eL python3 "$CRASH_TEST_PY" whitebox \
         --duration=$duration \
-        --kill_odds=1000000 \
+        --kill_odds=100000000 \
         --n_tables=10 \
         --max_key=10000 \
-        --shortest_value=1024 \
-        --longest_value=4096 \
+        --shortest_value=32 \
+        --longest_value=20000 \
         --use_random_params > "$log_file" 2>&1 &
     CURRENT_TEST_PID=$!
     CURRENT_TEST_TYPE="whitebox"
@@ -135,11 +135,11 @@ start_blackbox_test() {
     # 启动黑盒测试
     stdbuf -oL -eL python3 "$CRASH_TEST_PY" blackbox \
         --duration=$duration \
-        --interval=360 \
+        --interval=3600 \
         --n_tables=10 \
         --max_key=10000 \
-        --shortest_value=1024 \
-        --longest_value=4096 \
+        --shortest_value=32 \
+        --longest_value=20000 \
         --use_random_params > "$log_file" 2>&1 &
     CURRENT_TEST_PID=$!
     CURRENT_TEST_TYPE="blackbox"
@@ -194,9 +194,9 @@ main_loop() {
         # 确定当前应该处于什么状态
         local expected_status="" 
         # 20 / 4    4/10 原先
-        if [ $current_hour -ge 14 ] || [ $current_hour -lt 4 ]; then
+        if [ $current_hour -ge 11 ] || [ $current_hour -lt 4 ]; then
             expected_status="whitebox"
-        elif [ $current_hour -ge 4 ] && [ $current_hour -lt 13 ]; then
+        elif [ $current_hour -ge 4 ] && [ $current_hour -lt 10 ]; then
             expected_status="blackbox"
         else
             expected_status="rest"

@@ -12,10 +12,11 @@
 #include "db_stress_shared_state.h"
 #include "eloq_store.h"
 #include "expected_value.h"
-
 #undef BLOCK_SIZE
 #include "concurrentqueue/concurrentqueue.h"
 
+// 由于一些头文件嵌套定义的问题,声明需要放在这里
+DECLARE_bool(enable_latency_monitoring);
 namespace StressTest
 {
 class StressTest
@@ -42,7 +43,7 @@ public:
 
         for (uint32_t i = 0;
              i < FLAGS_n_partitions * FLAGS_num_readers_per_partition;
-             ++i)
+             ++i)  //这样写for循环可以使得多个读者映射到一个partition
         {
             readers_.emplace_back(new Reader(i));
             readers_[i]->partition_ =
@@ -80,7 +81,57 @@ public:
     void Wake(eloqstore::KvRequest *req)
     {
         bool ok = finished_reqs_.enqueue(req->UserData());
+
         CHECK(ok);
+
+        // 根据全局参数决定是否执行性能监控
+        if (FLAGS_enable_latency_monitoring)
+        {
+            uint64_t user_data = req->UserData();
+            uint64_t current_time = UnixTimestamp();
+            bool is_write = (user_data & (uint64_t(1) << 63));
+            uint32_t id = (user_data & ((uint64_t(1) << 63) - 1));
+
+            if (is_write)
+            {
+                Partition *partition = partitions_[id];
+                uint64_t latency = current_time - partition->write_start_time_;
+
+                if (rand() % 3000 == 0)
+                {
+                    double latency_ms =
+                        static_cast<double>(latency) / 1000000.0;  // 转换为毫秒
+                    LOG(INFO) << "写操作延迟: " << latency_ms << " 毫秒 (分区 "
+                              << partition->id_ << ")";
+                }
+                total_write_latency_ += latency;
+                write_count_++;
+            }
+            else
+            {
+                Reader *reader = readers_[id];
+                uint64_t latency = current_time - reader->read_start_time_;
+                if (rand() % 3000 == 0)
+                {
+                    double latency_ms =
+                        static_cast<double>(latency) /
+                        1000000.0;  // 转换为毫秒
+                                    // 根据is_scan_mode_区分请求类型
+                    if (reader->is_scan_mode_)
+                    {
+                        LOG(INFO) << "扫描操作延迟: " << latency_ms
+                                  << " 毫秒 (读取器 " << reader->id_ << ")";
+                    }
+                    else
+                    {
+                        LOG(INFO) << "点读操作延迟: " << latency_ms
+                                  << " 毫秒 (读取器 " << reader->id_ << ")";
+                    }
+                }
+                total_read_latency_ += latency;
+                read_count_++;
+            }
+        }
     }
 
     // remove threadstate parameter
@@ -101,9 +152,9 @@ public:
     {
     }
     // add a new virtual function for mixed upsert and delete
-    virtual void TestMixedOps(uint32_t partition_id, std::vector<int64_t> &rand_keys)
+    virtual void TestMixedOps(uint32_t partition_id,
+                              std::vector<int64_t> &rand_keys)
     {
-
     }
     virtual void TestGet(uint32_t reader_id, int64_t rand_key)
     {
@@ -138,8 +189,9 @@ public:
         }
 
         uint32_t id_;
-        uint64_t ticks_{0};
-        eloqstore::BatchWriteRequest req_;
+        uint64_t ticks_{0};                 //计算写次数?
+        uint64_t write_start_time_{0};      // 仅记录写请求发起时间
+        eloqstore::BatchWriteRequest req_;  //只有一个写者,所以放在这里
         eloqstore::TruncateRequest trun_req_;
         std::vector<PendingExpectedValue> pending_expected_values;
         Random rand_;
@@ -155,19 +207,25 @@ public:
 
     struct Reader
     {
-        Reader(uint32_t id) : id_(id), IsReading(false), should_stop(false), is_scan_mode_(false)
+        Reader(uint32_t id)
+            : id_(id),
+              IsReading(false),
+              should_stop(false),
+              is_scan_mode_(false)
         {
         }
 
-        // currently, this function will verify batch by scan ,and verify nonbatch by two metheds
+        // currently, this function will verify batch by scan ,and verify
+        // nonbatch by two metheds
         void VerifyGet(ThreadState *thread);
 
         uint32_t id_;
         bool IsReading;
         bool should_stop;
-        
+
         // scan or read one
         bool is_scan_mode_;
+        uint64_t read_start_time_{0};  // 仅记录读请求发起时间
         // 有两种模式,scan目前只在batch模式和verify的时候被用到
         // read目前在nonbatch的testget中用到
         eloqstore::ScanRequest scan_req_;
@@ -182,7 +240,8 @@ public:
         std::vector<ExpectedValue> pre_read_expected_values;
         // post actually not be a member
         // std::vector<ExpectedValue> post_read_expected_values;
-        std::vector<std::string> key_readings_;  // new key_reading be supported for scan
+        std::vector<std::string>
+            key_readings_;  // new key_reading be supported for scan
         Partition *partition_;
 
         std::string begin_key_;
@@ -210,22 +269,27 @@ public:
     };
     TestType type;
 
-
 public:  //用于线程同步
     static std::atomic<int> init_completed_count_;
     static std::atomic<int> total_threads_;
     static std::condition_variable init_barrier_cv_;
     static std::mutex init_barrier_mutex_;
     static std::atomic<bool> all_init_done_;
+
+    // 性能统计成员
+    uint64_t total_write_latency_{0};  // 写请求总延迟
+    uint64_t write_count_{0};          // 写请求计数
+    uint64_t total_read_latency_{0};   // 读请求总延迟
+    uint64_t read_count_{0};           // 读请求计数
 private:
     void OperateTest()
     {
         InitDb();
-        WaitForAllInitComplete(); //新增同步屏障
+        WaitForAllInitComplete();  //新增同步屏障
         OperateDb();
         ClearDb();
     }
-    void WaitForAllInitComplete(); //线程同步屏障,用于等待所有线程初始化完成
+    void WaitForAllInitComplete();  //线程同步屏障,用于等待所有线程初始化完成
     std::thread worker_thread_;
 };
 

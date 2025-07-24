@@ -25,6 +25,7 @@ DECLARE_uint32(keys_per_batch);
 DECLARE_bool(syn_scan);
 
 DECLARE_string(db_path);
+
 DECLARE_string(options);
 DECLARE_uint32(n_tables);
 DECLARE_uint32(n_partitions);

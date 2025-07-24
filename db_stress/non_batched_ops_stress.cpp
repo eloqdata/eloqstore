@@ -33,9 +33,11 @@ void NonBatchedOpsStressTest::TestPut(uint32_t partition_id,
     partition->pending_expected_values.resize(rand_keys.size());
 
     uint64_t ts = UnixTimestamp();
-    // writeDataEntry class is an unit of kv work ,entries is a batch of kv work.
+    // writeDataEntry class is an unit of kv work ,entries is a batch of kv
+    // work.
     std::vector<eloqstore::WriteDataEntry> entries;
-    // must be sorted,because the eloqstore should make sure the order of the key
+    // must be sorted,because the eloqstore should make sure the order of the
+    // key
     sort(rand_keys.begin(), rand_keys.end());
     for (size_t i = 0; i < rand_keys.size(); ++i)
     {
@@ -59,9 +61,10 @@ void NonBatchedOpsStressTest::TestPut(uint32_t partition_id,
     partition->req_.SetArgs({thread_state_->table_name_, partition->id_},
                             std::move(entries));
     uint64_t user_data = (partition->id_ | (uint64_t(1) << 63));
-    bool ok = store_->ExecAsyn(&partition->req_,
-                               user_data,
-                               [this](eloqstore::KvRequest *req) { Wake(req); });
+    bool ok =
+        store_->ExecAsyn(&partition->req_,
+                         user_data,
+                         [this](eloqstore::KvRequest *req) { Wake(req); });
     CHECK(ok);
 }
 
@@ -93,9 +96,10 @@ void NonBatchedOpsStressTest::TestDelete(uint32_t partition_id,
     partition->req_.SetArgs({thread_state_->table_name_, partition->id_},
                             std::move(entries));
     uint64_t user_data = (partition->id_ | (uint64_t(1) << 63));
-    bool ok = store_->ExecAsyn(&partition->req_,
-                               user_data,
-                               [this](eloqstore::KvRequest *req) { Wake(req); });
+    bool ok =
+        store_->ExecAsyn(&partition->req_,
+                         user_data,
+                         [this](eloqstore::KvRequest *req) { Wake(req); });
     CHECK(ok);
 }
 void NonBatchedOpsStressTest::TestMixedOps(uint32_t partition_id,
@@ -107,22 +111,25 @@ void NonBatchedOpsStressTest::TestMixedOps(uint32_t partition_id,
     partition->pending_expected_values.resize(rand_keys.size());
 
     uint64_t ts = UnixTimestamp();
-    // writeDataEntry class is an unit of kv work ,entries is a batch of kv work.
+    // writeDataEntry class is an unit of kv work ,entries is a batch of kv
+    // work.
     std::vector<eloqstore::WriteDataEntry> entries;
 
     // use it to record the keys that need to be upserted and deleted.
     std::vector<int64_t> upsert_keys;
     std::vector<int64_t> delete_keys;
-    // must be sorted,because the eloqstore should make sure the order of the key
+    // must be sorted,because the eloqstore should make sure the order of the
+    // key
     sort(rand_keys.begin(), rand_keys.end());
     for (size_t i = 0; i < rand_keys.size(); ++i)
     {
         const std::string k = Key(rand_keys[i]);
         eloqstore::WriteDataEntry &ent = entries.emplace_back();
-        // The common operations for deletion and insertion are preassigned in advance.
+        // The common operations for deletion and insertion are preassigned in
+        // advance.
         ent.key_ = k;
         ent.timestamp_ = ts;
-        
+
         // 随机决定是upsert还是delete
         if (partition->rand_.PercentTrue(FLAGS_write_percent))
         {
@@ -147,20 +154,28 @@ void NonBatchedOpsStressTest::TestMixedOps(uint32_t partition_id,
             ent.op_ = eloqstore::WriteOp::Delete;
         }
     }
-    
-    //thread_state_->TraceOneBatch(partition_id, rand_keys, true); // 这里可能需要调整
-    if (!upsert_keys.empty()) {
-        thread_state_->TraceOneBatch(partition_id, upsert_keys, true);   // upsert用true
+
+    // thread_state_->TraceOneBatch(partition_id, rand_keys, true); //
+    // 这里可能需要调整
+    if (!upsert_keys.empty())
+    {
+        thread_state_->TraceOneBatch(
+            partition_id, upsert_keys, true);  // upsert用true
     }
-    if (!delete_keys.empty()) {
-        thread_state_->TraceOneBatch(partition_id, delete_keys, false);  // delete用false
+    if (!delete_keys.empty())
+    {
+        thread_state_->TraceOneBatch(
+            partition_id, delete_keys, false);  // delete用false
     }
+    partition->write_start_time_ = UnixTimestamp();
     partition->req_.SetArgs({thread_state_->table_name_, partition->id_},
                             std::move(entries));
+    // user_data在写操作的时候,就是partiton的id的自身id,同时最高位强制为1(或上了1000000...)
     uint64_t user_data = (partition->id_ | (uint64_t(1) << 63));
-    bool ok = store_->ExecAsyn(&partition->req_,
-                               user_data,
-                               [this](eloqstore::KvRequest *req) { Wake(req); });
+    bool ok =
+        store_->ExecAsyn(&partition->req_,
+                         user_data,
+                         [this](eloqstore::KvRequest *req) { Wake(req); });
     CHECK(ok);
 }
 void NonBatchedOpsStressTest::TestGet(uint32_t reader_id, int64_t rand_key)
@@ -175,12 +190,14 @@ void NonBatchedOpsStressTest::TestGet(uint32_t reader_id, int64_t rand_key)
         thread_state_->Load(reader->partition_->id_, rand_key));
 
     std::string_view read_key(reader->key_readings_[0]);
+    reader->read_start_time_ = UnixTimestamp();
     reader->read_req_.SetArgs(
         {thread_state_->table_name_, reader->partition_->id_}, read_key);
-    uint64_t user_data = reader->id_;
-    bool ok = store_->ExecAsyn(&reader->read_req_,
-                               user_data,
-                               [this](eloqstore::KvRequest *req) { Wake(req); });
+    uint64_t user_data = reader->id_;  //这边的user_data就是直接就是reader的id了
+    bool ok =
+        store_->ExecAsyn(&reader->read_req_,
+                         user_data,
+                         [this](eloqstore::KvRequest *req) { Wake(req); });
     CHECK(ok);
     reader->IsReading = true;
 }
@@ -191,7 +208,7 @@ void NonBatchedOpsStressTest::TestScan(uint32_t reader_id, int64_t rand_key)
     reader->is_scan_mode_ = true;
 
     int64_t scan_start = rand_key;
-    int64_t scan_end = std::min(rand_key + 1, FLAGS_max_key);
+    int64_t scan_end = std::min(rand_key + 100, FLAGS_max_key);
     reader->begin_key_ = Key(scan_start);
     reader->end_key_ = Key(scan_end);
 
@@ -200,19 +217,22 @@ void NonBatchedOpsStressTest::TestScan(uint32_t reader_id, int64_t rand_key)
     reader->pre_read_expected_values.clear();
 
     // 添加实际要扫描的key到key_readings_
-    for (int64_t i = scan_start; i < scan_end; ++i) {
+    for (int64_t i = scan_start; i < scan_end; ++i)
+    {
         reader->key_readings_.push_back(Key(i));
         reader->pre_read_expected_values.push_back(
             thread_state_->Load(reader->partition_->id_, i));
     }
     std::string_view begin(reader->begin_key_);
     std::string_view end(reader->end_key_);
+    reader->read_start_time_ = UnixTimestamp();
     reader->scan_req_.SetArgs(
         {thread_state_->table_name_, reader->partition_->id_}, begin, end);
     uint64_t user_data = reader->id_;
-    bool ok = store_->ExecAsyn(&reader->scan_req_,
-                               user_data,
-                               [this](eloqstore::KvRequest *req) { Wake(req); });
+    bool ok =
+        store_->ExecAsyn(&reader->scan_req_,
+                         user_data,
+                         [this](eloqstore::KvRequest *req) { Wake(req); });
     CHECK(ok);
     reader->IsReading = true;
 }
@@ -298,8 +318,8 @@ void NonBatchedOpsStressTest::VerifyDb()
         }
     }
     uint64_t ts2 = UnixTimestamp();
-
-    LOG(INFO) << " verify successfully.Scan costs " << ts2 - ts1;
+    // 这里可以尝试打开,查看扫一轮数据库的开销
+    // LOG(INFO) << " verify successfully.Scan costs " << ts2 - ts1;
 }
 
 }  // namespace StressTest

@@ -22,7 +22,7 @@ void InitializeHotKeyGenerator(double alpha)
     double c = 0;
     for (int64_t i = 1; i <= zipf_sum_size; i++)
     {
-        c = c +  (1.0 / std::pow(static_cast<double>(i), alpha));
+        c = c + (1.0 / std::pow(static_cast<double>(i), alpha));
     }
     c = 1.0 / c;
 

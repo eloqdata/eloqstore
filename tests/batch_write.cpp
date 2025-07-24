@@ -30,7 +30,6 @@ TEST_CASE("mixed batch write with read", "[batch_write]")
         }
     }
 }
-
 TEST_CASE("batch write with big key", "[batch_write]")
 {
     eloqstore::EloqStore *store = InitStore(mem_store_opts);
