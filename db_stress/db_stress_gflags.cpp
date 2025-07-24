@@ -109,6 +109,7 @@ DEFINE_uint32(overflow_pointers,
               16,
               "amount of pointers stored in overflow page");
 DEFINE_bool(data_append_mode, false, "write data in append only mode");
+DEFINE_string(cloud_store_path, "", "path to cloud store");
 DEFINE_bool(enable_latency_monitoring,
             false,
             "enable request latency monitoring and logging");

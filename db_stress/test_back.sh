@@ -12,13 +12,6 @@ ERROR_LOG_DIR="$LOG_DIR/errors"
 CRASH_TEST_PY="$SCRIPT_DIR/crash_test.py"
 CLEANUP_CMD="../build/db_stress/clean_up"
 
-
-PARAM_COMBINATIONS=(
-    "--data_append_mode=false"  # 组合0: 无cloud_store_path, data_append_mode=false
-    "--data_append_mode=true"   # 组合1: 无cloud_store_path, data_append_mode=true
-    # "--cloud_store_path=/tmp/cloud_store --data_append_mode=false"  # 组合2: 有cloud_store_path, data_append_mode=false
-    # "--cloud_store_path=/tmp/cloud_store --data_append_mode=true"   # 组合3: 有cloud_store_path, data_append_mode=true
-)
 # 创建日志目录
 mkdir -p "$WHITEBOX_LOG_DIR"
 mkdir -p "$BLACKBOX_LOG_DIR"
@@ -32,13 +25,6 @@ LAST_STATUS=""  # 新增：记录上一次的状态，避免重复日志
 log_message() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
-# 随机选择参数组合
-get_random_param_combination() {
-    local combination_count=${#PARAM_COMBINATIONS[@]}
-    local random_index=$((RANDOM % combination_count))
-    echo "${PARAM_COMBINATIONS[$random_index]}"
-}
-
 
 # 错误日志函数
 log_error() {
@@ -107,15 +93,13 @@ calculate_duration_to_hour() {
         echo $((today_target - current_time))
     fi
 }
-# 启动白盒测试（连续运行直到被断言错误）
+# 启动白盒测试（连续运行直到被kill）
 start_whitebox_test() {
     local duration=$(calculate_duration_to_hour 4)
     local timestamp=$(date '+%Y%m%d_%H%M%S')
     local log_file="$WHITEBOX_LOG_DIR/whitebox_${timestamp}.log"
-    local param_args=$(get_random_param_combination) # 随机选择一种参数
-
+    
     log_message "开始执行白盒测试，持续时间: ${duration}秒 (到凌晨4点)"
-    log_message "参数组合: $param_args"
     log_message "日志文件: $log_file"
     
     # 执行清理操作
@@ -129,8 +113,7 @@ start_whitebox_test() {
         --max_key=10000 \
         --shortest_value=32 \
         --longest_value=20000 \
-        --use_random_params \
-        $param_args> "$log_file" 2>&1 &
+        --use_random_params > "$log_file" 2>&1 &
     CURRENT_TEST_PID=$!
     CURRENT_TEST_TYPE="whitebox"
     
@@ -142,10 +125,8 @@ start_blackbox_test() {
     local duration=$(calculate_duration_to_hour 10)
     local timestamp=$(date '+%Y%m%d_%H%M%S')
     local log_file="$BLACKBOX_LOG_DIR/blackbox_${timestamp}.log"
-    local param_args=$(get_random_param_combination)
     
     log_message "开始执行黑盒测试，持续时间: ${duration}秒 (到早上10点)"
-    log_message "参数组合: $param_args"
     log_message "日志文件: $log_file"
     
     # 执行清理操作
@@ -159,8 +140,7 @@ start_blackbox_test() {
         --max_key=10000 \
         --shortest_value=32 \
         --longest_value=20000 \
-        --use_random_params \
-        $param_args > "$log_file" 2>&1 &
+        --use_random_params > "$log_file" 2>&1 &
     CURRENT_TEST_PID=$!
     CURRENT_TEST_TYPE="blackbox"
     
