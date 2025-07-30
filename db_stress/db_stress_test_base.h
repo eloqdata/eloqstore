@@ -193,7 +193,7 @@ public:
                                             // it directly use BatchWriteRequest
         eloqstore::TruncateRequest trun_req_;
         std::vector<PendingExpectedValue> pending_expected_values;
-        Random rand_;
+        rocksdb::Random rand_;
         StressTest *table;
         uint32_t verify_cnt{0};
         bool should_stop = false;

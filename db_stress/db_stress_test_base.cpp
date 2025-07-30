@@ -18,7 +18,7 @@
 #include "eloq_store.h"
 #include "error.h"
 #include "expected_value.h"
-#include "random.h"
+#include "external/random.h"
 
 namespace StressTest
 {

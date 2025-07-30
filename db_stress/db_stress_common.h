@@ -9,7 +9,7 @@
 
 #include "db_stress_shared_state.h"
 #include "db_stress_test_base.h"
-#include "random.h"
+#include "external/random.h"
 
 DECLARE_uint64(ops_per_partition);
 DECLARE_int64(max_key);

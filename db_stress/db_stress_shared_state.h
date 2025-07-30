@@ -12,7 +12,7 @@
 
 #include "eloq_store.h"
 #include "expected_value.h"
-#include "random.h"
+#include "external/random.h"
 
 DECLARE_uint64(seed);
 DECLARE_int64(max_key);

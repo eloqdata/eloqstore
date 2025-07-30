@@ -55,7 +55,7 @@ uint64_t GetOneHotKeyID(double rand_seed, int64_t max_key)
         }
     }
     int64_t tmp_zipf_seed = zipf * max_key / zipf_sum_size;
-    Random64 rand_local(tmp_zipf_seed);
+    rocksdb::Random64 rand_local(tmp_zipf_seed);
     return rand_local.Next() % max_key;
 }
 
