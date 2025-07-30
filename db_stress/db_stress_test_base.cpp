@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 #include "db_stress_common.h"
 #include "db_stress_shared_state.h"
@@ -35,7 +36,7 @@ void StressTest::InitDb()
     }
     else if (!FLAGS_open_wfile)
     {
-        // 存疑,好像不用调用,直接reset
+        // reset directly
         // VerifyAndSyncValues();
         thread_state_->ResetValues();
 
@@ -97,11 +98,6 @@ void StressTest::OperateDb()
     uint64_t ts_gen_v = 0;
     start_time = ts1;
 
-    uint64_t last_log_time = ts1;
-    uint64_t total_ops_count = 0;
-    uint64_t last_ops_count = 0;
-    uint64_t total_write_ops = 0;
-    uint64_t total_read_ops = 0;
     do
     {
         uint64_t user_data;
@@ -111,14 +107,12 @@ void StressTest::OperateDb()
             // 1<<63然后再&,可以得到最高位
             // 1<<63-1然后再&,可以得到低63位
             bool is_write = (user_data & (uint64_t(1) << 63));
-            uint32_t id = (user_data & ((uint64_t(1) << 63) - 1));
+            uint32_t id = (user_data & ((static_cast<uint64_t>(1) << 63) - 1));
 
             if (is_write)
             {
                 auto partition = partitions_[id];
                 partition->FinishWrite();
-                total_ops_count++;
-                total_write_ops++;
             }
 
             else
@@ -127,8 +121,6 @@ void StressTest::OperateDb()
                 uint64_t ts22 = UnixTimestamp();
                 reader->VerifyGet(thread_state_);
                 ts_verify += UnixTimestamp() - ts22;
-                total_ops_count++;
-                total_read_ops++;
             }
         }
         // the rand_keys is vector so the TestPut is a batch operator
@@ -137,7 +129,8 @@ void StressTest::OperateDb()
         // which defaults to a random value between 100 and 500.
         // support slice window(Flags_hot_key_alpha == 0)
         // support hot key(FLAGS_hot_key_alpha > 0)
-        // 这边因为都是异步的,所以需要遍历的是还没有完成测试的(300轮?)
+        // due to the asynchronous nature of the test, we need to traverse the
+        // unfinished_id_ to find the partitions that have not finished the test
         for (auto partition_id : unfinished_id_)
         {
             auto partition = partitions_[partition_id];
@@ -151,12 +144,8 @@ void StressTest::OperateDb()
                 // be cout in the log
                 // LOG(INFO) << "Rand keys for " << ts_rand << ","<< (double)
                 // ts_rand * 100 / (ts2 - ts1) << "%";  //
-                // 生成随机key的耗时和占比
                 ts_rand += UnixTimestamp() - ts11;
 
-                // // 记录写请求发送时间,公式在TestMix中有说明
-                // uint64_t write_user_data = (partition_id | (uint64_t(1) <<
-                // 63)); request_timestamps[write_user_data] = UnixTimestamp();
                 TestMixedOps(partition_id, rand_keys);
             }
 
@@ -173,9 +162,6 @@ void StressTest::OperateDb()
                     int64_t rand_key =
                         GenerateOneKey(partition, partition->FinishedRounds());
 
-                    // // 记录读请求发送时间,公式同上
-                    // uint64_t read_user_data = reader->id_;
-                    // request_timestamps[read_user_data] = UnixTimestamp();
                     if (partition->rand_.PercentTrue(FLAGS_point_read_percent))
                     {
                         TestGet(i, rand_key);
@@ -183,54 +169,9 @@ void StressTest::OperateDb()
                     else
                     {
                         TestScan(i, rand_key);
-                        // TestGet(i, rand_key);
                     }
                 }
             }
-        }
-        // 每5秒输出一次性能统计
-        uint64_t current_time = UnixTimestamp();
-        if (current_time - last_log_time > 5000000000ULL)
-        {  // 5秒 (纳秒单位)
-            uint64_t time_diff =
-                (current_time - last_log_time) / 1000000000ULL;  // 转换为秒
-            uint64_t ops_diff = total_ops_count - last_ops_count;
-            double ops_per_sec = static_cast<double>(ops_diff) / time_diff;
-
-            // 计算平均请求响应时间
-            double avg_write_latency =
-                write_count_ > 0 ? static_cast<double>(total_write_latency_) /
-                                       write_count_ / 1000000
-                                 : 0;  // 转换为毫秒
-            double avg_read_latency =
-                read_count_ > 0 ? static_cast<double>(total_read_latency_) /
-                                      read_count_ / 1000000
-                                : 0;  // 转换为毫秒
-
-            // LOG(INFO) << "Performance stats: " << ops_diff << " ops in "
-            //           << time_diff << " seconds, "
-            //           << "rate: " << ops_per_sec << " ops/sec, "
-            //           << "total_ops: " << total_ops_count
-            //           << " (writes: " << total_write_ops
-            //           << ", reads: " << total_read_ops << ")"
-            //           << ", avg_write_latency: " << avg_write_latency << "
-            //           ms"
-            //           << ", avg_read_latency: " << avg_read_latency << " ms";
-            // LOG(INFO) << "性能统计：在 " << time_diff << " 秒内完成 "
-            //           << ops_diff << " 次操作, "
-            //           << "速率: " << ops_per_sec << " 次/秒, "
-            //           << "总操作数: " << total_ops_count
-            //           << " (写入: " << total_write_ops
-            //           << ", 读取: " << total_read_ops << ")"
-            //           << ", 写入平均延迟: " << avg_write_latency << " 毫秒"
-            //           << ", 读取平均延迟: " << avg_read_latency << " 毫秒";
-            // 重置统计数据
-            last_log_time = current_time;
-            last_ops_count = total_ops_count;
-            total_write_latency_ = 0;
-            total_read_latency_ = 0;
-            write_count_ = 0;
-            read_count_ = 0;
         }
 
     } while (!AllPartitionsFinished());
@@ -399,7 +340,7 @@ void StressTest::Reader::VerifyGet(ThreadState *thread_state_)
             v_res.emplace_back(v);
         }
 
-        CHECK(v_res.size() == 10);
+        CHECK_EQ(v_res.size(), 10);
         for (int i = 0; i < 10; ++i)
         {
             // check all value are same
@@ -610,7 +551,8 @@ void StressTest::VerifyAndSyncValues()
             uint64_t user_data;
             while (finished_reqs_.try_dequeue(user_data))
             {
-                uint32_t id = (user_data & ((uint64_t(1) << 63) - 1));
+                uint32_t id =
+                    (user_data & ((static_cast<uint64_t>(1) << 63) - 1));
                 auto reader = readers_[id];
                 auto partition = reader->partition_;
                 size_t idx = 0;

@@ -1,5 +1,6 @@
 #include "non_batched_ops_stress.h"
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
@@ -262,7 +263,8 @@ void NonBatchedOpsStressTest::VerifyDb()
             uint64_t user_data;
             while (finished_reqs_.try_dequeue(user_data))
             {
-                uint32_t id = (user_data & ((uint64_t(1) << 63) - 1));
+                uint32_t id =
+                    (user_data & ((static_cast<uint64_t>(1) << 63) - 1));
                 auto reader = readers_[id];
                 size_t idx = 0;
                 for (size_t key = 0; key < FLAGS_max_key; ++key)
@@ -319,8 +321,6 @@ void NonBatchedOpsStressTest::VerifyDb()
         }
     }
     uint64_t ts2 = UnixTimestamp();
-    // 这里可以尝试打开,查看扫一轮数据库的开销
-    // LOG(INFO) << " verify successfully.Scan costs " << ts2 - ts1;
 }
 
 }  // namespace StressTest

@@ -10,8 +10,8 @@
 #include <string>
 #include <vector>
 
-#include "db_stress/expected_value.h"
 #include "eloq_store.h"
+#include "expected_value.h"
 #include "random.h"
 
 DECLARE_uint64(seed);

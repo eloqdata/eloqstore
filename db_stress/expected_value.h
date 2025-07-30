@@ -158,7 +158,7 @@ private:
     }
 
     // The 32-bit expected_value_ is divided into following parts:
-    // Bit 0 - 14: value base
+    // Bit 0 - 14: value base ps:it is actually the count of upsert times
     static constexpr uint32_t VALUE_BASE_MASK = 0x7fff;
     static constexpr uint32_t VALUE_BASE_DELTA = 1;
     // Bit 15: whether write to this value base is pending (0 equals `false`)

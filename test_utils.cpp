@@ -805,7 +805,7 @@ void ConcurrencyTester::Run(uint16_t n_readers,
         uint64_t user_data;
         finished_reqs_.wait_dequeue(user_data);
         bool is_write = (user_data & (uint64_t(1) << 63));
-        uint32_t id = (user_data & ((uint64_t(1) << 63) - 1));
+        uint32_t id = (user_data & ((static_cast<uint64_t>(1) << 63) - 1));
 
         if (is_write)
         {

@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <queue>
+#include <string>
 #include <unordered_set>
 #include <vector>
 
@@ -15,7 +16,8 @@
 #undef BLOCK_SIZE
 #include "concurrentqueue/concurrentqueue.h"
 
-// 由于一些头文件嵌套定义的问题,声明需要放在这里
+// due to the nested definition of some header files, the declaration needs to
+// be placed here
 DECLARE_bool(enable_latency_monitoring);
 namespace StressTest
 {
@@ -90,7 +92,7 @@ public:
             uint64_t user_data = req->UserData();
             uint64_t current_time = UnixTimestamp();
             bool is_write = (user_data & (uint64_t(1) << 63));
-            uint32_t id = (user_data & ((uint64_t(1) << 63) - 1));
+            uint32_t id = (user_data & ((static_cast<uint64_t>(1) << 63) - 1));
 
             if (is_write)
             {
@@ -104,8 +106,6 @@ public:
                     LOG(INFO) << "写操作延迟: " << latency_ms << " 毫秒 (分区 "
                               << partition->id_ << ")";
                 }
-                total_write_latency_ += latency;
-                write_count_++;
             }
             else
             {
@@ -128,8 +128,6 @@ public:
                                   << " 毫秒 (读取器 " << reader->id_ << ")";
                     }
                 }
-                total_read_latency_ += latency;
-                read_count_++;
             }
         }
     }
@@ -208,7 +206,7 @@ public:
 
     struct Reader
     {
-        Reader(uint32_t id)
+        explicit Reader(uint32_t id)
             : id_(id),
               IsReading(false),
               should_stop(false),
@@ -279,11 +277,6 @@ public:
     static std::mutex init_barrier_mutex_;
     static std::atomic<bool> all_init_done_;
 
-    // performance statistic member
-    uint64_t total_write_latency_{0};  // total write latency
-    uint64_t write_count_{0};          // write count
-    uint64_t total_read_latency_{0};   // total read latency
-    uint64_t read_count_{0};           // read count
 private:
     void OperateTest()
     {
