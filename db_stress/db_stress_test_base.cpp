@@ -310,29 +310,11 @@ void StressTest::Partition::CheckIfAllFinished()
 
 std::string StressTest::Partition::GenerateValue(uint32_t base)
 {
-    // size_t value_sz;
-    // if (FLAGS_value_sz_mode == 0)
-    // {
-    //     value_sz = (rand_.Uniform(5) + 1) * 32;
-    // }
-    // else if (FLAGS_value_sz_mode == 1)
-    // {
-    //     value_sz = (rand_.Uniform(3) + 1) * KB + rand_.Uniform(1024);
-    // }
-    // else if (FLAGS_value_sz_mode == 2)
-    // {
-    //     value_sz = (rand_.Uniform(900) + 100) * KB + rand_.Uniform(1024);
-    // }
-    // else
-    // {
-    //     value_sz = (rand_.Uniform(250) + 50) * MB + rand_.Uniform(1024) * KB
-    //     +
-    //                rand_.Uniform(1024);
-    // }
     // assert(value_sz >= 32);
     // make sure parameter is valid
     assert(FLAGS_longest_value >= FLAGS_shortest_value);
-    assert(FLAGS_shortest_value >= 32);
+    assert(FLAGS_shortest_value >=
+           32);  // I don't now this is valid,shortest_value must >= 32?
 
     size_t value_sz;
     if (FLAGS_longest_value == FLAGS_shortest_value)
@@ -371,17 +353,31 @@ void StressTest::Partition::FinishWrite()
     req_.batch_.clear();
 
     ++table->ops_fin;
-    // if (parent->ops_fin == parent->process_rate * parent->ops_all / 100)
-    // {
-    //     LOG(INFO) << " process rate:" << parent->process_rate
-    //               << "%, it costs:" << UnixTimestamp() - parent->start_time;
-    //     parent->process_rate += 10;
-    // }
+
     CheckIfAllFinished();
 }
 
 void StressTest::Reader::VerifyGet(ThreadState *thread_state_)
 {
+    // the BatchedOpsStressTest is designed to test atomic batch operations
+    // ensuring that either all operations in a batch succeed or all fail
+    // together
+
+    // take a single base key (eg.helllo),and create 10 related entries with
+    // suffixes 0~9(eg.hello0,hello1,hello2...) and the value is also suffixes
+    // 0~9
+
+    /*  in the BatchedOpsStressTest::testGet
+    void BatchedOpsStressTest::TestGet(uint32_t reader_id, int64_t rand_key)
+    {
+        Reader *reader = readers_[reader_id];
+        reader->begin_key_ = Key(rand_key) + "0";     // Start from suffix "0"
+        reader->end_key_ = Key(rand_key + 1) + "0";   // End before next key
+    group
+        // This scan will capture all 10 entries: key+"0" to key+"9"
+    }
+    */
+
     if (partition_->table->type == TestType::BatchedOpsStressTest)
     {
         CHECK(scan_req_.Error() == eloqstore::KvError::NoError ||
@@ -395,19 +391,22 @@ void StressTest::Reader::VerifyGet(ThreadState *thread_state_)
         {
             assert(!k.empty());
             assert(!v.empty());
-
+            // Last char of key == last char of value
             CHECK(k.back() == v.back());
+            // make value0~0 to value (rm the suffix)
             v.pop_back();
+            // and then push to v_res(vector<string>)
             v_res.emplace_back(v);
         }
 
         CHECK(v_res.size() == 10);
         for (int i = 0; i < 10; ++i)
         {
+            // check all value are same
             CHECK(v_res[i] == v_res[0]);
         }
 
-        IsReading = false;  //存疑,没懂为什么要把IsReading设置为false
+        IsReading = false;  // set IsReading = false when finishing verify
     }
     else  // NonBatchedOpsStressTest
     {
@@ -421,7 +420,7 @@ void StressTest::Reader::VerifyGet(ThreadState *thread_state_)
             auto entries = scan_req_.Entries();
             size_t entry_idx = 0;
 
-            // 遍历所有期望的key，按顺序验证
+            // Traverse all the expected keys and validate in order
             for (size_t i = 0; i < key_readings_.size(); ++i)
             {
                 const std::string &expected_key = key_readings_[i];
@@ -434,11 +433,11 @@ void StressTest::Reader::VerifyGet(ThreadState *thread_state_)
                         ? pre_read_expected_values[i]
                         : ExpectedValue();
 
-                // 检查当前entry是否对应当前期望的key
+                // check if the current entry matches the expected key
                 if (entry_idx < entries.size() &&
                     entries[entry_idx].key_ == expected_key)
                 {
-                    // 找到了对应的entry，验证value
+                    // check the value is valid if find the match entry
                     const std::string &actual_value = entries[entry_idx].value_;
                     assert(!actual_value.empty());
                     assert(!ExpectedValueHelper::MustHaveNotExisted(
@@ -460,10 +459,11 @@ void StressTest::Reader::VerifyGet(ThreadState *thread_state_)
         }
         else
         {
-            // 点读模式：直接处理单个结果
-            assert(key_readings_.size() == 1);  // 点读只有一个key
+            // read only one: proccess result directly
+            assert(key_readings_.size() ==
+                   1);  // read only one mode only have one result
 
-            // 断言要么找到要么没找到
+            // assert the result is either found or not found
             CHECK(read_req_.Error() == eloqstore::KvError::NoError ||
                   read_req_.Error() == eloqstore::KvError::NotFound);
 
@@ -478,7 +478,7 @@ void StressTest::Reader::VerifyGet(ThreadState *thread_state_)
 
             if (read_req_.Error() == eloqstore::KvError::NoError)
             {
-                // 读到了值，验证正确性
+                // check the value is valid if find the match entry
                 const std::string &actual_value = read_req_.value_;
                 assert(!actual_value.empty());
                 assert(!ExpectedValueHelper::MustHaveNotExisted(pre_expected,
@@ -490,7 +490,7 @@ void StressTest::Reader::VerifyGet(ThreadState *thread_state_)
             }
             else
             {
-                // 没有读到值，验证是否不必须存在
+                // check the value is not exist if not found
                 assert(!ExpectedValueHelper::MustHaveExisted(pre_expected,
                                                              post_expected));
             }

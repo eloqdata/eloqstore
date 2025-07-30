@@ -122,6 +122,7 @@ void RunStressTest(int argc, char **argv)
     else
     {
         opts.store_path = {FLAGS_db_path};
+        opts.cloud_store_path = FLAGS_cloud_store_path;
         opts.buf_ring_size = FLAGS_buf_ring_size;
         opts.coroutine_stack_size = FLAGS_coroutine_stack_size;
         opts.data_page_size = FLAGS_data_page_size;
@@ -160,7 +161,6 @@ void RunStressTest(int argc, char **argv)
     StressTest::total_threads_.store(FLAGS_n_tables);
     StressTest::init_completed_count_.store(0);
     StressTest::all_init_done_.store(false);
-
 
     if (FLAGS_test_batched_ops_stress)
     {

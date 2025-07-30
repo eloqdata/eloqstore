@@ -23,7 +23,8 @@ public:
 
     void TestGet(uint32_t reader_id, int64_t rand_key) override;
     void TestScan(uint32_t reader_id, int64_t rand_key) override;
-    void TestMixedOps(uint32_t partition_id, std::vector<int64_t> &rand_keys) override;
+    void TestMixedOps(uint32_t partition_id,
+                      std::vector<int64_t> &rand_keys) override;
 
     void VerifyDb() override;
 };

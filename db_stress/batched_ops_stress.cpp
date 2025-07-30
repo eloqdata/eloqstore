@@ -50,9 +50,10 @@ void BatchedOpsStressTest::TestPut(uint32_t partition_id,
     partition->req_.SetArgs({thread_state_->table_name_, partition->id_},
                             std::move(entries));
     uint64_t user_data = (partition->id_ | (uint64_t(1) << 63));
-    bool ok = store_->ExecAsyn(&partition->req_,
-                               user_data,
-                               [this](eloqstore::KvRequest *req) { Wake(req); });
+    bool ok =
+        store_->ExecAsyn(&partition->req_,
+                         user_data,
+                         [this](eloqstore::KvRequest *req) { Wake(req); });
     CHECK(ok);
 }
 
@@ -81,9 +82,10 @@ void BatchedOpsStressTest::TestDelete(uint32_t partition_id,
     partition->req_.SetArgs({thread_state_->table_name_, partition->id_},
                             std::move(entries));
     uint64_t user_data = (partition->id_ | (uint64_t(1) << 63));
-    bool ok = store_->ExecAsyn(&partition->req_,
-                               user_data,
-                               [this](eloqstore::KvRequest *req) { Wake(req); });
+    bool ok =
+        store_->ExecAsyn(&partition->req_,
+                         user_data,
+                         [this](eloqstore::KvRequest *req) { Wake(req); });
     CHECK(ok);
 }
 void BatchedOpsStressTest::TestMixedOps(uint32_t partition_id,
@@ -92,7 +94,7 @@ void BatchedOpsStressTest::TestMixedOps(uint32_t partition_id,
     Partition *partition = partitions_[partition_id];
     assert(!partition->IsWriting());
     partition->ticks_++;
-    
+
     // just use the 1 key for test,and it will be used for all suffixes(0~9)
     std::string key_body = Key(rand_keys[0]);
     uint32_t value_base = partition->rand_.Next();
@@ -100,19 +102,19 @@ void BatchedOpsStressTest::TestMixedOps(uint32_t partition_id,
 
     uint64_t ts = UnixTimestamp();
     std::vector<eloqstore::WriteDataEntry> entries;
-    
+
     // the writeOp(delete/upsert) is determined by FLAGS_write_percent
     bool is_upsert = (partition->rand_.Uniform(100) < FLAGS_write_percent);
-    
+
     for (int i = 0; i <= 9; ++i)
     {
         std::string num = std::to_string(i);
         const std::string k = key_body + num;
-        
+
         eloqstore::WriteDataEntry &ent = entries.emplace_back();
         ent.key_ = k;
         ent.timestamp_ = ts;
-        
+
         if (is_upsert)
         {
             // do upsert for all suffixes
@@ -126,13 +128,14 @@ void BatchedOpsStressTest::TestMixedOps(uint32_t partition_id,
             ent.op_ = eloqstore::WriteOp::Delete;
         }
     }
-    
+
     partition->req_.SetArgs({thread_state_->table_name_, partition->id_},
                             std::move(entries));
     uint64_t user_data = (partition->id_ | (uint64_t(1) << 63));
-    bool ok = store_->ExecAsyn(&partition->req_,
-                               user_data,
-                               [this](eloqstore::KvRequest *req) { Wake(req); });
+    bool ok =
+        store_->ExecAsyn(&partition->req_,
+                         user_data,
+                         [this](eloqstore::KvRequest *req) { Wake(req); });
     CHECK(ok);
 }
 void BatchedOpsStressTest::TestGet(uint32_t reader_id, int64_t rand_key)
@@ -146,9 +149,10 @@ void BatchedOpsStressTest::TestGet(uint32_t reader_id, int64_t rand_key)
     reader->scan_req_.SetArgs(
         {thread_state_->table_name_, reader->partition_->id_}, begin, end);
     uint64_t user_data = reader->id_;
-    bool ok = store_->ExecAsyn(&reader->scan_req_,
-                               user_data,
-                               [this](eloqstore::KvRequest *req) { Wake(req); });
+    bool ok =
+        store_->ExecAsyn(&reader->scan_req_,
+                         user_data,
+                         [this](eloqstore::KvRequest *req) { Wake(req); });
     CHECK(ok);
     reader->IsReading = true;
 }

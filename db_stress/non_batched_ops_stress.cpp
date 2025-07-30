@@ -130,7 +130,7 @@ void NonBatchedOpsStressTest::TestMixedOps(uint32_t partition_id,
         ent.key_ = k;
         ent.timestamp_ = ts;
 
-        // 随机决定是upsert还是delete
+        // choose upsert or delete randomly
         if (partition->rand_.PercentTrue(FLAGS_write_percent))
         {
             // Upsert操作
@@ -146,7 +146,7 @@ void NonBatchedOpsStressTest::TestMixedOps(uint32_t partition_id,
         }
         else
         {
-            // Delete操作
+            // Delete
             delete_keys.push_back(rand_keys[i]);
             partition->pending_expected_values[i] =
                 thread_state_->PrepareDelete(partition_id, rand_keys[i]);
@@ -156,21 +156,22 @@ void NonBatchedOpsStressTest::TestMixedOps(uint32_t partition_id,
     }
 
     // thread_state_->TraceOneBatch(partition_id, rand_keys, true); //
-    // 这里可能需要调整
+    // those may be modify
     if (!upsert_keys.empty())
     {
         thread_state_->TraceOneBatch(
-            partition_id, upsert_keys, true);  // upsert用true
+            partition_id, upsert_keys, true);  // upsert use true
     }
     if (!delete_keys.empty())
     {
         thread_state_->TraceOneBatch(
-            partition_id, delete_keys, false);  // delete用false
+            partition_id, delete_keys, false);  // delete use false
     }
     partition->write_start_time_ = UnixTimestamp();
     partition->req_.SetArgs({thread_state_->table_name_, partition->id_},
                             std::move(entries));
-    // user_data在写操作的时候,就是partiton的id的自身id,同时最高位强制为1(或上了1000000...)
+    // user_data is actually partition_id when write operation,and the highest
+    // bit is 1(& 0x8000000000000000)
     uint64_t user_data = (partition->id_ | (uint64_t(1) << 63));
     bool ok =
         store_->ExecAsyn(&partition->req_,
@@ -193,7 +194,7 @@ void NonBatchedOpsStressTest::TestGet(uint32_t reader_id, int64_t rand_key)
     reader->read_start_time_ = UnixTimestamp();
     reader->read_req_.SetArgs(
         {thread_state_->table_name_, reader->partition_->id_}, read_key);
-    uint64_t user_data = reader->id_;  //这边的user_data就是直接就是reader的id了
+    uint64_t user_data = reader->id_;  // this user_data is actually reader_id
     bool ok =
         store_->ExecAsyn(&reader->read_req_,
                          user_data,
@@ -216,7 +217,7 @@ void NonBatchedOpsStressTest::TestScan(uint32_t reader_id, int64_t rand_key)
     reader->key_readings_.clear();
     reader->pre_read_expected_values.clear();
 
-    // 添加实际要扫描的key到key_readings_
+    // add actual scaned keys to key_readings_
     for (int64_t i = scan_start; i < scan_end; ++i)
     {
         reader->key_readings_.push_back(Key(i));

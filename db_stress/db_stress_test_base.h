@@ -138,7 +138,7 @@ public:
     void VerifyAndSyncValues();
     void InitDb();
     void OperateDb();
-    // 仅仅这个是虚函数
+    // only this is virtual function
     virtual void VerifyDb()
     {
     }
@@ -189,9 +189,10 @@ public:
         }
 
         uint32_t id_;
-        uint64_t ticks_{0};                 //计算写次数?
-        uint64_t write_start_time_{0};      // 仅记录写请求发起时间
-        eloqstore::BatchWriteRequest req_;  //只有一个写者,所以放在这里
+        uint64_t ticks_{0};                 // count the number of write ops
+        uint64_t write_start_time_{0};      // only record the first write time
+        eloqstore::BatchWriteRequest req_;  // only one writer per Partition so
+                                            // it directly use BatchWriteRequest
         eloqstore::TruncateRequest trun_req_;
         std::vector<PendingExpectedValue> pending_expected_values;
         Random rand_;
@@ -225,13 +226,14 @@ public:
 
         // scan or read one
         bool is_scan_mode_;
-        uint64_t read_start_time_{0};  // 仅记录读请求发起时间
-        // 有两种模式,scan目前只在batch模式和verify的时候被用到
-        // read目前在nonbatch的testget中用到
+        uint64_t read_start_time_{0};  // only record the first read time
+        // there are two modes ,now scan only be use in batch mode and verify so
+        // I add the scan test in operatorDB() read will be used in nonbatch
+        // mode and verify mode
         eloqstore::ScanRequest scan_req_;
         eloqstore::ReadRequest read_req_;
 
-        // // reader会存储读之前和读之后的,用来verify
+        // reader will store the pre and post expected value to verify
         // ExpectedValue pre_read_expected_value;
         // ExpectedValue post_read_expected_value;
 
@@ -269,27 +271,28 @@ public:
     };
     TestType type;
 
-public:  //用于线程同步
+public:
+    // use for thread sync
     static std::atomic<int> init_completed_count_;
     static std::atomic<int> total_threads_;
     static std::condition_variable init_barrier_cv_;
     static std::mutex init_barrier_mutex_;
     static std::atomic<bool> all_init_done_;
 
-    // 性能统计成员
-    uint64_t total_write_latency_{0};  // 写请求总延迟
-    uint64_t write_count_{0};          // 写请求计数
-    uint64_t total_read_latency_{0};   // 读请求总延迟
-    uint64_t read_count_{0};           // 读请求计数
+    // performance statistic member
+    uint64_t total_write_latency_{0};  // total write latency
+    uint64_t write_count_{0};          // write count
+    uint64_t total_read_latency_{0};   // total read latency
+    uint64_t read_count_{0};           // read count
 private:
     void OperateTest()
     {
         InitDb();
-        WaitForAllInitComplete();  //新增同步屏障
+        WaitForAllInitComplete();  // use it to set up a barrier
         OperateDb();
         ClearDb();
     }
-    void WaitForAllInitComplete();  //线程同步屏障,用于等待所有线程初始化完成
+    void WaitForAllInitComplete();  // add a barrier to wait all thread init
     std::thread worker_thread_;
 };
 

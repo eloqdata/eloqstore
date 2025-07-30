@@ -20,7 +20,6 @@ uint64_t UnixTimestamp()
     return std::chrono::duration_cast<std::chrono::nanoseconds>(dur).count();
 }
 
-
 // using it to convert int to string
 std::string Key(int64_t k)
 {
@@ -31,7 +30,8 @@ std::string Key(int64_t k)
     std::string kstr = ss.str();
     assert(kstr.size() == sz);
 
-    // second The number of suffix xs to be appended is determined by JudgeKeyLevel
+    // second The number of suffix xs to be appended is determined by
+    // JudgeKeyLevel
     uint8_t level = JudgeKeyLevel(k);
     assert(level < 4);
     std::string post_fix(level * 8, 'x');

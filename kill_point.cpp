@@ -1,4 +1,5 @@
 #include "kill_point.h"
+
 #include <csignal>
 
 #include "external/random.h"
