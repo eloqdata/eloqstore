@@ -117,7 +117,29 @@ perform_cleanup() {
     
     log_message "Minio cleanup operation completed"
 }
-
+auto_update_code() {
+    log_message "Starting automatic code update..."
+    
+    local project_root="$(cd "$SCRIPT_DIR/.." && pwd)"
+    
+    log_message "Executing git pull..."
+    if ! (cd "$project_root" && git pull); then
+        log_message "Error: git pull failed"
+        log_error "git pull failed during automatic update" "auto_update"
+        log_message "Terminating program due to update failure"
+        cleanup_and_exit
+    fi
+    
+    log_message "Executing build.sh..."
+    if ! (cd "$SCRIPT_DIR" && ./build.sh); then
+        log_message "Error: build.sh failed"
+        log_error "build.sh failed during automatic update" "auto_update"
+        log_message "Terminating program due to build failure"
+        cleanup_and_exit
+    fi
+    
+    log_message "Automatic code update completed successfully"
+}
 # Terminate current test process
 kill_current_test() {
     if [ -n "$CURRENT_TEST_PID" ] && kill -0 "$CURRENT_TEST_PID" 2>/dev/null; then
@@ -278,6 +300,7 @@ monitor_current_test() {
 
 main_loop() {
     log_message "Starting initial test cycle with whitebox test"
+    auto_update_code
     start_whitebox_test
     NEXT_SWITCH_TIME=$(calculate_next_switch_time)  
     log_message "Next switch time: $(date -d @$NEXT_SWITCH_TIME '+%Y-%m-%d %H:%M:%S')"
@@ -291,6 +314,9 @@ main_loop() {
             
             kill_current_test
             
+            # use git pull and build.sh to update code
+            auto_update_code
+
             if [ "$next_test_type" = "whitebox" ]; then
                 start_whitebox_test
             else
