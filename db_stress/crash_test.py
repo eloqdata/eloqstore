@@ -2,18 +2,39 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All Rights Reserved.
 
 import argparse
-import math
+import signal
+import atexit
 import os
 import random
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import csv
 import glob
 import resource
 from datetime import datetime
+
+# Global variable to store current running subprocess
+current_child_process = None
+
+def signal_handler(signum, frame):
+    """Handle signals when script is killed"""
+    print(f"\nReceived signal {signum}, cleaning up...")
+    if current_child_process and current_child_process.poll() is None:
+        print(f"Killing child process {current_child_process.pid}")
+        current_child_process.kill()
+        current_child_process.wait()
+    cleanup_after_success()
+    sys.exit(0)
+
+def cleanup_on_exit():
+    """Cleanup function when program exits"""
+    if current_child_process and current_child_process.poll() is None:
+        print(f"Cleaning up child process {current_child_process.pid}")
+        current_child_process.kill()
+        current_child_process.wait()
+
 
 # Add core file management functions
 def setup_core_dump():
@@ -305,10 +326,11 @@ def gen_cmd(params, unknown_params):
 
 
 def execute_cmd(cmd, timeout=None, timeout_pstack=False):
+    global current_child_process
     # Set core dump before starting the process
     setup_core_dump()
     child = subprocess.Popen(cmd, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
-    # child = subprocess.Popen(cmd, stdout=sys.stdout, stderr=sys.stderr)
+    current_child_process = child
 
     print("Running db_stress with pid=%d: %s\n" % (child.pid, " ".join(cmd)))
     print("This process will be killed manually after interval=",timeout)
@@ -487,6 +509,12 @@ def whitebox_crash_main(args, unknown_args):
 
 
 def main():
+    # Register signal handlers
+    signal.signal(signal.SIGINT, signal_handler)   # Ctrl+C
+    signal.signal(signal.SIGTERM, signal_handler)  # kill command
+    # Register cleanup function on exit
+    atexit.register(cleanup_on_exit)
+
     global stress_cmd
     global cleanup_cmd
 
