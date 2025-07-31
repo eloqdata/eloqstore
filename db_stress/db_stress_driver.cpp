@@ -157,7 +157,6 @@ void RunStressTest(int argc, char **argv)
 
     std::vector<std::unique_ptr<StressTest>> stress(FLAGS_n_tables);
 
-    // 根据实际线程数设置,下面两条其实不用,因为stress_test只会被初始化一次
     StressTest::total_threads_.store(FLAGS_n_tables);
     StressTest::init_completed_count_.store(0);
     StressTest::all_init_done_.store(false);

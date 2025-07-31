@@ -36,7 +36,7 @@ DEFINE_string(shared_state_path,
               "Path to shared state directory");
 DEFINE_uint32(n_tables, 10, "nums of threads/tables");
 DEFINE_uint32(n_partitions, 300, "nums of partitions");
-// 我认为压力测试不应该结束,所以这里设置的很大
+// I think it is better to set a large value for ops_per_partition
 DEFINE_uint64(ops_per_partition,
               3000000,
               "ops of batch write on each partition");

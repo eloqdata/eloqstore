@@ -158,8 +158,8 @@ void BatchedOpsStressTest::TestGet(uint32_t reader_id, int64_t rand_key)
 }
 void BatchedOpsStressTest::TestScan(uint32_t reader_id, int64_t rand_key)
 {
-    // 对于batched模式，TestScan和TestGet可以是相同的实现
-    // 因为batched模式本身就是基于scan的
+    // for batched mode,TestScan and TestGet can be the same implementation
+    // because batched mode is based on scan
     TestGet(reader_id, rand_key);
 }
 void BatchedOpsStressTest::VerifyDb()

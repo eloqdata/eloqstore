@@ -199,15 +199,4 @@ private:
     uint32_t seqno_;
 };
 
-// struct ThreadState1
-// {
-//     ThreadState *shared;
-//     std::string table_name_;
-
-//     ThreadState1(ThreadState *_shared, std::string table_name)
-//         : shared(_shared), table_name_(table_name)
-//     {
-//     }
-// };
-
 }  // namespace StressTest

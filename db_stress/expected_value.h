@@ -316,7 +316,7 @@ private:
     {
         pending_state_closed_ = true;
     }
-
+    // 这个地方其实是指针,实际上修改这个value,可以修改到验证表里的value
     uint32_t *value_;
     ExpectedValue orig_value_;
     ExpectedValue final_value_;

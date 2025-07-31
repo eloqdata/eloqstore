@@ -10,7 +10,7 @@ void ExpectedValue::Put(bool pending)
     {
         SetPendingWrite();
     }
-    else
+    else  // basevalue to next value only when reset pending write
     {
         SetValueBase(NextValueBase());
         ClearDeleted();

@@ -168,7 +168,8 @@ void FileThreadState::SaveAtAndAfter()
 
     FileWriter.open(GetFileNameForSeqno());
     assert(FileWriter.is_open());
-    FileWriter << seqno_;  // 其实包括这些写版本号的操作也可能没完成
+    FileWriter << seqno_;  // actually, these write version number operations
+                           // may not be completed
     FileWriter.close();
 
     if (seqno_ > 0)

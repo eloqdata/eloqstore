@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <iostream>
 
+// due to the history ,this file need not exit
 DEFINE_string(store_path, "data/", "path to the test folder ");
 
 int main()
@@ -15,14 +16,14 @@ int main()
 
     try
     {
-        // 验证db_stress_helper1文件夹是否存在
+        // Check if db_stress_helper folder exists
         if (std::filesystem::exists(db_stress_helper_path))
         {
-            std::cout << "找到文件了: " << db_stress_helper << ", 尝试删除..."
-                      << std::endl;
+            std::cout << "Found folder: " << db_stress_helper
+                      << ", attempting to delete..." << std::endl;
             std::filesystem::remove_all(db_stress_helper_path);
 
-            // 验证删除是否成功
+            // Verify deletion was successful
             if (!std::filesystem::exists(db_stress_helper_path))
             {
                 std::cout << "Folder: " << db_stress_helper
@@ -41,14 +42,14 @@ int main()
                       << " does not exist, skipping deletion." << std::endl;
         }
 
-        // 验证stress_test1文件夹是否存在
+        // Check if stress_test folder exists
         if (std::filesystem::exists(stress_test_path))
         {
-            std::cout << "找到文件了: " << stress_test << ", 尝试删除..."
-                      << std::endl;
+            std::cout << "Found folder: " << stress_test
+                      << ", attempting to delete..." << std::endl;
             std::filesystem::remove_all(stress_test_path);
 
-            // 验证删除是否成功
+            // Verify deletion was successful
             if (!std::filesystem::exists(stress_test_path))
             {
                 std::cout << "Folder: " << stress_test

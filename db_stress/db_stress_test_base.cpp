@@ -43,16 +43,23 @@ void StressTest::InitDb()
         VerifyDb();
     }
     else
-    {  // ps: seqno从seqno表中拿(构造函数中),拿到之后++就是当前表
-        thread_state_
-            ->Init();  // 这个地方会先调用filetomem载入latest.state表,然后调用replay把trace表来还原验证表
-        VerifyAndSyncValues();  // 扫描一遍数据库验证
-        thread_state_
-            ->FinishInit();  //调用memtofile回写latest,然后savaAtAfter把latest.state拷贝到seqno.state,同时删除历史表,最后把seqno.trace启动了
-    }
-    // LOG(INFO) << "Db has been Inited."; //这个地方日志不对,只是验证表准备好了
+    {  // ps: seqno is fetched from seqno table (in constructor), after fetching
+       // it gets incremented to become current table
 
-    // fetch_add用于把init_completed_count_加1,并返回加之前的值,故要+1是实际完成的
+        thread_state_->Init();        // This will first call filetomem to load
+                                      // latest.state table, then call replay to
+                                      // restore verify table from trace table
+        VerifyAndSyncValues();        // Scan database once for verification
+        thread_state_->FinishInit();  // Call memtofile to write back latest,
+                                      // then savaAtAfter copies latest.state to
+                                      // seqno.state, delete history tables, and
+                                      // finally start seqno.trace
+    }
+    // LOG(INFO) << "Db has been Inited."; // This log is incorrect, only verify
+    // table is ready
+
+    // fetch_add is used to increment init_completed_count_ by 1 and return the
+    // value before increment, so +1 is the actual completed count
     int completed = init_completed_count_.fetch_add(1) + 1;
     LOG(INFO) << "Thread initialization completed. Progress: " << completed
               << "/" << total_threads_.load();
@@ -60,16 +67,16 @@ void StressTest::InitDb()
 
 void StressTest::WaitForAllInitComplete()
 {
-    // mutex用于和条件变量相配合
+    // mutex is used to work with condition variable
     std::unique_lock<std::mutex> lock(init_barrier_mutex_);
 
-    // 如果已经全部完成，直接返回
+    // If all initialization is already complete, return directly
     if (all_init_done_.load())
     {
         return;
     }
 
-    // 等待所有线程完成初始化
+    // Wait for all threads to complete initialization
     init_barrier_cv_.wait(lock,
                           []
                           {
@@ -78,11 +85,14 @@ void StressTest::WaitForAllInitComplete()
                                      all_init_done_.load();
                           });
 
-    // 最后一个到达的线程负责唤醒所有等待的线程
+    // The last thread to arrive is responsible for waking up all waiting
+    // threads
     if (init_completed_count_.load() >= total_threads_.load() &&
         !all_init_done_.exchange(true))
     {
-        //不会每个线程都执行一遍notify_all,因为exchange会设置为true,并且返回旧值,所以只有之前是false的才能进入这个if
+        // Not every thread will execute notify_all, because exchange sets it to
+        // true and returns the old value, so only threads that were previously
+        // false can enter this if
         LOG(INFO) << "All threads initialization completed. Starting "
                      "operations DB...";
         init_barrier_cv_.notify_all();
@@ -103,9 +113,9 @@ void StressTest::OperateDb()
         uint64_t user_data;
         while (finished_reqs_.try_dequeue(user_data))
         {
-            // userdata的第一位是是否写,后面是id
-            // 1<<63然后再&,可以得到最高位
-            // 1<<63-1然后再&,可以得到低63位
+            // First bit of userdata indicates if it's a write, remaining bits
+            // are id 1<<63 then & can get the highest bit 1<<63-1 then & can
+            // get the lower 63 bits
             bool is_write = (user_data & (uint64_t(1) << 63));
             uint32_t id = (user_data & ((static_cast<uint64_t>(1) << 63) - 1));
 
@@ -154,7 +164,7 @@ void StressTest::OperateDb()
                  ++i)
             {
                 auto reader = readers_[i];
-                // 这里有reader->IsReading拦住,所以不会重复读
+                // reader->IsReading blocks here, so it won't read repeatedly
                 if (!reader->IsReading &&
                     partition->verify_cnt < FLAGS_max_verify_ops_per_write &&
                     !reader->should_stop)
@@ -388,11 +398,11 @@ void StressTest::Reader::VerifyGet(ThreadState *thread_state_)
                     assert(ExpectedValueHelper::InExpectedValueBaseRange(
                         value_base, pre_expected, post_expected));
 
-                    entry_idx++;  // 移动到下一个entry
+                    entry_idx++;  // move to the next entry
                 }
                 else
                 {
-                    // 没有找到对应的entry，验证是否应该不存在
+                    // not found the match entry, verify if it should not exist
                     assert(!ExpectedValueHelper::MustHaveExisted(
                         pre_expected, post_expected));
                 }

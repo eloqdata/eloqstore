@@ -45,7 +45,8 @@ public:
 
         for (uint32_t i = 0;
              i < FLAGS_n_partitions * FLAGS_num_readers_per_partition;
-             ++i)  //这样写for循环可以使得多个读者映射到一个partition
+             ++i)
+        // use this code can let multiple readers map to one partition
         {
             readers_.emplace_back(new Reader(i));
             readers_[i]->partition_ =
@@ -86,7 +87,8 @@ public:
 
         CHECK(ok);
 
-        // 根据全局参数决定是否执行性能监控
+        // Decide whether to perform latency monitoring based on global
+        // parameters
         if (FLAGS_enable_latency_monitoring)
         {
             uint64_t user_data = req->UserData();
@@ -101,10 +103,10 @@ public:
 
                 if (rand() % 3000 == 0)
                 {
-                    double latency_ms =
-                        static_cast<double>(latency) / 1000000.0;  // 转换为毫秒
-                    LOG(INFO) << "写操作延迟: " << latency_ms << " 毫秒 (分区 "
-                              << partition->id_ << ")";
+                    double latency_ms = static_cast<double>(latency) /
+                                        1000000.0;  // Convert to milliseconds
+                    LOG(INFO) << "Write operation latency: " << latency_ms
+                              << " ms (partition " << partition->id_ << ")";
                 }
             }
             else
@@ -113,19 +115,20 @@ public:
                 uint64_t latency = current_time - reader->read_start_time_;
                 if (rand() % 3000 == 0)
                 {
-                    double latency_ms =
-                        static_cast<double>(latency) /
-                        1000000.0;  // 转换为毫秒
-                                    // 根据is_scan_mode_区分请求类型
+                    double latency_ms = static_cast<double>(latency) /
+                                        1000000.0;  // Convert to milliseconds
+                                                    // Distinguish request type
+                                                    // based on is_scan_mode_
                     if (reader->is_scan_mode_)
                     {
-                        LOG(INFO) << "扫描操作延迟: " << latency_ms
-                                  << " 毫秒 (读取器 " << reader->id_ << ")";
+                        LOG(INFO) << "Scan operation latency: " << latency_ms
+                                  << " ms (reader " << reader->id_ << ")";
                     }
                     else
                     {
-                        LOG(INFO) << "点读操作延迟: " << latency_ms
-                                  << " 毫秒 (读取器 " << reader->id_ << ")";
+                        LOG(INFO)
+                            << "Point read operation latency: " << latency_ms
+                            << " ms (reader " << reader->id_ << ")";
                     }
                 }
             }
