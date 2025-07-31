@@ -4,6 +4,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOG_DIR="$SCRIPT_DIR/log"
 
 DATA_DIR="$SCRIPT_DIR/data1"
+# actually only need DataDir
 DB_DIR="$DATA_DIR/db_stress"
 SHARED_STATE_DIR="$DATA_DIR/shared_state"
 WHITEBOX_LOG_DIR="$LOG_DIR/whitebox"
@@ -11,6 +12,9 @@ BLACKBOX_LOG_DIR="$LOG_DIR/blackbox"
 ERROR_LOG_DIR="$LOG_DIR/errors"
 CRASH_TEST_PY="$SCRIPT_DIR/crash_test.py"
 
+
+SWITCH_INTERVAL_HOURS=24 
+KILL_WAIT_TIME=10
 
 PARAM_COMBINATIONS=(
      "--data_append_mode=false"  # Combination 0: no cloud_store_path, data_append_mode=false
@@ -28,6 +32,8 @@ mkdir -p "$ERROR_LOG_DIR"
 CURRENT_TEST_PID=""
 CURRENT_TEST_TYPE=""
 LAST_STATUS=""  # Added: record last status to avoid duplicate logs
+
+NEXT_SWITCH_TIME=""
 # Log function
 log_message() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -117,12 +123,13 @@ kill_current_test() {
     if [ -n "$CURRENT_TEST_PID" ] && kill -0 "$CURRENT_TEST_PID" 2>/dev/null; then
         log_message "Terminating current test process $CURRENT_TEST_PID"
         kill -TERM "$CURRENT_TEST_PID"
-        sleep 5
+        sleep $KILL_WAIT_TIME
         
         # If process is still running, force kill
         if kill -0 "$CURRENT_TEST_PID" 2>/dev/null; then
             log_message "Force terminating process $CURRENT_TEST_PID"
             kill -KILL "$CURRENT_TEST_PID"
+            sleep 2  
         fi
         
         wait "$CURRENT_TEST_PID" 2>/dev/null
@@ -130,26 +137,34 @@ kill_current_test() {
         log_message "Test process terminated"
     fi
 }
-# Calculate remaining seconds to specified hour
-calculate_duration_to_hour() {
-    local target_hour=$1
+# 新增：计算下次切换时间
+calculate_next_switch_time() {
     local current_time=$(date '+%s')
-    local current_hour=$(date '+%H' | sed 's/^0//')
+    local switch_interval_seconds=$((SWITCH_INTERVAL_HOURS * 3600))
+    echo $((current_time + switch_interval_seconds))
+}
+
+# 新增：检查是否到了切换时间
+should_switch_test() {
+    if [ -z "$NEXT_SWITCH_TIME" ]; then
+        return 0  # 首次运行，需要开始测试
+    fi
     
-    # Calculate today's target time timestamp
-    local today_target=$(date -d "today ${target_hour}:00:00" '+%s')
-    
-    # If target time has passed, calculate tomorrow's target time
-    if [ $current_time -gt $today_target ]; then
-        local tomorrow_target=$(date -d "tomorrow ${target_hour}:00:00" '+%s')
-        echo $((tomorrow_target - current_time))
+    local current_time=$(date '+%s')
+    [ $current_time -ge $NEXT_SWITCH_TIME ]
+}
+
+# 新增：获取下一个测试类型
+get_next_test_type() {
+    if [ "$CURRENT_TEST_TYPE" = "whitebox" ]; then
+        echo "blackbox"
     else
-        echo $((today_target - current_time))
+        echo "whitebox"
     fi
 }
 # Start whitebox test (continuous run until assertion error)
 start_whitebox_test() {
-    local duration=$(calculate_duration_to_hour 4)
+    local duration=$((SWITCH_INTERVAL_HOURS * 3600))  # 修改：使用配置的时间间隔
     local timestamp=$(date '+%Y%m%d_%H%M%S')
     local log_file="$WHITEBOX_LOG_DIR/whitebox_${timestamp}.log"
     local param_args=$(get_random_param_combination) # Randomly select a parameter combination
@@ -162,7 +177,7 @@ start_whitebox_test() {
     perform_cleanup
     
     # Start whitebox test, pass calculated duration
-    stdbuf -oL -eL python3 "$CRASH_TEST_PY" whitebox \
+    setsid stdbuf -oL -eL python3 "$CRASH_TEST_PY" whitebox \
         --db_path="$DB_DIR" \
         --shared_state_path="$SHARED_STATE_DIR" \
         --duration=$duration \
@@ -176,18 +191,18 @@ start_whitebox_test() {
         $param_args> "$log_file" 2>&1 &
     CURRENT_TEST_PID=$!
     CURRENT_TEST_TYPE="whitebox"
-    
+
     log_message "Whitebox test process PID: $CURRENT_TEST_PID"
 }
 
 # Start blackbox test
 start_blackbox_test() {
-    local duration=$(calculate_duration_to_hour 10)
+    local duration=$((SWITCH_INTERVAL_HOURS * 3600))
     local timestamp=$(date '+%Y%m%d_%H%M%S')
     local log_file="$BLACKBOX_LOG_DIR/blackbox_${timestamp}.log"
     local param_args=$(get_random_param_combination)
     
-    log_message "Starting blackbox test, duration: ${duration} seconds (until 10 AM)"
+    log_message "Starting blackbox test, duration: ${duration} seconds (${SWITCH_INTERVAL_HOURS} hours)"
     log_message "Parameter combination: $param_args"
     log_message "Log file: $log_file"
     
@@ -195,7 +210,7 @@ start_blackbox_test() {
     perform_cleanup
     
     # Start blackbox test
-    stdbuf -oL -eL python3 "$CRASH_TEST_PY" blackbox \
+    setsid stdbuf -oL -eL python3 "$CRASH_TEST_PY" blackbox \
         --db_path="$DB_DIR" \
         --shared_state_path="$SHARED_STATE_DIR" \
         --duration=$duration \
@@ -209,6 +224,8 @@ start_blackbox_test() {
         $param_args > "$log_file" 2>&1 &
     CURRENT_TEST_PID=$!
     CURRENT_TEST_TYPE="blackbox"
+
+
     
     log_message "Blackbox test process PID: $CURRENT_TEST_PID"
 }
@@ -258,58 +275,31 @@ monitor_current_test() {
     fi
 }
 
-# Get current hour
-get_current_hour() {
-    date '+%H' | sed 's/^0//'
-}
 
-# Main loop
 main_loop() {
+    log_message "Starting initial test cycle with whitebox test"
+    start_whitebox_test
+    NEXT_SWITCH_TIME=$(calculate_next_switch_time)  
+    log_message "Next switch time: $(date -d @$NEXT_SWITCH_TIME '+%Y-%m-%d %H:%M:%S')"
     while true; do
-        current_hour=$(get_current_hour)
         # Monitor current test process status
         monitor_current_test
-        # Determine what state should be current
-        local expected_status="" 
-        # 20 / 4    4/10 original
-        if [ $current_hour -ge 11 ] || [ $current_hour -lt 4 ]; then
-            expected_status="whitebox"
-        elif [ $current_hour -ge 4 ] && [ $current_hour -lt 11 ]; then
-            expected_status="blackbox"
-        else
-            expected_status="rest"
+        
+        if should_switch_test && [ -n "$CURRENT_TEST_PID" ]; then
+            local next_test_type=$(get_next_test_type)
+            log_message "Time to switch from $CURRENT_TEST_TYPE to $next_test_type test"
+            
+            kill_current_test
+            
+            if [ "$next_test_type" = "whitebox" ]; then
+                start_whitebox_test
+            else
+                start_blackbox_test
+            fi
+            NEXT_SWITCH_TIME=$(calculate_next_switch_time)
+            log_message "Test type switched. Next switch time: $(date -d @$NEXT_SWITCH_TIME '+%Y-%m-%d %H:%M:%S')"
         fi
-        # Only output logs and execute operations when status changes
-        if [ "$expected_status" != "$LAST_STATUS" ]; then
-            case "$expected_status" in
-                "whitebox")
-                    if [ "$CURRENT_TEST_TYPE" != "whitebox" ]; then
-                        log_message "Current time: ${current_hour} o'clock, switching to whitebox test period"
-                        if [ -n "$CURRENT_TEST_PID" ]; then
-                            kill_current_test
-                        fi
-                        start_whitebox_test
-                    fi
-                    ;;
-                "blackbox")
-                    if [ "$CURRENT_TEST_TYPE" != "blackbox" ]; then
-                        log_message "Current time: ${current_hour} o'clock, switching to blackbox test period"
-                        if [ -n "$CURRENT_TEST_PID" ]; then
-                            kill_current_test
-                        fi
-                        start_blackbox_test
-                    fi
-                    ;;
-                "rest")
-                    if [ -n "$CURRENT_TEST_PID" ]; then
-                        log_message "Current time: ${current_hour} o'clock, entering rest time, terminating current test"
-                        kill_current_test
-                    fi
-                    log_message "Current time: ${current_hour} o'clock, rest time, waiting for next test period"
-                    ;;
-            esac  # case reversed
-            LAST_STATUS="$expected_status"
-        fi
+        
         # Check every 30 seconds
         sleep 30
     done
@@ -334,5 +324,35 @@ if [ ! -f "$CRASH_TEST_PY" ]; then
     log_message "Error: crash_test.py does not exist: $CRASH_TEST_PY"
     exit 1
 fi
+
+# Check python3
+if ! command -v python3 &> /dev/null; then
+    log_message "Error: python3 is not installed or not in PATH"
+    exit 1
+fi
+
+# Check rclone
+if ! command -v rclone &> /dev/null; then
+    log_message "Error: rclone is not installed or not in PATH"
+    exit 1
+fi
+
+# Check docker
+if ! command -v docker &> /dev/null; then
+    log_message "Error: docker is not installed or not in PATH"
+    exit 1
+fi
+
+# Check if minio container is running
+if ! docker ps --format "table {{.Names}}" | grep -q "minio"; then
+    log_message "Error: minio container is not running in docker"
+    log_message "Please start minio container before running the test"
+    exit 1
+fi
+
+log_message "=== Test Configuration ==="
+log_message "Switch interval: ${SWITCH_INTERVAL_HOURS} hours"
+log_message "Kill wait time: ${KILL_WAIT_TIME} seconds"
+log_message "========================="
 
 main_loop

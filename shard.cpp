@@ -1,7 +1,8 @@
 #include "shard.h"
 
-// #include <bthread/eloq_module.h>
-
+#ifdef ELOQ_MODULE_ENABLED
+#include <bthread/eloq_module.h>
+#endif
 namespace eloqstore
 {
 Shard::Shard(const EloqStore *store, size_t shard_id, uint32_t fd_limit)
