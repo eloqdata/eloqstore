@@ -70,8 +70,7 @@ set(ELOQ_STORE_SOURCES
     scan_task.cpp
     write_task.cpp
     batch_write_task.cpp
-    compact_task.cpp
-    archive_task.cpp
+    background_write.cpp
     async_io_manager.cpp
     data_page.cpp
     page.cpp

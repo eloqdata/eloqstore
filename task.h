@@ -42,8 +42,7 @@ enum struct TaskType
     Read = 0,
     Scan,
     BatchWrite,
-    Compact,
-    Archive,
+    BackgroundWrite,
     EvictFile
 };
 

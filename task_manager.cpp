@@ -18,18 +18,10 @@ BatchWriteTask *TaskManager::GetBatchWriteTask(const TableIdent &tbl_id)
     return task;
 }
 
-CompactTask *TaskManager::GetCompactTask(const TableIdent &tbl_id)
+BackgroundWrite *TaskManager::GetBackgroundWrite(const TableIdent &tbl_id)
 {
     num_active_++;
-    CompactTask *task = compact_pool_.GetTask();
-    task->Reset(tbl_id);
-    return task;
-}
-
-ArchiveTask *TaskManager::GetArchiveTask(const TableIdent &tbl_id)
-{
-    num_active_++;
-    ArchiveTask *task = archive_pool_.GetTask();
+    BackgroundWrite *task = bg_write_pool_.GetTask();
     task->Reset(tbl_id);
     return task;
 }
@@ -60,11 +52,8 @@ void TaskManager::FreeTask(KvTask *task)
     case TaskType::BatchWrite:
         batch_write_pool_.FreeTask(static_cast<BatchWriteTask *>(task));
         break;
-    case TaskType::Compact:
-        compact_pool_.FreeTask(static_cast<CompactTask *>(task));
-        break;
-    case TaskType::Archive:
-        archive_pool_.FreeTask(static_cast<ArchiveTask *>(task));
+    case TaskType::BackgroundWrite:
+        bg_write_pool_.FreeTask(static_cast<BackgroundWrite *>(task));
         break;
     case TaskType::EvictFile:
         assert(false && "EvictFile task should not be freed here");

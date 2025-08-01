@@ -4,9 +4,8 @@
 #include <memory>
 #include <vector>
 
-#include "archive_task.h"
+#include "background_write.h"
 #include "batch_write_task.h"
-#include "compact_task.h"
 #include "read_task.h"
 #include "scan_task.h"
 #include "types.h"
@@ -17,8 +16,7 @@ class TaskManager
 {
 public:
     BatchWriteTask *GetBatchWriteTask(const TableIdent &tbl_id);
-    CompactTask *GetCompactTask(const TableIdent &tbl_id);
-    ArchiveTask *GetArchiveTask(const TableIdent &tbl_id);
+    BackgroundWrite *GetBackgroundWrite(const TableIdent &tbl_id);
     ReadTask *GetReadTask();
     ScanTask *GetScanTask();
     void FreeTask(KvTask *task);
@@ -77,8 +75,7 @@ private:
     };
 
     TaskPool<BatchWriteTask> batch_write_pool_{1024};
-    TaskPool<CompactTask> compact_pool_{1024};
-    TaskPool<ArchiveTask> archive_pool_{256};
+    TaskPool<BackgroundWrite> bg_write_pool_{1024};
     TaskPool<ReadTask> read_pool_{2048};
     TaskPool<ScanTask> scan_pool_{2048};
     size_t num_active_{0};

@@ -262,14 +262,14 @@ void Shard::ProcessReq(KvRequest *req)
     }
     case RequestType::Archive:
     {
-        ArchiveTask *task = task_mgr_.GetArchiveTask(req->TableId());
+        BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());
         auto lbd = [task]() -> KvError { return task->CreateArchive(); };
         StartTask(task, req, lbd);
         break;
     }
     case RequestType::Compact:
     {
-        CompactTask *task = task_mgr_.GetCompactTask(req->TableId());
+        BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());
         auto lbd = [task]() -> KvError { return task->CompactDataFile(); };
         StartTask(task, req, lbd);
         break;
