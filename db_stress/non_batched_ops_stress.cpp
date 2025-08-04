@@ -186,6 +186,7 @@ void NonBatchedOpsStressTest::TestGet(uint32_t reader_id, int64_t rand_key)
     // set read mode
     reader->is_scan_mode_ = false;
     reader->key_readings_.clear();
+    // actually ,key_readings can be vector<uint64_t>,not string
     reader->key_readings_.push_back(Key(rand_key));
     reader->pre_read_expected_values.clear();
     reader->pre_read_expected_values.push_back(
@@ -210,7 +211,34 @@ void NonBatchedOpsStressTest::TestScan(uint32_t reader_id, int64_t rand_key)
     reader->is_scan_mode_ = true;
 
     int64_t scan_start = rand_key;
-    int64_t scan_end = std::min(rand_key + 100, FLAGS_max_key);
+    // Implement probability-based scan range selection
+    // Small ranges have higher probability, large ranges have lower probability
+    int64_t max_possible_range = FLAGS_max_key - rand_key;
+    int64_t scan_range;
+
+    if (max_possible_range <= 0)
+    {
+        scan_range = 1;
+    }
+    else
+    {
+        // Use exponential decay distribution: small ranges have high
+        // probability, large ranges have low probability Parameters can be
+        // adjusted based on max_key; larger max_key leads to faster decay
+        // decay_factor 越 小 ⇒ 分布越“平滑”（尾部更厚，概率下降更慢）
+        double decay_factor = std::max(
+            0.1, 1000.0 / FLAGS_max_key);  // Dynamically adjust decay factor
+        double random_val =
+            reader->partition_->rand_.Uniform(1000) / 1000.0;  // [0,1)
+
+        // Exponential distribution: range = -log(1-random_val) / decay_factor
+        // Constrain within reasonable bounds
+        double raw_range = -std::log(1.0 - random_val * 0.999) / decay_factor;
+        scan_range = std::min(max_possible_range,
+                              std::max(1L, static_cast<int64_t>(raw_range)));
+    }
+
+    int64_t scan_end = scan_start + scan_range;
     reader->begin_key_ = Key(scan_start);
     reader->end_key_ = Key(scan_end);
 

@@ -38,7 +38,7 @@ DEFINE_uint32(n_tables, 10, "nums of threads/tables");
 DEFINE_uint32(n_partitions, 300, "nums of partitions");
 // I think it is better to set a large value for ops_per_partition
 DEFINE_uint64(ops_per_partition,
-              3000000,
+              3000000000,
               "ops of batch write on each partition");
 DEFINE_uint32(kill_odds, 0, "odds (1/this) of each killpoint to crash");
 DEFINE_uint32(num_client_threads, 1, "Amount of client threads");

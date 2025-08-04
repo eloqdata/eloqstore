@@ -149,7 +149,7 @@ def randomize_dynamic_params():
         "buf_ring_size": lambda: random.choice([1<<9, 1<<10, 1<<11, 1<<12]),
         # "coroutine_stack_size": lambda: random.choice([1<<13, 1<<14, 1<<15]),
         "file_amplify_factor": random.choice([2, 4, 6, 8]),
-        # "num_gc_threads": random.choice([1, 2, 4]),
+        #"num_gc_threads": random.choice([1, 2, 4]),
         "reserve_space_ratio": random.choice([50, 100, 150, 200]),
         "rclone_threads": random.choice([1, 2, 4]),
     }
@@ -353,6 +353,7 @@ def execute_cmd(cmd, timeout=None, timeout_pstack=False):
 
 def print_output_and_exit_on_error(stdout, stderr, print_stderr_separately=False):
     if len(stdout)>0:
+        print("stdout:\n")
         print("stdout:\n", stdout)
     else:
         print("stdout:None")

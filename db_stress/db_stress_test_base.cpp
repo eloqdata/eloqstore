@@ -266,7 +266,7 @@ std::string StressTest::Partition::GenerateValue(uint32_t base)
     assert(FLAGS_longest_value >= FLAGS_shortest_value);
     assert(FLAGS_shortest_value >=
            32);  // I don't now this is valid,shortest_value must >= 32?
-
+    // ergeng: it ensure it do not overflow when memset
     size_t value_sz;
     if (FLAGS_longest_value == FLAGS_shortest_value)
     {
@@ -278,8 +278,12 @@ std::string StressTest::Partition::GenerateValue(uint32_t base)
             FLAGS_shortest_value +
             rand_.Uniform(FLAGS_longest_value - FLAGS_shortest_value + 1);
     }
-
-    char post_fix_ch = '0' + rand_.Uniform(10);
+    /*
+    if shortest_value == 64,longest_value == 128,value_sz = 100 ,base = 12345
+    00000000000000000000000012345777777777777777777777777777777777777777777777777
+    |<------- 32-char prefix --->|<---------- remaining 48 chars--------------->
+    */
+    char post_fix_ch = '0' + rand_.Uniform(10);  // [0,9]
     std::string ret(value_sz, post_fix_ch);
     std::string value_base = std::to_string(base);
     size_t zero_pad = 32 - value_base.size();
@@ -374,6 +378,7 @@ void StressTest::Reader::VerifyGet(ThreadState *thread_state_)
             // Traverse all the expected keys and validate in order
             for (size_t i = 0; i < key_readings_.size(); ++i)
             {
+                // i think it is not necessary to get string
                 const std::string &expected_key = key_readings_[i];
                 int64_t key_int = KeyStringToInt(expected_key);
 

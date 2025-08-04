@@ -95,8 +95,9 @@ void print_test_params()
         LOG(INFO) << "The test may occupy Mem: " << mem
                   << " GB, please pay attention!";
     }
+
     double storage = 0.0;
-    storage = (double) max_key * partitions * (12 + value_sz);
+    storage = (double) max_key * partitions * (12 + value_sz) * tables;
     storage = (double) storage / KB / KB / KB;
     LOG(INFO) << "The data DB contains would be about " << storage << " GB.";
 }
