@@ -5,6 +5,43 @@
 
 namespace eloqstore
 {
+class MovingCachedPages
+{
+public:
+    MovingCachedPages(size_t cap)
+    {
+        pages_.reserve(cap);
+    }
+    ~MovingCachedPages()
+    {
+        // Moving operations are aborted
+        for (auto [page, src_fp_id] : pages_)
+        {
+            page->SetFilePageId(src_fp_id);
+            page->Unpin();
+        }
+    }
+    void Add(MemIndexPage *page, FilePageId dest_fp_id)
+    {
+        page->Pin();
+        FilePageId src_fp_id = page->GetFilePageId();
+        page->SetFilePageId(dest_fp_id);
+        pages_.emplace_back(page, src_fp_id);
+    }
+    void Finish()
+    {
+        // Moving operations are succeed
+        for (auto [page, _] : pages_)
+        {
+            page->Unpin();
+        }
+        pages_.clear();
+    }
+
+private:
+    std::vector<std::pair<MemIndexPage *, FilePageId>> pages_;
+};
+
 KvError BackgroundWrite::CompactDataFile()
 {
     const KvOptions *opts = Options();
@@ -69,6 +106,7 @@ KvError BackgroundWrite::CompactDataFile()
     move_batch_buf.reserve(max_move_batch);
     std::vector<FilePageId> move_batch_fp_ids;
     move_batch_fp_ids.reserve(max_move_batch);
+    MovingCachedPages moving_cached(mapping_cnt);
 
     auto it_low = fp_ids.begin();
     auto it_high = fp_ids.begin();
@@ -112,23 +150,48 @@ KvError BackgroundWrite::CompactDataFile()
         for (auto it = it_low; it < it_high; it += max_move_batch)
         {
             uint32_t batch_size = std::min(long(max_move_batch), it_high - it);
-            std::span<std::pair<FilePageId, PageId>> batch_ids(it, batch_size);
+            const std::span<std::pair<FilePageId, PageId>> batch_ids(
+                it, batch_size);
             // Read original pages.
             move_batch_fp_ids.clear();
-            for (auto [fp_id, _] : batch_ids)
+            for (auto [fp_id, page_id] : batch_ids)
             {
-                move_batch_fp_ids.emplace_back(fp_id);
+                MemIndexPage *page =
+                    cow_meta_.old_mapping_->GetSwizzlingPointer(page_id);
+                if (page != nullptr)
+                {
+                    auto [_, new_fp_id] = AllocatePage(page_id);
+                    moving_cached.Add(page, new_fp_id);
+                    err = WritePage(page, new_fp_id);
+                    CHECK_KV_ERR(err);
+                }
+                else
+                {
+                    move_batch_fp_ids.emplace_back(fp_id);
+                }
+            }
+            if (move_batch_fp_ids.empty())
+            {
+                continue;
             }
             err = IoMgr()->ReadPages(
                 tbl_ident_, move_batch_fp_ids, move_batch_buf);
             CHECK_KV_ERR(err);
             // Write these pages to the new file.
-            for (uint32_t i = 0; i < batch_size; i++)
+            for (uint32_t i = 0; auto [fp_id, page_id] : batch_ids)
             {
-                PageId page_id = batch_ids[i].second;
-                auto [_, fp_id] = AllocatePage(page_id);
-                err = WritePage(std::move(move_batch_buf[i]), fp_id);
+                if (i == move_batch_fp_ids.size())
+                {
+                    break;
+                }
+                if (fp_id != move_batch_fp_ids[i])
+                {
+                    continue;
+                }
+                auto [_, new_fp_id] = AllocatePage(page_id);
+                err = WritePage(std::move(move_batch_buf[i]), new_fp_id);
                 CHECK_KV_ERR(err);
+                i++;
             }
         }
         if (min_file_id != end_file_id)
@@ -144,6 +207,7 @@ KvError BackgroundWrite::CompactDataFile()
 
     err = UpdateMeta();
     CHECK_KV_ERR(err);
+    moving_cached.Finish();
 
     TriggerFileGC();
     return KvError::NoError;

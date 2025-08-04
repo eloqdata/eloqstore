@@ -410,11 +410,16 @@ void IndexPageManager::FinishIo(MappingSnapshot *mapping,
     idx_page->tbl_ident_ = mapping->tbl_ident_;
     mapping->AddSwizzling(idx_page->GetPageId(), idx_page);
 
-    auto tbl_it = tbl_roots_.find(*mapping->tbl_ident_);
-    assert(tbl_it != tbl_roots_.end());
-    tbl_it->second.Pin();
-
-    assert(idx_page->IsDetached());
+    if (idx_page->IsDetached())
+    {
+        auto tbl_it = tbl_roots_.find(*mapping->tbl_ident_);
+        assert(tbl_it != tbl_roots_.end());
+        tbl_it->second.Pin();
+    }
+    else
+    {
+        // index page is moved on physical position.
+    }
     EnqueuIndexPage(idx_page);
 }
 
