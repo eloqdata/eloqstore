@@ -256,12 +256,10 @@ cleanup_cmd = "../build/db_stress/clean_up"
 
 # Total test duration and interval between crashes, consider removing duration
 blackbox_default_params = {
-    "duration": 3600,
     "interval": 600,
 }
 
 whitebox_default_params={
-    "duration":3600,
     "kill_odds":800000,
 }
 
@@ -336,20 +334,25 @@ def execute_cmd(cmd, timeout=None, timeout_pstack=False):
     print("This process will be killed manually after interval=",timeout)
     pid = child.pid
     start_time = time.time()
-    try:
-        outs, errs = child.communicate(timeout=timeout)
+   # 当timeout为-1时，不设置超时，让进程自然结束
+    if timeout == -1:
+        outs, errs = child.communicate()  # 不设置timeout参数
         hit_timeout = False
-        print("WARNING: db_stress ended before kill: exitcode=%d\n" % child.returncode)
-    except subprocess.TimeoutExpired:
-        hit_timeout = True
-        if timeout_pstack:
-            os.system("pstack %d" % pid)
-        child.kill()
-        print("\nkilled process manually, pid=%d\n" % child.pid)
-        outs, errs = child.communicate()
+        print("db_stress ended naturally: exitcode=%d\n" % child.returncode)
+    else:
+        try:
+            outs, errs = child.communicate(timeout=timeout)
+            hit_timeout = False
+            print("WARNING: db_stress ended before kill: exitcode=%d\n" % child.returncode)
+        except subprocess.TimeoutExpired:
+            hit_timeout = True
+            if timeout_pstack:
+                os.system("pstack %d" % pid)
+            child.kill()
+            print("\nkilled process manually, pid=%d\n" % child.pid)
+            outs, errs = child.communicate()
 
     return hit_timeout, child.returncode, outs.decode("utf-8"), errs.decode("utf-8"), pid, start_time
-
 
 def print_output_and_exit_on_error(stdout, stderr, print_stderr_separately=False):
     if len(stdout)>0:
@@ -381,19 +384,17 @@ def cleanup_after_success():
 def blackbox_crash_main(args, unknown_args):
 #    dbname = get_dbname("blackbox")
     start_time=time.time()
-    # exit_time = time.time() + args.duration if hasattr(args, 'duration') else time.time() + 3600
-    exit_time = time.time() + args.duration if args.duration is not None else time.time() + 3600
 
 
-    while time.time() < exit_time:
+    while True:
         cmd_params = gen_cmd_params(args, use_random_params=args.use_random_params)
         cmd = gen_cmd(
             dict(list(cmd_params.items())), unknown_args
         )
         # Generate command string for logging
         cmd_str = " ".join(cmd)
-        process_rate=round((time.time()-start_time)/cmd_params["duration"]*100,2)
-        print("crash_test process rate:",process_rate,"%")
+        running_time = round((time.time() - start_time) / 3600, 2)  # 转换为小时
+        print(f"crash_test running time: {running_time} hours")
         interval=random.randint(1000, cmd_params["interval"])
 
         # Record start time of each test    
@@ -425,24 +426,16 @@ def blackbox_crash_main(args, unknown_args):
         time.sleep(1)  # time to stabilize before the next run
 
         time.sleep(1)  # time to stabilize before the next run
-    print("blackbox crash test has succeeded!!!")
-    # we need to clean up after ourselves -- only do this on test success
-    cleanup_after_success()
-
 
 def whitebox_crash_main(args, unknown_args):
-    # cmd_params = gen_cmd_params(args)
-    cur_time = time.time()
-    # exit_time = time.time() + args.duration if hasattr(args, 'duration') else time.time() + 3600
-    exit_time = time.time() + args.duration if args.duration is not None else time.time() + 3600
 
     succeeded = True
     hit_timeout = False
     start_time=time.time()
-    while time.time() < exit_time:
+    while True:
         cmd_params = gen_cmd_params(args, use_random_params=args.use_random_params)
-        process_rate=round((time.time()-start_time)/cmd_params["duration"]*100,2)
-        print("crash_test process rate:",process_rate,"%")
+        running_time = round((time.time() - start_time) / 3600, 2)  # 转换为小时
+        print(f"crash_test running time: {running_time} hours")        
         # Generate kill_odds randomly for each loop
         kill_odds_upper = cmd_params["kill_odds"]
         kill_odds_lower = 400000
@@ -462,7 +455,7 @@ def whitebox_crash_main(args, unknown_args):
         #     cmd, exit_time - time.time() + 900
         # )
         hit_timeout, retcode, stdoutdata, stderrdata, pid, cmd_start_time = execute_cmd(
-            cmd, exit_time - time.time() + 900
+            cmd, -1
         )
         test_end_time = time.time()
 
@@ -488,7 +481,7 @@ def whitebox_crash_main(args, unknown_args):
         )
         if hit_timeout:
             print("Killing the run for running too long")
-            break
+            continue
 
         succeeded = False
         if odd>0 and (retcode == -15):
@@ -502,11 +495,6 @@ def whitebox_crash_main(args, unknown_args):
 
         time.sleep(1)  # time to stabilize after a kill
 
-    print("whitebox crash test has succeeded!!!")
-
-    # Clean up after ourselves
-    if succeeded or hit_timeout:
-        cleanup_after_success()
 
 
 def main():

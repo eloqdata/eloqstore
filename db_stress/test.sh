@@ -61,6 +61,7 @@ SYSTEM_TYPE_PARAM_COMBINATIONS=(
     # ps:12是实际写入db的key的最小值,内存中不需要是因为使用index来优化掉key的开销
     
     #增大table和partition都可以让db的树变多,但是table可以提高并发请求的压力,因为table等价于线程数
+    # 二更:其实也不一定,partition是写者数量,其实也就是一个线程内可以写多少次,同时每个partition也配置了固定数量的写者
     # 单个partition的磁盘占用为max_key*(12+(shortest_value+longestvalue)/2)*0.75
     #   我希望占用大概至少150G的理论磁盘,同时单个patition至少要有1百兆
 
@@ -411,7 +412,6 @@ start_whitebox_test() {
     setsid stdbuf -oL -eL python3 "$CRASH_TEST_PY" whitebox \
         --db_path="$DB_DIR" \
         --shared_state_path="$SHARED_STATE_DIR" \
-        --duration=$duration \
         --kill_odds=100000000 \
         --use_random_params \
         $param_args> "$log_file" 2>&1 &
@@ -450,7 +450,6 @@ start_blackbox_test() {
     setsid stdbuf -oL -eL python3 "$CRASH_TEST_PY" blackbox \
         --db_path="$DB_DIR" \
         --shared_state_path="$SHARED_STATE_DIR" \
-        --duration=$duration \
         --interval=3600 \
         --use_random_params \
         $param_args > "$log_file" 2>&1 &
