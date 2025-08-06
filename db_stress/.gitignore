@@ -5,8 +5,8 @@ build.sh
 
 log/
 info/
-nohup.out
-
+*.out
+*.log
 UML/
 
 .vscode
@@ -14,3 +14,6 @@ UML/
 data*/
 
 bug
+dd.csv
+superset/
+

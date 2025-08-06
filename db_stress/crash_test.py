@@ -136,8 +136,7 @@ def manage_core_files(pid, start_time, exit_code, hit_timeout, test_type):
             print(f"No core file generated (reason: {reason})")
 def randomize_dynamic_params():
     return {
-        "num_threads": random.choice([1, 2, 4, 8, 16]),
-        #"num_threads": random.choice([1]),
+        "num_threads": random.choice([40]),
         "data_page_restart_interval": random.choice([8, 16, 24, 32]),
         "index_page_restart_interval": random.choice([8, 16, 24, 32]),
         # "skip_verify_checksum": random.choice([True, False]),
@@ -247,7 +246,7 @@ default_params = {
     "reserve_space_ratio":100,#default 100
     "rclone_threads":1,#default 1
     "overflow_pointers":16,#default 16
-    "open_wfile":True,
+    "open_wfile":1,
 }
 
 stress_cmd = "../build/db_stress/db_stress"
@@ -439,7 +438,10 @@ def whitebox_crash_main(args, unknown_args):
         # Generate kill_odds randomly for each loop
         kill_odds_upper = cmd_params["kill_odds"]
         kill_odds_lower = 400000
-        odd = random.randint(kill_odds_lower, kill_odds_upper)
+        if kill_odds_upper != 0:
+            odd = random.randint(kill_odds_lower, kill_odds_upper)
+        else:
+            odd = 0
         
         cmd = gen_cmd(
             dict(

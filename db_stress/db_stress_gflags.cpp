@@ -113,3 +113,12 @@ DEFINE_string(cloud_store_path, "", "path to cloud store");
 DEFINE_bool(enable_latency_monitoring,
             false,
             "enable request latency monitoring and logging");
+DEFINE_bool(enable_throughput_monitoring,
+            true,
+            "enable IO throughput monitoring and logging");
+DEFINE_uint32(throughput_report_interval_secs,
+              5,
+              "interval in seconds to report IO throughput statistics");
+DEFINE_string(throughput_log_file,
+              "throughput.log",
+              "file path to write throughput statistics");

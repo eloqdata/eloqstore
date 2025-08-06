@@ -19,6 +19,10 @@
 // due to the nested definition of some header files, the declaration needs to
 // be placed here
 DECLARE_bool(enable_latency_monitoring);
+DECLARE_bool(enable_throughput_monitoring);
+DECLARE_uint32(throughput_report_interval_secs);
+DECLARE_string(throughput_log_file);
+
 namespace StressTest
 {
 class StressTest
@@ -194,6 +198,8 @@ public:
         uint64_t write_start_time_{0};      // only record the first write time
         eloqstore::BatchWriteRequest req_;  // only one writer per Partition so
                                             // it directly use BatchWriteRequest
+        uint64_t write_bytes_{0};
+
         eloqstore::TruncateRequest trun_req_;
         std::vector<PendingExpectedValue> pending_expected_values;
         rocksdb::Random rand_;
@@ -279,6 +285,36 @@ public:
     static std::condition_variable init_barrier_cv_;
     static std::mutex init_barrier_mutex_;
     static std::atomic<bool> all_init_done_;
+
+    // add this struct on throughput monitoring
+    struct ThroughputStats
+    {
+        std::atomic<uint64_t> total_write_bytes{0};
+        std::atomic<uint64_t> total_read_bytes{0};
+        std::atomic<uint64_t> total_write_ops{0};
+        std::atomic<uint64_t> total_read_ops{0};
+        std::atomic<uint64_t> last_report_time{0};
+        std::atomic<uint64_t> last_write_bytes{0};
+        std::atomic<uint64_t> last_read_bytes{0};
+        std::atomic<uint64_t> last_write_ops{0};
+        std::atomic<uint64_t> last_read_ops{0};
+    };
+
+    // use static to make sure only single instance,and all stressTest instance
+    // share the same throughput_stats_
+    static ThroughputStats throughput_stats_;
+    static std::mutex throughput_mutex_;
+    static std::thread throughput_reporter_thread_;
+    static std::atomic<bool> stop_throughput_monitoring_;
+    static std::ofstream throughput_log_;
+    static uint64_t theoretical_disk_usage_;
+
+    static void StartThroughputMonitoring();
+    static void StopThroughputMonitoring();
+    static void ThroughputReporter();
+    static void RecordWriteBytes(uint64_t bytes, uint32_t ops);
+    static void RecordReadBytes(uint64_t bytes, uint32_t ops);
+    static uint64_t GetDiskUsage(const std::string &path);
 
 private:
     void OperateTest()

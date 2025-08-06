@@ -18,20 +18,13 @@ DISK_LOG_FILE="$DISK_LOG_DIR/disk_usage.log"
 MINIO_DATA_PATH="/home/sjh/minio/data"
 DISK_MONITOR_PID=""
 
-SWITCH_INTERVAL_HOURS=1
+SWITCH_INTERVAL_HOURS=8
 KILL_WAIT_TIME=10
 CURRENT_TEST_PARAMS=""
 
 AUTO_UPDATE_ENABLED=false  # auto pull and build new code
+CRASH_TEST_ENABLED=false
 
-PARAM_COMBINATIONS=(
-    #  "--data_append_mode=false"  # Combination 0: no cloud_store_path, data_append_mode=false
-    # "--data_append_mode=true"   # Combination 1: no cloud_store_path, data_append_mode=true
-    "--cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --data_append_mode=false"  # Combination 2: with cloud_store_path, data_append_mode=false
-    "--cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --data_append_mode=true"   # Combination 3: with cloud_store_path, data_append_mode=true
-    "--cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --data_append_mode=false"  # Combination 4: with cloud_store_path, data_append_mode=false
-    "--cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --data_append_mode=true"   # Combination 5: with cloud_store_path, data_append_mode=true
-)
 # Create log directories
 mkdir -p "$WHITEBOX_LOG_DIR"
 mkdir -p "$BLACKBOX_LOG_DIR"
@@ -51,8 +44,8 @@ log_message() {
 STORAGE_PARAM_COMBINATIONS=(
     "--data_append_mode=false"  
     "--data_append_mode=true"   
-    "--cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --data_append_mode=false"  
-    "--cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --data_append_mode=true"   
+    # "--cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --data_append_mode=false"  
+    # "--cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --data_append_mode=true"   
 )
 SYSTEM_TYPE_PARAM_COMBINATIONS=(
     #验证表所占用的内存就是n_table*n_parition*max_key*sizeof(int)
@@ -60,6 +53,8 @@ SYSTEM_TYPE_PARAM_COMBINATIONS=(
     #n_table*n_partition*max_key*(12+(shortest_value+longestvalue)/2)*0.75(读和删除的比例)
     # ps:12是实际写入db的key的最小值,内存中不需要是因为使用index来优化掉key的开销
     
+    #同时如果longest_value不大,则验证表在磁盘的空间占用就会接近于db的磁盘空间占用
+
     #增大table和partition都可以让db的树变多,但是table可以提高并发请求的压力,因为table等价于线程数
     # 二更:其实也不一定,partition是写者数量,其实也就是一个线程内可以写多少次,同时每个partition也配置了固定数量的写者
     # 单个partition的磁盘占用为max_key*(12+(shortest_value+longestvalue)/2)*0.75
@@ -67,44 +62,44 @@ SYSTEM_TYPE_PARAM_COMBINATIONS=(
 
     # 单个partiton超大的测试
     # 单个partition: 10000000 * (12 + (32+32)/2) * 0.75 = 100000000 * 44 * 0.75 = 3.3GB
-    # 总磁盘占用: 20 * 10 * 330MB = 66GB
-    "--n_tables=20 --n_partitions=1 --max_key=100000000 --shortest_value=32 --longest_value=32 --active_width=10000000 --keys_per_batch=500000"
+    # 总磁盘占用: 20 * 10 * 330MB = 180GB
+    #"--n_tables=5 --n_partitions=12 --max_key=100000000 --shortest_value=32 --longest_value=32 --active_width=10000000 --keys_per_batch=500000"
     
-    # 普通patition测试,超高并发
-    # 单个partition: 10000000 * (12 + (32+32)/2) * 0.75 = 10000000 * 44 * 0.75 = 330MB
-    # 总磁盘占用: 50 * 330MB = 15.36GB
-    "--n_tables=50 --n_partitions=1 --max_key=10000000 --shortest_value=32 --longest_value=32 --active_width=500000 --keys_per_batch=30000"
+    # # 普通patition测试,超高并发
+    # # 单个partition: 10000000 * (12 + (32+32)/2) * 0.75 = 10000000 * 44 * 0.75 = 330MB
+    # # 总磁盘占用: 10*50 * 330MB = 200GB
+    "--n_tables=10 --n_partitions=20 --max_key=10000 --shortest_value=1024 --longest_value=200000 --active_width=3000 --keys_per_batch=2500 --max_verify_ops_per_write=0"
     
-    # 常规测试,正常并发,正常磁盘,正常patition
-    # 单个partition: 10000000 * (12 + (32+32)/2) * 0.75 = 10000000 * 44 * 0.75 = 330MB
-    # 总磁盘占用: 20 * 10 * 330MB = 66GB
-    "--n_tables=20 --n_partitions=10 --max_key=10000000 --shortest_value=32 --longest_value=32 --active_width=200000 --keys_per_batch=2000"
+    # # 常规测试,正常并发,正常磁盘,正常patition
+    # # 单个partition: 10000000 * (12 + (32+32)/2) * 0.75 = 10000000 * 44 * 0.75 = 330MB
+    # # 总磁盘占用: 20 * 30 * 330MB = 180GB
+    # "--n_tables=20 --n_partitions=30 --max_key=10000000 --shortest_value=32 --longest_value=32 --active_width=200000 --keys_per_batch=2000"
     
-    # 中小等value测试
-    # 单个partition: 3000000 * (12 + (128+512)/2) * 0.75 = 3000000 * 332 * 0.75 = 747MB
-    # 总磁盘占用: 30 * 3 * 747MB = 67GB
-    "--n_tables=30 --n_partitions=3 --max_key=3000000 --shortest_value=128 --longest_value=512 --active_width=300000 --keys_per_batch=25000"
+    # # 中小等value测试
+    # # 单个partition: 3000000 * (12 + (128+512)/2) * 0.75 = 3000000 * 332 * 0.75 = 747MB
+    # # 总磁盘占用: 20 * 10 * 747MB = 149GB
+    # "--n_tables=20 --n_partitions=10 --max_key=3000000 --shortest_value=128 --longest_value=512 --active_width=300000 --keys_per_batch=25000"
     
-    # 中value测试
-    # 单个partition: 1000000 * (12 + (1024+8192)/2) * 0.75 = 1000000 * 4620 * 0.75 = 3.47GB
-    # 总磁盘占用: 20 * 3.47GB = 69.4GB
-    "--n_tables=20 --n_partitions=1 --max_key=1000000 --shortest_value=1024 --longest_value=8192 --active_width=100000 --keys_per_batch=10000"
+    # # 中value测试
+    # # 单个partition: 1000000 * (12 + (1024+8192)/2) * 0.75 = 1000000 * 4620 * 0.75 = 3.47GB
+    # # 总磁盘占用: 50 * 3.47GB = 160GB
+    # "--n_tables=5 --n_partitions=10 --max_key=1000000 --shortest_value=1024 --longest_value=8192 --active_width=100000 --keys_per_batch=10000"
     
-    # 大value测试
-    # 单个partition: 100000 * (12 + (8192+65536)/2) * 0.75 = 100000 * 36876 * 0.75 = 2.77GB
-    # 总磁盘占用: 20 * 2.77GB = 55.4GB
-    "--n_tables=20 --n_partitions=1 --max_key=100000 --shortest_value=8192 --longest_value=65536 --active_width=10000 --keys_per_batch=5000"
+    # # 大value测试
+    # # 单个partition: 100000 * (12 + (8192+65536)/2) * 0.75 = 100000 * 36876 * 0.75 = 2.77GB
+    # # 总磁盘占用: 20 *5* 2.77GB = 250GB
+    # "--n_tables=20 --n_partitions=5 --max_key=100000 --shortest_value=8192 --longest_value=65536 --active_width=10000 --keys_per_batch=5000"
     
-    
-
-    # 单个partition: 500000 * (12 + (4096+32768)/2) * 0.75 = 500000 * 18444 * 0.75 = 6.92GB (超过4GB上限!)
-    # 总磁盘占用: 10 * 6.92GB = 69.2GB
-    "--n_tables=10 --n_partitions=1 --max_key=500000 --shortest_value=4096 --longest_value=32768 --active_width=50000 --keys_per_batch=6000"
     
 
-    # 单个partition: 1500000 * (12 + (32+64)/2) * 0.75 = 1500000 * 60 * 0.75 = 67.5MB (低于100MB下限!)
-    # 总磁盘占用: 50 * 20 * 67.5MB = 60.2GB
-    "--n_tables=50 --n_partitions=20 --max_key=1500000 --shortest_value=32 --longest_value=64 --active_width=150000 --keys_per_batch=15000"
+    # # 单个partition: 500000 * (12 + (4096+32768)/2) * 0.75 = 500000 * 18444 * 0.75 = 6.92GB (超过4GB上限!)
+    # # 总磁盘占用: 2 *10* 6.92GB = 125GB
+    # "--n_tables=2 --n_partitions=10 --max_key=500000 --shortest_value=4096 --longest_value=32768 --active_width=50000 --keys_per_batch=6000"
+    
+
+    # # 单个partition: 1500000 * (12 + (32+64)/2) * 0.75 = 1500000 * 60 * 0.75 = 67.5MB (低于100MB下限!)
+    # # 总磁盘占用: 10 * 300 * 67.5MB = 180.2GB
+    # "--n_tables=10 --n_partitions=300 --max_key=1500000 --shortest_value=32 --longest_value=64 --active_width=150000 --keys_per_batch=15000"
     
     
 )
@@ -222,7 +217,6 @@ stop_disk_monitor() {
         log_message "Disk monitor stopped"
     fi
 }
-# 修改后的参数组合获取函数
 get_random_param_combination() {
     # 从存储特性参数组合中随机选择一个
     local storage_count=${#STORAGE_PARAM_COMBINATIONS[@]}
@@ -234,10 +228,10 @@ get_random_param_combination() {
     local system_index=$((RANDOM % system_count))
     local system_params="${SYSTEM_TYPE_PARAM_COMBINATIONS[$system_index]}"
     
-    # 记录选择的参数组合类型
+    # 记录选择的参数组合类型（重定向到标准错误）
     local storage_type=$((storage_index + 1))
     local system_type=$((system_index + 1))
-    log_message "Selected storage type: $storage_type, system type: $system_type"
+    log_message "Selected storage type: $storage_type, system type: $system_type" >&2
     # 拼接并返回完整参数
     echo "$storage_params $system_params"
 }
@@ -376,7 +370,9 @@ should_switch_test() {
 
 # 新增：获取下一个测试类型
 get_next_test_type() {
-    if [ "$CURRENT_TEST_TYPE" = "whitebox" ]; then
+    if [ "$CRASH_TEST_ENABLED" = "false" ]; then
+        echo "whitebox"  # 如果禁用崩溃测试，始终返回whitebox
+    elif [ "$CURRENT_TEST_TYPE" = "whitebox" ]; then
         echo "blackbox"
     else
         echo "whitebox"
@@ -392,7 +388,19 @@ start_whitebox_test() {
 
     CURRENT_TEST_PARAMS="$param_args"
 
-    log_message "Starting whitebox test, duration: ${duration} seconds (until 4 AM)"
+    local kill_odds_param
+    local open_wfile_param
+    
+    if [ "$CRASH_TEST_ENABLED" = "false" ]; then
+        kill_odds_param="--kill_odds=0"
+        open_wfile_param="--open_wfile=0"
+        log_message "Starting whitebox test (crash test disabled), duration: ${duration} seconds"
+    else
+        kill_odds_param="--kill_odds=100000000"
+        open_wfile_param=""  
+        log_message "Starting whitebox test (crash test enabled), duration: ${duration} seconds"
+    fi
+    
     log_message "Parameter combination: $param_args"
     log_message "Log file: $log_file"
     
@@ -412,7 +420,8 @@ start_whitebox_test() {
     setsid stdbuf -oL -eL python3 "$CRASH_TEST_PY" whitebox \
         --db_path="$DB_DIR" \
         --shared_state_path="$SHARED_STATE_DIR" \
-        --kill_odds=100000000 \
+        $kill_odds_param \
+        $open_wfile_param \
         --use_random_params \
         $param_args> "$log_file" 2>&1 &
     CURRENT_TEST_PID=$!

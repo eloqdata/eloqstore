@@ -22,11 +22,6 @@
 
 namespace StressTest
 {
-std::atomic<int> StressTest::init_completed_count_{0};
-std::atomic<int> StressTest::total_threads_{0};
-std::condition_variable StressTest::init_barrier_cv_;
-std::mutex StressTest::init_barrier_mutex_;
-std::atomic<bool> StressTest::all_init_done_{false};
 
 void StressTest::InitDb()
 {
@@ -298,6 +293,8 @@ void StressTest::Partition::FinishWrite()
     CHECK(req_.Error() == eloqstore::KvError::NoError);
     ticks_++;
     verify_cnt = 0;
+    RecordWriteBytes(write_bytes_, 1);
+    write_bytes_ = 0;
     if (table->type == TestType::NonBatchedOpsStressTest)
     {
         for (size_t i = 0; i < pending_expected_values.size(); ++i)
@@ -373,6 +370,15 @@ void StressTest::Reader::VerifyGet(ThreadState *thread_state_)
                   scan_req_.Error() == eloqstore::KvError::NotFound);
 
             auto entries = scan_req_.Entries();
+
+            uint64_t read_bytes = 0;
+
+            for (const auto &entry : entries)
+            {
+                read_bytes += entry.key_.size() + entry.value_.size();
+            }
+            StressTest::RecordReadBytes(read_bytes, 1);
+
             size_t entry_idx = 0;
 
             // Traverse all the expected keys and validate in order
@@ -434,6 +440,10 @@ void StressTest::Reader::VerifyGet(ThreadState *thread_state_)
 
             if (read_req_.Error() == eloqstore::KvError::NoError)
             {
+                uint64_t read_bytes =
+                    expected_key.size() + read_req_.value_.size();
+                StressTest::RecordReadBytes(read_bytes, 1);
+
                 // check the value is valid if find the match entry
                 const std::string &actual_value = read_req_.value_;
                 assert(!actual_value.empty());
@@ -446,6 +456,7 @@ void StressTest::Reader::VerifyGet(ThreadState *thread_state_)
             }
             else
             {
+                StressTest::RecordReadBytes(expected_key.size(), 1);
                 // check the value is not exist if not found
                 assert(!ExpectedValueHelper::MustHaveExisted(pre_expected,
                                                              post_expected));
@@ -627,6 +638,288 @@ void StressTest::VerifyAndSyncValues()
             }
         }
     }
+}
+std::atomic<int> StressTest::init_completed_count_{0};
+std::atomic<int> StressTest::total_threads_{0};
+std::condition_variable StressTest::init_barrier_cv_;
+std::mutex StressTest::init_barrier_mutex_;
+std::atomic<bool> StressTest::all_init_done_{false};
+
+StressTest::ThroughputStats StressTest::throughput_stats_;
+std::mutex StressTest::throughput_mutex_;
+std::thread StressTest::throughput_reporter_thread_;
+std::atomic<bool> StressTest::stop_throughput_monitoring_{false};
+std::ofstream StressTest::throughput_log_;
+uint64_t StressTest::theoretical_disk_usage_{0};
+
+struct SystemIOStats
+{
+    uint64_t total_read_bytes = 0;
+    uint64_t total_write_bytes = 0;
+    uint64_t total_read_ops = 0;
+    uint64_t total_write_ops = 0;
+};
+SystemIOStats GetSystemIOStats()
+{
+    SystemIOStats total_stats;
+
+    try
+    {
+        std::ifstream diskstats_file("/proc/diskstats");
+        if (!diskstats_file.is_open())
+        {
+            LOG(WARNING) << "Cannot open /proc/diskstats";
+            return total_stats;
+        }
+
+        std::string line;
+        while (std::getline(diskstats_file, line))
+        {
+            std::istringstream iss(line);
+            std::string device_name;
+            uint64_t major, minor;
+            uint64_t read_ios, read_merges, read_sectors, read_ticks;
+            uint64_t write_ios, write_merges, write_sectors, write_ticks;
+            uint64_t dummy;
+
+            // /proc/diskstats 格式：major minor device_name read_ios
+            // read_merges read_sectors read_ticks write_ios write_merges
+            // write_sectors write_ticks ...
+            if (iss >> major >> minor >> device_name >> read_ios >>
+                read_merges >> read_sectors >> read_ticks >> write_ios >>
+                write_merges >> write_sectors >> write_ticks)
+            {
+                if (device_name == "nvme0n1" || device_name == "sda")
+                {
+                    total_stats.total_read_ops += read_ios;
+                    total_stats.total_write_ops += write_ios;
+                    total_stats.total_read_bytes += read_sectors * 512;
+                    total_stats.total_write_bytes += write_sectors * 512;
+                }
+            }
+        }
+    }
+    catch (const std::exception &e)
+    {
+        LOG(WARNING) << "Error reading system IO stats: " << e.what();
+    }
+
+    return total_stats;
+}
+uint64_t StressTest::GetDiskUsage(const std::string &path)
+{
+    uint64_t total_size = 0;
+    try
+    {
+        if (std::filesystem::exists(path))
+        {
+            for (const auto &entry :
+                 std::filesystem::recursive_directory_iterator(path))
+            {
+                if (entry.is_regular_file())
+                {
+                    total_size += entry.file_size();
+                }
+            }
+        }
+    }
+    catch (const std::filesystem::filesystem_error &e)
+    {
+        LOG(WARNING) << "Error calculating disk usage: " << e.what();
+    }
+    return total_size;
+}
+void StressTest::StartThroughputMonitoring()
+{
+    if (!FLAGS_enable_throughput_monitoring)
+    {
+        return;
+    }
+
+    stop_throughput_monitoring_.store(false);
+    throughput_stats_.last_report_time.store(UnixTimestamp());
+
+    double avg_value_size = (FLAGS_shortest_value + FLAGS_longest_value) / 2.0;
+    theoretical_disk_usage_ =
+        static_cast<uint64_t>(FLAGS_n_tables * FLAGS_n_partitions *
+                              FLAGS_max_key * (12 + avg_value_size) * 0.75);
+
+    std::lock_guard<std::mutex> lock(throughput_mutex_);
+    throughput_log_.open(FLAGS_throughput_log_file, std::ios::app);
+    if (throughput_log_.is_open())
+    {
+        throughput_log_ << "# Timestamp, Write_MB/s, Read_MB/s, Write_Qps, "
+                           "Read_Qps, Total_Write_MB, Total_Read_MB, "
+                           "Current_Disk_Usage_MB, Theoretical_Disk_Usage_MB, "
+                           "Total_Write_Ops, Total_Read_Ops, "
+                           "System_Write_MB/s, System_Read_MB/s, "
+                           "System_Write_Qps, System_Read_Qps\n";
+        throughput_log_.flush();
+    }
+
+    throughput_reporter_thread_ = std::thread(&StressTest::ThroughputReporter);
+}
+
+void StressTest::StopThroughputMonitoring()
+{
+    if (!FLAGS_enable_throughput_monitoring)
+    {
+        return;
+    }
+
+    stop_throughput_monitoring_.store(true);
+    if (throughput_reporter_thread_.joinable())
+    {
+        throughput_reporter_thread_.join();
+    }
+
+    std::lock_guard<std::mutex> lock(throughput_mutex_);
+    if (throughput_log_.is_open())
+    {
+        throughput_log_.close();
+    }
+}
+
+void StressTest::ThroughputReporter()
+{
+    static SystemIOStats last_system_stats;
+    static bool first_run = true;
+    while (!stop_throughput_monitoring_.load())
+    {
+        std::this_thread::sleep_for(
+            std::chrono::seconds(FLAGS_throughput_report_interval_secs));
+
+        if (stop_throughput_monitoring_.load())
+        {
+            break;
+        }
+
+        uint64_t current_time = UnixTimestamp();
+        uint64_t last_time =
+            throughput_stats_.last_report_time.exchange(current_time);
+        uint64_t time_diff_ns = current_time - last_time;
+
+        if (time_diff_ns == 0)
+            continue;
+
+        uint64_t current_write_bytes =
+            throughput_stats_.total_write_bytes.load();
+        uint64_t current_read_bytes = throughput_stats_.total_read_bytes.load();
+        uint64_t current_write_ops = throughput_stats_.total_write_ops.load();
+        uint64_t current_read_ops = throughput_stats_.total_read_ops.load();
+
+        uint64_t last_write_bytes =
+            throughput_stats_.last_write_bytes.exchange(current_write_bytes);
+        uint64_t last_read_bytes =
+            throughput_stats_.last_read_bytes.exchange(current_read_bytes);
+        uint64_t last_write_ops =
+            throughput_stats_.last_write_ops.exchange(current_write_ops);
+        uint64_t last_read_ops =
+            throughput_stats_.last_read_ops.exchange(current_read_ops);
+
+        uint64_t write_bytes_diff = current_write_bytes - last_write_bytes;
+        uint64_t read_bytes_diff = current_read_bytes - last_read_bytes;
+        uint64_t write_ops_diff = current_write_ops - last_write_ops;
+        uint64_t read_ops_diff = current_read_ops - last_read_ops;
+
+        double time_diff_secs = static_cast<double>(time_diff_ns) / 1e9;
+        double write_mbps =
+            (static_cast<double>(write_bytes_diff) / (1024.0 * 1024.0)) /
+            time_diff_secs;
+        double read_mbps =
+            (static_cast<double>(read_bytes_diff) / (1024.0 * 1024.0)) /
+            time_diff_secs;
+        double write_ops_per_sec =
+            static_cast<double>(write_ops_diff) / time_diff_secs;
+        double read_ops_per_sec =
+            static_cast<double>(read_ops_diff) / time_diff_secs;
+
+        double total_write_mb =
+            static_cast<double>(current_write_bytes) / (1024.0 * 1024.0);
+        double total_read_mb =
+            static_cast<double>(current_read_bytes) / (1024.0 * 1024.0);
+
+        uint64_t current_disk_usage = GetDiskUsage(FLAGS_db_path);
+        double current_disk_usage_mb =
+            static_cast<double>(current_disk_usage) / (1024.0 * 1024.0);
+        double theoretical_disk_usage_mb =
+            static_cast<double>(theoretical_disk_usage_) / (1024.0 * 1024.0);
+
+        SystemIOStats current_system_stats = GetSystemIOStats();
+
+        double system_read_mbps = 0.0;
+        double system_write_mbps = 0.0;
+        double system_read_ops_per_sec = 0.0;
+        double system_write_ops_per_sec = 0.0;
+
+        if (!first_run)
+        {
+            uint64_t system_read_bytes_diff =
+                current_system_stats.total_read_bytes -
+                last_system_stats.total_read_bytes;
+            uint64_t system_write_bytes_diff =
+                current_system_stats.total_write_bytes -
+                last_system_stats.total_write_bytes;
+            uint64_t system_read_ops_diff =
+                current_system_stats.total_read_ops -
+                last_system_stats.total_read_ops;
+            uint64_t system_write_ops_diff =
+                current_system_stats.total_write_ops -
+                last_system_stats.total_write_ops;
+
+            system_read_mbps = (static_cast<double>(system_read_bytes_diff) /
+                                (1024.0 * 1024.0)) /
+                               time_diff_secs;
+            system_write_mbps = (static_cast<double>(system_write_bytes_diff) /
+                                 (1024.0 * 1024.0)) /
+                                time_diff_secs;
+            system_read_ops_per_sec =
+                static_cast<double>(system_read_ops_diff) / time_diff_secs;
+            system_write_ops_per_sec =
+                static_cast<double>(system_write_ops_diff) / time_diff_secs;
+        }
+        last_system_stats = current_system_stats;
+        first_run = false;
+        std::lock_guard<std::mutex> lock(throughput_mutex_);
+        if (throughput_log_.is_open())
+        {
+            throughput_log_
+                << current_time << ", " << std::fixed << std::setprecision(2)
+                << write_mbps << ", " << read_mbps << ", " << std::fixed
+                << std::setprecision(0) << write_ops_per_sec << ", "
+                << read_ops_per_sec << ", " << std::fixed
+                << std::setprecision(2) << total_write_mb << ", "
+                << total_read_mb << ", " << current_disk_usage_mb << ", "
+                << theoretical_disk_usage_mb << ", " << std::fixed
+                << std::setprecision(0) << current_write_ops << ", "
+                << current_read_ops << ", " << std::fixed
+                << std::setprecision(2) << system_write_mbps << ", "
+                << system_read_mbps << ", " << std::fixed
+                << std::setprecision(0) << system_write_ops_per_sec << ", "
+                << system_read_ops_per_sec << "\n";
+            throughput_log_.flush();
+        }
+    }
+}
+
+void StressTest::RecordWriteBytes(uint64_t bytes, uint32_t ops)
+{
+    if (!FLAGS_enable_throughput_monitoring)
+    {
+        return;
+    }
+    throughput_stats_.total_write_bytes.fetch_add(bytes);
+    throughput_stats_.total_write_ops.fetch_add(ops);
+}
+
+void StressTest::RecordReadBytes(uint64_t bytes, uint32_t ops)
+{
+    if (!FLAGS_enable_throughput_monitoring)
+    {
+        return;
+    }
+    throughput_stats_.total_read_bytes.fetch_add(bytes);
+    throughput_stats_.total_read_ops.fetch_add(ops);
 }
 
 }  // namespace StressTest

@@ -111,6 +111,9 @@ void NonBatchedOpsStressTest::TestMixedOps(uint32_t partition_id,
     partition->ticks_++;
     partition->pending_expected_values.resize(rand_keys.size());
 
+    uint64_t total_write_bytes =
+        0;  // it is the total entres number,not batch number
+
     uint64_t ts = UnixTimestamp();
     // writeDataEntry class is an unit of kv work ,entries is a batch of kv
     // work.
@@ -131,6 +134,8 @@ void NonBatchedOpsStressTest::TestMixedOps(uint32_t partition_id,
         ent.key_ = k;
         ent.timestamp_ = ts;
 
+        total_write_bytes += k.size();
+
         // choose upsert or delete randomly
         if (partition->rand_.PercentTrue(FLAGS_write_percent))
         {
@@ -144,6 +149,8 @@ void NonBatchedOpsStressTest::TestMixedOps(uint32_t partition_id,
             ent.val_ = partition->GenerateValue(value_base);
             partition->gen_v_time += UnixTimestamp() - ts1;
             ent.op_ = eloqstore::WriteOp::Upsert;
+
+            total_write_bytes += ent.val_.size();
         }
         else
         {
@@ -155,6 +162,7 @@ void NonBatchedOpsStressTest::TestMixedOps(uint32_t partition_id,
             ent.op_ = eloqstore::WriteOp::Delete;
         }
     }
+    partition->write_bytes_ += total_write_bytes;
 
     // thread_state_->TraceOneBatch(partition_id, rand_keys, true); //
     // those may be modify

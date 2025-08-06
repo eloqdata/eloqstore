@@ -191,6 +191,8 @@ void RunStressTest(int argc, char **argv)
 
     InitializeHotKeyGenerator(FLAGS_hot_key_alpha);
 
+    StressTest::StartThroughputMonitoring();
+
     for (size_t i = 0; i < stress.size(); ++i)
     {
         stress[i]->Start();
@@ -200,6 +202,8 @@ void RunStressTest(int argc, char **argv)
     {
         stress[i]->Join();
     }
+
+    StressTest::StopThroughputMonitoring();
     store.Stop();
 
     LOG(INFO) << "StressTest ends.";
