@@ -35,25 +35,6 @@ uint64_t DecodeKey(const std::string &key)
     return eloqstore::BigEndianToNative(eloqstore::DecodeFixed64(key.data()));
 }
 
-void InitRequest(eloqstore::BatchWriteRequest &request,
-                 const eloqstore::TableIdent &tbl_id,
-                 uint32_t batch_idx)
-{
-    std::vector<eloqstore::WriteDataEntry> entries;
-    entries.reserve(FLAGS_batch_size);
-    for (uint64_t i = 0; i < FLAGS_batch_size; i++)
-    {
-        std::string key;
-        key.resize(sizeof(uint64_t));
-        EncodeKey(key.data(), i + batch_idx * FLAGS_batch_size);
-        std::string value;
-        value.resize(FLAGS_kv_size - sizeof(uint64_t));
-        entries.emplace_back(
-            std::move(key), std::move(value), 0, eloqstore::WriteOp::Upsert);
-    }
-    request.SetArgs(tbl_id, std::move(entries));
-}
-
 class Writer
 {
 public:
@@ -62,6 +43,7 @@ public:
     void Continue();
     static void Callback(eloqstore::KvRequest *req);
 
+private:
     eloqstore::EloqStore *store_;
     const uint32_t id_;
     std::vector<eloqstore::BatchWriteRequest> requests_;
@@ -74,7 +56,22 @@ Writer::Writer(eloqstore::EloqStore *store, uint32_t id)
     eloqstore::TableIdent tbl_id(table, id);
     for (uint32_t batch_idx = 0; auto &req : requests_)
     {
-        InitRequest(req, tbl_id, batch_idx);
+        std::vector<eloqstore::WriteDataEntry> entries;
+        entries.reserve(FLAGS_batch_size);
+        for (uint64_t i = 0; i < FLAGS_batch_size; i++)
+        {
+            std::string key;
+            key.resize(sizeof(uint64_t));
+            EncodeKey(key.data(), i + batch_idx * FLAGS_batch_size);
+            std::string value;
+            value.resize(FLAGS_kv_size - sizeof(uint64_t));
+            entries.emplace_back(std::move(key),
+                                 std::move(value),
+                                 0,
+                                 eloqstore::WriteOp::Upsert);
+        }
+        req.SetArgs(tbl_id, std::move(entries));
+
         batch_idx++;
     }
 }
@@ -169,8 +166,11 @@ int main(int argc, char *argv[])
             const uint64_t write_bytes = batch_bytes * FLAGS_partitions;
             const uint64_t speed = write_bytes * 1000 / cost_ms;
             const uint64_t mb_per_sec = speed >> 20;
-            LOG(INFO) << "speed " << speed << " bytes/s | " << mb_per_sec
-                      << " MiB/s";
+            const uint64_t num_kvs =
+                uint64_t(FLAGS_batch_size) * FLAGS_partitions;
+            const uint64_t kvs_per_sec = num_kvs * 1000 / cost_ms;
+            LOG(INFO) << "write speed " << speed << " bytes/s | " << mb_per_sec
+                      << " MiB/s | " << kvs_per_sec << " kvs/s";
             last_time = now;
 
             // Output the current progress at regular intervals.
@@ -183,17 +183,14 @@ int main(int argc, char *argv[])
     std::cout << "\rBenchmark result:" << std::endl;
     std::cout << "Time spent " << cost_ms << " ms" << std::endl;
     uint64_t write_bytes = batch_bytes * FLAGS_write_batchs;
-    std::cout << "Total write " << write_bytes << " bytes" << std::endl;
+    uint64_t num_kvs = uint64_t(FLAGS_batch_size) * FLAGS_write_batchs;
+    std::cout << "Total write " << write_bytes << " bytes, " << num_kvs
+              << " kvs" << std::endl;
     const uint64_t speed = write_bytes * 1000 / cost_ms;
     const uint64_t mb_per_sec = speed >> 20;
-    std::cout << "Average speed " << speed << " bytes/s | " << mb_per_sec
-              << " MiB/s" << std::endl;
-
-    for (auto &w : writers)
-    {
-        DLOG(INFO) << "writer " << w.id_ << " write " << w.finished_batch_cnt_
-                   << " batchs";
-    }
+    const uint64_t kvs_per_sec = num_kvs * 1000 / cost_ms;
+    std::cout << "Average write speed " << speed << " bytes/s | " << mb_per_sec
+              << " MiB/s | " << kvs_per_sec << " kvs/s" << std::endl;
 
     store.Stop();
 }
