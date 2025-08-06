@@ -41,6 +41,9 @@ target_link_libraries(eloqstore_benchmark ${DYNAMIC_LIB} eloqstore)
 add_executable(load_bench load_bench.cpp)
 target_link_libraries(load_bench eloqstore)
 
+add_executable(simple_test simple_test.cpp)
+target_link_libraries(simple_test eloqstore)
+
 include(CTest)
 enable_testing()
 
