@@ -748,12 +748,12 @@ void StressTest::StartThroughputMonitoring()
     throughput_log_.open(FLAGS_throughput_log_file, std::ios::app);
     if (throughput_log_.is_open())
     {
-        throughput_log_ << "# Timestamp, Write_MB/s, Read_MB/s, Write_Qps, "
-                           "Read_Qps, Total_Write_MB, Total_Read_MB, "
-                           "Current_Disk_Usage_MB, Theoretical_Disk_Usage_MB, "
-                           "Total_Write_Ops, Total_Read_Ops, "
-                           "System_Write_MB/s, System_Read_MB/s, "
-                           "System_Write_Qps, System_Read_Qps\n";
+        throughput_log_ << "Timestamp,Write_MB/s,Read_MB/s,Write_Qps,"
+                           "Read_Qps,Total_Write_MB,Total_Read_MB,"
+                           "Current_Disk_Usage_MB,Theoretical_Disk_Usage_MB,"
+                           "Total_Write_Ops,Total_Read_Ops,"
+                           "System_Write_MB/s,System_Read_MB/s,"
+                           "System_Write_Qps,System_Read_Qps\n";
         throughput_log_.flush();
     }
 
@@ -884,18 +884,17 @@ void StressTest::ThroughputReporter()
         if (throughput_log_.is_open())
         {
             throughput_log_
-                << current_time << ", " << std::fixed << std::setprecision(2)
-                << write_mbps << ", " << read_mbps << ", " << std::fixed
-                << std::setprecision(0) << write_ops_per_sec << ", "
-                << read_ops_per_sec << ", " << std::fixed
-                << std::setprecision(2) << total_write_mb << ", "
-                << total_read_mb << ", " << current_disk_usage_mb << ", "
-                << theoretical_disk_usage_mb << ", " << std::fixed
-                << std::setprecision(0) << current_write_ops << ", "
-                << current_read_ops << ", " << std::fixed
-                << std::setprecision(2) << system_write_mbps << ", "
-                << system_read_mbps << ", " << std::fixed
-                << std::setprecision(0) << system_write_ops_per_sec << ", "
+                << current_time << "," << std::fixed << std::setprecision(2)
+                << write_mbps << "," << read_mbps << "," << std::fixed
+                << std::setprecision(0) << write_ops_per_sec << ","
+                << read_ops_per_sec << "," << std::fixed << std::setprecision(2)
+                << total_write_mb << "," << total_read_mb << ","
+                << current_disk_usage_mb << "," << theoretical_disk_usage_mb
+                << "," << std::fixed << std::setprecision(0)
+                << current_write_ops << "," << current_read_ops << ","
+                << std::fixed << std::setprecision(2) << system_write_mbps
+                << "," << system_read_mbps << "," << std::fixed
+                << std::setprecision(0) << system_write_ops_per_sec << ","
                 << system_read_ops_per_sec << "\n";
             throughput_log_.flush();
         }

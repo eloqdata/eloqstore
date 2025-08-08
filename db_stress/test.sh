@@ -68,40 +68,37 @@ SYSTEM_TYPE_PARAM_COMBINATIONS=(
     # # 普通patition测试,超高并发
     # # 单个partition: 10000000 * (12 + (32+32)/2) * 0.75 = 10000000 * 44 * 0.75 = 330MB
     # # 总磁盘占用: 10*50 * 330MB = 200GB
-    "--n_tables=10 --n_partitions=20 --max_key=10000 --shortest_value=1024 --longest_value=200000 --active_width=3000 --keys_per_batch=2500 --max_verify_ops_per_write=0"
+    # 这个盘爆了,故将n_partitions从20改为10
+    #"--n_tables=10 --n_partitions=20 --max_key=10000 --shortest_value=1024 --longest_value=200000 --active_width=3000 --keys_per_batch=2500 --max_verify_ops_per_write=0"
+    # 这个理论上,最终写入的key就是active_width了
+    # "--n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=200000 --active_width=3000 --keys_per_batch=2500 --max_verify_ops_per_write=0"
+
+    # # # 常规测试,正常并发,正常磁盘,正常patition
+    # # # 单个partition: 10000000 * (12 + (32+32)/2) * 0.75 = 10000000 * 44 * 0.75 = 330MB
+    # # # 总磁盘占用: 20 * 30 * 330MB = 180GB
+    # "--n_tables=10 --n_partitions=100 --max_key=10000 --shortest_value=32 --longest_value=4096 --active_width=5000 --keys_per_batch=2000 --max_verify_ops_per_write=0"
     
-    # # 常规测试,正常并发,正常磁盘,正常patition
-    # # 单个partition: 10000000 * (12 + (32+32)/2) * 0.75 = 10000000 * 44 * 0.75 = 330MB
-    # # 总磁盘占用: 20 * 30 * 330MB = 180GB
-    # "--n_tables=20 --n_partitions=30 --max_key=10000000 --shortest_value=32 --longest_value=32 --active_width=200000 --keys_per_batch=2000"
+    # # # 中小等value测试
+    # # # 单个partition: 3000000 * (12 + (128+512)/2) * 0.75 = 3000000 * 332 * 0.75 = 747MB
+    # # # 总磁盘占用: 20 * 10 * 747MB = 149GB
+    # "--n_tables=20 --n_partitions=10 --max_key=30000 --shortest_value=128 --longest_value=512 --active_width=3000 --keys_per_batch=250 --max_verify_ops_per_write=0"
     
-    # # 中小等value测试
-    # # 单个partition: 3000000 * (12 + (128+512)/2) * 0.75 = 3000000 * 332 * 0.75 = 747MB
-    # # 总磁盘占用: 20 * 10 * 747MB = 149GB
-    # "--n_tables=20 --n_partitions=10 --max_key=3000000 --shortest_value=128 --longest_value=512 --active_width=300000 --keys_per_batch=25000"
-    
-    # # 中value测试
-    # # 单个partition: 1000000 * (12 + (1024+8192)/2) * 0.75 = 1000000 * 4620 * 0.75 = 3.47GB
-    # # 总磁盘占用: 50 * 3.47GB = 160GB
-    # "--n_tables=5 --n_partitions=10 --max_key=1000000 --shortest_value=1024 --longest_value=8192 --active_width=100000 --keys_per_batch=10000"
-    
-    # # 大value测试
-    # # 单个partition: 100000 * (12 + (8192+65536)/2) * 0.75 = 100000 * 36876 * 0.75 = 2.77GB
-    # # 总磁盘占用: 20 *5* 2.77GB = 250GB
-    # "--n_tables=20 --n_partitions=5 --max_key=100000 --shortest_value=8192 --longest_value=65536 --active_width=10000 --keys_per_batch=5000"
-    
+   # 设置对于compact对吞吐影响的测试,思路是将放大因子调小,同时不断地执行updata(就是对一批key不断执行写入,同时不删除),导致追加写一直compact
+   # 然后另一个测试是将放大因子调整的很大,此时系统的吞吐量
+   # 首先我希望理论占用磁盘空间为10G,同时高并发的写入,同时不要执行读操作,也不要执行删除操作,max_key不要太大,value可以大一点,同时active=max,batch可以不用很大
+   #"--n_tables=10 --n_partitions=100 --max_key=2000 --shortest_value=128 --longest_value=5120 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=2"
+   #"--n_tables=10 --n_partitions=100 --max_key=2000 --shortest_value=128 --longest_value=5120 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=5"
+   #"--n_tables=10 --n_partitions=100 --max_key=2000 --shortest_value=128 --longest_value=5120 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=10"
+   #"--n_tables=10 --n_partitions=100 --max_key=2000 --shortest_value=128 --longest_value=5120 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=50"
     
 
-    # # 单个partition: 500000 * (12 + (4096+32768)/2) * 0.75 = 500000 * 18444 * 0.75 = 6.92GB (超过4GB上限!)
-    # # 总磁盘占用: 2 *10* 6.92GB = 125GB
-    # "--n_tables=2 --n_partitions=10 --max_key=500000 --shortest_value=4096 --longest_value=32768 --active_width=50000 --keys_per_batch=6000"
-    
+   # 二更:好像partiton不能太多,因为他是从data_0,data_1开始逐渐分配的,上面这种总共1000个partiton就会导致一开始就分配8GB,故我们应该限制partition数量,但是限制数量了就无法保证高并发了,此时就只能将一个batch调大了
+   "--n_tables=10 --n_partitions=10 --max_key=2000 --shortest_value=128 --longest_value=512000 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=2"
+   "--n_tables=10 --n_partitions=10 --max_key=2000 --shortest_value=128 --longest_value=512000 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=5"
+   "--n_tables=10 --n_partitions=10 --max_key=2000 --shortest_value=128 --longest_value=512000 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=7"
+   "--n_tables=10 --n_partitions=10 --max_key=2000 --shortest_value=128 --longest_value=512000 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=4 --enable_throughput_monitoring=1"
 
-    # # 单个partition: 1500000 * (12 + (32+64)/2) * 0.75 = 1500000 * 60 * 0.75 = 67.5MB (低于100MB下限!)
-    # # 总磁盘占用: 10 * 300 * 67.5MB = 180.2GB
-    # "--n_tables=10 --n_partitions=300 --max_key=1500000 --shortest_value=32 --longest_value=64 --active_width=150000 --keys_per_batch=15000"
-    
-    
+
 )
 calculate_theoretical_disk_usage() {
     local param_args="$1"
