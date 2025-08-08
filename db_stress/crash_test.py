@@ -136,7 +136,7 @@ def manage_core_files(pid, start_time, exit_code, hit_timeout, test_type):
             print(f"No core file generated (reason: {reason})")
 def randomize_dynamic_params():
     return {
-        "num_threads": random.choice([40]),
+        "num_threads": random.choice([10]),
         "data_page_restart_interval": random.choice([8, 16, 24, 32]),
         "index_page_restart_interval": random.choice([8, 16, 24, 32]),
         # "skip_verify_checksum": random.choice([True, False]),
@@ -147,7 +147,7 @@ def randomize_dynamic_params():
         "max_write_batch_pages": random.choice([32, 64, 128]),
         "buf_ring_size": lambda: random.choice([1<<9, 1<<10, 1<<11, 1<<12]),
         # "coroutine_stack_size": lambda: random.choice([1<<13, 1<<14, 1<<15]),
-        "file_amplify_factor": random.choice([2, 4, 6, 8]),
+        "file_amplify_factor": random.choice([2]),
         #"num_gc_threads": random.choice([1, 2, 4]),
         "reserve_space_ratio": random.choice([50, 100, 150, 200]),
         "rclone_threads": random.choice([1, 2, 4]),

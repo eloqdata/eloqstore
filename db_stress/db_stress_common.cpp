@@ -78,9 +78,11 @@ int64_t GenerateOneKey(StressTest::Partition *partition, uint64_t iteration)
     return cur_key;
 }
 
+// iteration: the current iteration of the test
 std::vector<int64_t> GenerateNKeys(StressTest::Partition *partition,
                                    uint64_t iteration)
 {
+    // first calculate the number of batch
     uint32_t n;
     if (FLAGS_keys_per_batch > 0)
         n = FLAGS_keys_per_batch;
@@ -90,15 +92,38 @@ std::vector<int64_t> GenerateNKeys(StressTest::Partition *partition,
     std::vector<int64_t> cur_keys;
     std::unordered_set<int64_t> keys;
 
-    if (FLAGS_hot_key_alpha == 0)
+    if (FLAGS_hot_key_alpha == 0)  // smooth distribution
     {
+        // When generating keys, the system follows a sliding window mechanism.
+        // However, there’s an important detail: the window slides based on the
+        // write requests to each partition, and each partition represents a
+        // writer instance. The flag FLAGS_ops_per_partition defines how many
+        // write operations each partition will perform in total. At the same
+        // time, the generateKey function takes in a counter that tracks how
+        // many writes the partition has already done, and it uses this to
+        // calculate the percentage of progress. Then, the sliding window moves
+        // its left boundary based on this progress — for example, if the
+        // partition is at 50% of its total writes, the window starts at 50% of
+        // the key space. So, if I want to measure the actual disk usage, I have
+        // two ways to ensure all keys are covered: Set FLAGS_ops_per_partition
+        // high enough so that the partitions run until the end of the key
+        // range. Or, set active_width = max_key, so that the sliding window
+        // always includes the full key range, no matter where the left edge is.
+
         const double completed_ratio =
             static_cast<double>(iteration) / FLAGS_ops_per_partition;
         const int64_t base_key = static_cast<int64_t>(
             completed_ratio * (FLAGS_max_key - FLAGS_active_width));
 
         std::vector<int64_t> source(FLAGS_active_width);
+        // iota make source to [base_key, base_key + 1, base_key + 2, ...,
+        // base_key + FLAGS_active_width - 1]
         std::iota(source.begin(), source.end(), base_key);
+
+        // std::sample is used to randomly pick n unique numbers from the source
+        // list and put them into cur_keys. The part
+        // std::mt19937{std::random_device{}()} is the random number generator,
+        // which makes sure that the result is different each time you run it.
         std::sample(source.begin(),
                     source.end(),
                     std::back_inserter(cur_keys),
@@ -106,7 +131,7 @@ std::vector<int64_t> GenerateNKeys(StressTest::Partition *partition,
                     std::mt19937{std::random_device{}()});
     }
 
-    else
+    else  // hot key distribution
     {
         size_t i = 0;
         while (keys.size() < n)
