@@ -20,6 +20,7 @@ DISK_MONITOR_PID=""
 
 SWITCH_INTERVAL_HOURS=1
 KILL_WAIT_TIME=10
+
 CURRENT_TEST_PARAMS=""
 
 AUTO_UPDATE_ENABLED=false  # auto pull and build new code
@@ -33,7 +34,7 @@ mkdir -p "$DISK_LOG_DIR"
 
 CURRENT_TEST_PID=""
 CURRENT_TEST_TYPE=""
-LAST_STATUS=""  # Added: record last status to avoid duplicate logs
+LAST_STATUS=""  # A--num_threads=1e --throughput_report_interval_secs=10 d: record last status to avoid duplicate logs
 
 NEXT_SWITCH_TIME=""
 # Log function
@@ -41,12 +42,6 @@ log_message() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
-STORAGE_PARAM_COMBINATIONS=(
-    "--data_append_mode=false"  
-    "--data_append_mode=true"   
-    # "--cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --data_append_mode=false"  
-    # "--cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --data_append_mode=true"   
-)
 SYSTEM_TYPE_PARAM_COMBINATIONS=(
     #验证表所占用的内存就是n_table*n_parition*max_key*sizeof(int)
     #磁盘所占用的理论容量是
@@ -60,46 +55,31 @@ SYSTEM_TYPE_PARAM_COMBINATIONS=(
     # 单个partition的磁盘占用为max_key*(12+(shortest_value+longestvalue)/2)*0.75
     #   我希望占用大概至少150G的理论磁盘,同时单个patition至少要有1百兆
 
-    # 单个partiton超大的测试
-    # 单个partition: 10000000 * (12 + (32+32)/2) * 0.75 = 100000000 * 44 * 0.75 = 3.3GB
-    # 总磁盘占用: 20 * 10 * 330MB = 180GB
-    #"--n_tables=5 --n_partitions=12 --max_key=100000000 --shortest_value=32 --longest_value=32 --active_width=10000000 --keys_per_batch=500000"
-    
-    # # 普通patition测试,超高并发
-    # # 单个partition: 10000000 * (12 + (32+32)/2) * 0.75 = 10000000 * 44 * 0.75 = 330MB
-    # # 总磁盘占用: 10*50 * 330MB = 200GB
-    # 这个盘爆了,故将n_partitions从20改为10
-    #"--n_tables=10 --n_partitions=20 --max_key=10000 --shortest_value=1024 --longest_value=200000 --active_width=3000 --keys_per_batch=2500 --max_verify_ops_per_write=0"
-    # 这个理论上,最终写入的key就是active_width了
-    # "--n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=200000 --active_width=3000 --keys_per_batch=2500 --max_verify_ops_per_write=0"
-
-    # # # 常规测试,正常并发,正常磁盘,正常patition
-    # # # 单个partition: 10000000 * (12 + (32+32)/2) * 0.75 = 10000000 * 44 * 0.75 = 330MB
-    # # # 总磁盘占用: 20 * 30 * 330MB = 180GB
-    # "--n_tables=10 --n_partitions=100 --max_key=10000 --shortest_value=32 --longest_value=4096 --active_width=5000 --keys_per_batch=2000 --max_verify_ops_per_write=0"
-    
-    # # # 中小等value测试
-    # # # 单个partition: 3000000 * (12 + (128+512)/2) * 0.75 = 3000000 * 332 * 0.75 = 747MB
-    # # # 总磁盘占用: 20 * 10 * 747MB = 149GB
-    # "--n_tables=20 --n_partitions=10 --max_key=30000 --shortest_value=128 --longest_value=512 --active_width=3000 --keys_per_batch=250 --max_verify_ops_per_write=0"
-    
-   # 设置对于compact对吞吐影响的测试,思路是将放大因子调小,同时不断地执行updata(就是对一批key不断执行写入,同时不删除),导致追加写一直compact
-   # 然后另一个测试是将放大因子调整的很大,此时系统的吞吐量
-   # 首先我希望理论占用磁盘空间为10G,同时高并发的写入,同时不要执行读操作,也不要执行删除操作,max_key不要太大,value可以大一点,同时active=max,batch可以不用很大
-   #"--n_tables=10 --n_partitions=100 --max_key=2000 --shortest_value=128 --longest_value=5120 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=2"
-   #"--n_tables=10 --n_partitions=100 --max_key=2000 --shortest_value=128 --longest_value=5120 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=5"
-   #"--n_tables=10 --n_partitions=100 --max_key=2000 --shortest_value=128 --longest_value=5120 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=10"
-   #"--n_tables=10 --n_partitions=100 --max_key=2000 --shortest_value=128 --longest_value=5120 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=50"
-    
 
    # 二更:好像partiton不能太多,因为他是从data_0,data_1开始逐渐分配的,上面这种总共1000个partiton就会导致一开始就分配8GB,故我们应该限制partition数量,但是限制数量了就无法保证高并发了,此时就只能将一个batch调大了
    # 我减少了一个batch写入的数据量,发现吞吐量不变,是不是其实只能将patition的数量提高才能拉高吞吐呢?
-   "--n_tables=10 --n_partitions=10 --max_key=2000 --shortest_value=128 --longest_value=51200 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=2"
-#    "--n_tables=10 --n_partitions=10 --max_key=2000 --shortest_value=128 --longest_value=51200 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=5"
-#    "--n_tables=10 --n_partitions=10 --max_key=2000 --shortest_value=128 --longest_value=51200 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=7"
-#    "--n_tables=10 --n_partitions=10 --max_key=2000 --shortest_value=128 --longest_value=51200 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=10"
 
 
+   # 不追加情况下,随着线程数增加
+    "--data_append_mode=false --num_threads=1  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    "--data_append_mode=false --num_threads=2  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    "--data_append_mode=false --num_threads=4  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    "--data_append_mode=false --num_threads=8  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    "--data_append_mode=false --num_threads=16 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    "--data_append_mode=false --num_threads=32 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    
+    # 追加情况下,随着线程数增加
+    "--data_append_mode=true --num_threads=1  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    "--data_append_mode=true --num_threads=2  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    "--data_append_mode=true --num_threads=4  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    "--data_append_mode=true --num_threads=8  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    "--data_append_mode=true --num_threads=16 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    "--data_append_mode=true --num_threads=32 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+
+    # 压缩因子的影响
+    "--data_append_mode=true  --file_amplify_factor=2 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    "--data_append_mode=true  --file_amplify_factor=3 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    "--data_append_mode=true  --file_amplify_factor=4 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
 )
 calculate_theoretical_disk_usage() {
     local param_args="$1"
@@ -215,23 +195,25 @@ stop_disk_monitor() {
         log_message "Disk monitor stopped"
     fi
 }
-get_random_param_combination() {
-    # 从存储特性参数组合中随机选择一个
-    local storage_count=${#STORAGE_PARAM_COMBINATIONS[@]}
-    local storage_index=$((RANDOM % storage_count))
-    local storage_params="${STORAGE_PARAM_COMBINATIONS[$storage_index]}"
+CURRENT_PARAM_INDEX=0
+
+# 修改 get_random_param_combination 函数为顺序选择
+get_sequential_param_combination() {
+    # 获取参数组合总数
+    local param_count=${#SYSTEM_TYPE_PARAM_COMBINATIONS[@]}
     
-    # 从系统类型参数组合中随机选择一个
-    local system_count=${#SYSTEM_TYPE_PARAM_COMBINATIONS[@]}
-    local system_index=$((RANDOM % system_count))
-    local system_params="${SYSTEM_TYPE_PARAM_COMBINATIONS[$system_index]}"
+    # 获取当前参数组合
+    local current_params="${SYSTEM_TYPE_PARAM_COMBINATIONS[$CURRENT_PARAM_INDEX]}"
     
-    # 记录选择的参数组合类型（重定向到标准错误）
-    local storage_type=$((storage_index + 1))
-    local system_type=$((system_index + 1))
-    log_message "Selected storage type: $storage_type, system type: $system_type" >&2
-    # 拼接并返回完整参数
-    echo "$storage_params $system_params"
+    # 记录当前选择的参数组合索引
+    local param_type=$((CURRENT_PARAM_INDEX + 1))
+    log_message "Selected parameter combination: $param_type/$param_count" >&2
+    
+    # 更新索引，循环使用
+    CURRENT_PARAM_INDEX=$(((CURRENT_PARAM_INDEX + 1) % param_count))
+    
+    # 返回参数组合
+    echo "$current_params"
 }
 # Error log function
 log_error() {
@@ -382,7 +364,7 @@ start_whitebox_test() {
     local duration=$((SWITCH_INTERVAL_HOURS * 3600))  # 修改：使用配置的时间间隔
     local timestamp=$(date '+%Y%m%d_%H%M%S')
     local log_file="$WHITEBOX_LOG_DIR/whitebox_${timestamp}.log"
-    local param_args=$(get_random_param_combination) # Randomly select a parameter combination
+    local param_args=$(get_sequential_param_combination) # Randomly select a parameter combination
 
     CURRENT_TEST_PARAMS="$param_args"
 
@@ -420,7 +402,7 @@ start_whitebox_test() {
         --shared_state_path="$SHARED_STATE_DIR" \
         $kill_odds_param \
         $open_wfile_param \
-        --use_random_params \
+        #--use_random_params \
         $param_args> "$log_file" 2>&1 &
     CURRENT_TEST_PID=$!
     CURRENT_TEST_TYPE="whitebox"
@@ -433,7 +415,7 @@ start_blackbox_test() {
     local duration=$((SWITCH_INTERVAL_HOURS * 3600))
     local timestamp=$(date '+%Y%m%d_%H%M%S')
     local log_file="$BLACKBOX_LOG_DIR/blackbox_${timestamp}.log"
-    local param_args=$(get_random_param_combination)
+    local param_args=$(get_sequential_param_combination)
     
     CURRENT_TEST_PARAMS="$param_args"
     log_message "Starting blackbox test, duration: ${duration} seconds (${SWITCH_INTERVAL_HOURS} hours)"

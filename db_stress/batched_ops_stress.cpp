@@ -162,6 +162,12 @@ void BatchedOpsStressTest::TestScan(uint32_t reader_id, int64_t rand_key)
     // because batched mode is based on scan
     TestGet(reader_id, rand_key);
 }
+
+void BatchedOpsStressTest::TestFloor(uint32_t reader_id, int64_t rand_key)
+{
+    // I think it need not to test
+}
+
 void BatchedOpsStressTest::VerifyDb()
 {
     for (auto partition : partitions_)

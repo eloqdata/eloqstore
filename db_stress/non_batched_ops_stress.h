@@ -26,6 +26,8 @@ public:
     void TestMixedOps(uint32_t partition_id,
                       std::vector<int64_t> &rand_keys) override;
 
+    void TestFloor(uint32_t reader_id, int64_t rand_key) override;
+
     void VerifyDb() override;
 };
 

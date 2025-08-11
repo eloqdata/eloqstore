@@ -274,6 +274,49 @@ void NonBatchedOpsStressTest::TestScan(uint32_t reader_id, int64_t rand_key)
     CHECK(ok);
     reader->IsReading = true;
 }
+
+void NonBatchedOpsStressTest::TestFloor(uint32_t reader_id, int64_t rand_key)
+{
+    Reader *reader = readers_[reader_id];
+    // set floor mode
+    reader->is_scan_mode_ = false;
+    reader->is_floor_mode_ = true;
+
+    // avoid to access the key which is not in the verify table
+    // if rand_key < FLAGS_floor_size, it will access the index < 0 on verify
+    // table
+    if (rand_key < FLAGS_floor_size)
+    {
+        rand_key = FLAGS_floor_size;
+    }
+
+    reader->key_readings_.clear();
+    reader->pre_read_expected_values.clear();
+
+    // add the floor_size keys to key_readings_
+    for (int i = FLAGS_floor_size - 1; i >= 0; --i)
+    {
+        int64_t key_to_check = rand_key - i;
+        reader->key_readings_.push_back(Key(key_to_check));
+        reader->pre_read_expected_values.push_back(
+            thread_state_->Load(reader->partition_->id_, key_to_check));
+    }
+
+    std::string_view floor_key(
+        reader->key_readings_[FLAGS_floor_size -
+                              1]);  // using the max_key as floor key
+    reader->read_start_time_ = UnixTimestamp();
+    reader->floor_req_.SetArgs(
+        {thread_state_->table_name_, reader->partition_->id_}, floor_key);
+    uint64_t user_data = reader->id_;
+    bool ok =
+        store_->ExecAsyn(&reader->floor_req_,
+                         user_data,
+                         [this](eloqstore::KvRequest *req) { Wake(req); });
+    CHECK(ok);
+    reader->IsReading = true;
+}
+
 void NonBatchedOpsStressTest::VerifyDb()
 {
     uint64_t ts1 = UnixTimestamp();

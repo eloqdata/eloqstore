@@ -27,6 +27,8 @@ public:
 
     void TestScan(uint32_t reader_id, int64_t rand_key) override;
 
+    void TestFloor(uint32_t reader_id, int64_t rand_key) override;
+
     void VerifyDb() override;
 };
 

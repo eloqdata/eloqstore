@@ -35,18 +35,23 @@ DEFINE_string(shared_state_path,
               "data/db_stress_helper",
               "Path to shared state directory");
 DEFINE_uint32(n_tables, 10, "nums of threads/tables");
-DEFINE_uint32(n_partitions, 300, "nums of partitions");
+DEFINE_uint32(n_partitions, 10, "nums of partitions");
 // I think it is better to set a large value for ops_per_partition
 DEFINE_uint64(ops_per_partition,
               300000000000000,
               "ops of batch write on each partition");
 DEFINE_uint32(kill_odds, 0, "odds (1/this) of each killpoint to crash");
 DEFINE_uint32(num_client_threads, 1, "Amount of client threads");
-DEFINE_int64(max_key, 1000, "the value of the max key");
-DEFINE_int64(active_width, 500, "width of active range");
+DEFINE_int64(max_key, 10000, "the value of the max key");
+DEFINE_int64(active_width, 10000, "width of active range");
 DEFINE_double(hot_key_alpha, 0, "alpha of hot key,recommend:[0.8,1.5]");
 DEFINE_uint64(seed, 2341234, "seed for random");
 DEFINE_uint32(write_percent, 75, "percentage of upsert in upsert/delete");
+DEFINE_uint32(floor_size, 2, "number of keys to check in floor request test");
+DEFINE_uint32(floor_read_percent,
+              50,
+              "percentage of floor read in scan read operations, "
+              "if it is 50, then floor read is 50 of scan read");
 DEFINE_uint32(point_read_percent,
               25,
               "percentage of point read in point_read/scan_read");
@@ -57,7 +62,7 @@ DEFINE_uint32(num_readers_per_partition,
               "partition");
 DEFINE_uint32(max_verify_ops_per_write, 15, "max verify ops after per write");
 DEFINE_uint32(keys_per_batch,
-              200,
+              2000,
               "keys for writing per batch,0 represents random in "
               "[100,500],keys_per_batch must be less than active_width");
 DEFINE_bool(
@@ -71,9 +76,9 @@ DEFINE_bool(syn_scan, true, "choose scan syn or asyn");
 //     "0: 32B - 160B, 1: 1KB - 4KB, 2: 100KB - 1001KB, 3: 50MB - 301MB");
 // I think it is better to define two flags shortest_value and longest_value
 DEFINE_uint32(shortest_value, 1024, "minimum value size in bytes");
-DEFINE_uint32(longest_value, 4096, "maximum value size in bytes");
+DEFINE_uint32(longest_value, 40960, "maximum value size in bytes");
 // random params for crash_test
-DEFINE_uint32(num_threads, 10, "Amount of threads");
+DEFINE_uint32(num_threads, 8, "Amount of threads");
 DEFINE_uint32(data_page_restart_interval, 16, "interval of datapage restart");
 DEFINE_uint32(index_page_restart_interval, 16, "interval of indexpage restart");
 DEFINE_uint32(init_page_count, 1 << 15, "nums of init page");
@@ -93,7 +98,7 @@ DEFINE_uint32(num_retained_archives, 0, "limit number of retained archives");
 DEFINE_uint32(archive_interval_secs, 86400, "archive time interval in secs");
 DEFINE_uint32(max_archive_tasks, 256, "max running archive tasks");
 DEFINE_uint32(file_amplify_factor,
-              4,
+              2,
               "move pages in data file that space amplification factor");
 DEFINE_uint32(num_gc_threads, 1, "num of bg file GC threads");
 DEFINE_uint64(local_space_limit,
