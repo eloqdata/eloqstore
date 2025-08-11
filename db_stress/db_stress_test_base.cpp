@@ -173,7 +173,18 @@ void StressTest::OperateDb()
                     }
                     else
                     {
-                        TestScan(i, rand_key);
+                        // consider the floorRequest is scanner actual
+                        if (partition->rand_.PercentTrue(
+                                FLAGS_floor_read_percent))
+                        {
+                            // floor
+                            TestFloor(i, rand_key);
+                        }
+                        else
+                        {
+                            // scan
+                            TestScan(i, rand_key);
+                        }
                     }
                 }
             }
@@ -363,8 +374,110 @@ void StressTest::Reader::VerifyGet(ThreadState *thread_state_)
     else  // NonBatchedOpsStressTest
     {
         partition_->verify_cnt++;
+        if (is_floor_mode_)
+        {
+            CHECK(floor_req_.Error() == eloqstore::KvError::NoError ||
+                  floor_req_.Error() == eloqstore::KvError::NotFound);
 
-        if (is_scan_mode_)
+            if (floor_req_.Error() == eloqstore::KvError::NoError)
+            {
+                // found key
+                std::string found_key = floor_req_.floor_key_;
+                int64_t found_key_int = KeyStringToInt(found_key);
+
+                // 检查找到的key是否在我们的范围内 [key_readings_[0],
+                // key_readings_[size-1]]
+                int64_t range_start = KeyStringToInt(key_readings_[0]);
+                int64_t range_end =
+                    KeyStringToInt(key_readings_[key_readings_.size() - 1]);
+
+                if (found_key_int >= range_start && found_key_int <= range_end)
+                {
+                    // 找到的key在范围内
+                    // 1. 验证找到的key应该存在
+                    int found_index = found_key_int - range_start;
+                    ExpectedValue post_expected =
+                        thread_state_->Load(partition_->id_, found_key_int);
+                    ExpectedValue pre_expected =
+                        pre_read_expected_values[found_index];
+
+                    // 验证找到的key应该存在
+                    assert(!ExpectedValueHelper::MustHaveNotExisted(
+                        pre_expected, post_expected));
+
+                    // 验证返回的value
+                    const std::string &actual_value = floor_req_.value_;
+                    assert(!actual_value.empty());
+                    uint32_t value_base = std::stoi(actual_value.substr(0, 32));
+                    assert(ExpectedValueHelper::InExpectedValueBaseRange(
+                        value_base, pre_expected, post_expected));
+
+                    // 2. 验证从找到的key到范围末尾之间的所有key都不必须存在
+                    for (int i = found_index + 1; i < key_readings_.size(); ++i)
+                    {
+                        int64_t key_int = KeyStringToInt(key_readings_[i]);
+                        ExpectedValue post_exp =
+                            thread_state_->Load(partition_->id_, key_int);
+                        ExpectedValue pre_exp = pre_read_expected_values[i];
+
+                        // 这些key都不必须存在
+                        assert(!ExpectedValueHelper::MustHaveExisted(pre_exp,
+                                                                     post_exp));
+                    }
+
+                    uint64_t read_bytes =
+                        found_key.size() + actual_value.size();
+                    StressTest::RecordReadBytes(read_bytes, 1);
+                }
+                else
+                {
+                    for (size_t i = 0; i < key_readings_.size(); ++i)
+                    {
+                        int64_t key_int = KeyStringToInt(key_readings_[i]);
+                        ExpectedValue post_expected =
+                            thread_state_->Load(partition_->id_, key_int);
+                        ExpectedValue pre_expected =
+                            pre_read_expected_values[i];
+
+                        // all keys in range must not exist
+                        assert(!ExpectedValueHelper::MustHaveExisted(
+                            pre_expected, post_expected));
+                    }
+
+                    uint64_t read_bytes = 0;
+                    for (const auto &key : key_readings_)
+                    {
+                        read_bytes += key.size();
+                    }
+                    StressTest::RecordReadBytes(read_bytes, 1);
+                }
+            }
+            else
+            {
+                // not found, verify all keys in range
+                for (size_t i = 0; i < key_readings_.size(); ++i)
+                {
+                    int64_t key_int = KeyStringToInt(key_readings_[i]);
+                    ExpectedValue post_expected =
+                        thread_state_->Load(partition_->id_, key_int);
+                    ExpectedValue pre_expected = pre_read_expected_values[i];
+
+                    // 所有key都不必须存在
+                    assert(!ExpectedValueHelper::MustHaveExisted(
+                        pre_expected, post_expected));
+                }
+
+                uint64_t read_bytes = 0;
+                for (const auto &key : key_readings_)
+                {
+                    read_bytes += key.size();
+                }
+                StressTest::RecordReadBytes(read_bytes, 1);
+            }
+
+            is_floor_mode_ = false;
+        }
+        else if (is_scan_mode_)
         {
             CHECK(scan_req_.Error() == eloqstore::KvError::NoError ||
                   scan_req_.Error() == eloqstore::KvError::NotFound);
@@ -740,9 +853,9 @@ void StressTest::StartThroughputMonitoring()
     throughput_stats_.last_report_time.store(UnixTimestamp());
 
     double avg_value_size = (FLAGS_shortest_value + FLAGS_longest_value) / 2.0;
-    theoretical_disk_usage_ =
-        static_cast<uint64_t>(FLAGS_n_tables * FLAGS_n_partitions *
-                              FLAGS_max_key * (12 + avg_value_size) * 0.75);
+    theoretical_disk_usage_ = static_cast<uint64_t>(
+        FLAGS_n_tables * FLAGS_n_partitions * FLAGS_max_key *
+        (12 + avg_value_size) * FLAGS_write_percent / 100);
 
     std::lock_guard<std::mutex> lock(throughput_mutex_);
     throughput_log_.open(FLAGS_throughput_log_file, std::ios::app);

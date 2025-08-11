@@ -21,6 +21,8 @@ DECLARE_uint32(point_read_percent);
 DECLARE_bool(test_batched_ops_stress);
 DECLARE_uint32(num_readers_per_partition);
 DECLARE_uint32(max_verify_ops_per_write);
+DECLARE_uint32(floor_size);
+DECLARE_uint32(floor_read_percent);
 DECLARE_uint32(keys_per_batch);
 DECLARE_bool(syn_scan);
 

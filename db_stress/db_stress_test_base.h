@@ -168,6 +168,10 @@ public:
     {
     }
 
+    virtual void TestFloor(uint32_t reader_id, int64_t rand_key)
+    {
+    }
+
     bool AllPartitionsFinished();
 
     struct Partition
@@ -233,12 +237,14 @@ public:
 
         // scan or read one
         bool is_scan_mode_;
+        bool is_floor_mode_;
         uint64_t read_start_time_{0};  // only record the first read time
         // there are two modes ,now scan only be use in batch mode and verify so
         // I add the scan test in operatorDB() read will be used in nonbatch
         // mode and verify mode
         eloqstore::ScanRequest scan_req_;
         eloqstore::ReadRequest read_req_;
+        eloqstore::FloorRequest floor_req_;
 
         // reader will store the pre and post expected value to verify
         // ExpectedValue pre_read_expected_value;
