@@ -18,7 +18,7 @@ DISK_LOG_FILE="$DISK_LOG_DIR/disk_usage.log"
 MINIO_DATA_PATH="/home/sjh/minio/data"
 DISK_MONITOR_PID=""
 
-SWITCH_INTERVAL_HOURS=8
+SWITCH_INTERVAL_HOURS=1
 KILL_WAIT_TIME=10
 CURRENT_TEST_PARAMS=""
 
@@ -93,10 +93,11 @@ SYSTEM_TYPE_PARAM_COMBINATIONS=(
     
 
    # 二更:好像partiton不能太多,因为他是从data_0,data_1开始逐渐分配的,上面这种总共1000个partiton就会导致一开始就分配8GB,故我们应该限制partition数量,但是限制数量了就无法保证高并发了,此时就只能将一个batch调大了
-   "--n_tables=10 --n_partitions=10 --max_key=2000 --shortest_value=128 --longest_value=512000 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=2"
-   "--n_tables=10 --n_partitions=10 --max_key=2000 --shortest_value=128 --longest_value=512000 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=5"
-   "--n_tables=10 --n_partitions=10 --max_key=2000 --shortest_value=128 --longest_value=512000 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=7"
-   "--n_tables=10 --n_partitions=10 --max_key=2000 --shortest_value=128 --longest_value=512000 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=4 --enable_throughput_monitoring=1"
+   # 我减少了一个batch写入的数据量,发现吞吐量不变,是不是其实只能将patition的数量提高才能拉高吞吐呢?
+   "--n_tables=10 --n_partitions=10 --max_key=2000 --shortest_value=128 --longest_value=51200 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=2"
+#    "--n_tables=10 --n_partitions=10 --max_key=2000 --shortest_value=128 --longest_value=51200 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=5"
+#    "--n_tables=10 --n_partitions=10 --max_key=2000 --shortest_value=128 --longest_value=51200 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=7"
+#    "--n_tables=10 --n_partitions=10 --max_key=2000 --shortest_value=128 --longest_value=51200 --active_width=2000 --keys_per_batch=100 --max_verify_ops_per_write=0 --write_percent=100 --file_amplify_factor=10"
 
 
 )
