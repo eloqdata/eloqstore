@@ -39,8 +39,9 @@ uint64_t DecodeKey(const std::string &key)
 
 thread_local std::mt19937 rand_gen(0);
 
-static const size_t key_interval = 10;
-static const size_t del_ratio = 4;
+static constexpr size_t key_interval = 10;
+static constexpr size_t del_ratio = 4;
+static constexpr double upsert_ratio = 1 - (1.0 / del_ratio);
 
 class Writer
 {
@@ -150,7 +151,8 @@ void WriteLoop(eloqstore::EloqStore *store)
             const uint64_t num_kvs =
                 uint64_t(FLAGS_batch_size) * FLAGS_partitions;
             const uint64_t kvs_per_sec = num_kvs * 1000 / cost_ms;
-            const uint64_t mb_per_sec = (kvs_per_sec * FLAGS_kv_size) >> 20;
+            const uint64_t mb_per_sec =
+                (uint64_t(kvs_per_sec * upsert_ratio) * FLAGS_kv_size) >> 20;
             LOG(INFO) << "write speed " << kvs_per_sec << " kvs/s | cost "
                       << cost_ms << " ms | " << mb_per_sec << " MiB/s";
 
