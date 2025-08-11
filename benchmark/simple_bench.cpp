@@ -14,12 +14,12 @@
 
 DEFINE_string(kvoptions, "", "Path to config file of EloqStore options");
 DEFINE_uint32(kv_size, 128, "size of a pair of KV");
-DEFINE_uint32(batch_size, 8192, "number of KVs per batch");
-DEFINE_uint32(write_batchs, 512, "number of batchs to write");
-DEFINE_uint32(partitions, 256, "number of partitions");
-DEFINE_uint32(max_key, 10000, "max key limit");
+DEFINE_uint32(batch_size, 2048, "number of KVs per batch");
+DEFINE_uint32(write_batchs, 4096, "number of batchs to write");
+DEFINE_uint32(partitions, 128, "number of partitions");
+DEFINE_uint32(max_key, 1000000, "max key limit");
 DEFINE_uint32(write_interval, 10, "interval seconds between writes");
-DEFINE_uint32(read_reqs, 4096, "concurrent read requests");
+DEFINE_uint32(read_per_part, 1, "concurrent read requests per partition");
 DEFINE_uint32(read_secs, 600, "read test time");
 
 using namespace std::chrono;
@@ -37,7 +37,7 @@ uint64_t DecodeKey(const std::string &key)
     return eloqstore::BigEndianToNative(eloqstore::DecodeFixed64(key.data()));
 }
 
-thread_local std::mt19937 mt_(0);
+thread_local std::mt19937 rand_gen(0);
 
 static const size_t key_interval = 10;
 static const size_t del_ratio = 4;
@@ -46,9 +46,11 @@ class Writer
 {
 public:
     Writer(uint32_t id);
+    void NextBatch();
 
     const uint32_t id_;
     eloqstore::BatchWriteRequest request_;
+    size_t writing_key_{0};
 };
 
 Writer::Writer(uint32_t id) : id_(id)
@@ -56,31 +58,58 @@ Writer::Writer(uint32_t id) : id_(id)
     eloqstore::TableIdent tbl_id(table, id);
     std::vector<eloqstore::WriteDataEntry> entries;
     entries.reserve(FLAGS_batch_size);
-    uint64_t key_num = mt_() % FLAGS_batch_size;
+    uint64_t ts = utils::UnixTs<milliseconds>();
     for (uint64_t i = 0; i < FLAGS_batch_size; i++)
     {
         std::string key;
         key.resize(sizeof(uint64_t));
-        EncodeKey(key.data(), key_num);
-        key_num += (mt_() % key_interval) + 1;
+        EncodeKey(key.data(), writing_key_);
+        writing_key_ += (rand_gen() % key_interval) + 1;
         std::string value;
         value.resize(FLAGS_kv_size - sizeof(uint64_t));
-        if (mt_() % del_ratio == 0)
+        if (rand_gen() % del_ratio == 0)
         {
             entries.emplace_back(std::move(key),
                                  std::move(value),
-                                 0,
+                                 ts,
                                  eloqstore::WriteOp::Delete);
         }
         else
         {
             entries.emplace_back(std::move(key),
                                  std::move(value),
-                                 0,
+                                 ts,
                                  eloqstore::WriteOp::Upsert);
         }
     }
     request_.SetArgs(tbl_id, std::move(entries));
+    if (writing_key_ > FLAGS_max_key)
+    {
+        writing_key_ = 0;
+    }
+}
+
+void Writer::NextBatch()
+{
+    uint64_t ts = utils::UnixTs<milliseconds>();
+    for (auto &entry : request_.batch_)
+    {
+        writing_key_ += (rand_gen() % key_interval) + 1;
+        EncodeKey(entry.key_.data(), writing_key_);
+        entry.timestamp_ = ts;
+        if (rand_gen() % del_ratio == 0)
+        {
+            entry.op_ = eloqstore::WriteOp::Delete;
+        }
+        else
+        {
+            entry.op_ = eloqstore::WriteOp::Upsert;
+        }
+    }
+    if (writing_key_ > FLAGS_max_key)
+    {
+        writing_key_ = 0;
+    }
 }
 
 void WriteLoop(eloqstore::EloqStore *store)
@@ -98,13 +127,10 @@ void WriteLoop(eloqstore::EloqStore *store)
         finished.enqueue(p);
     };
 
-    const uint64_t batch_bytes = FLAGS_kv_size * FLAGS_batch_size;
     auto start = high_resolution_clock::now();
     for (auto &writer : writers)
     {
-        bool ok = store->ExecAsyn(
-            &writer->request_, uint64_t(writer.get()), callback);
-        CHECK(ok);
+        store->ExecAsyn(&writer->request_, uint64_t(writer.get()), callback);
     }
     for (size_t i = 0; i < FLAGS_write_batchs;)
     {
@@ -113,36 +139,20 @@ void WriteLoop(eloqstore::EloqStore *store)
 
         assert(writer->request_.IsDone());
         assert(writer->request_.Error() == eloqstore::KvError::NoError);
-
-        uint64_t key_num = mt_() % FLAGS_batch_size;
-        for (auto &entry : writer->request_.batch_)
-        {
-            key_num += (mt_() % key_interval) + 1;
-            EncodeKey(entry.key_.data(), key_num);
-            entry.timestamp_ = i;
-            if (mt_() % del_ratio == 0)
-            {
-                entry.op_ = eloqstore::WriteOp::Delete;
-            }
-            else
-            {
-                entry.op_ = eloqstore::WriteOp::Upsert;
-            }
-        }
-
-        bool ok =
-            store->ExecAsyn(&writer->request_, uint64_t(writer), callback);
-        CHECK(ok);
+        writer->NextBatch();
+        store->ExecAsyn(&writer->request_, uint64_t(writer), callback);
 
         i++;
         if (i % FLAGS_partitions == 0)
         {
             auto now = high_resolution_clock::now();
-            double cost_secs = duration_cast<seconds>(now - start).count();
+            double cost_ms = duration_cast<milliseconds>(now - start).count();
             const uint64_t num_kvs =
                 uint64_t(FLAGS_batch_size) * FLAGS_partitions;
-            const uint64_t kvs_per_sec = num_kvs / cost_secs;
-            LOG(INFO) << "write speed " << kvs_per_sec << " kvs/s";
+            const uint64_t kvs_per_sec = num_kvs * 1000 / cost_ms;
+            const uint64_t mb_per_sec = (kvs_per_sec * FLAGS_kv_size) >> 20;
+            LOG(INFO) << "write speed " << kvs_per_sec << " kvs/s | cost "
+                      << cost_ms << " ms | " << mb_per_sec << " MiB/s";
 
             if (FLAGS_write_interval > 0)
             {
@@ -178,8 +188,9 @@ public:
 void ReadLoop(eloqstore::EloqStore *store)
 {
     moodycamel::BlockingConcurrentQueue<Reader *> finished;
-    std::vector<std::unique_ptr<Reader>> readers(FLAGS_read_reqs);
-    for (uint32_t i = 0; i < FLAGS_read_reqs; i++)
+    const size_t num_readers = FLAGS_read_per_part * FLAGS_partitions;
+    std::vector<std::unique_ptr<Reader>> readers(num_readers);
+    for (uint32_t i = 0; i < num_readers; i++)
     {
         readers[i] = std::make_unique<Reader>(i);
     }
@@ -193,7 +204,7 @@ void ReadLoop(eloqstore::EloqStore *store)
 
     auto send_req = [&store, callback](Reader *reader)
     {
-        EncodeKey(reader->key_, mt_() % FLAGS_max_key);
+        EncodeKey(reader->key_, rand_gen() % FLAGS_max_key);
         reader->start_ts_ = utils::UnixTs<microseconds>();
         store->ExecAsyn(&reader->request_, uint64_t(reader), callback);
     };
@@ -216,7 +227,7 @@ void ReadLoop(eloqstore::EloqStore *store)
 
         send_req(reader);
 
-        if (req_cnt == 100000)
+        if (req_cnt == 200000)
         {
             auto now = high_resolution_clock::now();
             double cost_ms = duration_cast<milliseconds>(now - start).count();
@@ -237,7 +248,7 @@ void ReadLoop(eloqstore::EloqStore *store)
             max_latency = 0;
         }
     }
-    for (uint32_t i = 0; i < FLAGS_read_reqs; i++)
+    for (uint32_t i = 0; i < num_readers; i++)
     {
         Reader *reader;
         finished.wait_dequeue(reader);
