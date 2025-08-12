@@ -62,9 +62,11 @@ void Shard::WorkLoop()
                 break;
             }
         }
+
         int nreqs = dequeue_requests();
         if (nreqs < 0)
         {
+            // Exit.
             break;
         }
         for (size_t i = 0; i < nreqs; i++)
