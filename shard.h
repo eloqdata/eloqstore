@@ -41,11 +41,11 @@ public:
     const size_t shard_id_{0};
     boost::context::continuation main_;
     KvTask *running_;
-    CircularQueue<KvTask *> scheduled_;
+    CircularQueue<KvTask *> ready_tasks_;
 
 private:
     void WorkLoop();
-    bool ResumeScheduled();
+    bool ExecuteReadyTasks();
     void OnTaskFinished(KvTask *task);
     void OnReceivedReq(KvRequest *req);
     void ProcessReq(KvRequest *req);

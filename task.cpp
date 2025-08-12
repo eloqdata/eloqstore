@@ -21,7 +21,7 @@ void KvTask::Resume()
                status_ == TaskStatus::BlockedIO ||
                Type() == TaskType::EvictFile);
         status_ = TaskStatus::Ongoing;
-        shard->scheduled_.Enqueue(this);
+        shard->ready_tasks_.Enqueue(this);
     }
 }
 

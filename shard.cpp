@@ -55,7 +55,7 @@ void Shard::WorkLoop()
         {
             io_mgr_->Submit();
             io_mgr_->PollComplete();
-            bool busy = ResumeScheduled();
+            bool busy = ExecuteReadyTasks();
             if (!busy)
             {
                 // CPU is not busy, we can process more requests.
@@ -291,13 +291,13 @@ void Shard::ProcessReq(KvRequest *req)
     }
 }
 
-bool Shard::ResumeScheduled()
+bool Shard::ExecuteReadyTasks()
 {
-    bool busy = scheduled_.Size() > 0;
-    while (scheduled_.Size() > 0)
+    bool busy = ready_tasks_.Size() > 0;
+    while (ready_tasks_.Size() > 0)
     {
-        KvTask *task = scheduled_.Peek();
-        scheduled_.Dequeue();
+        KvTask *task = ready_tasks_.Peek();
+        ready_tasks_.Dequeue();
         assert(task->status_ == TaskStatus::Ongoing);
         running_ = task;
         task->coro_ = task->coro_.resume();
@@ -357,7 +357,7 @@ void Shard::WorkOneRound()
     io_mgr_->Submit();
     io_mgr_->PollComplete();
 
-    ResumeScheduled();
+    ExecuteReadyTasks();
 }
 #endif
 
