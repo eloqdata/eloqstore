@@ -62,18 +62,12 @@ SYSTEM_TYPE_PARAM_COMBINATIONS=(
 
    # 不追加情况下,随着线程数增加
     "--data_append_mode=false --num_threads=1  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
-    "--data_append_mode=false --num_threads=2  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
-    "--data_append_mode=false --num_threads=4  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=false --num_threads=8  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
-    "--data_append_mode=false --num_threads=16 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=false --num_threads=32 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     
     # 追加情况下,随着线程数增加
     "--data_append_mode=true --num_threads=1  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
-    "--data_append_mode=true --num_threads=2  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
-    "--data_append_mode=true --num_threads=4  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=true --num_threads=8  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
-    "--data_append_mode=true --num_threads=16 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=true --num_threads=32 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
 
     # 压缩因子的影响
@@ -397,12 +391,12 @@ start_whitebox_test() {
     start_disk_monitor "whitebox" "$theoretical_usage"
 
     # Start whitebox test, pass calculated duration
+    # 注意这边随机参数被删掉了
     setsid stdbuf -oL -eL python3 "$CRASH_TEST_PY" whitebox \
         --db_path="$DB_DIR" \
         --shared_state_path="$SHARED_STATE_DIR" \
         $kill_odds_param \
         $open_wfile_param \
-        #--use_random_params \
         $param_args> "$log_file" 2>&1 &
     CURRENT_TEST_PID=$!
     CURRENT_TEST_TYPE="whitebox"
