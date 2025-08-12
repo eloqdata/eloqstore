@@ -41,7 +41,7 @@ NEXT_SWITCH_TIME=""
 log_message() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
-
+PARAM_INDEX_FILE="$SCRIPT_DIR/log/current_param_index"
 SYSTEM_TYPE_PARAM_COMBINATIONS=(
     #验证表所占用的内存就是n_table*n_parition*max_key*sizeof(int)
     #磁盘所占用的理论容量是
@@ -61,7 +61,7 @@ SYSTEM_TYPE_PARAM_COMBINATIONS=(
 
 
    # 不追加情况下,随着线程数增加
-    "--data_append_mode=false --num_threads=1  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    #"--data_append_mode=false --num_threads=1  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=false --num_threads=8  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=false --num_threads=32 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     
@@ -191,8 +191,14 @@ stop_disk_monitor() {
 }
 CURRENT_PARAM_INDEX=0
 
-# 修改 get_random_param_combination 函数为顺序选择
 get_sequential_param_combination() {
+    # 从文件读取当前索引
+    if [ -f "$PARAM_INDEX_FILE" ]; then
+        CURRENT_PARAM_INDEX=$(cat "$PARAM_INDEX_FILE")
+    else
+        CURRENT_PARAM_INDEX=0
+    fi
+    
     # 获取参数组合总数
     local param_count=${#SYSTEM_TYPE_PARAM_COMBINATIONS[@]}
     
@@ -205,6 +211,9 @@ get_sequential_param_combination() {
     
     # 更新索引，循环使用
     CURRENT_PARAM_INDEX=$(((CURRENT_PARAM_INDEX + 1) % param_count))
+    
+    # 保存索引,注意>是覆盖,>>是追加
+    echo "$CURRENT_PARAM_INDEX" > "$PARAM_INDEX_FILE"
     
     # 返回参数组合
     echo "$current_params"
