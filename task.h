@@ -34,7 +34,8 @@ enum class TaskStatus : uint8_t
     Idle = 0,
     Ongoing,
     Blocked,
-    BlockedIO
+    BlockedIO,
+    Finished
 };
 
 enum struct TaskType

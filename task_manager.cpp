@@ -40,6 +40,8 @@ ScanTask *TaskManager::GetScanTask()
 
 void TaskManager::FreeTask(KvTask *task)
 {
+    assert(task->status_ == TaskStatus::Finished);
+    assert(task->inflight_io_ == 0);
     num_active_--;
     switch (task->Type())
     {

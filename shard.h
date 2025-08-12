@@ -42,16 +42,13 @@ public:
     boost::context::continuation main_;
     KvTask *running_;
     CircularQueue<KvTask *> scheduled_;
-    CircularQueue<KvTask *> finished_;
 
 private:
     void WorkLoop();
-    void ResumeScheduled();
-    void PollFinished();
-
+    bool ResumeScheduled();
+    void OnTaskFinished(KvTask *task);
     void OnReceivedReq(KvRequest *req);
     void ProcessReq(KvRequest *req);
-    void OnWriteFinished(const TableIdent &tbl_id);
 
 #ifdef ELOQ_MODULE_ENABLED
     void WorkOneRound();
@@ -88,11 +85,14 @@ private:
                                                  task->req_->SetDone(err);
                                                  task->req_ = nullptr;
                                                  task->status_ =
-                                                     TaskStatus::Idle;
-                                                 shard->finished_.Enqueue(task);
+                                                     TaskStatus::Finished;
                                                  return std::move(shard->main_);
                                              });
         running_ = nullptr;
+        if (task->status_ == TaskStatus::Finished)
+        {
+            OnTaskFinished(task);
+        }
     }
 
     moodycamel::BlockingConcurrentQueue<KvRequest *> requests_;

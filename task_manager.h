@@ -57,8 +57,7 @@ private:
 
         void FreeTask(T *task)
         {
-            assert(task->status_ == TaskStatus::Idle);
-            assert(task->inflight_io_ == 0);
+            task->status_ = TaskStatus::Idle;
             task->next_ = free_head_;
             free_head_ = task;
         }
