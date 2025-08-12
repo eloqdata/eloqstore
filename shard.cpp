@@ -358,7 +358,6 @@ void Shard::WorkOneRound()
     io_mgr_->PollComplete();
 
     ResumeScheduled();
-    PollFinished();
 }
 #endif
 
