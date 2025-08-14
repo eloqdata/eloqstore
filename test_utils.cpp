@@ -105,8 +105,9 @@ std::pair<std::string, eloqstore::KvError> Scan(
     {
         return {{}, req.Error()};
     }
-    return {test_util::FormatEntries(req.Entries()),
-            eloqstore::KvError::NoError};
+    auto result = req.Entries();
+    std::span entries(result.data(), result.size());
+    return {test_util::FormatEntries(entries), eloqstore::KvError::NoError};
 }
 
 MapVerifier::MapVerifier(eloqstore::TableIdent tid,
@@ -547,7 +548,8 @@ void ConcurrencyTester::VerifyRead(Reader *reader, uint32_t write_pause)
     const uint16_t seg_id = key_begin / seg_size_;
     const uint32_t partition_id = reader->partition_id_;
     Partition &partition = partitions_[partition_id];
-    auto entries = reader->req_.Entries();
+    auto result = reader->req_.Entries();
+    std::span entries(result.data(), result.size());
 
     uint64_t sum_val = 0;
     for (auto &ent : entries)

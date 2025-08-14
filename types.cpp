@@ -38,7 +38,7 @@ uint8_t TableIdent::DiskIndex(uint8_t num_disks) const
     return partition_id_ % num_disks;
 }
 
-fs::path TableIdent::StorePath(std::span<const std::string> disks) const
+fs::path TableIdent::StorePath(tcb::span<const std::string> disks) const
 {
     fs::path partition_path = disks[DiskIndex(disks.size())];
     partition_path.append(ToString());

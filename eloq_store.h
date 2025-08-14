@@ -139,7 +139,7 @@ public:
     std::string_view BeginKey() const;
     std::string_view EndKey() const;
 
-    std::span<KvEntry> Entries();
+    tcb::span<KvEntry> Entries();
 
     /**
      * @brief Get the size of the scan result.

@@ -7,8 +7,9 @@
 #include <cstdlib>
 #include <filesystem>
 #include <ostream>
-#include <span>
 #include <string>
+
+#include "external/span.hpp"
 
 namespace eloqstore
 {
@@ -44,7 +45,7 @@ struct TableIdent
     std::string ToString() const;
     static TableIdent FromString(const std::string &str);
     uint8_t DiskIndex(uint8_t num_disks) const;
-    fs::path StorePath(std::span<const std::string> disks) const;
+    fs::path StorePath(tcb::span<const std::string> disks) const;
     uint16_t ShardIndex(uint16_t num_shards) const;
     bool IsValid() const;
 
