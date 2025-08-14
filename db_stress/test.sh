@@ -12,10 +12,12 @@ BLACKBOX_LOG_DIR="$LOG_DIR/blackbox"
 ERROR_LOG_DIR="$LOG_DIR/errors"
 CRASH_TEST_PY="$SCRIPT_DIR/crash_test.py"
 
-DISK_LOG_DIR="$LOG_DIR/disk"
-DISK_LOG_FILE="$DISK_LOG_DIR/disk_usage.log"
+DISK_LOG_FILE="$LOG_DIR/disk_usage.log"
 
-MINIO_DATA_PATH="/home/sjh/minio/data"
+
+# no start cloud if it is empty
+MINIO_DATA_PATH=""
+#MINIO_DATA_PATH="/home/sjh/minio/data"
 DISK_MONITOR_PID=""
 
 SWITCH_INTERVAL_HOURS=1
@@ -58,7 +60,9 @@ SYSTEM_TYPE_PARAM_COMBINATIONS=(
 
    # 二更:好像partiton不能太多,因为他是从data_0,data_1开始逐渐分配的,上面这种总共1000个partiton就会导致一开始就分配8GB,故我们应该限制partition数量,但是限制数量了就无法保证高并发了,此时就只能将一个batch调大了
    # 我减少了一个batch写入的数据量,发现吞吐量不变,是不是其实只能将patition的数量提高才能拉高吞吐呢?
-
+    " --data_append_mode=true --cloud_store_path=minio:db-stress/db-stress/  --fd_limit=1000 --num_gc_threads=1 --num_threads=2  --rclone_threads=1 -throughput_report_interval_secs=10 --n_tables=2 --n_partitions=2 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=4000 --max_verify_ops_per_write=0 --write_percent=100"
+    # "--data_append_mode=true --cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --num_threads=4  --rclone_threads=2 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    # "--data_append_mode=true --cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --num_threads=4  --rclone_threads=4 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
 
    # 不追加情况下,随着线程数增加
     #"--data_append_mode=false --num_threads=1  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
@@ -66,7 +70,7 @@ SYSTEM_TYPE_PARAM_COMBINATIONS=(
     "--data_append_mode=false --num_threads=32 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     
     # 追加情况下,随着线程数增加
-    "--data_append_mode=true --num_threads=1  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    "--data_append_mode=true --num_threads=1 --file_amplify_factor=2  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=true --num_threads=8  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=true --num_threads=32 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
 
@@ -92,16 +96,13 @@ calculate_theoretical_disk_usage() {
     shortest_value=${shortest_value:-32}
     longest_value=${longest_value:-32}
     
-    # 计算理论磁盘使用量
-    # 公式: n_table * n_partition * max_key * (12 + (shortest_value + longest_value) / 2) * 0.75
+    #  n_table * n_partition * max_key * (12 + (shortest_value + longest_value) / 2) * 0.75
     local avg_value=$(( (shortest_value + longest_value) / 2 ))
     local key_overhead=12
     local usage_ratio=0.75
     
-    # 使用bc进行浮点计算
     local theoretical_bytes=$(echo "$n_tables * $n_partitions * $max_key * ($key_overhead + $avg_value) * $usage_ratio" | bc -l)
     
-    # 转换为GB
     local theoretical_gb=$(echo "scale=2; $theoretical_bytes / 1024 / 1024 / 1024" | bc -l)
     
     echo "$theoretical_gb"
@@ -110,7 +111,6 @@ start_disk_monitor() {
     local test_type="$1"
     local theoretical_usage="$2"
     
-    # 停止之前的监控进程（如果存在）
     stop_disk_monitor
     {
         echo ""
@@ -121,15 +121,12 @@ start_disk_monitor() {
         echo "Actual disk usage monitoring (every 1 minute):"
     } >> "$DISK_LOG_FILE"
     
-    # 启动后台监控进程
     (
         while true; do
-            sleep 60  # 每分钟监控一次
+            sleep 30  
             
-            # 获取当前磁盘使用量
             local current_usage=""
             if [ -d "$DB_DIR" ]; then
-                # 获取数据目录的磁盘使用量（以GB为单位）
                 current_usage=$(du -sb "$DB_DIR" 2>/dev/null | awk '{printf "%.2f", $1/1024/1024/1024}')
                 if [ -z "$current_usage" ]; then
                     current_usage="0.00"
@@ -138,15 +135,13 @@ start_disk_monitor() {
                 current_usage="0.00"
             fi
             
-            # 检查是否使用minio存储
             local minio_usage=""
             local using_minio=false
             
-            # 检查当前测试参数是否包含cloud_store_path
-            if [ -n "$CURRENT_TEST_PARAMS" ] && echo "$CURRENT_TEST_PARAMS" | grep -q "cloud_store_path"; then
+
+            if [ -n "$MINIO_DATA_PATH" ] && [ -n "$CURRENT_TEST_PARAMS" ] && echo "$CURRENT_TEST_PARAMS" | grep -q "cloud_store_path"; then
                 using_minio=true
                 
-                # 获取minio数据目录的磁盘使用量
                 if [ -d "$MINIO_DATA_PATH" ]; then
                     minio_usage=$(du -sb "$MINIO_DATA_PATH" 2>/dev/null | awk '{printf "%.2f", $1/1024/1024/1024}')
                     if [ -z "$minio_usage" ]; then
@@ -157,12 +152,9 @@ start_disk_monitor() {
                 fi
             fi
             
-            # 根据是否使用minio来格式化输出
             if [ "$using_minio" = true ]; then
-                # 格式：本地GB/minioGB
                 echo -n "${current_usage}GB/${minio_usage}GB," >> "$DISK_LOG_FILE"
             else
-                # 只有本地存储
                 echo -n "${current_usage}GB," >> "$DISK_LOG_FILE"
             fi
         done
@@ -175,8 +167,7 @@ stop_disk_monitor() {
         log_message "Stopping disk monitor process $DISK_MONITOR_PID"
         kill -TERM "$DISK_MONITOR_PID" 2>/dev/null
         sleep 2
-        
-        # 如果进程仍在运行，强制终止
+
         if kill -0 "$DISK_MONITOR_PID" 2>/dev/null; then
             kill -KILL "$DISK_MONITOR_PID" 2>/dev/null
         fi
@@ -184,7 +175,6 @@ stop_disk_monitor() {
         wait "$DISK_MONITOR_PID" 2>/dev/null
         DISK_MONITOR_PID=""
         
-        # 在日志文件末尾添加换行符
         echo "" >> "$DISK_LOG_FILE"
         log_message "Disk monitor stopped"
     fi
@@ -192,30 +182,23 @@ stop_disk_monitor() {
 CURRENT_PARAM_INDEX=0
 
 get_sequential_param_combination() {
-    # 从文件读取当前索引
     if [ -f "$PARAM_INDEX_FILE" ]; then
         CURRENT_PARAM_INDEX=$(cat "$PARAM_INDEX_FILE")
     else
         CURRENT_PARAM_INDEX=0
     fi
     
-    # 获取参数组合总数
     local param_count=${#SYSTEM_TYPE_PARAM_COMBINATIONS[@]}
     
-    # 获取当前参数组合
     local current_params="${SYSTEM_TYPE_PARAM_COMBINATIONS[$CURRENT_PARAM_INDEX]}"
     
-    # 记录当前选择的参数组合索引
     local param_type=$((CURRENT_PARAM_INDEX + 1))
     log_message "Selected parameter combination: $param_type/$param_count" >&2
     
-    # 更新索引，循环使用
     CURRENT_PARAM_INDEX=$(((CURRENT_PARAM_INDEX + 1) % param_count))
     
-    # 保存索引,注意>是覆盖,>>是追加
     echo "$CURRENT_PARAM_INDEX" > "$PARAM_INDEX_FILE"
     
-    # 返回参数组合
     echo "$current_params"
 }
 # Error log function
@@ -264,30 +247,35 @@ perform_cleanup() {
     else
         log_message "Data directory does not exist, no cleanup needed: $DATA_DIR"
     fi
+    
+    if [ -n "$MINIO_DATA_PATH" ]; then
         # Clean up data in minio
-    log_message "Starting cleanup of data in minio"
-    
-    # Check if rclone is available
-    if ! command -v rclone >/dev/null 2>&1; then
-        log_message "Warning: rclone command not available, skipping minio cleanup"
-        return 0
-    fi
-    
-    # Clean up all possible minio paths
-    local minio_paths=(
-        "minio:db-stress/db-stress/"
-    )
-    
-    for path in "${minio_paths[@]}"; do
-        log_message "Cleaning minio path: $path"
-        if rclone delete "$path" --verbose 2>/dev/null; then
-            log_message "Successfully cleaned minio path: $path"
-        else
-            log_message "Failed to clean minio path or path does not exist: $path"
+        log_message "Starting cleanup of data in minio"
+        
+        # Check if rclone is available
+        if ! command -v rclone >/dev/null 2>&1; then
+            log_message "Warning: rclone command not available, skipping minio cleanup"
+            return 0
         fi
-    done
-    
-    log_message "Minio cleanup operation completed"
+        
+        # Clean up all possible minio paths
+        local minio_paths=(
+            "minio:db-stress/db-stress/"
+        )
+        
+        for path in "${minio_paths[@]}"; do
+            log_message "Cleaning minio path: $path"
+            if rclone delete "$path" --verbose 2>/dev/null; then
+                log_message "Successfully cleaned minio path: $path"
+            else
+                log_message "Failed to clean minio path or path does not exist: $path"
+            fi
+        done
+        
+        log_message "Minio cleanup operation completed"
+    else
+        log_message "MINIO_DATA_PATH is empty, skipping minio cleanup"
+    fi
 }
 auto_update_code() {
     log_message "Starting automatic code update..."
@@ -334,27 +322,24 @@ kill_current_test() {
         log_message "Test process terminated"
     fi
 }
-# 新增：计算下次切换时间
 calculate_next_switch_time() {
     local current_time=$(date '+%s')
     local switch_interval_seconds=$((SWITCH_INTERVAL_HOURS * 3600))
     echo $((current_time + switch_interval_seconds))
 }
 
-# 新增：检查是否到了切换时间
 should_switch_test() {
     if [ -z "$NEXT_SWITCH_TIME" ]; then
-        return 0  # 首次运行，需要开始测试
+        return 0  
     fi
     
     local current_time=$(date '+%s')
     [ $current_time -ge $NEXT_SWITCH_TIME ]
 }
 
-# 新增：获取下一个测试类型
 get_next_test_type() {
     if [ "$CRASH_TEST_ENABLED" = "false" ]; then
-        echo "whitebox"  # 如果禁用崩溃测试，始终返回whitebox
+        echo "whitebox"  
     elif [ "$CURRENT_TEST_TYPE" = "whitebox" ]; then
         echo "blackbox"
     else
@@ -563,35 +548,32 @@ if [ ! -f "$CRASH_TEST_PY" ]; then
     exit 1
 fi
 
-if [ ! -f "./build.sh" ]; then
-    echo "Error: build.sh does not exist: ./build.sh"
-    exit 1
-fi
-
 
 # Check python3
 if ! command -v python3 &> /dev/null; then
     log_message "Error: python3 is not installed or not in PATH"
     exit 1
 fi
-
-# Check rclone
-if ! command -v rclone &> /dev/null; then
-    log_message "Error: rclone is not installed or not in PATH"
+# Check bc for floating point calculations
+if ! command -v bc &> /dev/null; then
+    log_message "Error: bc is not installed or not in PATH (required for disk usage calculations)"
     exit 1
 fi
+# 只有在MINIO_DATA_PATH不为空时才检查rclone和docker
+if [ -n "$MINIO_DATA_PATH" ]; then
+    # Check rclone
+    if ! command -v rclone &> /dev/null; then
+        log_message "Error: rclone is not installed or not in PATH"
+        exit 1
+    fi
 
-# Check docker
-if ! command -v docker &> /dev/null; then
-    log_message "Error: docker is not installed or not in PATH"
-    exit 1
-fi
-
-# Check if minio container is running
-if ! docker ps --format "table {{.Names}}" | grep -q "minio"; then
-    log_message "Error: minio container is not running in docker"
-    log_message "Please start minio container before running the test"
-    exit 1
+    # Check docker
+    if ! command -v docker &> /dev/null; then
+        log_message "Error: docker is not installed or not in PATH"
+        exit 1
+    fi
+else
+    log_message "MINIO_DATA_PATH is empty, skipping rclone and docker dependency checks"
 fi
 
 log_message "=== Test Configuration ==="

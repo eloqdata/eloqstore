@@ -12,8 +12,8 @@ const eloqstore::KvOptions cloud_options = {
     .fd_limit = 30 + eloqstore::num_reserved_fd,
     .num_gc_threads = 0,
     .local_space_limit = 100 << 20,  // 100MB
-    .store_path = {"./test-data"},
-    .cloud_store_path = "minio:db-stress/db-stress/",
+    .store_path = {"/tmp/test-data"},
+    .cloud_store_path = "docker-minio:eloqstore/unit-test",
     .pages_per_file_shift = 8,  // 1MB per datafile
     .data_append_mode = true,
 };

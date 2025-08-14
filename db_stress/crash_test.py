@@ -235,14 +235,14 @@ default_params = {
     "init_page_count" : 1 << 15,#default 1<<15
     "pages_per_file_shift" : lambda:11,   #default 11  
     "manifest_limit" : lambda:16 <<20,#default 8<<20
-    "fd_limit" : 10000,#default 10000
+    "fd_limit" : 1000,#default 10000
     "io_queue_size" : 4096,#default 4096
     "buf_ring_size" :lambda:1 << 10,#default 1<<10
 #    "coroutine_stack_size" :lambda:1<<14,#default 8*1024
     "max_inflight_write":4096,#default 4096
     "file_amplify_factor":4,#default 4
     "num_gc_threads":1,#default 1
-    "local_space_limit":100*1024*1024*1024,#100G
+    "local_space_limit":20*1024*1024*1024,#2G
     "reserve_space_ratio":100,#default 100
     "rclone_threads":1,#default 1
     "overflow_pointers":16,#default 16
