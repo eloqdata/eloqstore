@@ -13,14 +13,15 @@
 #include "../concurrentqueue/blockingconcurrentqueue.h"
 
 DEFINE_string(kvoptions, "", "Path to config file of EloqStore options");
+DEFINE_string(workload, "", "workload (write/read/scan/write-read/write-scan)");
 DEFINE_uint32(kv_size, 128, "size of a pair of KV");
 DEFINE_uint32(batch_size, 2048, "number of KVs per batch");
 DEFINE_uint32(write_batchs, 4096, "number of batchs to write");
 DEFINE_uint32(partitions, 128, "number of partitions");
 DEFINE_uint32(max_key, 1000000, "max key limit");
-DEFINE_uint32(write_interval, 10, "interval seconds between writes");
-DEFINE_uint32(read_per_part, 1, "concurrent read requests per partition");
-DEFINE_uint32(read_secs, 600, "read test time");
+DEFINE_uint32(write_interval, 5, "interval seconds between writes");
+DEFINE_uint32(read_per_part, 1, "concurrent read/scan requests per partition");
+DEFINE_uint32(test_secs, 600, "read/scan test time");
 
 using namespace std::chrono;
 
@@ -177,6 +178,7 @@ public:
     Reader(size_t id) : id_(id)
     {
         eloqstore::TableIdent tbl_id(table, id % FLAGS_partitions);
+        EncodeKey(key_, 0);
         std::string_view key(key_, sizeof(uint64_t));
         request_.SetArgs(std::move(tbl_id), key);
     };
@@ -201,6 +203,8 @@ void ReadLoop(eloqstore::EloqStore *store)
     {
         Reader *reader = (Reader *) (req->UserData());
         reader->latency_ = utils::UnixTs<microseconds>() - reader->start_ts_;
+        assert(req->Error() == eloqstore::KvError::NoError ||
+               req->Error() == eloqstore::KvError::NotFound);
         finished.enqueue(reader);
     };
 
@@ -257,6 +261,108 @@ void ReadLoop(eloqstore::EloqStore *store)
     }
 }
 
+class Scanner
+{
+public:
+    Scanner(size_t id) : id_(id)
+    {
+        eloqstore::TableIdent tbl_id(table, id % FLAGS_partitions);
+        request_.SetPagination(page_size, 0);
+        EncodeKey(begin_key_, 0);
+        std::string_view key(begin_key_, sizeof(uint64_t));
+        request_.SetArgs(std::move(tbl_id), key, {});
+    };
+    static const size_t page_size = 256;
+    const size_t id_;
+    uint64_t start_ts_{0};
+    uint64_t latency_{0};
+    char begin_key_[sizeof(uint64_t)];
+    eloqstore::ScanRequest request_;
+    size_t kvs_cnt_{0};
+};
+
+void ScanLoop(eloqstore::EloqStore *store)
+{
+    moodycamel::BlockingConcurrentQueue<Scanner *> finished;
+    const size_t num_scanners = FLAGS_read_per_part * FLAGS_partitions;
+    std::vector<std::unique_ptr<Scanner>> scanners(num_scanners);
+    for (uint32_t i = 0; i < num_scanners; i++)
+    {
+        scanners[i] = std::make_unique<Scanner>(i);
+    }
+
+    auto callback = [&finished](eloqstore::KvRequest *req)
+    {
+        auto scan_req = static_cast<eloqstore::ScanRequest *>(req);
+        Scanner *reader = (Scanner *) (req->UserData());
+        reader->latency_ = utils::UnixTs<microseconds>() - reader->start_ts_;
+        reader->kvs_cnt_ += scan_req->Entries().size();
+        assert(scan_req->Error() == eloqstore::KvError::NoError ||
+               scan_req->Error() == eloqstore::KvError::NotFound);
+        finished.enqueue(reader);
+    };
+
+    auto send_req = [&store, callback](Scanner *scanner)
+    {
+        EncodeKey(scanner->begin_key_, rand_gen() % FLAGS_max_key);
+        scanner->start_ts_ = utils::UnixTs<microseconds>();
+        store->ExecAsyn(&scanner->request_, uint64_t(scanner), callback);
+    };
+
+    uint64_t latency_sum = 0;
+    uint64_t req_cnt = 0;
+    uint64_t max_latency = 0;
+    const auto start = high_resolution_clock::now();
+    auto last_time = high_resolution_clock::now();
+    for (auto &scanner : scanners)
+    {
+        send_req(scanner.get());
+    }
+    while (true)
+    {
+        Scanner *scanner;
+        finished.wait_dequeue(scanner);
+        latency_sum += scanner->latency_;
+        req_cnt++;
+        max_latency = std::max(max_latency, scanner->latency_);
+
+        send_req(scanner);
+
+        if (req_cnt == 10000)
+        {
+            auto now = high_resolution_clock::now();
+            double cost_ms =
+                duration_cast<milliseconds>(now - last_time).count();
+            uint64_t qps = req_cnt * 1000 / cost_ms;
+            uint64_t average_latency = latency_sum / req_cnt;
+            LOG(INFO) << "scan speed " << qps << " QPS | average latency "
+                      << average_latency << " microseconds | max latency "
+                      << max_latency << " microseconds";
+
+            if (stop_.load(std::memory_order_relaxed))
+            {
+                break;
+            }
+
+            last_time = high_resolution_clock::now();
+            req_cnt = 0;
+            latency_sum = 0;
+            max_latency = 0;
+        }
+    }
+    size_t total_kvs = 0;
+    for (uint32_t i = 0; i < num_scanners; i++)
+    {
+        Scanner *scanner;
+        finished.wait_dequeue(scanner);
+        total_kvs += scanner->kvs_cnt_;
+    }
+    auto now = high_resolution_clock::now();
+    double cost_ms = duration_cast<milliseconds>(now - start).count();
+    uint64_t kvps = total_kvs * 1000 / cost_ms;
+    LOG(INFO) << "scan throughput " << kvps << " kvs/s";
+}
+
 int main(int argc, char *argv[])
 {
     google::ParseCommandLineFlags(&argc, &argv, true);
@@ -271,9 +377,9 @@ int main(int argc, char *argv[])
     eloqstore::EloqStore store(options);
     store.Start();
 
-    if (FLAGS_write_batchs > 0 && FLAGS_read_secs > 0)
+    if (FLAGS_workload == "write-read")
     {
-        // Hybrid read and write.
+        // Hybrid write and read.
         std::thread write_thd(WriteLoop, &store);
         std::thread read_thd(ReadLoop, &store);
         // wait all threads exit
@@ -281,19 +387,37 @@ int main(int argc, char *argv[])
         stop_.store(true, std::memory_order_relaxed);
         read_thd.join();
     }
-    else if (FLAGS_write_batchs == 0 && FLAGS_read_secs > 0)
+    else if (FLAGS_workload == "write-scan")
     {
-        // Read only
-        std::thread read_thd(ReadLoop, &store);
-        std::this_thread::sleep_for(std::chrono::seconds(FLAGS_read_secs));
+        // Hybrid write and scan.
+        std::thread write_thd(WriteLoop, &store);
+        std::thread scan_thd(ScanLoop, &store);
+        // wait all threads exit
+        write_thd.join();
         stop_.store(true, std::memory_order_relaxed);
-        read_thd.join();
+        scan_thd.join();
     }
-    else if (FLAGS_read_secs == 0 && FLAGS_write_batchs > 0)
+    else if (FLAGS_workload == "write")
     {
         // Write only
         std::thread write_thd(WriteLoop, &store);
         write_thd.join();
+    }
+    else if (FLAGS_workload == "read")
+    {
+        // Read only
+        std::thread read_thd(ReadLoop, &store);
+        std::this_thread::sleep_for(std::chrono::seconds(FLAGS_test_secs));
+        stop_.store(true, std::memory_order_relaxed);
+        read_thd.join();
+    }
+    else if (FLAGS_workload == "scan")
+    {
+        // Scan only
+        std::thread scan_thd(ScanLoop, &store);
+        std::this_thread::sleep_for(std::chrono::seconds(FLAGS_test_secs));
+        stop_.store(true, std::memory_order_relaxed);
+        scan_thd.join();
     }
 
     store.Stop();

@@ -10,15 +10,18 @@
 
 #include <cstddef>
 
-#include "rocksdb/rocksdb_namespace.h"
+#include "rocksdb_namespace.h"
 
-namespace ROCKSDB_NAMESPACE {
+namespace ROCKSDB_NAMESPACE
+{
 
 template <typename T, std::size_t Align = alignof(T)>
-struct aligned_storage {
-  struct type {
-    alignas(Align) unsigned char data[sizeof(T)];
-  };
+struct aligned_storage
+{
+    struct type
+    {
+        alignas(Align) unsigned char data[sizeof(T)];
+    };
 };
 
 }  // namespace ROCKSDB_NAMESPACE
