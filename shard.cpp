@@ -74,6 +74,7 @@ void Shard::WorkLoop()
 void Shard::Start()
 {
 #ifdef ELOQ_MODULE_ENABLED
+    shard = this;
     io_mgr_->Start();
 #else
     thd_ = std::thread([this] { WorkLoop(); });
