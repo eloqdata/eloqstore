@@ -15,7 +15,10 @@ CRASH_TEST_PY="$SCRIPT_DIR/crash_test.py"
 DISK_LOG_DIR="$LOG_DIR/disk"
 DISK_LOG_FILE="$DISK_LOG_DIR/disk_usage.log"
 
-MINIO_DATA_PATH="/home/sjh/minio/data"
+
+# no start cloud if it is empty
+MINIO_DATA_PATH=""
+#MINIO_DATA_PATH="/home/sjh/minio/data"
 DISK_MONITOR_PID=""
 
 SWITCH_INTERVAL_HOURS=1
@@ -152,7 +155,8 @@ start_disk_monitor() {
             local using_minio=false
             
             # 检查当前测试参数是否包含cloud_store_path
-            if [ -n "$CURRENT_TEST_PARAMS" ] && echo "$CURRENT_TEST_PARAMS" | grep -q "cloud_store_path"; then
+            # 只有在MINIO_DATA_PATH不为空时才检查minio
+            if [ -n "$MINIO_DATA_PATH" ] && [ -n "$CURRENT_TEST_PARAMS" ] && echo "$CURRENT_TEST_PARAMS" | grep -q "cloud_store_path"; then
                 using_minio=true
                 
                 # 获取minio数据目录的磁盘使用量
@@ -273,30 +277,35 @@ perform_cleanup() {
     else
         log_message "Data directory does not exist, no cleanup needed: $DATA_DIR"
     fi
+    
+    if [ -n "$MINIO_DATA_PATH" ]; then
         # Clean up data in minio
-    log_message "Starting cleanup of data in minio"
-    
-    # Check if rclone is available
-    if ! command -v rclone >/dev/null 2>&1; then
-        log_message "Warning: rclone command not available, skipping minio cleanup"
-        return 0
-    fi
-    
-    # Clean up all possible minio paths
-    local minio_paths=(
-        "minio:db-stress/db-stress/"
-    )
-    
-    for path in "${minio_paths[@]}"; do
-        log_message "Cleaning minio path: $path"
-        if rclone delete "$path" --verbose 2>/dev/null; then
-            log_message "Successfully cleaned minio path: $path"
-        else
-            log_message "Failed to clean minio path or path does not exist: $path"
+        log_message "Starting cleanup of data in minio"
+        
+        # Check if rclone is available
+        if ! command -v rclone >/dev/null 2>&1; then
+            log_message "Warning: rclone command not available, skipping minio cleanup"
+            return 0
         fi
-    done
-    
-    log_message "Minio cleanup operation completed"
+        
+        # Clean up all possible minio paths
+        local minio_paths=(
+            "minio:db-stress/db-stress/"
+        )
+        
+        for path in "${minio_paths[@]}"; do
+            log_message "Cleaning minio path: $path"
+            if rclone delete "$path" --verbose 2>/dev/null; then
+                log_message "Successfully cleaned minio path: $path"
+            else
+                log_message "Failed to clean minio path or path does not exist: $path"
+            fi
+        done
+        
+        log_message "Minio cleanup operation completed"
+    else
+        log_message "MINIO_DATA_PATH is empty, skipping minio cleanup"
+    fi
 }
 auto_update_code() {
     log_message "Starting automatic code update..."
@@ -583,25 +592,27 @@ if ! command -v python3 &> /dev/null; then
     log_message "Error: python3 is not installed or not in PATH"
     exit 1
 fi
-
-# Check rclone
-if ! command -v rclone &> /dev/null; then
-    log_message "Error: rclone is not installed or not in PATH"
+# Check bc for floating point calculations
+if ! command -v bc &> /dev/null; then
+    log_message "Error: bc is not installed or not in PATH (required for disk usage calculations)"
     exit 1
 fi
+# 只有在MINIO_DATA_PATH不为空时才检查rclone和docker
+if [ -n "$MINIO_DATA_PATH" ]; then
+    # Check rclone
+    if ! command -v rclone &> /dev/null; then
+        log_message "Error: rclone is not installed or not in PATH"
+        exit 1
+    fi
 
-# Check docker
-if ! command -v docker &> /dev/null; then
-    log_message "Error: docker is not installed or not in PATH"
-    exit 1
+    # Check docker
+    if ! command -v docker &> /dev/null; then
+        log_message "Error: docker is not installed or not in PATH"
+        exit 1
+    fi
+else
+    log_message "MINIO_DATA_PATH is empty, skipping rclone and docker dependency checks"
 fi
-
-# Check if minio container is running
-# if ! docker ps --format "table {{.Names}}" | grep -q "minio"; then
-#     log_message "Error: minio container is not running in docker"
-#     log_message "Please start minio container before running the test"
-#     exit 1
-# fi
 
 log_message "=== Test Configuration ==="
 log_message "Switch interval: ${SWITCH_INTERVAL_HOURS} hours"
