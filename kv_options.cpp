@@ -157,6 +157,36 @@ int KvOptions::LoadFromIni(const char *path)
     return 0;
 }
 
+bool KvOptions::operator==(const KvOptions &other) const
+{
+    return num_threads == other.num_threads &&
+           data_page_restart_interval == other.data_page_restart_interval &&
+           index_page_restart_interval == other.index_page_restart_interval &&
+           init_page_count == other.init_page_count &&
+           skip_verify_checksum == other.skip_verify_checksum &&
+           index_buffer_pool_size == other.index_buffer_pool_size &&
+           manifest_limit == other.manifest_limit &&
+           fd_limit == other.fd_limit && io_queue_size == other.io_queue_size &&
+           max_inflight_write == other.max_inflight_write &&
+           max_write_batch_pages == other.max_write_batch_pages &&
+           buf_ring_size == other.buf_ring_size &&
+           coroutine_stack_size == other.coroutine_stack_size &&
+           num_retained_archives == other.num_retained_archives &&
+           archive_interval_secs == other.archive_interval_secs &&
+           max_archive_tasks == other.max_archive_tasks &&
+           file_amplify_factor == other.file_amplify_factor &&
+           num_gc_threads == other.num_gc_threads &&
+           local_space_limit == other.local_space_limit &&
+           reserve_space_ratio == other.reserve_space_ratio &&
+           rclone_threads == other.rclone_threads &&
+           store_path == other.store_path &&
+           cloud_store_path == other.cloud_store_path &&
+           data_page_size == other.data_page_size &&
+           pages_per_file_shift == other.pages_per_file_shift &&
+           overflow_pointers == other.overflow_pointers &&
+           data_append_mode == other.data_append_mode;
+}
+
 size_t KvOptions::FilePageOffsetMask() const
 {
     return (1 << pages_per_file_shift) - 1;

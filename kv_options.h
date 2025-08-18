@@ -15,7 +15,7 @@ constexpr uint16_t max_read_pages_batch = max_overflow_pointers;
 struct KvOptions
 {
     int LoadFromIni(const char *path);
-    bool operator==(const KvOptions &other) const = default;
+    bool operator==(const KvOptions &other) const;
 
     /**
      * @brief Number of shards (threads).
