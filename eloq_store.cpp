@@ -438,9 +438,9 @@ std::string_view ScanRequest::EndKey() const
                                  : std::get<std::string>(end_key_);
 }
 
-std::span<KvEntry> ScanRequest::Entries()
+tcb::span<KvEntry> ScanRequest::Entries()
 {
-    return std::span<KvEntry>(entries_.data(), num_entries_);
+    return tcb::span<KvEntry>(entries_.data(), num_entries_);
 }
 
 std::pair<size_t, size_t> ScanRequest::ResultSize() const
