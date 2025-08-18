@@ -5,6 +5,7 @@
 #include <cassert>
 #include <filesystem>
 #include <mutex>
+#include <span>
 
 #include "eloq_store.h"
 #include "utils.h"
