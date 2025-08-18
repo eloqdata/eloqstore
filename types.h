@@ -67,7 +67,11 @@ struct FileKey
 
 struct KvEntry
 {
-    bool operator==(const KvEntry &other) const = default;
+    bool operator==(const KvEntry &other) const
+    {
+        return key_ == other.key_ && value_ == other.value_ &&
+               timestamp_ == other.timestamp_ && expire_ts_ == other.expire_ts_;
+    }
     std::string key_;
     std::string value_;
     uint64_t timestamp_;
