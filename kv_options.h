@@ -145,11 +145,11 @@ struct KvOptions
      * mode, and ideally, each batch write operation should exactly fill a new
      * file, as this will make uploading to S3 the most efficient.
      * For non-append mode, it is advisable to set a larger file size like
-     * 512MB to avoid the need for fdatasync to be executed for each small file
+     * 1GB to avoid the need for fdatasync to be executed for each small file
      * with minor modifications, ideally every partition consists of exactly one
      * data file.
      */
-    uint8_t pages_per_file_shift = 17;
+    uint8_t pages_per_file_shift = 18;
 
     /**
      * @brief Amount of pointers stored in overflow page.
