@@ -49,6 +49,7 @@ EloqStore::EloqStore(const KvOptions &opts) : options_(opts), stopped_(true)
 
     if (!options_.cloud_store_path.empty())
     {
+        // Cloud storage is enabled.
         if (options_.num_gc_threads > 0)
         {
             LOG(FATAL)
@@ -58,6 +59,29 @@ EloqStore::EloqStore(const KvOptions &opts) : options_(opts), stopped_(true)
         {
             LOG(FATAL)
                 << "Must set local_space_limit when cloud store is enabled ";
+        }
+        if (!options_.data_append_mode)
+        {
+            LOG(WARNING) << "append write mode should be enabled when cloud "
+                            "storage is enabled";
+        }
+    }
+
+    if (options_.data_append_mode)
+    {
+        if (!options_.cloud_store_path.empty() &&
+            options_.DataFileSize() > (8 << 20))
+        {
+            LOG(WARNING) << "smaller file size is recommended in append write "
+                            "mode with cloud storage";
+        }
+    }
+    else
+    {
+        if (options_.DataFileSize() < (256 << 20))
+        {
+            LOG(WARNING) << "bigger file size is recommended in non-append "
+                            "write mode";
         }
     }
 }

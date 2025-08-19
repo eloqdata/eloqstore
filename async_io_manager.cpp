@@ -824,7 +824,12 @@ int IouringMgr::CreateFile(LruFD::Ref dir_fd, FileId file_id)
         // be marked as dirty every time, but only fsync
         // it once when SyncData.
         dir_fd.Get()->dirty_ = true;
-        Fallocate({fd, false}, options_->DataFileSize());
+        if (options_->data_append_mode)
+        {
+            // Avoid update metadata (file size) of file frequently in append
+            // write mode.
+            Fallocate({fd, false}, options_->DataFileSize());
+        }
     }
     return fd;
 }
