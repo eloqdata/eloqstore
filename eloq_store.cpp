@@ -78,7 +78,7 @@ EloqStore::EloqStore(const KvOptions &opts) : options_(opts), stopped_(true)
     }
     else
     {
-        if (options_.DataFileSize() < (256 << 20))
+        if (options_.DataFileSize() < (512 << 20))
         {
             LOG(WARNING) << "bigger file size is recommended in non-append "
                             "write mode";
