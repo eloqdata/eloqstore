@@ -51,8 +51,9 @@ struct KvOptions
     uint32_t io_queue_size = 4096;
     /**
      * @brief Max amount of inflight write IO per shard.
+     * Only take effect in non-append write mode.
      */
-    uint32_t max_inflight_write = 64 << 10;
+    uint32_t max_inflight_write = 32 << 10;
     /**
      * @brief The maximum number of pages per batch for the write task.
      */
