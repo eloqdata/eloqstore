@@ -90,7 +90,7 @@ struct KvOptions
      * bigger than this value.
      * Only take effect when data_append_mode is enabled.
      */
-    uint8_t file_amplify_factor = 4;
+    uint8_t file_amplify_factor = 2;
     /**
      * @brief Number of background file GC threads.
      * Only take effect when data_append_mode is enabled.

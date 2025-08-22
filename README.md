@@ -138,7 +138,7 @@ make install
    sudo apt install rclone
    ```
 
-4. **Configure `rclone`:**
+4. **Configure and start `rclone`:**
    ```bash
    rclone config
    ```
@@ -158,7 +158,18 @@ make install
    endpoint = http://127.0.0.1:9900
    acl = private
    ```
-
+   ```bash
+   rclone rcd \
+   --rc-no-auth \
+   --rc-addr=127.0.0.1:5572 \
+   --transfers=16 \
+   --checkers=16 \
+   --s3-upload-concurrency=8 \
+   --s3-chunk-size=8M \
+   --s3-no-head \
+   --fast-list \
+   -v 
+   ```
 5. **Start EloqKV:**
    ```bash
    cd install

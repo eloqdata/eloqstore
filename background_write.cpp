@@ -208,7 +208,6 @@ KvError BackgroundWrite::CompactDataFile()
     err = UpdateMeta();
     CHECK_KV_ERR(err);
     moving_cached.Finish();
-
     TriggerFileGC();
     return KvError::NoError;
 }
@@ -238,8 +237,15 @@ KvError BackgroundWrite::CreateArchive()
     uint64_t current_ts = utils::UnixTs<chrono::microseconds>();
     err = IoMgr()->CreateArchive(tbl_ident_, snapshot, current_ts);
     CHECK_KV_ERR(err);
+
+    // Update the cached max file id.
+    FileId max_file_id =
+        static_cast<FileId>(max_fp_id >> Options()->pages_per_file_shift);
+    IoMgr()->archived_max_file_ids_[tbl_ident_] = max_file_id;
+
     LOG(INFO) << "created archive for partition " << tbl_ident_ << " at "
-              << current_ts;
+              << current_ts << ", updated cached max file id to "
+              << max_file_id;
     return KvError::NoError;
 }
 

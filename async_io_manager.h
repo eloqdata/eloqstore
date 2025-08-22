@@ -95,6 +95,8 @@ public:
     virtual void CleanTable(const TableIdent &tbl_id) = 0;
 
     const KvOptions *options_;
+
+    std::unordered_map<TableIdent, FileId> archived_max_file_ids_;
 };
 
 KvError ToKvError(int err_no);
@@ -349,19 +351,25 @@ protected:
 class CloudStoreMgr : public IouringMgr
 {
 public:
-    CloudStoreMgr(const KvOptions *opts,
-                  uint32_t fd_limit,
-                  ObjectStore *obj_store);
+    CloudStoreMgr(const KvOptions *opts, uint32_t fd_limit);
     void Start() override;
     bool IsIdle() override;
     void Stop() override;
+    void Submit() override;
     void PollComplete() override;
     KvError SwitchManifest(const TableIdent &tbl_id,
                            std::string_view snapshot) override;
     KvError CreateArchive(const TableIdent &tbl_id,
                           std::string_view snapshot,
                           uint64_t ts) override;
-    void OnObjectStoreComplete(KvTask *task);
+
+    ObjectStore *GetObjectStore()
+    {
+        return obj_store_.get();
+    }
+
+    KvError ReadArchiveFileAndDelete(const std::string &file_path,
+                                     std::string &content);
 
 private:
     int CreateFile(LruFD::Ref dir_fd, FileId file_id) override;
@@ -440,8 +448,7 @@ private:
 
     FileCleaner file_cleaner_;
 
-    ObjectStore *obj_store_;
-    moodycamel::ConcurrentQueue<KvTask *> obj_complete_q_;
+    std::unique_ptr<ObjectStore> obj_store_;
 };
 
 class MemStoreMgr : public AsyncIoManager

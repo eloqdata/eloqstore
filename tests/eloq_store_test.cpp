@@ -68,12 +68,6 @@ TEST_CASE("EloqStore ValidateOptions validates all parameters", "[eloq_store]")
     REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
     options.max_write_batch_pages = 16;  // restore valid value
 
-    // Test cloud storage configuration - number of GC threads
-    options.cloud_store_path = "test_cloud_path";
-    options.num_gc_threads = 1;  // GC threads not allowed in cloud storage mode
-    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
-    options.num_gc_threads = 0;  // restore valid value
-
     // Test cloud storage configuration - local space limit
     options.local_space_limit =
         0;  // must set local space limit in cloud storage mode

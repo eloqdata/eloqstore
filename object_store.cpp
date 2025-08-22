@@ -2,159 +2,433 @@
 
 #include <glog/logging.h>
 
-#include "async_io_manager.h"
+#include <chrono>
+#include <filesystem>
 
+#include "async_io_manager.h"
+#include "task.h"
 namespace eloqstore
 {
+namespace fs = std::filesystem;
+ObjectStore::ObjectStore(AsyncIoManager *io_mgr)
+{
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+    async_http_mgr_ =
+        std::make_unique<AsyncHttpManager>("http://127.0.0.1:5572", io_mgr);
+}
+
 ObjectStore::~ObjectStore()
 {
-    Stop();
+    curl_global_cleanup();
 }
 
-void ObjectStore::Start()
+AsyncHttpManager::AsyncHttpManager(const std::string &daemon_url,
+                                   AsyncIoManager *io_mgr)
+    : daemon_url_(daemon_url), io_mgr_(io_mgr)
 {
-    const uint16_t n_workers = options_->rclone_threads;
-    workers_.reserve(n_workers);
-    for (int i = 0; i < n_workers; i++)
+    multi_handle_ = curl_multi_init();
+    if (!multi_handle_)
     {
-        workers_.emplace_back([this] { WorkLoop(); });
+        LOG(FATAL) << "Failed to initialize cURL multi handle";
     }
-    LOG(INFO) << "object store syncer started";
+
+    // set the max connections
+    curl_multi_setopt(multi_handle_, CURLMOPT_MAXCONNECTS, 20L);
 }
 
-void ObjectStore::Stop()
+AsyncHttpManager::~AsyncHttpManager()
 {
-    if (workers_.empty())
+    Cleanup();
+    if (multi_handle_)
+    {
+        curl_multi_cleanup(multi_handle_);
+    }
+}
+void AsyncHttpManager::PerformRequests()
+{
+    curl_multi_perform(multi_handle_, &running_handles_);
+}
+
+void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
+{
+    CURL *easy = curl_easy_init();
+    if (!easy)
+    {
+        LOG(ERROR) << "Failed to initialize cURL easy handle";
+        task->error_ = KvError::CloudErr;
+        if (task->kv_task_)
+        {
+            task->kv_task_->Resume();
+        }
+        return;
+    }
+
+    // base configuration
+    curl_easy_setopt(easy, CURLOPT_PROXY, "");
+    curl_easy_setopt(easy, CURLOPT_NOPROXY, "*");
+    curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, WriteCallback);
+    curl_easy_setopt(easy, CURLOPT_WRITEDATA, &task->response_data_);
+    curl_easy_setopt(easy, CURLOPT_PRIVATE, task);
+    curl_easy_setopt(easy, CURLOPT_TIMEOUT, 300L);
+
+    switch (task->TaskType())
+    {
+    case ObjectStore::Task::Type::AsyncDownload:
+        SetupDownloadRequest(static_cast<ObjectStore::DownloadTask *>(task),
+                             easy);
+        break;
+    case ObjectStore::Task::Type::AsyncUpload:
+        SetupMultipartUpload(static_cast<ObjectStore::UploadTask *>(task),
+                             easy);
+        break;
+    case ObjectStore::Task::Type::AsyncList:
+        SetupListRequest(static_cast<ObjectStore::ListTask *>(task), easy);
+        break;
+    case ObjectStore::Task::Type::AsyncDelete:
+        SetupDeleteRequest(static_cast<ObjectStore::DeleteTask *>(task), easy);
+        break;
+    default:
+        LOG(ERROR) << "Unknown async task type";
+        curl_easy_cleanup(easy);
+        return;
+    }
+
+    // add to multi handle
+    CURLMcode mres = curl_multi_add_handle(multi_handle_, easy);
+    if (mres != CURLM_OK)
+    {
+        LOG(ERROR) << "Failed to add handle to multi: "
+                   << curl_multi_strerror(mres);
+        curl_easy_cleanup(easy);
+        task->error_ = KvError::CloudErr;
+        if (task->kv_task_)
+        {
+            task->kv_task_->Resume();
+        }
+        return;
+    }
+
+    // increment inflight_io_ when request is successfully submitted
+    task->inflight_io_++;
+
+    // record the active request using CURL handle as key
+    active_requests_[easy] = task;
+}
+void AsyncHttpManager::SetupDownloadRequest(ObjectStore::DownloadTask *task,
+                                            CURL *easy)
+{
+    Json::Value request;
+    request["srcFs"] =
+        io_mgr_->options_->cloud_store_path + "/" + task->tbl_id_->ToString();
+    request["srcRemote"] = task->filename_;
+
+    fs::path dir_path = task->tbl_id_->StorePath(io_mgr_->options_->store_path);
+    request["dstFs"] = dir_path.string();
+    request["dstRemote"] = task->filename_;
+
+    Json::StreamWriterBuilder builder;
+    task->json_data_ = Json::writeString(builder, request);
+
+    std::string endpoint = "/operations/copyfile";
+    std::string url = daemon_url_ + endpoint;
+
+    struct curl_slist *headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->json_data_.c_str());
+    curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
+
+    task->headers_ = headers;
+}
+
+void AsyncHttpManager::SetupMultipartUpload(ObjectStore::UploadTask *task,
+                                            CURL *easy)
+{
+    fs::path dir_path = task->tbl_id_->StorePath(io_mgr_->options_->store_path);
+
+    // use the new MIME API
+    curl_mime *mime = curl_mime_init(easy);
+
+    for (const std::string &filename : task->filenames_)
+    {
+        std::string filepath = (dir_path / filename).string();
+        if (std::filesystem::exists(filepath))
+        {
+            curl_mimepart *part = curl_mime_addpart(mime);
+            curl_mime_name(part, "file");
+            curl_mime_filedata(part, filepath.c_str());
+        }
+    }
+
+    std::string fs_param =
+        io_mgr_->options_->cloud_store_path + "/" + task->tbl_id_->ToString();
+    std::string url =
+        daemon_url_ + "/operations/uploadfile?fs=" + fs_param + "&remote=";
+
+    curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(easy, CURLOPT_MIMEPOST, mime);
+
+    // store mine object for later clean
+    task->mime_ = mime;
+}
+void AsyncHttpManager::SetupListRequest(ObjectStore::ListTask *task, CURL *easy)
+{
+    Json::Value request;
+    request["fs"] = io_mgr_->options_->cloud_store_path;
+    request["remote"] = task->remote_path_;
+    request["opt"] = Json::Value(Json::objectValue);
+    request["opt"]["recurse"] = false;
+    request["opt"]["showHash"] = false;
+
+    Json::StreamWriterBuilder builder;
+    task->json_data_ = Json::writeString(builder, request);
+
+    std::string endpoint = "/operations/list";
+    std::string url = daemon_url_ + endpoint;
+
+    struct curl_slist *headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->json_data_.c_str());
+    curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
+
+    task->headers_ = headers;
+}
+void AsyncHttpManager::SetupDeleteRequest(ObjectStore::DeleteTask *task,
+                                          CURL *easy)
+{
+    // Process single file based on current_index_
+    if (task->current_index_ >= task->file_paths_.size())
+    {
+        LOG(ERROR) << "DeleteTask current_index_ out of range";
+        return;
+    }
+
+    size_t index = task->current_index_;
+
+    Json::Value request;
+    request["fs"] = io_mgr_->options_->cloud_store_path;
+    request["remote"] = task->file_paths_[index];
+
+    Json::StreamWriterBuilder builder;
+    task->json_data_list_[index] = Json::writeString(builder, request);
+
+    std::string endpoint = "/operations/deletefile";
+    std::string url = daemon_url_ + endpoint;
+
+    struct curl_slist *headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+    task->headers_list_[index] = headers;
+
+    curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(
+        easy, CURLOPT_POSTFIELDS, task->json_data_list_[index].c_str());
+    curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
+}
+
+void AsyncHttpManager::ProcessCompletedRequests()
+{
+    if (IsIdle())
     {
         return;
     }
-    // Send stop signal to all workers.
-    StopSignal stop;
-    for (auto &w : workers_)
+
+    CURLMsg *msg;
+    int msgs_left;
+    while ((msg = curl_multi_info_read(multi_handle_, &msgs_left)))
     {
-        submit_q_.enqueue(&stop);
-    }
-    for (auto &w : workers_)
-    {
-        w.join();
-    }
-    workers_.clear();
-    LOG(INFO) << "object store syncer stopped";
-}
-
-bool ObjectStore::IsRunning() const
-{
-    return !workers_.empty();
-}
-
-void ObjectStore::WorkLoop()
-{
-    std::string command;
-    command.reserve(512);
-    while (true)
-    {
-        Task *task;
-        submit_q_.wait_dequeue(task);
-        if (task->TaskType() == Task::Type::Stop)
+        if (msg->msg == CURLMSG_DONE)
         {
-            return;
-        }
+            CURL *easy = msg->easy_handle;
+            ObjectStore::Task *task;
+            curl_easy_getinfo(easy, CURLINFO_PRIVATE, (void **) &task);
 
-        fs::path dir_path = task->tbl_id_->StorePath(options_->store_path);
-        switch (task->TaskType())
-        {
-        case Task::Type::Download:
-        {
-            auto dl_task = static_cast<DownloadTask *>(task);
-            command = "rclone copyto --error-on-no-transfer ";
-
-            command.append(options_->cloud_store_path);
-            command.push_back('/');
-            command.append(dl_task->tbl_id_->ToString());
-            command.push_back('/');
-            command.append(dl_task->filename_);
-
-            command.push_back(' ');
-
-            command.append(dir_path);
-            command.push_back('/');
-            command.append(dl_task->filename_);
-            break;
-        }
-        case Task::Type::Upload:
-        {
-            auto up_task = static_cast<UploadTask *>(task);
-            assert(!up_task->filenames_.empty());
-            command = "rclone copy --no-check-dest ";
-
-            command.append("--transfers ");
-            size_t transfers = std::min(up_task->filenames_.size(), size_t(32));
-            command.append(std::to_string(transfers));
-            command.push_back(' ');
-
-            for (const std::string &filename : up_task->filenames_)
+            if (!task)
             {
-                command.append("--include ");
-                command.append(filename);
-                command.push_back(' ');
+                LOG(ERROR) << "Task is null in ProcessCompletedRequests";
+                curl_multi_remove_handle(multi_handle_, easy);
+                curl_easy_cleanup(easy);
+                continue;
             }
 
-            command.append(dir_path);
+            long response_code;
+            curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &response_code);
 
-            command.push_back(' ');
-
-            command.append(options_->cloud_store_path);
-            command.push_back('/');
-            command.append(up_task->tbl_id_->ToString());
-            break;
-        }
-        default:
-            LOG(FATAL) << "Unknown task type " << int(task->TaskType());
-        }
-
-        task->error_ = ExecRclone(command);
-
-        task->io_mgr_->OnObjectStoreComplete(task->kv_task_);
-    }
-}
-
-KvError ObjectStore::ExecRclone(std::string_view cmd) const
-{
-    // rclone retry params are set to low-level-retries=10 and retries=3 by
-    // default.
-    uint8_t retry_cnt = 0;
-    while (true)
-    {
-        int res = system(cmd.data());
-        // See https://rclone.org/docs/#list-of-exit-codes
-        switch (WEXITSTATUS(res))
-        {
-        case 0:  // Success
-            return KvError::NoError;
-        case 2:  // Syntax or usage error
-            LOG(FATAL) << "Rclone syntax or usage error : " << cmd;
-        case 3:  // Directory not found
-        case 4:  // File not found
-            return KvError::NotFound;
-        case 5:  // Temporary error
-            if (retry_cnt++ < 3)
+            if (msg->data.result == CURLE_OK)
             {
-                continue;  // Try again.
+                if (response_code == 200)
+                {
+                    task->error_ = KvError::NoError;
+                }
+                else
+                {
+                    switch (response_code)
+                    {
+                    case 400:
+                    case 401:
+                    case 403:
+                    case 409:
+                        LOG(ERROR) << "HTTP error: " << response_code;
+                        task->error_ = KvError::CloudErr;
+                        break;
+                    case 404:
+                        task->error_ =
+                            KvError::NotFound;  // 404 is a normal case
+                        break;
+                    case 408:
+                    case 504:
+                    case 429:
+                    case 503:
+                        LOG(ERROR) << "HTTP error: " << response_code;
+                        if (task->retry_count_ < task->max_retries_)
+                        {
+                            task->retry_count_++;
+
+                            curl_multi_remove_handle(multi_handle_, easy);
+                            curl_easy_cleanup(easy);
+                            active_requests_.erase(easy);
+                            task->inflight_io_--;
+                            CleanupTaskResources(task);
+
+                            SubmitRequest(task);
+                            continue;
+                        }
+
+                        task->error_ = KvError::Timeout;
+                        break;
+                    case 500:
+                    case 502:
+                    case 505:
+                        LOG(ERROR) << "HTTP error: " << response_code;
+                        task->error_ = KvError::Timeout;
+                        break;
+                    default:
+                        LOG(ERROR) << "HTTP error: " << response_code;
+                        task->error_ = KvError::CloudErr;
+                        break;
+                    }
+                }
             }
-            return KvError::TryAgain;
-        case 9:  // Operation successful, but no files transferred
-            // Download source not found. Reported by '--error-on-no-transfer'
-            return KvError::NotFound;
-        case 10:  // Duration exceeded
-            // This should not happen because --max-duration defaults to off.
-            return KvError::Timeout;
-        case 1:  // Error not otherwise categorised
-        case 6:  // Less serious errors (NoRetry errors)
-        case 7:  // Fatal error
-        case 8:  // Transfer exceeded (--max-transfer defaults to off)
-        default:
-            return KvError::CloudErr;
+            else
+            {
+                LOG(ERROR) << "cURL error: "
+                           << curl_easy_strerror(msg->data.result);
+                task->error_ = KvError::CloudErr;
+            }
+
+            if (task->TaskType() == ObjectStore::Task::Type::AsyncDelete)
+            {
+                auto *delete_task =
+                    static_cast<ObjectStore::DeleteTask *>(task);
+                if (task->error_ != KvError::NoError &&
+                    !delete_task->has_error_)
+                {
+                    delete_task->has_error_ = true;
+                    delete_task->first_error_ = task->error_;
+                }
+            }
+
+            // clean curl resources first
+            curl_multi_remove_handle(multi_handle_, easy);
+            curl_easy_cleanup(easy);
+            active_requests_.erase(easy);
+            task->inflight_io_--;
+
+            if (task->inflight_io_ == 0)
+            {
+                CleanupTaskResources(task);
+
+                if (task->kv_task_)
+                {
+                    if (task->TaskType() ==
+                        ObjectStore::Task::Type::AsyncDelete)
+                    {
+                        auto *delete_task =
+                            static_cast<ObjectStore::DeleteTask *>(task);
+                        if (delete_task->has_error_)
+                        {
+                            task->error_ = delete_task->first_error_;
+                        }
+                    }
+                    task->kv_task_->Resume();
+                }
+            }
         }
     }
 }
+
+void AsyncHttpManager::CleanupTaskResources(ObjectStore::Task *task)
+{
+    if (!task || task->inflight_io_ > 0)
+    {
+        return;
+    }
+
+    if (task->TaskType() == ObjectStore::Task::Type::AsyncUpload)
+    {
+        auto upload_task = static_cast<ObjectStore::UploadTask *>(task);
+        if (upload_task->mime_)
+        {
+            curl_mime_free(upload_task->mime_);  // free the mime object
+            upload_task->mime_ = nullptr;
+        }
+        if (upload_task->headers_)
+        {
+            // free the header list
+            curl_slist_free_all(upload_task->headers_);
+            upload_task->headers_ = nullptr;
+        }
+    }
+    else if (task->TaskType() == ObjectStore::Task::Type::AsyncDownload)
+    {
+        auto download_task = static_cast<ObjectStore::DownloadTask *>(task);
+        if (download_task->headers_)
+        {
+            curl_slist_free_all(download_task->headers_);
+            download_task->headers_ = nullptr;
+        }
+    }
+    else if (task->TaskType() == ObjectStore::Task::Type::AsyncList)
+    {
+        auto list_task = static_cast<ObjectStore::ListTask *>(task);
+        if (list_task->headers_)
+        {
+            curl_slist_free_all(list_task->headers_);
+            list_task->headers_ = nullptr;
+        }
+    }
+    else if (task->TaskType() == ObjectStore::Task::Type::AsyncDelete)
+    {
+        auto delete_task = static_cast<ObjectStore::DeleteTask *>(task);
+        for (auto &headers : delete_task->headers_list_)
+        {
+            if (headers)
+            {
+                curl_slist_free_all(headers);
+            }
+        }
+        delete_task->headers_list_.clear();
+        delete_task->json_data_list_.clear();
+    }
+}
+void AsyncHttpManager::Cleanup()
+{
+    for (auto &[easy, task] : active_requests_)
+    {
+        // remove easy handle from multi handle
+        curl_multi_remove_handle(multi_handle_, easy);
+
+        // clean Task associated resources
+        CleanupTaskResources(task);
+
+        // clean cURL easy handle
+        curl_easy_cleanup(easy);
+
+        task->inflight_io_--;
+    }
+    active_requests_.clear();
+}
+
 }  // namespace eloqstore

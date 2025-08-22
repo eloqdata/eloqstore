@@ -26,7 +26,11 @@ enum struct KvError : uint8_t
     Timeout,
     NoPermission,
     CloudErr,
-    IoFail
+    IoFail,
+
+    // InvalidArg,  // rclone API invalid argument,response 400
+    // AuthErr,     // rclone API authentication error,response 401/403
+    // Conflict,    // rclone API conflict error,response 409
 };
 
 constexpr const char *ErrorString(KvError err)

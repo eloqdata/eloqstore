@@ -53,13 +53,6 @@ bool EloqStore::ValidateOptions(const KvOptions &opts)
 
     if (!opts.cloud_store_path.empty())
     {
-        // Cloud storage is enabled.
-        if (opts.num_gc_threads > 0)
-        {
-            LOG(ERROR)
-                << "num_gc_threads must be 0 when cloud store is enabled";
-            return false;
-        }
         if (opts.local_space_limit == 0)
         {
             LOG(ERROR)
@@ -122,10 +115,6 @@ KvError EloqStore::Start()
         KvError err = InitStoreSpace();
         CHECK_KV_ERR(err);
     }
-    if (!options_.cloud_store_path.empty())
-    {
-        obj_store_ = std::make_unique<ObjectStore>(&options_);
-    }
 
     // There are files opened at very early stage like stdin/stdout/stderr, glog
     // file, and root directories of data.
@@ -153,14 +142,23 @@ KvError EloqStore::Start()
 
     if (options_.data_append_mode)
     {
-        if (options_.num_gc_threads > 0)
+        // Initialize file garbage collector for both local and cloud modes
+        if (file_gc_ == nullptr)
         {
-            if (file_gc_ == nullptr)
-            {
-                file_gc_ = std::make_unique<FileGarbageCollector>(&options_);
-            }
-            file_gc_->Start(options_.num_gc_threads);
+            file_gc_ = std::make_unique<FileGarbageCollector>(&options_);
         }
+
+        // Only start thread pool in local mode
+        if (options_.cloud_store_path.empty() && options_.num_gc_threads > 0)
+        {
+            LOG(INFO) << "local file gc thread pool started";
+            file_gc_->StartLocalThreadPool(options_.num_gc_threads);
+        }
+        else if (!options_.cloud_store_path.empty())
+        {
+            LOG(INFO) << "file gc initialized for cloud mode";
+        }
+
         if (options_.num_retained_archives > 0 &&
             options_.archive_interval_secs > 0)
         {
@@ -170,11 +168,6 @@ KvError EloqStore::Start()
             }
             archive_crond_->Start();
         }
-    }
-
-    if (!options_.cloud_store_path.empty())
-    {
-        obj_store_->Start();
     }
 
     for (auto &shard : shards_)
@@ -315,10 +308,6 @@ void EloqStore::Stop()
         shard->Stop();
     }
 
-    if (obj_store_ != nullptr)
-    {
-        obj_store_->Stop();
-    }
     if (file_gc_ != nullptr)
     {
         file_gc_->Stop();

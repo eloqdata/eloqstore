@@ -17,10 +17,15 @@ if (ELOQ_MODULE_ENABLED)
     add_compile_definitions(ELOQ_MODULE_ENABLED)
 endif()
 
+
+
 find_package(Threads REQUIRED)
 find_package(glog REQUIRED)
 
 find_package(Boost REQUIRED COMPONENTS context)
+
+find_package(jsoncpp REQUIRED)
+find_package(CURL REQUIRED)
 if(Boost_FOUND)
     message(STATUS "Boost found at: ${Boost_INCLUDE_DIRS}")
 else()
@@ -93,7 +98,8 @@ set(ELOQ_STORE_SOURCES
 add_library(eloqstore STATIC ${ELOQ_STORE_SOURCES} ${INI_SOURCES})
 
 target_include_directories(eloqstore PUBLIC ${ELOQ_STORE_INCLUDE})
-target_link_libraries(eloqstore PRIVATE ${URING_LIB} Boost::context glog::glog absl::flat_hash_map)
+target_link_libraries(eloqstore PRIVATE ${URING_LIB} Boost::context glog::glog absl::flat_hash_map ${CURL_LIBRARIES} jsoncpp_lib)
+
 
 add_library(test_util STATIC test_utils.cpp)
 target_link_libraries(test_util PUBLIC eloqstore)
