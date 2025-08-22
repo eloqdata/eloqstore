@@ -33,6 +33,8 @@ void Shard::WorkLoop()
     auto dequeue_requests = [this, &reqs]() -> int
     {
         size_t nreqs = requests_.try_dequeue_bulk(reqs.data(), reqs.size());
+        // only wait when no request no active task and io is idle,
+        // so will complete workloop after all task done and io is idle
         if (nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle())
         {
             // Idle state, wait for new requests or exit.

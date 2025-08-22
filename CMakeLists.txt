@@ -17,6 +17,10 @@ if (ELOQ_MODULE_ENABLED)
     add_compile_definitions(ELOQ_MODULE_ENABLED)
 endif()
 
+option(USE_RCLONE_HTTP_API "Use Rclone HTTP API instead of system calls" ON)
+
+
+
 find_package(Threads REQUIRED)
 find_package(glog REQUIRED)
 
@@ -94,6 +98,14 @@ add_library(eloqstore STATIC ${ELOQ_STORE_SOURCES} ${INI_SOURCES})
 
 target_include_directories(eloqstore PUBLIC ${ELOQ_STORE_INCLUDE})
 target_link_libraries(eloqstore PRIVATE ${URING_LIB} Boost::context glog::glog absl::flat_hash_map)
+
+if(USE_RCLONE_HTTP_API)
+    add_definitions(-DUSE_RCLONE_HTTP_API)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(JSONCPP jsoncpp)
+    find_package(CURL REQUIRED)
+    target_link_libraries(eloqstore PRIVATE ${CURL_LIBRARIES} ${JSONCPP_LIBRARIES})
+endif()
 
 add_library(test_util STATIC test_utils.cpp)
 target_link_libraries(test_util PUBLIC eloqstore)

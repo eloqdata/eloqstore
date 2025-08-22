@@ -17,8 +17,8 @@ DISK_LOG_FILE="$DISK_LOG_DIR/disk_usage.log"
 
 
 # no start cloud if it is empty
-MINIO_DATA_PATH=""
-#MINIO_DATA_PATH="/home/sjh/minio/data"
+#MINIO_DATA_PATH=""
+MINIO_DATA_PATH="/home/sjh/minio/data"
 DISK_MONITOR_PID=""
 
 SWITCH_INTERVAL_HOURS=1
@@ -61,12 +61,14 @@ SYSTEM_TYPE_PARAM_COMBINATIONS=(
 
    # 二更:好像partiton不能太多,因为他是从data_0,data_1开始逐渐分配的,上面这种总共1000个partiton就会导致一开始就分配8GB,故我们应该限制partition数量,但是限制数量了就无法保证高并发了,此时就只能将一个batch调大了
    # 我减少了一个batch写入的数据量,发现吞吐量不变,是不是其实只能将patition的数量提高才能拉高吞吐呢?
-
+    "--data_append_mode=true --cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --num_threads=4  --rclone_threads=1 -throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=10 --write_percent=50"
+    # "--data_append_mode=true --cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --num_threads=4  --rclone_threads=2 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    # "--data_append_mode=true --cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --num_threads=4  --rclone_threads=4 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
 
    # 不追加情况下,随着线程数增加
     #"--data_append_mode=false --num_threads=1  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
-    "--data_append_mode=false --num_threads=8  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
-    "--data_append_mode=false --num_threads=32 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    # "--data_append_mode=false --num_threads=8  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    # "--data_append_mode=false --num_threads=32 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     
     # 追加情况下,随着线程数增加
     "--data_append_mode=true --num_threads=1  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
@@ -147,12 +149,26 @@ start_disk_monitor() {
             
             # 检查当前测试参数是否包含cloud_store_path
             # 只有在MINIO_DATA_PATH不为空时才检查minio
+            # if [ -n "$MINIO_DATA_PATH" ] && [ -n "$CURRENT_TEST_PARAMS" ] && echo "$CURRENT_TEST_PARAMS" | grep -q "cloud_store_path"; then
+            #     using_minio=true
+                
+            #     # 获取minio数据目录的磁盘使用量
+            #     if [ -d "$MINIO_DATA_PATH" ]; then
+            #         minio_usage=$(du -sb "$MINIO_DATA_PATH" 2>/dev/null | awk '{printf "%.2f", $1/1024/1024/1024}')
+            #         if [ -z "$minio_usage" ]; then
+            #             minio_usage="0.00"
+            #         fi
+            #     else
+            #         minio_usage="0.00"
+            #     fi
+            # fi
             if [ -n "$MINIO_DATA_PATH" ] && [ -n "$CURRENT_TEST_PARAMS" ] && echo "$CURRENT_TEST_PARAMS" | grep -q "cloud_store_path"; then
                 using_minio=true
                 
-                # 获取minio数据目录的磁盘使用量
-                if [ -d "$MINIO_DATA_PATH" ]; then
-                    minio_usage=$(du -sb "$MINIO_DATA_PATH" 2>/dev/null | awk '{printf "%.2f", $1/1024/1024/1024}')
+                # 使用rclone size命令获取minio数据使用量
+                if command -v rclone >/dev/null 2>&1; then
+                    # 使用rclone size获取minio:db-stress的大小，并转换为GB
+                    minio_usage=$(rclone size minio:db-stress 2>/dev/null | grep "Total size:" | awk '{print $3}' | sed 's/GiB//' | sed 's/MiB//' | awk '{if($0 ~ /MiB/) printf "%.2f", $0/1024; else printf "%.2f", $0}')
                     if [ -z "$minio_usage" ]; then
                         minio_usage="0.00"
                     fi
@@ -160,7 +176,6 @@ start_disk_monitor() {
                     minio_usage="0.00"
                 fi
             fi
-            
             # 根据是否使用minio来格式化输出
             if [ "$using_minio" = true ]; then
                 # 格式：本地GB/minioGB

@@ -527,6 +527,7 @@ KvError ToKvError(int err_no)
     case -ENOSPC:
         return KvError::OutOfSpace;
     default:
+        LOG(ERROR) << "ToKvError: " << err_no;
         return KvError::IoFail;
     }
 }
@@ -1948,11 +1949,26 @@ int CloudStoreMgr::ReserveCacheSpace(size_t size)
 KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id, FileId file_id)
 {
     std::string filename = ToFilename(file_id);
-    ObjectStore::DownloadTask obj_task(this, ThdTask(), &tbl_id, filename);
-    obj_store_->submit_q_.enqueue(&obj_task);
+
+    // the task will be deleted inside object_store, so it should be save the
+    // result when callback
+    KvError result = KvError::NoError;
+    auto async_task = new ObjectStore::DownloadTask(
+        this,
+        ThdTask(),
+        &tbl_id,
+        filename,
+        [this, &result](ObjectStore::Task *task)
+        {
+            result = task->error_;
+            obj_complete_q_.enqueue(task->kv_task_);
+        });
+
+    obj_store_->submit_q_.enqueue(async_task);
     ThdTask()->status_ = TaskStatus::Blocked;
     ThdTask()->Yield();
-    return obj_task.error_;
+
+    return result;
 }
 
 KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
@@ -1962,12 +1978,25 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
     {
         return KvError::NoError;
     }
-    ObjectStore::UploadTask obj_task(
-        this, ThdTask(), &tbl_id, std::move(filenames));
-    obj_store_->submit_q_.enqueue(&obj_task);
+
+    KvError result = KvError::NoError;
+    auto async_task =
+        new ObjectStore::UploadTask(this,
+                                    ThdTask(),
+                                    &tbl_id,
+                                    std::move(filenames),
+                                    [this, &result](ObjectStore::Task *task)
+                                    {
+                                        // save the result before enqueue,task
+                                        // will be deleted after this callback
+                                        result = task->error_;
+                                        obj_complete_q_.enqueue(task->kv_task_);
+                                    });
+    obj_store_->submit_q_.enqueue(async_task);
     ThdTask()->status_ = TaskStatus::Blocked;
     ThdTask()->Yield();
-    return obj_task.error_;
+
+    return result;
 }
 
 TaskType CloudStoreMgr::FileCleaner::Type() const
@@ -2040,6 +2069,7 @@ void CloudStoreMgr::FileCleaner::Run()
 
             io_uring_sqe *sqe = io_mgr_->GetSQE(UserDataType::BaseReq, &req);
             int root_fd = io_mgr_->GetRootFD(req.file_->key_->tbl_id_).first;
+            // LOG(INFO) << "file cleaner unlink file: " << req.path_;
             io_uring_prep_unlinkat(sqe, root_fd, req.path_.c_str(), 0);
         }
 
