@@ -15,13 +15,13 @@
 DEFINE_string(kvoptions, "", "Path to config file of EloqStore options");
 DEFINE_string(workload, "", "workload (write/read/scan/write-read/write-scan)");
 DEFINE_uint32(kv_size, 128, "size of a pair of KV");
-DEFINE_uint32(batch_size, 2048, "number of KVs per batch");
-DEFINE_uint32(write_batchs, 4096, "number of batchs to write");
+DEFINE_uint32(batch_size, 8192, "number of KVs per batch");
+DEFINE_uint32(write_batchs, 32768, "number of batchs to write");
 DEFINE_uint32(partitions, 128, "number of partitions");
 DEFINE_uint32(max_key, 1000000, "max key limit");
-DEFINE_uint32(write_interval, 5, "interval seconds between writes");
+DEFINE_uint32(write_interval, 0, "interval seconds between writes");
 DEFINE_uint32(read_per_part, 1, "concurrent read/scan requests per partition");
-DEFINE_uint32(test_secs, 600, "read/scan test time");
+DEFINE_uint32(test_secs, 60, "read/scan test time");
 DEFINE_uint32(read_thds, 1, "number of client threads send read/scan requests");
 
 using namespace std::chrono;
@@ -41,7 +41,7 @@ uint64_t DecodeKey(const std::string &key)
 
 thread_local std::mt19937 rand_gen(0);
 
-static constexpr size_t key_interval = 10;
+static constexpr size_t key_interval = 4;
 static constexpr size_t del_ratio = 4;
 static constexpr double upsert_ratio = 1 - (1.0 / del_ratio);
 
@@ -347,10 +347,12 @@ void ScanLoop(eloqstore::EloqStore *store, uint32_t thd_id)
                 duration_cast<milliseconds>(now - last_time).count();
             uint64_t qps = req_cnt * 1000 / cost_ms;
             uint64_t average_latency = latency_sum / req_cnt;
-            LOG(INFO) << "[" << thd_id << "]scan speed " << qps
-                      << " QPS | average latency " << average_latency
-                      << " microseconds | max latency " << max_latency
-                      << " microseconds";
+            uint64_t mb_per_sec =
+                (qps * Scanner::page_size * FLAGS_kv_size) >> 20;
+            LOG(INFO) << "[" << thd_id << "]scan speed " << mb_per_sec
+                      << " MB/s " << qps << " QPS | average latency "
+                      << average_latency << " microseconds | max latency "
+                      << max_latency << " microseconds";
 
             if (stop_.load(std::memory_order_relaxed))
             {
@@ -373,7 +375,9 @@ void ScanLoop(eloqstore::EloqStore *store, uint32_t thd_id)
     auto now = high_resolution_clock::now();
     double cost_ms = duration_cast<milliseconds>(now - start).count();
     uint64_t kvps = total_kvs * 1000 / cost_ms;
-    LOG(INFO) << "[" << thd_id << "]scan throughput " << kvps << " kvs/s";
+    uint64_t mb_per_sec = (kvps * Scanner::page_size * FLAGS_kv_size) >> 20;
+    LOG(INFO) << "[" << thd_id << "]scan throughput " << mb_per_sec << " MB/s "
+              << kvps << " kvs/s";
 }
 
 int main(int argc, char *argv[])
