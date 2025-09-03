@@ -35,16 +35,14 @@ public:
     class Task
     {
     public:
-        Task(CloudStoreMgr *io_mgr, KvTask *kv_task, const TableIdent *tbl_id)
-            : kv_task_(kv_task),
-              tbl_id_(tbl_id),
-              io_mgr_(io_mgr),
-              request_id_(next_request_id_++){};
+        Task() : request_id_(next_request_id_++){};
         virtual ~Task() = default;
         enum class Type : uint8_t
         {
             AsyncDownload = 0,
             AsyncUpload,
+            AsyncList,
+            AsyncDelete,
             Stop
         };
         virtual Type TaskType() = 0;
@@ -61,8 +59,8 @@ public:
         CompletionCallback callback_;
 
     protected:
-        const TableIdent *tbl_id_;
-        CloudStoreMgr *io_mgr_{nullptr};
+        // const TableIdent *tbl_id_;
+        // CloudStoreMgr *io_mgr_{nullptr};
         static std::atomic<uint64_t> next_request_id_;
         friend class ObjectStore;
         friend class AsyncHttpManager;
@@ -76,14 +74,17 @@ public:
                      const TableIdent *tbl_id,
                      std::string_view filename,
                      CompletionCallback callback)
-            : Task(io_mgr, kv_task, tbl_id), filename_(filename)
+            : tbl_id_(tbl_id), io_mgr_(io_mgr), filename_(filename)
         {
+            kv_task_ = kv_task;
             callback_ = std::move(callback);
         };
         Type TaskType() override
         {
             return Type::AsyncDownload;
         };
+        const TableIdent *tbl_id_;
+        CloudStoreMgr *io_mgr_;
         std::string filename_;
         struct curl_slist *headers_{nullptr};
         std::string json_data_;
@@ -97,14 +98,18 @@ public:
                    const TableIdent *tbl_id,
                    std::vector<std::string> filenames,
                    CompletionCallback callback)
-            : Task(io_mgr, kv_task, tbl_id), filenames_(std::move(filenames))
+            : tbl_id_(tbl_id), io_mgr_(io_mgr), filenames_(std::move(filenames))
         {
+            kv_task_ = kv_task;
             callback_ = std::move(callback);
         };
         Type TaskType() override
         {
             return Type::AsyncUpload;
         };
+
+        const TableIdent *tbl_id_;
+        CloudStoreMgr *io_mgr_;
         std::vector<std::string> filenames_;
 
         // cURL related members
@@ -112,13 +117,55 @@ public:
         struct curl_slist *headers_{nullptr};
     };
 
+    class ListTask : public Task
+    {
+    public:
+        ListTask(const KvOptions *options,
+                 std::string_view remote_path,
+                 std::vector<std::string> *result,
+                 CompletionCallback callback)
+            : options_(options), remote_path_(remote_path), result_(result)
+        {
+            callback_ = std::move(callback);
+        };
+        Type TaskType() override
+        {
+            return Type::AsyncList;
+        };
+        const KvOptions *options_;
+        std::string remote_path_;
+        std::vector<std::string> *result_;
+        struct curl_slist *headers_{nullptr};
+        std::string json_data_;
+    };
+
+    class DeleteTask : public Task
+    {
+    public:
+        DeleteTask(const KvOptions *options,
+                   std::string_view file_path,
+                   CompletionCallback callback)
+            : options_(options), file_path_(file_path)
+        {
+            callback_ = std::move(callback);
+        };
+        Type TaskType() override
+        {
+            return Type::AsyncDelete;
+        };
+        const KvOptions *options_;
+        std::string file_path_;
+        struct curl_slist *headers_{nullptr};
+        std::string json_data_;
+    };
+    const KvOptions *options_;
     moodycamel::BlockingConcurrentQueue<Task *> submit_q_;
 
 private:
     class StopSignal : public Task
     {
     public:
-        StopSignal() : Task(nullptr, nullptr, nullptr){};
+        StopSignal() : Task(){};
         Type TaskType() override
         {
             return Type::Stop;
@@ -147,6 +194,8 @@ private:
         void CleanupTaskResources(Task *task);
         void SetupMultipartUpload(UploadTask *task, CURL *easy);
         void SetupDownloadRequest(DownloadTask *task, CURL *easy);
+        void SetupListRequest(ListTask *task, CURL *easy);
+        void SetupDeleteRequest(DeleteTask *task, CURL *easy);
 
         static size_t WriteCallback(void *contents,
                                     size_t size,
@@ -169,7 +218,6 @@ private:
     std::unique_ptr<AsyncHttpManager> async_http_mgr_;
     void WorkLoop();
 
-    const KvOptions *options_;
     std::vector<std::thread> workers_;
 };
 }  // namespace eloqstore

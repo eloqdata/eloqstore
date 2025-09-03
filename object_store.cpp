@@ -81,7 +81,7 @@ void ObjectStore::WorkLoop()
     std::array<Task *, 128> tasks;
     // the max concurrent requests to rclone,it need not be too many,
     // because the rclone can not proccess much request
-    const int max_concurrent_requests = 20;
+    const int max_concurrent_requests = 60;
     auto dequeue_tasks = [this, &tasks]() -> int
     {
         size_t ntasks = submit_q_.try_dequeue_bulk(tasks.data(), tasks.size());
@@ -90,7 +90,7 @@ void ObjectStore::WorkLoop()
         {
             while (ntasks == 0)
             {
-                const auto timeout = std::chrono::milliseconds(100);
+                const auto timeout = std::chrono::milliseconds(10);
                 ntasks = submit_q_.wait_dequeue_bulk_timed(
                     tasks.data(), tasks.size(), timeout);
             }
@@ -180,6 +180,12 @@ void ObjectStore::AsyncHttpManager::SubmitRequest(Task *task)
     case Task::Type::AsyncUpload:
         SetupMultipartUpload(static_cast<UploadTask *>(task), easy);
         break;
+    case Task::Type::AsyncList:
+        SetupListRequest(static_cast<ListTask *>(task), easy);
+        break;
+    case Task::Type::AsyncDelete:
+        SetupDeleteRequest(static_cast<DeleteTask *>(task), easy);
+        break;
     default:
         LOG(ERROR) << "Unknown async task type";
         curl_easy_cleanup(easy);
@@ -264,6 +270,53 @@ void ObjectStore::AsyncHttpManager::SetupMultipartUpload(UploadTask *task,
     // store mine object for later clean
     task->mime_ = mime;
 }
+void ObjectStore::AsyncHttpManager::SetupListRequest(ListTask *task, CURL *easy)
+{
+    Json::Value request;
+    request["fs"] = task->options_->cloud_store_path;
+    request["remote"] = task->remote_path_;
+    request["opt"] = Json::Value(Json::objectValue);
+    request["opt"]["recurse"] = false;
+    request["opt"]["showHash"] = false;
+
+    Json::StreamWriterBuilder builder;
+    task->json_data_ = Json::writeString(builder, request);
+
+    std::string endpoint = "/operations/list";
+    std::string url = daemon_url_ + endpoint;
+
+    struct curl_slist *headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->json_data_.c_str());
+    curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
+
+    task->headers_ = headers;
+}
+void ObjectStore::AsyncHttpManager::SetupDeleteRequest(DeleteTask *task,
+                                                       CURL *easy)
+{
+    Json::Value request;
+    request["fs"] = task->options_->cloud_store_path;
+    request["remote"] = task->file_path_;  // 只删除第一个
+
+    Json::StreamWriterBuilder builder;
+    task->json_data_ = Json::writeString(builder, request);
+
+    std::string endpoint = "/operations/deletefile";
+    std::string url = daemon_url_ + endpoint;
+
+    struct curl_slist *headers = nullptr;
+    headers = curl_slist_append(headers, "Content-Type: application/json");
+
+    curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->json_data_.c_str());
+    curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
+
+    task->headers_ = headers;
+}
+
 void ObjectStore::AsyncHttpManager::ProcessCompletedRequests()
 {
     int running_handles;
@@ -403,6 +456,24 @@ void ObjectStore::AsyncHttpManager::CleanupTaskResources(Task *task)
         {
             curl_slist_free_all(download_task->headers_);
             download_task->headers_ = nullptr;
+        }
+    }
+    else if (task->TaskType() == Task::Type::AsyncList)
+    {
+        auto list_task = static_cast<ListTask *>(task);
+        if (list_task->headers_)
+        {
+            curl_slist_free_all(list_task->headers_);
+            list_task->headers_ = nullptr;
+        }
+    }
+    else if (task->TaskType() == Task::Type::AsyncDelete)
+    {
+        auto delete_task = static_cast<DeleteTask *>(task);
+        if (delete_task->headers_)
+        {
+            curl_slist_free_all(delete_task->headers_);
+            delete_task->headers_ = nullptr;
         }
     }
 }

@@ -49,11 +49,6 @@ EloqStore::EloqStore(const KvOptions &opts) : options_(opts), stopped_(true)
 
     if (!options_.cloud_store_path.empty())
     {
-        if (options_.num_gc_threads > 0)
-        {
-            LOG(FATAL)
-                << "num_gc_threads must be 0 when cloud store is enabled";
-        }
         if (options_.local_space_limit == 0)
         {
             LOG(FATAL)
@@ -114,7 +109,18 @@ KvError EloqStore::Start()
         {
             if (file_gc_ == nullptr)
             {
-                file_gc_ = std::make_unique<FileGarbageCollector>(&options_);
+                if (!options_.cloud_store_path.empty())
+                {
+                    LOG(INFO) << "cloud file gc started";
+                    file_gc_ = std::make_unique<CloudFileGarbageCollector>(
+                        &options_, obj_store_.get());
+                }
+                else
+                {
+                    LOG(INFO) << "local file gc started";
+                    file_gc_ =
+                        std::make_unique<LocalFileGarbageCollector>(&options_);
+                }
             }
             file_gc_->Start(options_.num_gc_threads);
         }
