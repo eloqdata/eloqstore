@@ -1979,11 +1979,12 @@ void CloudStoreMgr::FileCleaner::Run()
 {
     killed_ = false;
     const KvOptions *opts = io_mgr_->options_;
-    const size_t reserve_space = opts->reserve_space_ratio == 0
-                                     ? 0
-                                     : double(opts->local_space_limit) /
-                                           double(opts->reserve_space_ratio);
-    const size_t threshold = opts->local_space_limit - reserve_space;
+    const size_t per_shard_limit = opts->local_space_limit / opts->num_threads;
+    const size_t reserve_space =
+        opts->reserve_space_ratio == 0
+            ? 0
+            : double(per_shard_limit) / double(opts->reserve_space_ratio);
+    const size_t threshold = per_shard_limit - reserve_space;
     // 128 * 8MB (data file) = 1GB
     const uint16_t batch_size = 128;
 

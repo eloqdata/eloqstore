@@ -96,7 +96,7 @@ struct KvOptions
      */
     uint16_t num_gc_threads = 1;
     /**
-     * @brief Limit total size of local files per shard.
+     * @brief Limit total size of local files.
      * Only take effect when cloud store is enabled.
      */
     size_t local_space_limit = size_t(1) << 40;  // 1TB
