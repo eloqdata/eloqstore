@@ -84,12 +84,14 @@ make install
    ## data store service
    # The shard count of the eloqstore, it must be the same with the value of @@core_num
    eloq_store_worker_num=8
-   # The eloqstore data path, if not set, it will store as {eloq_data_path}/eloq_dss/eloqstore_data 
-   eloq_store_data_path={your_eloqstore_data_path}
+   # The eloqstore data path list, if not set, it will store as {eloq_data_path}/eloq_dss/eloqstore_data
+   eloq_store_data_path_list={your_eloqstore_data_path1, your_eloqstore_data_path2,...}
    # Max number of open files used by eloqstore(default: 1024)
    eloq_store_open_files_limit=1024
    # Number of background file GC threads.(default: 1)
    eloq_store_gc_threads=1
+   # Max amount of cached index pages
+   eloq_store_index_buffer_pool_size=131072
    ```
 
 2. **Start EloqKV:**
@@ -114,13 +116,15 @@ make install
    [store]
    ## data store service
    eloq_store_worker_num=8
-   # The eloqstore data path, if not set, it will store as {eloq_data_path}/eloq_dss/eloqstore_data 
-   eloq_store_data_path={your_eloqstore_data_path}
+   # The eloqstore data path list, if not set, it will store as {eloq_data_path}/eloq_dss/eloqstore_data
+   eloq_store_data_path_list={your_eloqstore_data_path1, your_eloqstore_data_path2,...}
    # Max number of open files used by eloqstore(default: 1024)
    eloq_store_open_files_limit=1024
    eloq_eloqstore_cloud_store_path=eloqstore_cloud:dss-eloqstore-dev
    # Number of threads used by rclone to upload/download files.
    eloq_eloqstore_cloud_worker_count=8
+   # Max amount of cached index pages
+   eloq_store_index_buffer_pool_size=131072
    ```
 
 2. **Install MinIO and start:**
