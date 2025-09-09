@@ -13,123 +13,16 @@ std::atomic<uint64_t> ObjectStore::Task::next_request_id_{1};
 ObjectStore::ObjectStore(const KvOptions *options) : options_(options)
 {
     curl_global_init(CURL_GLOBAL_DEFAULT);
-};
+    async_http_mgr_ =
+        std::make_unique<AsyncHttpManager>("http://127.0.0.1:5572");
+}
 
 ObjectStore::~ObjectStore()
 {
-    Stop();
     curl_global_cleanup();
 }
 
-void ObjectStore::Start()
-{
-    if (!async_http_mgr_)
-    {
-        async_http_mgr_ =
-            std::make_unique<AsyncHttpManager>("http://127.0.0.1:5572");
-    }
-
-    const uint16_t n_workers = options_->rclone_threads;
-    workers_.reserve(n_workers);
-    // now only support 1 worker,
-    // because the async_http_mgr_ is not thread safe,and one worker is enough
-    // to send request to rclone
-    CHECK(options_->rclone_threads == 1);
-    for (int i = 0; i < n_workers; i++)
-    {
-        workers_.emplace_back([this] { WorkLoop(); });
-    }
-    LOG(INFO) << "object store syncer started";
-}
-
-void ObjectStore::Stop()
-{
-    LOG(INFO) << "check whether should be stop";
-    if (workers_.empty())
-    {
-        return;
-    }
-    // Send stop signal to all workers.
-    StopSignal stop;
-    for (auto &w : workers_)
-    {
-        submit_q_.enqueue(&stop);
-    }
-
-    for (auto &w : workers_)
-    {
-        w.join();
-    }
-    workers_.clear();
-
-    if (async_http_mgr_)
-    {
-        async_http_mgr_->Cleanup();
-        async_http_mgr_.reset();
-        LOG(INFO) << "AsyncHttpManager cleaned up";
-    }
-    LOG(INFO) << "object store syncer stopped";
-}
-
-bool ObjectStore::IsRunning() const
-{
-    return !workers_.empty();
-}
-
-void ObjectStore::WorkLoop()
-{
-    std::array<Task *, 128> tasks;
-    // the max concurrent requests to rclone,it need not be too many,
-    // because the rclone can not proccess much request
-    const int max_concurrent_requests = 20;
-    auto dequeue_tasks = [this, &tasks]() -> int
-    {
-        size_t ntasks = submit_q_.try_dequeue_bulk(tasks.data(), tasks.size());
-        // no task, check whether the http mgr is idle
-        if (ntasks == 0 && async_http_mgr_->IsIdle())
-        {
-            while (ntasks == 0)
-            {
-                const auto timeout = std::chrono::milliseconds(10);
-                ntasks = submit_q_.wait_dequeue_bulk_timed(
-                    tasks.data(), tasks.size(), timeout);
-            }
-        }
-        return ntasks;
-    };
-    while (true)
-    {
-        int ntasks = dequeue_tasks();
-
-        CHECK(ntasks >= 0);
-
-        for (size_t i = 0; i < ntasks; i++)
-        {
-            Task *task = tasks[i];
-            if (task->TaskType() == Task::Type::Stop)
-            {
-                async_http_mgr_->Cleanup();
-                return;
-            }
-            // the rclone can not proccess much request ,it will remove jobs
-            while (async_http_mgr_->NumActiveRequests() >=
-                   max_concurrent_requests)
-            {
-                // execute the completed requests to release resources
-                async_http_mgr_->ProcessCompletedRequests();
-                // wait for network events to avoid the cpu busy
-                async_http_mgr_->WaitForNetworkEvents(10);
-            }
-            // submit the aysn request to http mgr
-            async_http_mgr_->SubmitRequest(task);
-        }
-
-        async_http_mgr_->ProcessCompletedRequests();
-        // wait for network events to avoid the cpu busy
-        async_http_mgr_->WaitForNetworkEvents(10);
-    }
-}
-ObjectStore::AsyncHttpManager::AsyncHttpManager(const std::string &daemon_url)
+AsyncHttpManager::AsyncHttpManager(const std::string &daemon_url)
     : daemon_url_(daemon_url)
 {
     multi_handle_ = curl_multi_init();
@@ -142,7 +35,7 @@ ObjectStore::AsyncHttpManager::AsyncHttpManager(const std::string &daemon_url)
     curl_multi_setopt(multi_handle_, CURLMOPT_MAXCONNECTS, 20L);
 }
 
-ObjectStore::AsyncHttpManager::~AsyncHttpManager()
+AsyncHttpManager::~AsyncHttpManager()
 {
     Cleanup();
     if (multi_handle_)
@@ -150,7 +43,7 @@ ObjectStore::AsyncHttpManager::~AsyncHttpManager()
         curl_multi_cleanup(multi_handle_);
     }
 }
-void ObjectStore::AsyncHttpManager::SubmitRequest(Task *task)
+void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
 {
     CURL *easy = curl_easy_init();
     if (!easy)
@@ -174,17 +67,19 @@ void ObjectStore::AsyncHttpManager::SubmitRequest(Task *task)
 
     switch (task->TaskType())
     {
-    case Task::Type::AsyncDownload:
-        SetupDownloadRequest(static_cast<DownloadTask *>(task), easy);
+    case ObjectStore::Task::Type::AsyncDownload:
+        SetupDownloadRequest(static_cast<ObjectStore::DownloadTask *>(task),
+                             easy);
         break;
-    case Task::Type::AsyncUpload:
-        SetupMultipartUpload(static_cast<UploadTask *>(task), easy);
+    case ObjectStore::Task::Type::AsyncUpload:
+        SetupMultipartUpload(static_cast<ObjectStore::UploadTask *>(task),
+                             easy);
         break;
-    case Task::Type::AsyncList:
-        SetupListRequest(static_cast<ListTask *>(task), easy);
+    case ObjectStore::Task::Type::AsyncList:
+        SetupListRequest(static_cast<ObjectStore::ListTask *>(task), easy);
         break;
-    case Task::Type::AsyncDelete:
-        SetupDeleteRequest(static_cast<DeleteTask *>(task), easy);
+    case ObjectStore::Task::Type::AsyncDelete:
+        SetupDeleteRequest(static_cast<ObjectStore::DeleteTask *>(task), easy);
         break;
     default:
         LOG(ERROR) << "Unknown async task type";
@@ -210,8 +105,8 @@ void ObjectStore::AsyncHttpManager::SubmitRequest(Task *task)
     // record the active request
     active_requests_[task->request_id_] = {task, easy};
 }
-void ObjectStore::AsyncHttpManager::SetupDownloadRequest(DownloadTask *task,
-                                                         CURL *easy)
+void AsyncHttpManager::SetupDownloadRequest(ObjectStore::DownloadTask *task,
+                                            CURL *easy)
 {
     Json::Value request;
     request["srcFs"] = task->io_mgr_->options_->cloud_store_path + "/" +
@@ -239,8 +134,8 @@ void ObjectStore::AsyncHttpManager::SetupDownloadRequest(DownloadTask *task,
     task->headers_ = headers;
 }
 
-void ObjectStore::AsyncHttpManager::SetupMultipartUpload(UploadTask *task,
-                                                         CURL *easy)
+void AsyncHttpManager::SetupMultipartUpload(ObjectStore::UploadTask *task,
+                                            CURL *easy)
 {
     fs::path dir_path =
         task->tbl_id_->StorePath(task->io_mgr_->options_->store_path);
@@ -270,7 +165,7 @@ void ObjectStore::AsyncHttpManager::SetupMultipartUpload(UploadTask *task,
     // store mine object for later clean
     task->mime_ = mime;
 }
-void ObjectStore::AsyncHttpManager::SetupListRequest(ListTask *task, CURL *easy)
+void AsyncHttpManager::SetupListRequest(ObjectStore::ListTask *task, CURL *easy)
 {
     Json::Value request;
     request["fs"] = task->options_->cloud_store_path;
@@ -294,8 +189,8 @@ void ObjectStore::AsyncHttpManager::SetupListRequest(ListTask *task, CURL *easy)
 
     task->headers_ = headers;
 }
-void ObjectStore::AsyncHttpManager::SetupDeleteRequest(DeleteTask *task,
-                                                       CURL *easy)
+void AsyncHttpManager::SetupDeleteRequest(ObjectStore::DeleteTask *task,
+                                          CURL *easy)
 {
     Json::Value request;
     request["fs"] = task->options_->cloud_store_path;
@@ -317,7 +212,7 @@ void ObjectStore::AsyncHttpManager::SetupDeleteRequest(DeleteTask *task,
     task->headers_ = headers;
 }
 
-void ObjectStore::AsyncHttpManager::ProcessCompletedRequests()
+void AsyncHttpManager::ProcessCompletedRequests()
 {
     int running_handles;
     curl_multi_perform(multi_handle_, &running_handles);
@@ -329,7 +224,7 @@ void ObjectStore::AsyncHttpManager::ProcessCompletedRequests()
         if (msg->msg == CURLMSG_DONE)
         {
             CURL *easy = msg->easy_handle;
-            Task *task;
+            ObjectStore::Task *task;
             curl_easy_getinfo(easy, CURLINFO_PRIVATE, (void **) &task);
 
             if (!task)
@@ -428,15 +323,15 @@ void ObjectStore::AsyncHttpManager::ProcessCompletedRequests()
         }
     }
 }
-void ObjectStore::AsyncHttpManager::CleanupTaskResources(Task *task)
+void AsyncHttpManager::CleanupTaskResources(ObjectStore::Task *task)
 {
     if (!task)
     {
         return;
     }
-    if (task->TaskType() == Task::Type::AsyncUpload)
+    if (task->TaskType() == ObjectStore::Task::Type::AsyncUpload)
     {
-        auto upload_task = static_cast<UploadTask *>(task);
+        auto upload_task = static_cast<ObjectStore::UploadTask *>(task);
         if (upload_task->mime_)
         {
             curl_mime_free(upload_task->mime_);  // free the mime object
@@ -449,27 +344,27 @@ void ObjectStore::AsyncHttpManager::CleanupTaskResources(Task *task)
             upload_task->headers_ = nullptr;
         }
     }
-    else if (task->TaskType() == Task::Type::AsyncDownload)
+    else if (task->TaskType() == ObjectStore::Task::Type::AsyncDownload)
     {
-        auto download_task = static_cast<DownloadTask *>(task);
+        auto download_task = static_cast<ObjectStore::DownloadTask *>(task);
         if (download_task->headers_)
         {
             curl_slist_free_all(download_task->headers_);
             download_task->headers_ = nullptr;
         }
     }
-    else if (task->TaskType() == Task::Type::AsyncList)
+    else if (task->TaskType() == ObjectStore::Task::Type::AsyncList)
     {
-        auto list_task = static_cast<ListTask *>(task);
+        auto list_task = static_cast<ObjectStore::ListTask *>(task);
         if (list_task->headers_)
         {
             curl_slist_free_all(list_task->headers_);
             list_task->headers_ = nullptr;
         }
     }
-    else if (task->TaskType() == Task::Type::AsyncDelete)
+    else if (task->TaskType() == ObjectStore::Task::Type::AsyncDelete)
     {
-        auto delete_task = static_cast<DeleteTask *>(task);
+        auto delete_task = static_cast<ObjectStore::DeleteTask *>(task);
         if (delete_task->headers_)
         {
             curl_slist_free_all(delete_task->headers_);
@@ -477,39 +372,7 @@ void ObjectStore::AsyncHttpManager::CleanupTaskResources(Task *task)
         }
     }
 }
-void ObjectStore::AsyncHttpManager::WaitForNetworkEvents(int timeout_ms)
-{
-    if (active_requests_.empty())
-    {
-        return;
-    }
-
-    fd_set fdread, fdwrite, fdexcep;
-    int maxfd = -1;
-
-    FD_ZERO(&fdread);   // the set of read file descriptors
-    FD_ZERO(&fdwrite);  // the set of write file descriptors
-    FD_ZERO(&fdexcep);  // the set of exception file descriptors
-
-    curl_multi_fdset(multi_handle_, &fdread, &fdwrite, &fdexcep, &maxfd);
-
-    if (maxfd >= 0)  // have file descriptors need to listen
-    {
-        struct timeval timeout;
-        timeout.tv_sec = timeout_ms / 1000;
-        timeout.tv_usec = (timeout_ms % 1000) * 1000;
-
-        // wait for file descriptors to be ready
-        select(maxfd + 1, &fdread, &fdwrite, &fdexcep, &timeout);
-    }
-    else
-    {
-        // simple wait if no file descriptors
-        std::this_thread::sleep_for(std::chrono::milliseconds(timeout_ms));
-    }
-}
-
-void ObjectStore::AsyncHttpManager::Cleanup()
+void AsyncHttpManager::Cleanup()
 {
     for (auto &[request_id, active_req] : active_requests_)
     {

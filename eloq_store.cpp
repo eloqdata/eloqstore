@@ -74,10 +74,6 @@ KvError EloqStore::Start()
         KvError err = InitStoreSpace();
         CHECK_KV_ERR(err);
     }
-    if (!options_.cloud_store_path.empty())
-    {
-        obj_store_ = std::make_unique<ObjectStore>(&options_);
-    }
 
     // There are files opened at very early stage like stdin/stdout/stderr, glog
     // file, and root directories of data.
@@ -103,24 +99,15 @@ KvError EloqStore::Start()
     // Start threads.
     stopped_.store(false, std::memory_order_relaxed);
 
-    if (options_.data_append_mode)
+    if (options_.data_append_mode && options_.cloud_store_path.empty())
     {
         if (options_.num_gc_threads > 0)
         {
             if (file_gc_ == nullptr)
             {
-                if (!options_.cloud_store_path.empty())
-                {
-                    LOG(INFO) << "cloud file gc started";
-                    file_gc_ = std::make_unique<CloudFileGarbageCollector>(
-                        &options_, obj_store_.get());
-                }
-                else
-                {
-                    LOG(INFO) << "local file gc started";
-                    file_gc_ =
-                        std::make_unique<LocalFileGarbageCollector>(&options_);
-                }
+                LOG(INFO) << "local file gc started";
+                file_gc_ =
+                    std::make_unique<LocalFileGarbageCollector>(&options_);
             }
             file_gc_->Start(options_.num_gc_threads);
         }
@@ -133,11 +120,6 @@ KvError EloqStore::Start()
             }
             archive_crond_->Start();
         }
-    }
-
-    if (!options_.cloud_store_path.empty())
-    {
-        obj_store_->Start();
     }
 
     for (auto &shard : shards_)
@@ -278,10 +260,6 @@ void EloqStore::Stop()
         shard->Stop();
     }
 
-    if (obj_store_ != nullptr)
-    {
-        obj_store_->Stop();
-    }
     if (file_gc_ != nullptr)
     {
         file_gc_->Stop();

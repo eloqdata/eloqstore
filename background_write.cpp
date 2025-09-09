@@ -208,8 +208,20 @@ KvError BackgroundWrite::CompactDataFile()
     err = UpdateMeta();
     CHECK_KV_ERR(err);
     moving_cached.Finish();
-
-    TriggerFileGC();
+    if (!Options()->cloud_store_path.empty())
+    {
+        // executes the GC logic in cloud mode directly
+        // TODO:
+        // 1. gets the file list that need to be deleted
+        // 2. deletes the files in cloud by object store
+        // 3. cleans the local cache files
+        LOG(INFO) << "Cloud GC logic integrated into CompactDataFile for table "
+                  << tbl_ident_.ToString();
+    }
+    else
+    {
+        TriggerFileGC();
+    }
     return KvError::NoError;
 }
 

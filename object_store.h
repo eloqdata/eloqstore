@@ -21,15 +21,18 @@ namespace eloqstore
 {
 class KvTask;
 class CloudStoreMgr;
+class AsyncHttpManager;
 
 class ObjectStore
 {
 public:
     ObjectStore(const KvOptions *options);
     ~ObjectStore();
-    void Start();
-    void Stop();
-    bool IsRunning() const;
+
+    AsyncHttpManager *GetHttpManager()
+    {
+        return async_http_mgr_.get();
+    }
 
     class Task
     {
@@ -46,7 +49,6 @@ public:
         };
         virtual Type TaskType() = 0;
 
-        KvTask *kv_task_;
         KvError error_{KvError::NoError};
         uint64_t request_id_;
         std::string response_data_;
@@ -58,8 +60,6 @@ public:
         CompletionCallback callback_;
 
     protected:
-        // const TableIdent *tbl_id_;
-        // CloudStoreMgr *io_mgr_{nullptr};
         static std::atomic<uint64_t> next_request_id_;
         friend class ObjectStore;
         friend class AsyncHttpManager;
@@ -69,13 +69,11 @@ public:
     {
     public:
         DownloadTask(CloudStoreMgr *io_mgr,
-                     KvTask *kv_task,
                      const TableIdent *tbl_id,
                      std::string_view filename,
                      CompletionCallback callback)
             : tbl_id_(tbl_id), io_mgr_(io_mgr), filename_(filename)
         {
-            kv_task_ = kv_task;
             callback_ = std::move(callback);
         };
         Type TaskType() override
@@ -93,13 +91,11 @@ public:
     {
     public:
         UploadTask(CloudStoreMgr *io_mgr,
-                   KvTask *kv_task,
                    const TableIdent *tbl_id,
                    std::vector<std::string> filenames,
                    CompletionCallback callback)
             : tbl_id_(tbl_id), io_mgr_(io_mgr), filenames_(std::move(filenames))
         {
-            kv_task_ = kv_task;
             callback_ = std::move(callback);
         };
         Type TaskType() override
@@ -160,63 +156,50 @@ public:
     const KvOptions *options_;
     moodycamel::BlockingConcurrentQueue<Task *> submit_q_;
 
-private:
-    class StopSignal : public Task
-    {
-    public:
-        StopSignal() : Task(){};
-        Type TaskType() override
-        {
-            return Type::Stop;
-        };
-    };
-    class AsyncHttpManager
-    {
-    public:
-        AsyncHttpManager(const std::string &daemon_url);
-        ~AsyncHttpManager();
-
-        void SubmitRequest(Task *task);
-        void ProcessCompletedRequests();
-        void WaitForNetworkEvents(int timeout_ms);
-        void Cleanup();
-        bool IsIdle() const
-        {
-            return active_requests_.empty();
-        }
-        size_t NumActiveRequests() const
-        {
-            return active_requests_.size();
-        }
-
-    private:
-        void CleanupTaskResources(Task *task);
-        void SetupMultipartUpload(UploadTask *task, CURL *easy);
-        void SetupDownloadRequest(DownloadTask *task, CURL *easy);
-        void SetupListRequest(ListTask *task, CURL *easy);
-        void SetupDeleteRequest(DeleteTask *task, CURL *easy);
-
-        static size_t WriteCallback(void *contents,
-                                    size_t size,
-                                    size_t nmemb,
-                                    std::string *userp)
-        {
-            userp->append((char *) contents, size * nmemb);
-            return size * nmemb;
-        }
-        struct ActiveRequest
-        {
-            Task *task;
-            CURL *easy_handle;
-        };
-        CURLM *multi_handle_{nullptr};
-        std::unordered_map<uint64_t, ActiveRequest> active_requests_;
-        std::string daemon_url_;
-    };
-
     std::unique_ptr<AsyncHttpManager> async_http_mgr_;
-    void WorkLoop();
-
-    std::vector<std::thread> workers_;
 };
+
+class AsyncHttpManager
+{
+public:
+    AsyncHttpManager(const std::string &daemon_url);
+    ~AsyncHttpManager();
+
+    void SubmitRequest(ObjectStore::Task *task);
+    void ProcessCompletedRequests();
+    void Cleanup();
+    bool IsIdle() const
+    {
+        return active_requests_.empty();
+    }
+    size_t NumActiveRequests() const
+    {
+        return active_requests_.size();
+    }
+
+private:
+    void CleanupTaskResources(ObjectStore::Task *task);
+    void SetupMultipartUpload(ObjectStore::UploadTask *task, CURL *easy);
+    void SetupDownloadRequest(ObjectStore::DownloadTask *task, CURL *easy);
+    void SetupListRequest(ObjectStore::ListTask *task, CURL *easy);
+    void SetupDeleteRequest(ObjectStore::DeleteTask *task, CURL *easy);
+
+    static size_t WriteCallback(void *contents,
+                                size_t size,
+                                size_t nmemb,
+                                std::string *userp)
+    {
+        return ((std::string *) userp)->append((char *) contents, size * nmemb),
+               size * nmemb;
+    }
+    struct ActiveRequest
+    {
+        ObjectStore::Task *task;
+        CURL *easy_handle;
+    };
+    CURLM *multi_handle_{nullptr};
+    std::unordered_map<uint64_t, ActiveRequest> active_requests_;
+    std::string daemon_url_;
+};
+
 }  // namespace eloqstore

@@ -70,8 +70,7 @@ std::unique_ptr<AsyncIoManager> AsyncIoManager::Instance(const EloqStore *store,
     }
     else
     {
-        ObjectStore *obj_store = store->obj_store_.get();
-        return std::make_unique<CloudStoreMgr>(opts, fd_limit, obj_store);
+        return std::make_unique<CloudStoreMgr>(opts, fd_limit);
     }
 }
 
@@ -1594,13 +1593,12 @@ void IouringMgr::WriteReq::SetPage(VarPage page)
     }
 }
 
-CloudStoreMgr::CloudStoreMgr(const KvOptions *opts,
-                             uint32_t fd_limit,
-                             ObjectStore *obj_store)
-    : IouringMgr(opts, fd_limit), file_cleaner_(this), obj_store_(obj_store)
+CloudStoreMgr::CloudStoreMgr(const KvOptions *opts, uint32_t fd_limit)
+    : IouringMgr(opts, fd_limit), file_cleaner_(this)
 {
     lru_file_head_.next_ = &lru_file_tail_;
     lru_file_tail_.prev_ = &lru_file_head_;
+    obj_store_ = std::make_unique<ObjectStore>(opts);
 }
 
 void CloudStoreMgr::Start()
@@ -1626,29 +1624,9 @@ void CloudStoreMgr::Stop()
 
 void CloudStoreMgr::PollComplete()
 {
-    IouringMgr::PollComplete();
+    obj_store_->GetHttpManager()->ProcessCompletedRequests();
 
-    std::array<KvTask *, 128> buf;
-    size_t n = obj_complete_q_.try_dequeue_bulk(buf.data(), buf.size());
-    while (n > 0)
-    {
-        for (size_t i = 0; i < n; i++)
-        {
-            buf[i]->Resume();
-        }
-        if (n == buf.size())
-        {
-            n = obj_complete_q_.try_dequeue_bulk(buf.data(), buf.size());
-        }
-        else
-        {
-            assert(n < buf.size());
-            // There is a high likelihood that the queue has been exhausted by
-            // the previous dequeue operation and no new entries was added
-            // during KvTask::Resume because it is fast.
-            break;
-        }
-    }
+    IouringMgr::PollComplete();
 }
 
 KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
@@ -1727,11 +1705,6 @@ KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
     used_local_space_ += options_->manifest_limit;
     EnqueClosedFile(FileKey(tbl_id, name));
     return err;
-}
-
-void CloudStoreMgr::OnObjectStoreComplete(KvTask *task)
-{
-    obj_complete_q_.enqueue(task);
 }
 
 int CloudStoreMgr::CreateFile(LruFD::Ref dir_fd, FileId file_id)
@@ -1948,18 +1921,18 @@ int CloudStoreMgr::ReserveCacheSpace(size_t size)
 
 KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id, FileId file_id)
 {
+    KvTask *current_task = ThdTask();
     std::string filename = ToFilename(file_id);
 
     ObjectStore::DownloadTask download_task(
         this,
-        ThdTask(),
         &tbl_id,
         filename,
-        [this](ObjectStore::Task *task)
-        { obj_complete_q_.enqueue(task->kv_task_); });
-    obj_store_->submit_q_.enqueue(&download_task);
-    ThdTask()->status_ = TaskStatus::Blocked;
-    ThdTask()->Yield();
+        [current_task](ObjectStore::Task *task) { current_task->Resume(); });
+
+    obj_store_->GetHttpManager()->SubmitRequest(&download_task);
+    current_task->status_ = TaskStatus::Blocked;
+    current_task->Yield();
 
     return download_task.error_;
 }
@@ -1972,17 +1945,17 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
         return KvError::NoError;
     }
 
-    ObjectStore::UploadTask upload_task(
-        this,
-        ThdTask(),
-        &tbl_id,
-        std::move(filenames),
-        [this](ObjectStore::Task *task)
-        { obj_complete_q_.enqueue(task->kv_task_); });
+    KvTask *current_task = ThdTask();
 
-    obj_store_->submit_q_.enqueue(&upload_task);
-    ThdTask()->status_ = TaskStatus::Blocked;
-    ThdTask()->Yield();
+    ObjectStore::UploadTask upload_task(this,
+                                        &tbl_id,
+                                        std::move(filenames),
+                                        [current_task](ObjectStore::Task *task)
+                                        { current_task->Resume(); });
+
+    obj_store_->GetHttpManager()->SubmitRequest(&upload_task);
+    current_task->status_ = TaskStatus::Blocked;
+    current_task->Yield();
 
     return upload_task.error_;
 }
