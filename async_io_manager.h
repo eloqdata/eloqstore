@@ -418,6 +418,7 @@ private:
     CachedFile lru_file_head_;
     CachedFile lru_file_tail_;
     size_t used_local_space_{0};
+    size_t shard_local_space_limit_{0};
 
     /**
      * @brief A background task to evict cached files when local space is full.

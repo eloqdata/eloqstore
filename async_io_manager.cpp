@@ -1571,6 +1571,7 @@ CloudStoreMgr::CloudStoreMgr(const KvOptions *opts,
 {
     lru_file_head_.next_ = &lru_file_tail_;
     lru_file_tail_.prev_ = &lru_file_head_;
+    shard_local_space_limit_ = opts->local_space_limit / opts->num_threads;
 }
 
 void CloudStoreMgr::Start()
@@ -1898,7 +1899,7 @@ bool CloudStoreMgr::HasEvictableFile() const
 
 int CloudStoreMgr::ReserveCacheSpace(size_t size)
 {
-    while (used_local_space_ + size > options_->local_space_limit)
+    while (used_local_space_ + size > shard_local_space_limit_)
     {
         if (!HasEvictableFile())
         {
@@ -1950,12 +1951,12 @@ void CloudStoreMgr::FileCleaner::Run()
 {
     killed_ = false;
     const KvOptions *opts = io_mgr_->options_;
-    const size_t per_shard_limit = opts->local_space_limit / opts->num_threads;
-    const size_t reserve_space =
-        opts->reserve_space_ratio == 0
-            ? 0
-            : double(per_shard_limit) / double(opts->reserve_space_ratio);
-    const size_t threshold = per_shard_limit - reserve_space;
+    const size_t shard_local_space_limit = io_mgr_->shard_local_space_limit_;
+    const size_t reserve_space = opts->reserve_space_ratio == 0
+                                     ? 0
+                                     : double(shard_local_space_limit) /
+                                           double(opts->reserve_space_ratio);
+    const size_t threshold = shard_local_space_limit - reserve_space;
     // 128 * 8MB (data file) = 1GB
     const uint16_t batch_size = 128;
 
