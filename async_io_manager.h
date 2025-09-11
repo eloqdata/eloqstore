@@ -165,6 +165,8 @@ protected:
 
         LruFD(PartitionFiles *tbl, FileId file_id);
         FdIdx FdPair() const;
+        void Lock();
+        void Unlock();
         void Deque();
         LruFD *DequeNext();
         LruFD *DequePrev();
@@ -175,7 +177,6 @@ protected:
         static constexpr FileId kMaxDataFile = kManifest - 1;
 
         static constexpr int FdEmpty = -1;
-        static constexpr int FdLocked = -2;
 
         int fd_{FdEmpty};
         int reg_idx_{-1};
@@ -184,6 +185,7 @@ protected:
         PartitionFiles *const tbl_;
         const FileId file_id_;
         uint32_t ref_count_{0};
+        bool locked_{false};
         WaitingZone waiting_;
         LruFD *prev_{nullptr};
         LruFD *next_{nullptr};
@@ -289,10 +291,6 @@ protected:
      * @brief Get file descripter if it is already opened.
      */
     LruFD::Ref GetOpenedFD(const TableIdent &tbl_id, FileId file_id);
-    /**
-     * @brief Get a file descripter slot for the file.
-     */
-    LruFD::Ref GetFDSlot(const TableIdent &tbl_id, FileId file_id);
     /**
      * @brief Open file if already exists. Only data file is opened with
      * O_DIRECT by default. Set `direct` to true to open manifest with O_DIRECT.
