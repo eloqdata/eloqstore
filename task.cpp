@@ -261,6 +261,21 @@ void WaitingSeat::Wake()
     }
 }
 
+void Mutex::Lock()
+{
+    while (locked_)
+    {
+        waiting_.Wait(ThdTask());
+    }
+    locked_ = true;
+}
+
+void Mutex::Unlock()
+{
+    locked_ = false;
+    waiting_.WakeOne();
+}
+
 KvTask *ThdTask()
 {
     return shard->running_;

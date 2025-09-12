@@ -568,10 +568,11 @@ IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(const TableIdent &tbl_id,
     {
         return nullptr;
     }
+    // This file may be in the process of being closed.
     LruFD::Ref fd_ref(&it_fd->second, this);
-    fd_ref.Get()->Lock();
+    fd_ref.Get()->mu_.Lock();
     bool empty = fd_ref.Get()->fd_ == LruFD::FdEmpty;
-    fd_ref.Get()->Unlock();
+    fd_ref.Get()->mu_.Unlock();
     return empty ? nullptr : fd_ref;
 }
 
@@ -600,11 +601,13 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     }
     LruFD::Ref lru_fd(&it_fd->second, this);
 
-    lru_fd.Get()->Lock();
-
+    // Avoid multiple coroutines from concurrently opening the same file
+    // duplicately.
+    lru_fd.Get()->mu_.Lock();
     if (lru_fd.Get()->fd_ != LruFD::FdEmpty)
     {
-        lru_fd.Get()->Unlock();
+        // This file have already been opened by previous coroutine.
+        lru_fd.Get()->mu_.Unlock();
         return {std::move(lru_fd), KvError::NoError};
     }
 
@@ -654,7 +657,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
             LOG(ERROR) << "open failed " << tbl_id << " file id " << file_id
                        << " : " << ErrorString(error);
         }
-        lru_fd.Get()->Unlock();
+        lru_fd.Get()->mu_.Unlock();
         return {nullptr, error};
     }
 
@@ -664,7 +667,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     }
 
     lru_fd.Get()->fd_ = fd;
-    lru_fd.Get()->Unlock();
+    lru_fd.Get()->mu_.Unlock();
     return {std::move(lru_fd), KvError::NoError};
 }
 
@@ -985,7 +988,6 @@ int IouringMgr::Close(int fd)
 KvError IouringMgr::CloseFile(LruFD::Ref fd_ref)
 {
     LruFD *lru_fd = fd_ref.Get();
-    assert(lru_fd->waiting_.Empty());
     const int fd = lru_fd->fd_;
     if (fd < 0)
     {
@@ -994,13 +996,13 @@ KvError IouringMgr::CloseFile(LruFD::Ref fd_ref)
     FdIdx fd_idx = lru_fd->FdPair();
 
     // Make sure no tasks can use this fd during closing.
-    lru_fd->Lock();
+    lru_fd->mu_.Lock();
 
     if (lru_fd->dirty_)
     {
         if (KvError err = SyncFile(fd_ref); err != KvError::NoError)
         {
-            lru_fd->Unlock();
+            lru_fd->mu_.Unlock();
             return err;
         }
     }
@@ -1013,11 +1015,11 @@ KvError IouringMgr::CloseFile(LruFD::Ref fd_ref)
 
     if (int res = Close(fd); res < 0)
     {
-        lru_fd->Unlock();
+        lru_fd->mu_.Unlock();
         return ToKvError(res);
     }
     lru_fd->fd_ = LruFD::FdEmpty;
-    lru_fd->Unlock();
+    lru_fd->mu_.Unlock();
     return KvError::NoError;
 }
 
@@ -1374,21 +1376,6 @@ std::pair<int, bool> IouringMgr::LruFD::FdPair() const
 {
     bool registered = reg_idx_ >= 0;
     return {registered ? reg_idx_ : fd_, registered};
-}
-
-void IouringMgr::LruFD::Lock()
-{
-    while (locked_)
-    {
-        waiting_.Wait(ThdTask());
-    }
-    locked_ = true;
-}
-
-void IouringMgr::LruFD::Unlock()
-{
-    locked_ = false;
-    waiting_.WakeOne();
 }
 
 void IouringMgr::LruFD::Deque()
@@ -1899,7 +1886,7 @@ void CloudStoreMgr::EnqueClosedFile(FileKey key)
     lru_file_head_.EnqueNext(&it->second);
 }
 
-bool CloudStoreMgr ::HasEvictableFile() const
+bool CloudStoreMgr::HasEvictableFile() const
 {
     return lru_file_tail_.prev_ != &lru_file_head_;
 }

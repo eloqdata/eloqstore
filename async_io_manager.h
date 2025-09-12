@@ -165,8 +165,6 @@ protected:
 
         LruFD(PartitionFiles *tbl, FileId file_id);
         FdIdx FdPair() const;
-        void Lock();
-        void Unlock();
         void Deque();
         LruFD *DequeNext();
         LruFD *DequePrev();
@@ -178,6 +176,10 @@ protected:
 
         static constexpr int FdEmpty = -1;
 
+        /**
+         * @brief mu_ avoids open/close file concurrently.
+         */
+        Mutex mu_;
         int fd_{FdEmpty};
         int reg_idx_{-1};
         bool dirty_{false};
@@ -185,8 +187,6 @@ protected:
         PartitionFiles *const tbl_;
         const FileId file_id_;
         uint32_t ref_count_{0};
-        bool locked_{false};
-        WaitingZone waiting_;
         LruFD *prev_{nullptr};
         LruFD *next_{nullptr};
     };

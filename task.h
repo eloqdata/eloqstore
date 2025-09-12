@@ -134,4 +134,15 @@ public:
 private:
     KvTask *task_{nullptr};
 };
+
+class Mutex
+{
+public:
+    void Lock();
+    void Unlock();
+
+private:
+    bool locked_{false};
+    WaitingZone waiting_;
+};
 }  // namespace eloqstore
