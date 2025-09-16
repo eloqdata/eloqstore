@@ -22,7 +22,7 @@ uint32_t DecodeKey(const std::string &key);
 void EncodeValue(std::string *dst, uint32_t val);
 uint32_t DecodeValue(const std::string &val);
 
-std::string FormatEntries(std::span<eloqstore::KvEntry> entries);
+std::string FormatEntries(tcb::span<eloqstore::KvEntry> entries);
 
 std::pair<std::string, eloqstore::KvError> Scan(
     eloqstore::EloqStore *store,

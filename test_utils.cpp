@@ -70,7 +70,7 @@ uint32_t DecodeValue(const std::string &val)
     return v;
 }
 
-std::string FormatEntries(std::span<eloqstore::KvEntry> entries)
+std::string FormatEntries(tcb::span<eloqstore::KvEntry> entries)
 {
     std::string kvs_str;
     for (auto &[k, v, ts, exp] : entries)
