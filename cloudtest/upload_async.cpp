@@ -236,6 +236,7 @@ private:
     std::condition_variable completion_cv;
     std::atomic<int> pending_uploads{0};
 
+    int max_active_requests = 20;
     struct UploadRequest
     {
         CURL *easy_handle;
@@ -291,10 +292,10 @@ private:
                 // wait 100ms
                 curl_multi_wait(multi_handle, nullptr, 0, 100, nullptr);
             }
-            else
-            {  // no active task
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
-            }
+            // else
+            // {  // no active task
+            //     std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            // }
         }
     }
 
@@ -360,7 +361,7 @@ public:
         multi_handle = curl_multi_init();
 
         // 设置并发连接数
-        curl_multi_setopt(multi_handle, CURLMOPT_MAXCONNECTS, 100L);
+        curl_multi_setopt(multi_handle, CURLMOPT_MAXCONNECTS, 1000L);
 
         worker_thread = std::thread(&AsyncRcloneUploader::workerLoop, this);
     }
@@ -394,7 +395,19 @@ public:
             callback(result);
             return;
         }
-
+        while (true)
+        {
+            {
+                std::lock_guard<std::mutex> lock(requests_mutex);
+                if (active_requests.size() <
+                    static_cast<size_t>(max_active_requests))
+                {
+                    break;  // 可以继续执行上传
+                }
+            }
+            // 睡眠一小段时间后重试
+            // std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
         // 构造请求JSON
         std::filesystem::path abs_path = std::filesystem::absolute(file_path);
         std::string parent_dir = abs_path.parent_path().string();

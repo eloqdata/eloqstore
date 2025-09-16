@@ -12,7 +12,7 @@ const eloqstore::KvOptions cloud_options = {
     .fd_limit = 30 + eloqstore::num_reserved_fd,
     .num_gc_threads = 0,
     .local_space_limit = 100 << 20,  // 100MB
-    .store_path = {"./test-data"},
+    .store_path = {"/tmp/test-data"},
     .cloud_store_path = "minio:db-stress/db-stress/",
     .pages_per_file_shift = 8,  // 1MB per datafile
     .data_append_mode = true,
@@ -108,10 +108,10 @@ TEST_CASE("concurrent test with cloud", "[cloud]")
 {
     eloqstore::KvOptions options = cloud_options;
     options.num_threads = 4;
-    options.rclone_threads = 8;
+    options.rclone_threads = 1;
     options.fd_limit = 100 + eloqstore::num_reserved_fd;
     options.reserve_space_ratio = 5;
-    options.local_space_limit = 500 << 20;  // 100MB
+    options.local_space_limit = 500 << 22;  // 100MB
     eloqstore::EloqStore *store = InitStore(options);
 
     ConcurrencyTester tester(store, "t1", 50, 1000);

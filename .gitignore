@@ -41,3 +41,10 @@ install
 .vscode
 
 test-data
+
+awsSDK
+
+*.puml
+*.log
+*.csv
+cloudtest

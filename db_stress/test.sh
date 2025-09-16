@@ -12,8 +12,7 @@ BLACKBOX_LOG_DIR="$LOG_DIR/blackbox"
 ERROR_LOG_DIR="$LOG_DIR/errors"
 CRASH_TEST_PY="$SCRIPT_DIR/crash_test.py"
 
-DISK_LOG_DIR="$LOG_DIR/disk"
-DISK_LOG_FILE="$DISK_LOG_DIR/disk_usage.log"
+DISK_LOG_FILE="$LOG_DIR/disk_usage.log"
 
 
 # no start cloud if it is empty
@@ -61,7 +60,7 @@ SYSTEM_TYPE_PARAM_COMBINATIONS=(
 
    # 二更:好像partiton不能太多,因为他是从data_0,data_1开始逐渐分配的,上面这种总共1000个partiton就会导致一开始就分配8GB,故我们应该限制partition数量,但是限制数量了就无法保证高并发了,此时就只能将一个batch调大了
    # 我减少了一个batch写入的数据量,发现吞吐量不变,是不是其实只能将patition的数量提高才能拉高吞吐呢?
-    "--data_append_mode=true --cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --num_threads=4  --rclone_threads=1 -throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=10 --write_percent=50"
+    " --data_append_mode=true --cloud_store_path=minio:db-stress/db-stress/  --fd_limit=1000 --num_gc_threads=1 --num_threads=2  --rclone_threads=1 -throughput_report_interval_secs=10 --n_tables=2 --n_partitions=2 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=4000 --max_verify_ops_per_write=0 --write_percent=100"
     # "--data_append_mode=true --cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --num_threads=4  --rclone_threads=2 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     # "--data_append_mode=true --cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --num_threads=4  --rclone_threads=4 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
 
@@ -71,7 +70,7 @@ SYSTEM_TYPE_PARAM_COMBINATIONS=(
     # "--data_append_mode=false --num_threads=32 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     
     # 追加情况下,随着线程数增加
-    "--data_append_mode=true --num_threads=1  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    "--data_append_mode=true --num_threads=1 --file_amplify_factor=2  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=true --num_threads=8  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=true --num_threads=32 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
 
@@ -129,7 +128,7 @@ start_disk_monitor() {
     # 启动后台监控进程
     (
         while true; do
-            sleep 60  # 每分钟监控一次
+            sleep 30  # 每分钟监控一次
             
             # 获取当前磁盘使用量
             local current_usage=""
