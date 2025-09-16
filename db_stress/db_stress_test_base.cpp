@@ -795,7 +795,7 @@ SystemIOStats GetSystemIOStats()
             uint64_t write_ios, write_merges, write_sectors, write_ticks;
             uint64_t dummy;
 
-            // /proc/diskstats 格式：major minor device_name read_ios
+            // /proc/diskstats ：major minor device_name read_ios
             // read_merges read_sectors read_ticks write_ios write_merges
             // write_sectors write_ticks ...
             if (iss >> major >> minor >> device_name >> read_ios >>

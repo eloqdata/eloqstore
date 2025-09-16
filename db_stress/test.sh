@@ -45,31 +45,15 @@ log_message() {
 }
 PARAM_INDEX_FILE="$SCRIPT_DIR/log/current_param_index"
 SYSTEM_TYPE_PARAM_COMBINATIONS=(
-    #验证表所占用的内存就是n_table*n_parition*max_key*sizeof(int)
-    #磁盘所占用的理论容量是
-    #n_table*n_partition*max_key*(12+(shortest_value+longestvalue)/2)*0.75(读和删除的比例)
-    # ps:12是实际写入db的key的最小值,内存中不需要是因为使用index来优化掉key的开销
-    
-    #同时如果longest_value不大,则验证表在磁盘的空间占用就会接近于db的磁盘空间占用
 
-    #增大table和partition都可以让db的树变多,但是table可以提高并发请求的压力,因为table等价于线程数
-    # 二更:其实也不一定,partition是写者数量,其实也就是一个线程内可以写多少次,同时每个partition也配置了固定数量的写者
-    # 单个partition的磁盘占用为max_key*(12+(shortest_value+longestvalue)/2)*0.75
-    #   我希望占用大概至少150G的理论磁盘,同时单个patition至少要有1百兆
-
-
-   # 二更:好像partiton不能太多,因为他是从data_0,data_1开始逐渐分配的,上面这种总共1000个partiton就会导致一开始就分配8GB,故我们应该限制partition数量,但是限制数量了就无法保证高并发了,此时就只能将一个batch调大了
-   # 我减少了一个batch写入的数据量,发现吞吐量不变,是不是其实只能将patition的数量提高才能拉高吞吐呢?
     " --data_append_mode=true --cloud_store_path=minio:db-stress/db-stress/  --fd_limit=1000 --num_gc_threads=1 --num_threads=2  --rclone_threads=1 -throughput_report_interval_secs=10 --n_tables=2 --n_partitions=2 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=4000 --max_verify_ops_per_write=0 --write_percent=100"
     # "--data_append_mode=true --cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --num_threads=4  --rclone_threads=2 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     # "--data_append_mode=true --cloud_store_path=minio:db-stress/db-stress/ --num_gc_threads=0 --num_threads=4  --rclone_threads=4 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
 
-   # 不追加情况下,随着线程数增加
     #"--data_append_mode=false --num_threads=1  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=false --num_threads=8  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=false --num_threads=32 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     
-    # 追加情况下,随着线程数增加
     "--data_append_mode=true --num_threads=1 --file_amplify_factor=2  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=true --num_threads=8  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=true --num_threads=32 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
@@ -82,14 +66,12 @@ SYSTEM_TYPE_PARAM_COMBINATIONS=(
 calculate_theoretical_disk_usage() {
     local param_args="$1"
     
-    # 从参数中提取关键值
     local n_tables=$(echo "$param_args" | grep -o "\--n_tables=[0-9]*" | cut -d'=' -f2)
     local n_partitions=$(echo "$param_args" | grep -o "\--n_partitions=[0-9]*" | cut -d'=' -f2)
     local max_key=$(echo "$param_args" | grep -o "\--max_key=[0-9]*" | cut -d'=' -f2)
     local shortest_value=$(echo "$param_args" | grep -o "\--shortest_value=[0-9]*" | cut -d'=' -f2)
     local longest_value=$(echo "$param_args" | grep -o "\--longest_value=[0-9]*" | cut -d'=' -f2)
     
-    # 设置默认值（如果参数中没有找到）
     n_tables=${n_tables:-1}
     n_partitions=${n_partitions:-1}
     max_key=${max_key:-1000000}
