@@ -159,7 +159,8 @@ impl DataPage {
     pub fn into_page(self) -> Page {
         self.page
     }
-}
+
+} // End of first impl DataPage block
 
 /// Iterator over entries in a data page
 pub struct DataPageIterator<'a> {
@@ -507,6 +508,7 @@ mod tests {
     }
 }
 
+impl DataPage {
     /// Get entry by key
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
         // TODO: Implement binary search
@@ -577,3 +579,4 @@ mod tests {
     pub fn size(&self) -> usize {
         self.page.size()
     }
+}

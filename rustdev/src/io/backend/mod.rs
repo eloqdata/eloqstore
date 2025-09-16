@@ -158,7 +158,6 @@ pub struct BatchIo {
 }
 
 /// Individual I/O operation
-#[derive(Debug)]
 pub enum IoOperation {
     /// Read operation
     Read {
@@ -183,6 +182,28 @@ pub enum IoOperation {
         /// File handle
         file: Arc<dyn FileHandle>,
     },
+}
+
+impl std::fmt::Debug for IoOperation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            IoOperation::Read { offset, len, .. } => {
+                f.debug_struct("Read")
+                    .field("offset", offset)
+                    .field("len", len)
+                    .finish()
+            }
+            IoOperation::Write { offset, data, .. } => {
+                f.debug_struct("Write")
+                    .field("offset", offset)
+                    .field("data_len", &data.len())
+                    .finish()
+            }
+            IoOperation::Sync { .. } => {
+                f.debug_struct("Sync").finish()
+            }
+        }
+    }
 }
 
 /// Batch I/O result

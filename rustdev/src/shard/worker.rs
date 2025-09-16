@@ -180,7 +180,7 @@ impl ShardWorker {
             }
             WorkItemType::BatchWrite { ref items } => {
                 // Simulate batch write
-                tokio::time::sleep(Duration::from_micros(100 * items.len())).await;
+                tokio::time::sleep(Duration::from_micros((100 * items.len()) as u64)).await;
                 Ok(WorkResult::BatchWrite(items.len()))
             }
             WorkItemType::Flush => {

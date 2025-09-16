@@ -85,8 +85,7 @@ pub enum WorkResult {
     Flush(()),
     /// Compaction result
     Compaction(CompactionStats),
-    /// Custom result
-    Custom(Box<dyn std::any::Any + Send + Sync>),
+    // Custom variant removed - Box<dyn Any> can't implement Clone
 }
 
 /// Compaction statistics

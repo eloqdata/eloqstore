@@ -206,10 +206,11 @@ impl IoBackend for ThreadPoolBackend {
         let path_buf = path.to_path_buf();
 
         task::spawn_blocking(move || {
-            Ok(path_buf.exists())
+            path_buf.exists()
         })
         .await
         .map_err(|e| Error::Internal(format!("Task join error: {}", e)))
+        .map(|exists| Ok(exists))?
     }
 
     async fn create_dir(&self, path: &Path) -> Result<()> {

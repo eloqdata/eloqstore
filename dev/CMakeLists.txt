@@ -64,6 +64,8 @@ add_library(test_fixtures STATIC
     fixtures/test_helpers.cpp
     fixtures/temp_directory.cpp
     fixtures/data_generator.cpp
+    fixtures/test_config.cpp
+    fixtures/random_generator.cpp
 )
 target_link_libraries(test_fixtures PUBLIC
     eloqstore
@@ -360,6 +362,10 @@ catch_discover_tests(async_pattern_test)
 add_executable(stress_test
     stress/concurrent_operations_test.cpp
 )
+
+add_executable(randomized_stress_test
+    tests/stress/randomized_stress_test.cpp
+)
 target_link_libraries(stress_test PRIVATE
     Catch2::Catch2WithMain
     test_fixtures
@@ -379,6 +385,27 @@ target_link_libraries(stress_test PRIVATE
     dl
 )
 catch_discover_tests(stress_test)
+
+target_link_libraries(randomized_stress_test PRIVATE
+    Catch2::Catch2
+    test_fixtures
+    -Wl,--whole-archive
+    ${CMAKE_SOURCE_DIR}/../build/libeloqstore.a
+    -Wl,--no-whole-archive
+    Boost::context
+    Boost::filesystem
+    uring
+    glog::glog
+    absl::flat_hash_map
+    absl::raw_hash_set
+    absl::hash
+    absl::strings
+    absl::time
+    absl::synchronization
+    absl::cord
+    pthread
+    dl
+)
 
 # Edge case tests
 add_executable(edge_case_test

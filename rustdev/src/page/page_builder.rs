@@ -107,13 +107,17 @@ impl PageBuilder {
 
         // Write entries
         let mut encoder = KvEncoder::new();
-        let mut data_start = page.len();
+        let data_start = page.len();
 
+        // Build entries in a temporary vector
+        let mut entry_data = Vec::new();
         for (key, value) in &self.entries {
-            encoder.encode_key(&mut page, key)?;
-            encoder.encode_value(&mut page, value)?;
+            encoder.encode_key(&mut entry_data, key)?;
+            encoder.encode_value(&mut entry_data, value)?;
         }
 
+        // Add entries to page
+        page.extend_from_slice(&entry_data);
         let data_end = page.len();
 
         // Write restart points
@@ -182,7 +186,7 @@ mod tests {
         assert!(page.verify_checksum());
 
         // Verify we can read it back
-        let data_page = DataPage::from_page(page).unwrap();
+        let data_page = DataPage::from_page(0, page);
         assert_eq!(data_page.entry_count(), 10);
     }
 
