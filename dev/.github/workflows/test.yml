@@ -1,0 +1,333 @@
+name: EloqStore Comprehensive Tests
+
+on:
+  push:
+    branches: [ main, dev ]
+    paths:
+      - 'dev/**'
+      - '.github/workflows/test.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'dev/**'
+  schedule:
+    # Run nightly at 2 AM UTC
+    - cron: '0 2 * * *'
+
+env:
+  BUILD_TYPE: Debug
+  CMAKE_BUILD_PARALLEL_LEVEL: 4
+
+jobs:
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        compiler: [gcc-11, gcc-12, clang-14, clang-15]
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          liburing-dev \
+          libboost-all-dev \
+          libgoogle-glog-dev \
+          libgflags-dev \
+          libssl-dev \
+          cmake \
+          ninja-build \
+          lcov
+
+    - name: Install Catch2
+      run: |
+        git clone https://github.com/catchorg/Catch2.git
+        cd Catch2
+        cmake -B build -S . -DBUILD_TESTING=OFF
+        sudo cmake --build build --target install
+
+    - name: Configure CMake
+      run: |
+        cd dev
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=$BUILD_TYPE \
+          -DCMAKE_CXX_COMPILER=${{ matrix.compiler }} \
+          -DWITH_COVERAGE=ON \
+          -GNinja
+
+    - name: Build
+      run: |
+        cd dev
+        cmake --build build
+
+    - name: Run Unit Tests
+      run: |
+        cd dev/build
+        ctest --output-on-failure -L unit
+
+    - name: Generate Coverage Report
+      if: matrix.compiler == 'gcc-11'
+      run: |
+        cd dev
+        lcov --capture --directory build --output-file coverage.info
+        lcov --remove coverage.info '/usr/*' --output-file coverage.info
+        lcov --list coverage.info
+
+    - name: Upload Coverage
+      if: matrix.compiler == 'gcc-11'
+      uses: codecov/codecov-action@v3
+      with:
+        file: ./dev/coverage.info
+        flags: unittests
+        name: codecov-umbrella
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          liburing-dev \
+          libboost-all-dev \
+          libgoogle-glog-dev \
+          libgflags-dev \
+          libssl-dev \
+          cmake \
+          ninja-build
+
+    - name: Install Catch2
+      run: |
+        git clone https://github.com/catchorg/Catch2.git
+        cd Catch2
+        cmake -B build -S . -DBUILD_TESTING=OFF
+        sudo cmake --build build --target install
+
+    - name: Build Main Project
+      run: |
+        mkdir build
+        cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release
+        make -j4
+
+    - name: Build Tests
+      run: |
+        cd dev
+        cmake -B build -DCMAKE_BUILD_TYPE=Release -GNinja
+        cmake --build build
+
+    - name: Run Integration Tests
+      run: |
+        cd dev/build
+        ./integration_test --reporter compact
+
+  stress-tests:
+    name: Stress Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          liburing-dev \
+          libboost-all-dev \
+          libgoogle-glog-dev \
+          libgflags-dev \
+          libssl-dev \
+          cmake \
+          ninja-build
+
+    - name: Install Catch2
+      run: |
+        git clone https://github.com/catchorg/Catch2.git
+        cd Catch2
+        cmake -B build -S . -DBUILD_TESTING=OFF
+        sudo cmake --build build --target install
+
+    - name: Build
+      run: |
+        cd dev
+        cmake -B build -DCMAKE_BUILD_TYPE=Release -GNinja
+        cmake --build build
+
+    - name: Run Stress Tests
+      timeout-minutes: 30
+      run: |
+        cd dev/build
+        ./stress_test --reporter compact
+
+  sanitizer-tests:
+    name: Sanitizer Tests
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        sanitizer: [address, thread, undefined]
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          liburing-dev \
+          libboost-all-dev \
+          libgoogle-glog-dev \
+          libgflags-dev \
+          libssl-dev \
+          cmake \
+          ninja-build \
+          clang-15
+
+    - name: Install Catch2
+      run: |
+        git clone https://github.com/catchorg/Catch2.git
+        cd Catch2
+        cmake -B build -S . -DBUILD_TESTING=OFF
+        sudo cmake --build build --target install
+
+    - name: Configure with Sanitizer
+      run: |
+        cd dev
+        cmake -B build \
+          -DCMAKE_BUILD_TYPE=Debug \
+          -DCMAKE_CXX_COMPILER=clang++-15 \
+          -DWITH_${{ matrix.sanitizer == 'address' && 'ASAN' || matrix.sanitizer == 'thread' && 'TSAN' || 'UBSAN' }}=ON \
+          -GNinja
+
+    - name: Build
+      run: |
+        cd dev
+        cmake --build build
+
+    - name: Run Tests with Sanitizer
+      run: |
+        cd dev/build
+        ctest --output-on-failure -L unit --timeout 60
+
+  edge-case-tests:
+    name: Edge Case Tests
+    runs-on: ubuntu-latest
+    needs: unit-tests
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          liburing-dev \
+          libboost-all-dev \
+          libgoogle-glog-dev \
+          libgflags-dev \
+          libssl-dev \
+          cmake \
+          ninja-build
+
+    - name: Install Catch2
+      run: |
+        git clone https://github.com/catchorg/Catch2.git
+        cd Catch2
+        cmake -B build -S . -DBUILD_TESTING=OFF
+        sudo cmake --build build --target install
+
+    - name: Build
+      run: |
+        cd dev
+        cmake -B build -DCMAKE_BUILD_TYPE=Debug -GNinja
+        cmake --build build
+
+    - name: Run Edge Case Tests
+      run: |
+        cd dev/build
+        ./edge_case_test --reporter compact
+
+  benchmark:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests]
+
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        submodules: recursive
+
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          liburing-dev \
+          libboost-all-dev \
+          libgoogle-glog-dev \
+          libgflags-dev \
+          libssl-dev \
+          cmake \
+          ninja-build
+
+    - name: Install Catch2
+      run: |
+        git clone https://github.com/catchorg/Catch2.git
+        cd Catch2
+        cmake -B build -S . -DBUILD_TESTING=OFF
+        sudo cmake --build build --target install
+
+    - name: Build
+      run: |
+        cd dev
+        cmake -B build -DCMAKE_BUILD_TYPE=Release -GNinja
+        cmake --build build
+
+    - name: Run Benchmarks
+      run: |
+        cd dev/build
+        ctest --output-on-failure -L benchmark
+
+    - name: Save Benchmark Results
+      uses: actions/upload-artifact@v3
+      with:
+        name: benchmark-results
+        path: dev/build/benchmark_results.json
+
+  test-summary:
+    name: Test Summary
+    runs-on: ubuntu-latest
+    needs: [unit-tests, integration-tests, stress-tests, sanitizer-tests, edge-case-tests]
+    if: always()
+
+    steps:
+    - name: Test Summary
+      run: |
+        echo "## Test Summary" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "✅ All test suites completed" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Test Suite | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|------------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Unit Tests | ${{ needs.unit-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Stress Tests | ${{ needs.stress-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Sanitizer Tests | ${{ needs.sanitizer-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Edge Case Tests | ${{ needs.edge-case-tests.result }} |" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,3 @@
+In this project, we want to write a comprehensive test suite for most of the important interfaces and functions in the C++ database EloqStore database, so that we can validate the correctness of the input/output. In particular, we need to make sure the edge cases are tested very solidly. This is to prepare to support for future development. The more tests we have, the easier to make modifications. We want to test most of the classes, if not most of the functions. 
+
+Going forward, we will make all modifications under the de/v directory, and will not modify the code outside of this directory unless absolutately necessary. We will also construct the build, test, and all tasks under subdirectories, under this. 
