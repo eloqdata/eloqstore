@@ -96,7 +96,7 @@ impl ShardRouter {
         let range_size = 256 / num_shards as usize;
         let shard = (first_byte as usize) / range_size.max(1);
 
-        (shard as ShardId).min(num_shards - 1)
+        (shard as ShardId).min((num_shards - 1) as ShardId)
     }
 
     /// Consistent hash routing
@@ -151,7 +151,7 @@ impl ConsistentHashRing {
             for vnode in 0..self.virtual_nodes {
                 let node_key = format!("shard-{}-vnode-{}", shard_id, vnode);
                 let hash = Self::hash_string(&node_key);
-                self.ring.push((hash, shard_id));
+                self.ring.push((hash, shard_id as ShardId));
             }
         }
 

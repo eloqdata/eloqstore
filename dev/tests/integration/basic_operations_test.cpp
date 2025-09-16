@@ -17,30 +17,32 @@ public:
     }
 
     void VerifyKeyValue(const TableIdent& table, const std::string& key, const std::string& expected_value) {
-        auto read_req = MakeReadRequest(table, key);
-        store_->Read(read_req.get());
-        WaitForRequest(read_req.get());
+        auto read_req = std::make_unique<ReadRequest>();
+        read_req->SetArgs(table, key);
 
-        AssertNoError(read_req->Error());
-        REQUIRE(read_req->value_ == expected_value);
+        auto err = store_->ExecSync(read_req.get());
+        REQUIRE(err == KvError::NoError);
+        REQUIRE(read_req->GetValue() == expected_value);
     }
 
     void WriteKeyValue(const TableIdent& table, const std::string& key, const std::string& value) {
-        auto write_req = MakeBatchWriteRequest(table);
-        write_req->AddPut(key, value);
-        store_->BatchWrite(write_req.get());
-        WaitForRequest(write_req.get());
+        auto write_req = std::make_unique<BatchWriteRequest>();
+        std::vector<WriteDataEntry> batch;
+        batch.emplace_back(key, value, 0, WriteOp::Put);
+        write_req->SetArgs(table, std::move(batch));
 
-        AssertNoError(write_req->Error());
+        auto err = store_->ExecSync(write_req.get());
+        REQUIRE(err == KvError::NoError);
     }
 
     void DeleteKey(const TableIdent& table, const std::string& key) {
-        auto write_req = MakeBatchWriteRequest(table);
-        write_req->AddDelete(key);
-        store_->BatchWrite(write_req.get());
-        WaitForRequest(write_req.get());
+        auto write_req = std::make_unique<BatchWriteRequest>();
+        std::vector<WriteDataEntry> batch;
+        batch.emplace_back(key, "", 0, WriteOp::Delete);
+        write_req->SetArgs(table, std::move(batch));
 
-        AssertNoError(write_req->Error());
+        auto err = store_->ExecSync(write_req.get());
+        REQUIRE(err == KvError::NoError);
     }
 };
 
@@ -81,11 +83,11 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_BasicReadWrite", "[integra
     }
 
     SECTION("Read non-existent key") {
-        auto read_req = MakeReadRequest(table, "non_existent");
-        store_->Read(read_req.get());
-        WaitForRequest(read_req.get());
+        auto read_req = std::make_unique<ReadRequest>();
+        read_req->SetArgs(table, "non_existent");
 
-        REQUIRE(read_req->Error() == KvError::NotFound);
+        auto err = store_->ExecSync(read_req.get());
+        REQUIRE(err == KvError::NotFound);
     }
 }
 

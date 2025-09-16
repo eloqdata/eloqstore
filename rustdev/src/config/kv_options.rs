@@ -26,6 +26,20 @@ pub struct KvOptions {
     pub archive_path: Option<PathBuf>,
     /// Pages per file (power of 2)
     pub pages_per_file: u32,
+    /// File descriptor limit
+    pub fd_limit: u64,
+    /// Number of worker threads
+    pub num_threads: usize,
+    /// Cloud storage path
+    pub cloud_store_path: Option<PathBuf>,
+    /// Number of GC threads
+    pub num_gc_threads: usize,
+    /// Local space limit for cloud storage
+    pub local_space_limit: u64,
+    /// Number of retained archives
+    pub num_retained_archives: usize,
+    /// Archive interval in seconds
+    pub archive_interval_secs: u64,
     /// Comparator for key comparison
     comparator: Arc<dyn Comparator>,
 }
@@ -42,6 +56,13 @@ impl Default for KvOptions {
             data_append_mode: false,
             archive_path: None,
             pages_per_file: 256,
+            fd_limit: 4096,
+            num_threads: 4,
+            cloud_store_path: None,
+            num_gc_threads: 0,
+            local_space_limit: 0,
+            num_retained_archives: 0,
+            archive_interval_secs: 0,
             comparator: Arc::new(crate::codec::BytewiseComparator::new()),
         }
     }

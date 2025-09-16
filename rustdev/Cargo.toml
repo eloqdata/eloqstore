@@ -70,6 +70,7 @@ chrono = "0.4"
 # Memory management
 jemallocator = "0.5"
 crc32fast = "1.5.0"
+libc = "0.2.175"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

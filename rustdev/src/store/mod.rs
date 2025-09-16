@@ -1,28 +1,11 @@
 //! Main EloqStore implementation
 
-use crate::Result;
-use crate::config::Config;
+pub mod request;
+pub mod eloq_store;
 
-/// Main store structure
-pub struct EloqStore {
-    config: Config,
-}
-
-impl EloqStore {
-    /// Create a new EloqStore instance
-    pub fn new(config: Config) -> Result<Self> {
-        Ok(Self { config })
-    }
-
-    /// Start the store
-    pub async fn start(&self) -> Result<()> {
-        // TODO: Implement store startup
-        Ok(())
-    }
-
-    /// Stop the store
-    pub async fn stop(&self) -> Result<()> {
-        // TODO: Implement store shutdown
-        Ok(())
-    }
-}
+pub use eloq_store::EloqStore;
+pub use request::{
+    RequestType, KvRequest, RequestBase,
+    ReadRequest, FloorRequest, ScanRequest,
+    BatchWriteRequest, TruncateRequest,
+};

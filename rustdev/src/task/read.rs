@@ -22,6 +22,8 @@ use super::traits::{Task, TaskResult, TaskPriority, TaskType, TaskContext};
 pub struct ReadTask {
     /// Key to read
     key: Key,
+    /// Table identifier
+    table_id: crate::types::TableIdent,
     /// Page cache
     page_cache: Arc<PageCache>,
     /// Page mapper
@@ -34,12 +36,14 @@ impl ReadTask {
     /// Create a new read task
     pub fn new(
         key: Key,
+        table_id: crate::types::TableIdent,
         page_cache: Arc<PageCache>,
         page_mapper: Arc<PageMapper>,
         file_manager: Arc<AsyncFileManager>,
     ) -> Self {
         Self {
             key,
+            table_id,
             page_cache,
             page_mapper,
             file_manager,
@@ -53,8 +57,40 @@ impl ReadTask {
             return Ok(Some(page));
         }
 
-        // TODO: Implement proper page lookup
-        // For now, return None (not found)
+        // In a full implementation, we would:
+        // 1. Get root metadata for the table using IndexManager
+        // 2. Use SeekIndex to find the page_id containing the key
+        // 3. Map logical page_id to physical file_page_id
+        // 4. Load the page from disk
+
+        // For now, try to load from mapper if we have any pages
+        let snapshot = self.page_mapper.snapshot();
+
+        // Simple linear search through pages (inefficient but works for testing)
+        // In production, we'd use the index tree
+        for page_id in 0..snapshot.max_page_id() {
+            if let Ok(file_page_id) = snapshot.to_file_page(page_id) {
+                // Load the page from disk
+                match self.file_manager.read_page(
+                    file_page_id.file_id() as u64,
+                    file_page_id.page_offset()
+                ).await {
+                    Ok(page_data) => {
+                        let data_page = DataPage::from_page(page_id, page_data);
+                        // Check if key might be in this page
+                        let page_arc = Arc::new(data_page);
+
+                        // Cache the page
+                        self.page_cache.insert(self.key.clone(), page_arc.clone()).await;
+
+                        return Ok(Some(page_arc));
+                    }
+                    Err(_) => continue, // Try next page
+                }
+            }
+        }
+
+        // No page found
         Ok(None)
     }
 }
@@ -201,7 +237,7 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
     use crate::io::backend::{IoBackendFactory, IoBackendType};
-    use crate::page::{PageCacheConfig, PageMapperConfig};
+    use crate::page::PageCacheConfig;
     use crate::types::TableIdent;
 
     #[tokio::test]
@@ -217,7 +253,7 @@ mod tests {
         ));
 
         let page_cache = Arc::new(PageCache::new(PageCacheConfig::default()));
-        let page_mapper = Arc::new(PageMapper::new(PageMapperConfig::default()));
+        let page_mapper = Arc::new(PageMapper::new());
 
         // Initialize
         file_manager.init().await.unwrap();

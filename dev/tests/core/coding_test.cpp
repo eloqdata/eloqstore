@@ -481,9 +481,11 @@ TEST_CASE("Coding_StressTest", "[coding][stress]") {
             REQUIRE(v64 == values64[i]);
 
             // String
+            std::string_view input(ptr, limit - ptr);
             std::string_view slice;
-            REQUIRE(GetLengthPrefixedSlice(&ptr, limit, &slice));
+            REQUIRE(GetLengthPrefixedSlice(&input, &slice));
             REQUIRE(slice == strings[i]);
+            ptr = input.data();  // Update ptr to new position
         }
 
         REQUIRE(ptr == limit); // All data consumed

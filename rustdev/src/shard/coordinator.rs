@@ -191,11 +191,12 @@ impl ShardCoordinator {
         let mut health = HashMap::new();
 
         for i in 0..self.num_shards {
-            if let Some(state) = states.get(&i) {
+            let shard_id = i as ShardId;
+            if let Some(state) = states.get(&shard_id) {
                 let is_healthy = now.duration_since(state.last_update) < timeout;
-                health.insert(i, is_healthy);
+                health.insert(shard_id, is_healthy);
             } else {
-                health.insert(i, false);
+                health.insert(shard_id, false);
             }
         }
 

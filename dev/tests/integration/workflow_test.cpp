@@ -35,29 +35,24 @@ public:
     }
 
     KvError WriteData(const std::map<std::string, std::string>& data) {
-        BatchWriteTask task;
         auto request = std::make_unique<BatchWriteRequest>();
-        request->table = main_table_;
+        std::vector<WriteDataEntry> batch;
 
         for (const auto& [key, value] : data) {
-            WriteOp op;
-            op.key = key;
-            op.value = value;
-            op.timestamp = CurrentTime();
-            request->ops.push_back(op);
+            batch.emplace_back(key, value, 0, WriteOp::Put);
         }
 
-        return task.Execute(request.get());
+        request->SetArgs(main_table_, std::move(batch));
+        return store_->ExecSync(request.get());
     }
 
     KvError ReadAndVerify(const std::string& key, const std::string& expected_value) {
-        ReadTask task;
-        std::string value;
-        uint64_t timestamp;
-        uint64_t expire_ts;
+        auto request = std::make_unique<ReadRequest>();
+        request->SetArgs(main_table_, key);
 
-        KvError err = task.Read(main_table_, key, value, timestamp, expire_ts);
+        KvError err = store_->ExecSync(request.get());
         if (err == KvError::NoError) {
+            std::string value = request->GetValue();
             REQUIRE(value == expected_value);
         }
         return err;
@@ -113,23 +108,17 @@ TEST_CASE_METHOD(WorkflowTestFixture, "Workflow_WriteReadVerify", "[integration]
         REQUIRE(WriteData(data) == KvError::NoError);
 
         // Delete
-        BatchWriteTask delete_task;
         auto delete_req = std::make_unique<BatchWriteRequest>();
-        delete_req->table = main_table_;
+        std::vector<WriteDataEntry> delete_batch;
+        delete_batch.emplace_back("delete_key", "", 0, WriteOp::Delete);
+        delete_req->SetArgs(main_table_, std::move(delete_batch));
 
-        WriteOp delete_op;
-        delete_op.key = "delete_key";
-        delete_op.is_delete = true;
-        delete_op.timestamp = CurrentTime();
-        delete_req->ops.push_back(delete_op);
-
-        REQUIRE(delete_task.Execute(delete_req.get()) == KvError::NoError);
+        REQUIRE(store_->ExecSync(delete_req.get()) == KvError::NoError);
 
         // Verify deletion
-        ReadTask read_task;
-        std::string value;
-        uint64_t timestamp, expire_ts;
-        REQUIRE(read_task.Read(main_table_, "delete_key", value, timestamp, expire_ts) == KvError::NotFound);
+        auto read_req = std::make_unique<ReadRequest>();
+        read_req->SetArgs(main_table_, "delete_key");
+        REQUIRE(store_->ExecSync(read_req.get()) == KvError::NotFound);
 
         // Recreate
         data["delete_key"] = "recreated_value";

@@ -94,6 +94,14 @@ pub enum Error {
     /// Not implemented
     #[error("Not implemented: {0}")]
     NotImplemented(String),
+
+    /// Invalid configuration
+    #[error("Invalid configuration: {0}")]
+    InvalidConfig(String),
+
+    /// I/O error wrapper (without auto From impl)
+    #[error("I/O error: {0}")]
+    IoError(std::io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -118,6 +126,10 @@ pub enum KvError {
     OutOfMemory = 14,
     OutOfRange = 15,
     NoSpace = 16,
+    OpenFileLimit = 17,
+    NotRunning = 18,
+    InternalError = 19,
+    NotImplemented = 20,
 }
 
 impl From<KvError> for Error {
@@ -138,6 +150,15 @@ impl From<KvError> for Error {
             KvError::NoSpace => Error::StorageFull,
             _ => Error::Internal(format!("KvError {:?}", err)),
         }
+    }
+}
+
+impl KvError {
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            KvError::TryAgain | KvError::TimedOut | KvError::Busy
+        )
     }
 }
 
