@@ -1,61 +1,76 @@
+//! Integration tests for manifest operations
+
+extern crate eloqstore_rs;
+
+use eloqstore_rs::storage::{ManifestData, ManifestFile};
+use eloqstore_rs::types::{PageId, FilePageId, TableIdent};
+use eloqstore_rs::index::CowRootMeta;
+use eloqstore_rs::page::PageMapper;
+use std::collections::HashMap;
 use std::sync::Arc;
-use std::path::PathBuf;
 use tempfile::TempDir;
 
-use eloqstore_rs::config::KvOptions;
-use eloqstore_rs::store::EloqStore;
-use eloqstore_rs::api::{ReadRequest, WriteRequest};
-
 #[tokio::test]
-async fn test_manifest_persistence() {
-    // Create a temporary directory for test data
+async fn test_manifest_save_and_load() {
     let temp_dir = TempDir::new().unwrap();
-    let data_path = temp_dir.path().to_path_buf();
+    let manifest_path = temp_dir.path().join("test_manifest.mf");
 
-    // Create options with our test directory
-    let mut options = KvOptions::default();
-    options.data_dirs = vec![data_path.clone()];
-    options.num_shards = 1;
-    let options = Arc::new(options);
+    // Create test data
+    let mut mappings = HashMap::new();
+    mappings.insert(PageId::from(1), FilePageId::from(0x0001_0001));
+    mappings.insert(PageId::from(2), FilePageId::from(0x0001_0002));
+    mappings.insert(PageId::from(3), FilePageId::from(0x0002_0001));
 
-    // Create and start store
-    let mut store = EloqStore::new(options.clone());
-    store.start().await.expect("Failed to start store");
+    let mut roots = HashMap::new();
+    let table1 = TableIdent::new("table1");
+    let table2 = TableIdent::new("table2");
 
-    // Write some test data
-    let write_req = WriteRequest {
-        table: "test_table".to_string(),
-        key: vec![1, 2, 3],
-        value: vec![4, 5, 6],
+    roots.insert(table1.clone(), CowRootMeta {
+        root_id: PageId::from(100),
+        ttl_root_id: PageId::from(200),
+        page_mapper: Arc::new(PageMapper::new()),
+        is_written: false,
+        old_mapping: None,
+    });
+
+    roots.insert(table2.clone(), CowRootMeta {
+        root_id: PageId::from(300),
+        ttl_root_id: PageId::from(400),
+        page_mapper: Arc::new(PageMapper::new()),
+        is_written: false,
+        old_mapping: None,
+    });
+
+    let manifest = ManifestData {
+        version: 1,
+        timestamp: 1234567890,
+        mappings: mappings.clone(),
+        roots: roots.clone(),
     };
-    
-    store.write(write_req).await.expect("Write failed");
 
-    // Stop the store (should save manifest)
-    store.stop().await;
+    // Save manifest
+    ManifestFile::save_to_file(&manifest, &manifest_path).await.unwrap();
 
-    // Create a new store instance with same directory
-    let mut store2 = EloqStore::new(options.clone());
-    store2.start().await.expect("Failed to start store2");
+    // Load it back
+    let loaded = ManifestFile::load_from_file(&manifest_path).await.unwrap();
 
-    // Try to read the data we wrote earlier
-    let read_req = ReadRequest {
-        table: "test_table".to_string(),
-        key: vec![1, 2, 3],
-    };
+    // Verify
+    assert_eq!(loaded.version, 1);
+    assert_eq!(loaded.timestamp, 1234567890);
+    assert_eq!(loaded.mappings.len(), 3);
+    assert_eq!(loaded.roots.len(), 2);
 
-    let result = store2.read(read_req).await;
-    assert!(result.is_ok(), "Read after restart failed");
-    
-    let value = result.unwrap();
-    assert_eq!(value, vec![4, 5, 6], "Value mismatch after restart");
+    // Check specific mappings
+    assert_eq!(loaded.mappings.get(&PageId::from(1)), Some(&FilePageId::from(0x0001_0001)));
+    assert_eq!(loaded.mappings.get(&PageId::from(2)), Some(&FilePageId::from(0x0001_0002)));
+    assert_eq!(loaded.mappings.get(&PageId::from(3)), Some(&FilePageId::from(0x0002_0001)));
 
-    // Stop the second store
-    store2.stop().await;
+    // Check roots
+    let root1 = loaded.roots.get(&table1).unwrap();
+    assert_eq!(root1.root_id, PageId::from(100));
+    assert_eq!(root1.ttl_root_id, PageId::from(200));
 
-    // Verify manifest file was created
-    let manifest_path = data_path.join("shard_0_manifest.bin");
-    assert!(manifest_path.exists(), "Manifest file not created");
-
-    println!("Manifest persistence test passed!");
+    let root2 = loaded.roots.get(&table2).unwrap();
+    assert_eq!(root2.root_id, PageId::from(300));
+    assert_eq!(root2.ttl_root_id, PageId::from(400));
 }

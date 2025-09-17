@@ -343,6 +343,7 @@ impl FileManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::types::DEFAULT_PAGE_SIZE;
     use tempfile::TempDir;
 
     #[test]

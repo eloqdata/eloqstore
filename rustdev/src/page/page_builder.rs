@@ -164,6 +164,7 @@ impl PageBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bytes::Bytes;
     use crate::page::{DataPage, DataPageBuilder};
 
     #[test]
