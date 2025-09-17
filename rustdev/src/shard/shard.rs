@@ -7,11 +7,12 @@ use std::time::{Duration, Instant};
 use tokio::sync::{RwLock, mpsc};
 
 use crate::config::KvOptions;
-use crate::task::{Task, TaskScheduler, ReadTask};
+use crate::task::{Task, TaskScheduler, ReadTask, TaskResult};
 use crate::page::{PageCache, PageMapper};
 use crate::storage::{AsyncFileManager, ManifestData, ManifestFile};
 use crate::io::backend::{IoBackendFactory, IoBackendType};
 use crate::index::IndexPageManager;
+use crate::types::KvEntry;
 use crate::Result;
 use crate::error::KvError;
 
@@ -21,7 +22,7 @@ pub type ShardId = usize;
 /// Request queue item
 /// Wrapper for raw pointer to make it Send
 /// SAFETY: We ensure this is only used in a safe context
-struct RequestPtr(*const dyn crate::store::KvRequest);
+struct RequestPtr(*mut dyn crate::store::KvRequest);
 unsafe impl Send for RequestPtr {}
 unsafe impl Sync for RequestPtr {}
 
@@ -127,6 +128,12 @@ impl Shard {
         let scheduler = Arc::new(TaskScheduler::new(Default::default()));
         let (tx, rx) = mpsc::unbounded_channel();
 
+        // Initialize index page manager here instead of in init()
+        let index_manager = Some(Arc::new(IndexPageManager::new(
+            file_manager.clone(),
+            options.clone(),
+        )));
+
         Self {
             id,
             options: options.clone(),
@@ -135,7 +142,7 @@ impl Shard {
             page_cache,
             page_mapper,
             file_manager: file_manager.clone(),
-            index_manager: None, // Will be initialized in init()
+            index_manager,
             scheduler,
             request_queue: tx,
             request_rx: Arc::new(RwLock::new(Some(rx))),
@@ -161,11 +168,7 @@ impl Shard {
         // Initialize file manager
         self.file_manager.init().await?;
 
-        // Initialize index page manager
-        self.index_manager = Some(Arc::new(IndexPageManager::new(
-            self.file_manager.clone(),
-            self.options.clone(),
-        )));
+        // Index manager is already initialized in new()
 
         // Load manifest if exists
         let manifest_path = self.get_manifest_path();
@@ -291,8 +294,8 @@ impl Shard {
         let item = RequestItem {
             request: boxed_request,
             timestamp: Instant::now(),
-            // Cast to 'static lifetime - safe because exec_sync waits for completion
-            original: Some(RequestPtr(request as *const dyn crate::store::KvRequest as *const dyn crate::store::KvRequest)),
+            // Cast to mutable pointer - safe because exec_sync waits for completion
+            original: Some(RequestPtr(request as *const dyn crate::store::KvRequest as *mut dyn crate::store::KvRequest)),
         };
 
         self.request_queue.send(item).is_ok()
@@ -431,7 +434,6 @@ impl Shard {
             }
             RequestType::Scan => {
                 self.stats.scans.fetch_add(1, Ordering::Relaxed);
-
                 if let Some(scan_req) = request.as_any().downcast_ref::<crate::store::ScanRequest>() {
                     let index_manager = match self.index_manager.as_ref() {
                         Some(mgr) => mgr.clone(),
@@ -454,11 +456,29 @@ impl Shard {
 
                     let ctx = TaskContext::default();
                     match task.execute(&ctx).await {
-                        Ok(_result) => {
-                            // TODO: Set scan results on request
+                        Ok(result) => {
+                            // Set scan results on the original request
+                            if let TaskResult::Scan(entries) = result {
+                                if let Some(RequestPtr(orig_ptr)) = original {
+                                    unsafe {
+                                        // orig_ptr is already mutable
+                                        if let Some(orig_scan) = (*orig_ptr).as_any().downcast_ref::<crate::store::ScanRequest>() {
+                                            let mutable_scan = orig_scan as *const crate::store::ScanRequest as *mut crate::store::ScanRequest;
+                                            (*mutable_scan).entries = entries.into_iter()
+                                                .map(|(k, v)| KvEntry {
+                                                    key: k.to_vec(),
+                                                    value: v.to_vec(),
+                                                    timestamp: 0,
+                                                    expire_ts: 0,
+                                                })
+                                                .collect();
+                                        }
+                                    }
+                                }
+                            }
                             Self::set_request_done(original, &request,None);
                         }
-                        Err(_e) => {
+                        Err(e) => {
                             self.stats.errors.fetch_add(1, Ordering::Relaxed);
                             Self::set_request_done(original, &request,Some(KvError::InternalError));
                         }

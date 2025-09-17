@@ -1,3 +1,12 @@
+//! Simple debug test for EloqStore
+//!
+//! Tests basic write and read operations with debug output
+//!
+//! Run with:
+//! ```bash
+//! cargo run --example debug_test
+//! ```
+
 use eloqstore::{
     config::KvOptions,
     store::EloqStore,

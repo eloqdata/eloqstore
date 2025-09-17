@@ -5,8 +5,8 @@
 **Rule**: Follow C++ implementation closely - no new features (except I/O abstraction)
 **C++ Code**: Located in `../` (read-only reference)
 
+Notice that in C++ version, a shard is single threaded and no need to handle multiple thread synchronization, therefore, we can avoid lock protection when processing requests. We will implement the same mechanism in Rust. 
 
-## 🎯 Current Status: 98% FEATURE COMPLETE! ✨ PRODUCTION READY!
 
 ### 🚧 Known Limitations:
 - io_uring disabled (tokio-uring thread safety)

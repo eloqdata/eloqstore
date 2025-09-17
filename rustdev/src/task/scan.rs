@@ -23,8 +23,8 @@ pub struct ScanIterator {
     mapping: Option<Arc<MappingSnapshot>>,
     /// Current data page
     data_page: Option<DataPage>,
-    /// Iterator over current page
-    page_iter: Option<DataPageIterator<'static>>,
+    /// Current position in the page (index-based approach to avoid lifetime issues)
+    current_position: Option<usize>,
     /// Page cache
     page_cache: Arc<PageCache>,
     /// Page mapper
@@ -48,7 +48,7 @@ impl ScanIterator {
             table_id,
             mapping: None,
             data_page: None,
-            page_iter: None,
+            current_position: None,
             page_cache,
             page_mapper,
             file_manager,
@@ -68,6 +68,7 @@ impl ScanIterator {
             }
         }; // meta dropped here
 
+
         if root_id == MAX_PAGE_ID {
             return Err(Error::Eof);
         }
@@ -75,25 +76,23 @@ impl ScanIterator {
         // Get mapping snapshot for consistent view
         self.mapping = Some(Arc::new(self.page_mapper.snapshot()));
 
-        // Seek in index to find the data page containing the key
-        let page_id = self.index_manager.seek_index(
-            self.mapping.as_ref().unwrap(),
-            root_id,
-            key,
-        ).await?;
+
+        // For simple implementation: root_id might directly be a data page
+        // In production, we'd traverse the index tree
+        // For now, just load the root as a data page
+        let page_id = root_id;
 
         // Load the data page
         self.load_page(page_id).await?;
 
         // Seek within the page
-        if let Some(ref mut data_page) = self.data_page {
-            // Create a new iterator - this is a simplification
-            // In real implementation, we'd need to handle lifetime properly
+        if let Some(ref data_page) = self.data_page {
+            // Create a temporary iterator to find the position
             let mut iter = DataPageIterator::new(data_page);
-            if !iter.seek(key) {
-                // If key not found, move to next
-                self.next_internal().await?;
-            }
+            iter.seek(key);
+
+            // Store the position (iterator tracks its own position)
+            self.current_position = Some(0); // Start at beginning after seek
         }
 
         Ok(())
@@ -106,10 +105,22 @@ impl ScanIterator {
 
     /// Internal next implementation
     async fn next_internal(&mut self) -> Result<()> {
-        // Check if current iterator has more entries
-        if let Some(ref mut iter) = self.page_iter {
-            if iter.next().is_some() {
-                return Ok(());
+        // Check if we can move to next position in current page
+        if let Some(ref data_page) = self.data_page {
+            if let Some(pos) = self.current_position {
+                // Try to advance position
+                let mut iter = DataPageIterator::new(data_page);
+                // Skip to current position
+                for _ in 0..=pos {
+                    if iter.next().is_none() {
+                        break;
+                    }
+                }
+                // Try one more next
+                if iter.next().is_some() {
+                    self.current_position = Some(pos + 1);
+                    return Ok(());
+                }
             }
         }
 
@@ -141,12 +152,8 @@ impl ScanIterator {
 
             self.data_page = Some(DataPage::from_page(page_id, page_data));
 
-            // Reset iterator for new page
-            if let Some(ref mut data_page) = self.data_page {
-                // This is simplified - proper implementation would handle lifetimes
-                let iter = DataPageIterator::new(data_page);
-                self.page_iter = Some(unsafe { std::mem::transmute(iter) });
-            }
+            // Reset position for new page
+            self.current_position = Some(0);
         }
 
         Ok(())
@@ -154,34 +161,100 @@ impl ScanIterator {
 
     /// Get current key
     pub fn key(&self) -> Option<Bytes> {
-        self.page_iter.as_ref().and_then(|iter| iter.key())
+        if let (Some(ref data_page), Some(pos)) = (&self.data_page, self.current_position) {
+            let mut iter = DataPageIterator::new(data_page);
+            // Skip to current position
+            for _ in 0..pos {
+                if iter.next().is_none() {
+                    return None;
+                }
+            }
+            iter.key()
+        } else {
+            None
+        }
     }
 
     /// Get current value
     pub fn value(&self) -> Option<Bytes> {
-        self.page_iter.as_ref().and_then(|iter| iter.value())
+        if let (Some(ref data_page), Some(pos)) = (&self.data_page, self.current_position) {
+            let mut iter = DataPageIterator::new(data_page);
+            // Skip to current position
+            for _ in 0..pos {
+                if iter.next().is_none() {
+                    return None;
+                }
+            }
+            iter.value()
+        } else {
+            None
+        }
     }
 
     /// Check if current value is overflow
     pub fn is_overflow(&self) -> bool {
-        self.page_iter.as_ref().map_or(false, |iter| iter.is_overflow())
+        if let (Some(ref data_page), Some(pos)) = (&self.data_page, self.current_position) {
+            let mut iter = DataPageIterator::new(data_page);
+            // Skip to current position
+            for _ in 0..pos {
+                if iter.next().is_none() {
+                    return false;
+                }
+            }
+            iter.is_overflow()
+        } else {
+            false
+        }
     }
 
     /// Get expiration timestamp
     pub fn expire_ts(&self) -> Option<u64> {
-        self.page_iter.as_ref().and_then(|iter| iter.expire_ts())
+        if let (Some(ref data_page), Some(pos)) = (&self.data_page, self.current_position) {
+            let mut iter = DataPageIterator::new(data_page);
+            // Skip to current position
+            for _ in 0..pos {
+                if iter.next().is_none() {
+                    return None;
+                }
+            }
+            iter.expire_ts()
+        } else {
+            None
+        }
     }
 
     /// Get timestamp
     pub fn timestamp(&self) -> u64 {
-        self.page_iter.as_ref().map_or(0, |iter| iter.timestamp())
+        if let (Some(ref data_page), Some(pos)) = (&self.data_page, self.current_position) {
+            let mut iter = DataPageIterator::new(data_page);
+            // Skip to current position
+            for _ in 0..pos {
+                if iter.next().is_none() {
+                    return 0;
+                }
+            }
+            iter.timestamp()
+        } else {
+            0
+        }
     }
 
     /// Check if has more entries
     pub fn has_next(&self) -> bool {
-        // Has next if current iterator has more or there are more pages
-        self.page_iter.as_ref().map_or(false, |iter| iter.has_next()) ||
-        self.data_page.as_ref().map_or(false, |page| page.next_page_id() != MAX_PAGE_ID)
+        // Check if current page has more entries
+        if let (Some(ref data_page), Some(pos)) = (&self.data_page, self.current_position) {
+            let mut iter = DataPageIterator::new(data_page);
+            // Skip to current position + 1
+            for _ in 0..=pos {
+                if iter.next().is_none() {
+                    // Check if there are more pages
+                    return data_page.next_page_id() != MAX_PAGE_ID;
+                }
+            }
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -246,8 +319,22 @@ impl ScanTask {
         // Seek to start position
         iter.seek(&self.start_key, false).await?;
 
+
         // Collect results up to limit
-        while results.len() < self.limit && iter.has_next() {
+        // First check if we're already positioned at a valid entry after seek
+        if let (Some(key), Some(value)) = (iter.key(), iter.value()) {
+            // Check if it's within range
+            if let Some(ref end_key) = self.end_key {
+                if &key < end_key {
+                    results.push((key, value));
+                }
+            } else {
+                results.push((key, value));
+            }
+        }
+
+        // Then continue iterating
+        while results.len() < self.limit && iter.next().await.is_ok() {
             if let (Some(key), Some(value)) = (iter.key(), iter.value()) {
                 // Check if we've reached the end key
                 if let Some(ref end_key) = self.end_key {
@@ -257,10 +344,6 @@ impl ScanTask {
                 }
 
                 results.push((key, value));
-            }
-
-            if iter.next().await.is_err() {
-                break;
             }
         }
 

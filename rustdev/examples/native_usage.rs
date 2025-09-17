@@ -2,6 +2,11 @@
 //!
 //! This example shows how to use EloqStore directly from Rust code,
 //! including basic CRUD operations, batch writes, and scanning.
+//!
+//! Run with:
+//! ```bash
+//! cargo run --example native_usage
+//! ```
 
 use eloqstore::{
     config::KvOptions,

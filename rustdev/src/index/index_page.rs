@@ -322,14 +322,19 @@ impl<'a> IndexPageIter<'a> {
     /// Get page ID pointed to by current entry
     pub fn get_page_id(&self) -> PageId {
         // Page ID is stored after the key
-        if self.curr_offset >= 4 {
+        if self.curr_offset >= 4 && self.curr_offset <= self.page_data.len() {
             let offset = self.curr_offset - 4;
-            u32::from_le_bytes([
-                self.page_data[offset],
-                self.page_data[offset + 1],
-                self.page_data[offset + 2],
-                self.page_data[offset + 3],
-            ])
+            // Check bounds before accessing
+            if offset + 3 < self.page_data.len() {
+                u32::from_le_bytes([
+                    self.page_data[offset],
+                    self.page_data[offset + 1],
+                    self.page_data[offset + 2],
+                    self.page_data[offset + 3],
+                ])
+            } else {
+                MAX_PAGE_ID
+            }
         } else {
             MAX_PAGE_ID
         }
