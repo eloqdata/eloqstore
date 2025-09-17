@@ -183,6 +183,26 @@ impl DataPageBuilder {
         self.content_size = 0;
         self.last_key.clear();
     }
+
+    /// Get current size estimate
+    pub fn current_size_estimate(&self) -> usize {
+        self.current_size()
+    }
+
+    /// Add an index entry (key -> page_id mapping)
+    pub fn add_index_entry(&mut self, key: &[u8], page_id: PageId, is_leaf: bool) -> bool {
+        // Encode page_id as value (4 bytes) plus leaf flag (1 byte)
+        let mut value = vec![0u8; 5];
+        value[0..4].copy_from_slice(&page_id.to_le_bytes());
+        value[4] = if is_leaf { 1 } else { 0 };
+        self.add(key, &value, 0, None, false)
+    }
+
+    /// Finish as an index page
+    pub fn finish_index_page(&mut self) -> Vec<u8> {
+        // Return the raw buffer for index page
+        self.buffer.to_vec()
+    }
 }
 
 #[cfg(test)]

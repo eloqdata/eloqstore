@@ -145,6 +145,9 @@ impl EloqStore {
             self.shard_handles.push(handle);
         }
 
+        // Give shards a moment to start their run loops
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+
         tracing::info!("EloqStore started with {} shards", self.shards.len());
         Ok(())
     }
@@ -370,10 +373,14 @@ impl EloqStore {
 
     /// Execute request synchronously
     pub fn exec_sync(&self, req: &dyn request::KvRequest) {
+        tracing::debug!("exec_sync: sending request type {:?}", req.request_type());
         if !futures::executor::block_on(self.send_request(req)) {
+            tracing::debug!("exec_sync: send_request returned false, marking as NotRunning");
             req.set_done(Some(KvError::NotRunning));
         } else {
+            tracing::debug!("exec_sync: waiting for request completion");
             req.wait();
+            tracing::debug!("exec_sync: request completed");
         }
     }
 

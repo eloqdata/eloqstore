@@ -55,26 +55,17 @@ pub enum TaskType {
 /// Task execution context
 #[derive(Clone)]
 pub struct TaskContext {
-    /// Task ID
-    pub task_id: u64,
-    /// Table identifier
-    pub table: TableIdent,
-    /// Task priority
-    pub priority: TaskPriority,
-    /// Timeout duration
-    pub timeout: Option<Duration>,
-    /// Cancellation token
-    pub cancel_token: tokio_util::sync::CancellationToken,
+    /// Shard ID
+    pub shard_id: u32,
+    /// Options
+    pub options: std::sync::Arc<crate::config::KvOptions>,
 }
 
 impl Default for TaskContext {
     fn default() -> Self {
         Self {
-            task_id: 0,
-            table: TableIdent::default(),
-            priority: TaskPriority::Normal,
-            timeout: None,
-            cancel_token: tokio_util::sync::CancellationToken::new(),
+            shard_id: 0,
+            options: std::sync::Arc::new(crate::config::KvOptions::default()),
         }
     }
 }

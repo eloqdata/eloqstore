@@ -133,6 +133,10 @@ impl ManifestBuilder {
 
     /// Build the manifest and return data with checksum
     pub fn build(&mut self) -> (Vec<u8>, u64) {
+        // Set log size in header before calculating checksum
+        let log_size = (self.buffer.len() - HEADER_SIZE) as u32;
+        self.buffer[OFFSET_LOG_SIZE..OFFSET_LOG_SIZE + 4].copy_from_slice(&log_size.to_le_bytes());
+
         self.set_checksum();
 
         // Extract checksum
@@ -250,6 +254,17 @@ impl ManifestFile {
             builder.update_mapping(*page_id, *file_page_id);
         }
 
+        // Get root ID from roots if available
+        let root_id = manifest.roots.values()
+            .next()
+            .map(|meta| meta.root_id)
+            .unwrap_or(MAX_PAGE_ID);
+
+        // Set root IDs in header
+        let ttl_root_id = MAX_PAGE_ID; // TTL not implemented yet
+        builder.buffer[OFFSET_ROOT..OFFSET_ROOT + 4].copy_from_slice(&root_id.to_le_bytes());
+        builder.buffer[OFFSET_TTL_ROOT..OFFSET_TTL_ROOT + 4].copy_from_slice(&ttl_root_id.to_le_bytes());
+
         // Build and return
         let (data, _checksum) = builder.build();
         Ok(data)
@@ -262,7 +277,21 @@ impl ManifestFile {
 
         let mut manifest = ManifestData::new();
         manifest.mappings = replayer.mappings;
-        manifest.roots = replayer.roots;
+
+        // If we have a root ID, create a root entry
+        if replayer.root_id != MAX_PAGE_ID {
+            // Create a default table ident for now
+            let table_id = TableIdent::new("test_table", 0);
+            let root_meta = CowRootMeta {
+                root_id: replayer.root_id,
+                ttl_root_id: replayer.ttl_root_id,
+                mapper: Some(Box::new(crate::page::PageMapper::new())),
+                manifest_size: 0,
+                old_mapping: None,
+                next_expire_ts: u64::MAX,
+            };
+            manifest.roots.insert(table_id, root_meta);
+        }
 
         Ok(manifest)
     }

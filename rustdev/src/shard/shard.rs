@@ -394,6 +394,7 @@ impl Shard {
                 self.stats.writes.fetch_add(1, Ordering::Relaxed);
 
                 if let Some(write_req) = request.as_any().downcast_ref::<crate::store::BatchWriteRequest>() {
+                    // Use proper BatchWriteTask implementation
                     let index_manager = match self.index_manager.as_ref() {
                         Some(mgr) => mgr.clone(),
                         None => {
@@ -402,33 +403,54 @@ impl Shard {
                         }
                     };
 
-                    // Use simplified write for now - just write first entry for testing
-                    let mut had_error = false;
-                    for entry in &write_req.entries {
-                        match crate::task::write_simple::simple_write(
-                            &entry.key,
-                            &entry.value,
-                            &write_req.base.table_id,
-                            self.page_cache.clone(),
-                            self.page_mapper.clone(),
-                            self.file_manager.clone(),
-                            index_manager.clone(),
-                        ).await {
-                            Ok(_) => {
-                                }
-                            Err(e) => {
-                                tracing::error!("Write error: {:?}", e);
-                                had_error = true;
-                                break;
-                            }
+                    // Convert entries to task::write::WriteDataEntry format
+                    // Note: write_req.entries are already crate::types::WriteDataEntry
+                    let entries: Vec<crate::task::write::WriteDataEntry> = write_req.entries.iter().map(|e| {
+                        crate::task::write::WriteDataEntry {
+                            key: crate::types::Key::from(e.key.clone()),
+                            value: crate::types::Value::from(e.value.clone()),
+                            op: match e.op {
+                                crate::types::WriteOp::Upsert => crate::task::write::WriteOp::Upsert,
+                                crate::types::WriteOp::Delete => crate::task::write::WriteOp::Delete,
+                            },
+                            timestamp: e.timestamp,
+                            expire_ts: e.expire_ts,  // already u64
                         }
-                    }
+                    }).collect();
 
-                    if had_error {
-                        self.stats.errors.fetch_add(1, Ordering::Relaxed);
-                        Self::set_request_done(original, &request,Some(KvError::InternalError));
-                    } else {
-                        Self::set_request_done(original, &request,None);
+                    tracing::debug!("Creating BatchWriteTask with {} entries", entries.len());
+
+                    // Create and execute BatchWriteTask
+                    let batch_task = crate::task::write::BatchWriteTask::new(
+                        entries,
+                        write_req.base.table_id.clone(),
+                        self.page_cache.clone(),
+                        self.page_mapper.clone(),
+                        self.file_manager.clone(),
+                        index_manager.clone(),
+                    );
+
+                    let ctx = crate::task::TaskContext {
+                        shard_id: self.id as u32,
+                        options: self.options.clone(),
+                    };
+
+                    match batch_task.execute(&ctx).await {
+                        Ok(crate::task::TaskResult::BatchWrite(count)) => {
+                            tracing::debug!("BatchWriteTask completed successfully: {} entries", count);
+                            self.stats.writes.fetch_add(count as u64, Ordering::Relaxed);
+                            Self::set_request_done(original, &request, None);
+                        }
+                        Ok(other) => {
+                            tracing::error!("Unexpected result from BatchWriteTask: {:?}", other);
+                            self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                            Self::set_request_done(original, &request, Some(KvError::InternalError));
+                        }
+                        Err(e) => {
+                            tracing::error!("BatchWriteTask error: {:?}", e);
+                            self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                            Self::set_request_done(original, &request, Some(KvError::InternalError));
+                        }
                     }
                 }
             }

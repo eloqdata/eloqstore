@@ -78,6 +78,7 @@ impl RequestBase {
     }
 
     pub fn set_done(&self, error: Option<KvError>) {
+        tracing::debug!("Setting request done with error: {:?}", error);
         *self.error.lock() = error;
         self.done.store(true, Ordering::Release);
 
@@ -91,9 +92,15 @@ impl RequestBase {
     }
 
     pub fn wait(&self) {
+        let mut count = 0;
         while !self.is_done() {
+            if count % 1000 == 0 {
+                tracing::debug!("Waiting for request to complete... (iteration {})", count);
+            }
+            count += 1;
             std::thread::yield_now();
         }
+        tracing::debug!("Request completed after {} iterations", count);
     }
 }
 

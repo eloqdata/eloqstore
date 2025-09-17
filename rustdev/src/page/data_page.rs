@@ -106,6 +106,11 @@ impl DataPage {
         self.page.content_length()
     }
 
+    /// Get number of restart points (following C++ RestartNum)
+    pub fn restart_num(&self) -> u16 {
+        self.restart_count()
+    }
+
     /// Get number of restart points
     pub fn restart_count(&self) -> u16 {
         let offset = self.page.size() - 2;

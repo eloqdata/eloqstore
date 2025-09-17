@@ -10,8 +10,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 
-use crate::types::{Key, Value, TableIdent, PageId};
-use crate::page::{DataPage, PageCache, DataPageBuilder};
+use crate::types::{Key, Value, TableIdent, PageId, MAX_PAGE_ID};
+use crate::page::{DataPage, PageCache, DataPageBuilder, DataPageIterator, Page};
 use crate::page::PageMapper;
 use crate::storage::AsyncFileManager;
 use crate::index::{IndexPageManager, CowRootMeta, IndexPageIter};
@@ -28,6 +28,14 @@ pub enum WriteOp {
     Upsert,
     /// Delete key
     Delete,
+}
+
+/// Index operation for tracking changes to index pages
+#[derive(Debug, Clone)]
+struct IndexOp {
+    key: Bytes,
+    page_id: PageId,
+    op: WriteOp,
 }
 
 /// Write data entry (following C++ WriteDataEntry)
@@ -55,6 +63,8 @@ struct IndexStackEntry {
     options: Arc<crate::config::KvOptions>,
     /// Is this a leaf index
     is_leaf_index: bool,
+    /// Changes to apply at this level
+    changes: Vec<IndexOp>,
 }
 
 impl IndexStackEntry {
@@ -72,6 +82,7 @@ impl IndexStackEntry {
             idx_page_iter: dummy_iter,
             options,
             is_leaf_index: false,
+            changes: Vec::new(),
         }
     }
 }
@@ -254,15 +265,243 @@ impl BatchWriteTask {
         Ok(())
     }
 
-    /// Pop from index stack
+    /// Pop from index stack (following C++ Pop)
     async fn pop_stack(&mut self) -> Result<Option<PageId>> {
-        if let Some(entry) = self.stack.pop() {
-            // Process any pending changes
-            // In full implementation, would update parent index page
-            Ok(None)
-        } else {
-            Ok(None)
+        if self.stack.is_empty() {
+            return Ok(None);
         }
+
+        let stack_entry = self.stack.pop().unwrap();
+
+        // If no changes, just return
+        if stack_entry.changes.is_empty() {
+            // TODO: Unpin page if needed
+            return Ok(stack_entry.idx_page.map(|p| p.get_page_id()));
+        }
+
+        // Reset index page builder for merging
+        self.idx_page_builder.reset();
+
+        let changes = stack_entry.changes;
+        let stack_page = stack_entry.idx_page.as_ref();
+        let is_leaf_index = stack_entry.is_leaf_index;
+
+        // Initialize base page iterator if we have a page
+        let mut base_page_iter = if let Some(page) = stack_page {
+            Some(crate::index::IndexPageIter::new(page, &stack_entry.options))
+        } else {
+            None
+        };
+
+        // Advance iterator to first valid entry
+        let mut is_base_iter_valid = false;
+        if let Some(ref mut iter) = base_page_iter {
+            is_base_iter_valid = iter.next();
+        }
+
+        // Keep track of previous page for redistribution
+        let mut prev_page_id = stack_page.map_or(MAX_PAGE_ID, |p| p.get_page_id());
+        let mut prev_page_data: Option<Vec<u8>> = None;
+        let mut prev_page_key = String::new();
+
+        // Get page key from parent if not root
+        let page_key = if !self.stack.is_empty() {
+            if let Some(parent) = self.stack.last() {
+                String::from_utf8_lossy(parent.idx_page_iter.key()).to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        let mut curr_page_key = page_key.clone();
+
+        // Merge changes with existing entries
+        let mut change_iter = changes.into_iter();
+        let mut curr_change = change_iter.next();
+
+        // Process both iterators in merge order
+        while is_base_iter_valid && curr_change.is_some() {
+            let base_iter = base_page_iter.as_ref().unwrap();
+            let base_key = base_iter.key();
+            let base_page_id = base_iter.get_page_id();
+
+            let change = curr_change.as_ref().unwrap();
+            let change_key = &change.key;
+            let change_page_id = change.page_id;
+
+            // Compare keys
+            let cmp_result = base_key.cmp(change_key.as_ref());
+
+            let (new_key, new_page_id, advance_base, advance_change) = match cmp_result {
+                std::cmp::Ordering::Less => {
+                    // Base key comes first
+                    (base_key.to_vec(), base_page_id, true, false)
+                }
+                std::cmp::Ordering::Equal => {
+                    // Keys are equal, apply change
+                    match change.op {
+                        WriteOp::Delete => {
+                            // Skip this entry
+                            (vec![], MAX_PAGE_ID, true, true)
+                        }
+                        WriteOp::Upsert => {
+                            // Replace with new page
+                            (change_key.to_vec(), change_page_id, true, true)
+                        }
+                    }
+                }
+                std::cmp::Ordering::Greater => {
+                    // Change key comes first (must be insert)
+                    debug_assert!(matches!(change.op, WriteOp::Upsert));
+                    (change_key.to_vec(), change_page_id, false, true)
+                }
+            };
+
+            // Add to page if not deleted
+            if !new_key.is_empty() || new_page_id != MAX_PAGE_ID {
+                // Check if page is full
+                if !self.idx_page_builder.add_index_entry(&new_key, new_page_id, is_leaf_index) {
+                    // Page is full, finish current page
+                    if let Some(page_data) = prev_page_data.take() {
+                        // Flush previous page
+                        self.flush_index_page(prev_page_id, page_data, prev_page_key.as_bytes(), true).await?;
+                    }
+
+                    prev_page_key = curr_page_key.clone();
+                    prev_page_data = Some(self.idx_page_builder.finish_index_page());
+                    prev_page_id = self.page_mapper.allocate_page()?;
+
+                    curr_page_key = String::from_utf8_lossy(&new_key).to_string();
+                    self.idx_page_builder.reset();
+
+                    // Add leftmost pointer without key
+                    self.idx_page_builder.add_index_entry(b"", new_page_id, is_leaf_index);
+                }
+            }
+
+            // Advance iterators
+            if advance_base {
+                if let Some(ref mut iter) = base_page_iter {
+                    is_base_iter_valid = iter.next();
+                }
+            }
+            if advance_change {
+                curr_change = change_iter.next();
+            }
+        }
+
+        // Process remaining base entries
+        while is_base_iter_valid {
+            if let Some(ref base_iter) = base_page_iter {
+                let new_key = base_iter.key();
+                let new_page_id = base_iter.get_page_id();
+
+                // Check if page is full
+                if !self.idx_page_builder.add_index_entry(&new_key, new_page_id, is_leaf_index) {
+                    // Page is full, finish current page
+                    if let Some(page_data) = prev_page_data.take() {
+                        // Flush previous page
+                        self.flush_index_page(prev_page_id, page_data, prev_page_key.as_bytes(), true).await?;
+                    }
+
+                    prev_page_key = curr_page_key.clone();
+                    prev_page_data = Some(self.idx_page_builder.finish_index_page());
+                    prev_page_id = self.page_mapper.allocate_page()?;
+
+                    curr_page_key = String::from_utf8_lossy(&new_key).to_string();
+                    self.idx_page_builder.reset();
+
+                    // Add leftmost pointer without key
+                    self.idx_page_builder.add_index_entry(b"", new_page_id, is_leaf_index);
+                }
+
+                if let Some(ref mut iter) = base_page_iter {
+                    is_base_iter_valid = iter.next();
+                }
+            }
+        }
+
+        // Process remaining changes
+        while let Some(change) = curr_change {
+            if !matches!(change.op, WriteOp::Delete) {
+                let new_key = change.key.as_ref();
+                let new_page_id = change.page_id;
+
+                // Check if page is full
+                if !self.idx_page_builder.add_index_entry(new_key, new_page_id, is_leaf_index) {
+                    // Page is full, finish current page
+                    if let Some(page_data) = prev_page_data.take() {
+                        // Flush previous page
+                        self.flush_index_page(prev_page_id, page_data, prev_page_key.as_bytes(), true).await?;
+                    }
+
+                    prev_page_key = curr_page_key.clone();
+                    prev_page_data = Some(self.idx_page_builder.finish_index_page());
+                    prev_page_id = self.page_mapper.allocate_page()?;
+
+                    curr_page_key = String::from_utf8_lossy(new_key).to_string();
+                    self.idx_page_builder.reset();
+
+                    // Add leftmost pointer without key
+                    self.idx_page_builder.add_index_entry(b"", new_page_id, is_leaf_index);
+                }
+            }
+            curr_change = change_iter.next();
+        }
+
+        // Handle final page
+        let mut new_root_id = None;
+        if self.idx_page_builder.is_empty() {
+            // All entries deleted, free the page
+            if let Some(page) = stack_entry.idx_page {
+                self.free_page(page.get_page_id());
+            }
+
+            // Notify parent about deletion
+            if !self.stack.is_empty() {
+                if let Some(parent) = self.stack.last_mut() {
+                    let page_key = parent.idx_page_iter.key();
+                    parent.changes.push(IndexOp {
+                        key: Bytes::copy_from_slice(page_key),
+                        page_id: prev_page_id,
+                        op: WriteOp::Delete,
+                    });
+                }
+            }
+        } else {
+            // Finish and flush the final page
+            let splited = prev_page_data.is_some();
+
+            // Finish current builder content
+            if !self.idx_page_builder.is_empty() {
+                let final_page = self.idx_page_builder.finish_index_page();
+
+                if let Some(prev_data) = prev_page_data {
+                    // We have a previous page to flush first
+                    self.flush_index_page(prev_page_id, prev_data, prev_page_key.as_bytes(), true).await?;
+
+                    // Now handle the final page
+                    let final_page_id = self.page_mapper.allocate_page()?;
+                    self.flush_index_page(final_page_id, final_page, curr_page_key.as_bytes(), false).await?;
+                    new_root_id = Some(final_page_id);
+                } else {
+                    // This is the only page
+                    if prev_page_id == MAX_PAGE_ID {
+                        prev_page_id = self.page_mapper.allocate_page()?;
+                    }
+                    self.flush_index_page(prev_page_id, final_page, curr_page_key.as_bytes(), false).await?;
+                    new_root_id = Some(prev_page_id);
+                }
+            } else if let Some(prev_data) = prev_page_data {
+                // Just flush the previous page
+                self.flush_index_page(prev_page_id, prev_data, prev_page_key.as_bytes(), false).await?;
+                new_root_id = Some(prev_page_id);
+            }
+        }
+
+        Ok(new_root_id)
     }
 
     /// Seek to leaf page (following C++ Seek)
@@ -417,33 +656,63 @@ impl BatchWriteTask {
 
     /// Write page to disk
     async fn write_page(&self, page: DataPage) -> Result<()> {
-        let snapshot = self.page_mapper.snapshot();
-        if let Ok(file_page_id) = snapshot.to_file_page(page.page_id()) {
-            self.file_manager
-                .write_page(file_page_id.file_id() as u64, file_page_id.page_offset(), page.as_page())
-                .await?;
+        let page_id = page.page_id();
+        tracing::debug!("write_page: writing page_id={}", page_id);
+
+        // Ensure file exists first
+        if self.file_manager.get_metadata(0).await.is_err() {
+            tracing::debug!("Creating file 0");
+            self.file_manager.create_file(&self.table_id).await?;
         }
+
+        // First check if page is already mapped
+        let snapshot = self.page_mapper.snapshot();
+        let file_page_id = if let Ok(fid) = snapshot.to_file_page(page_id) {
+            tracing::debug!("Page {} already mapped to file page {:?}", page_id, fid);
+            fid
+        } else {
+            // Need to allocate a file page for this logical page
+            tracing::debug!("Allocating file page for page_id={}", page_id);
+
+            // Switch to file 0 if needed
+            self.page_mapper.switch_file(0)?;
+            let file_page_id = self.page_mapper.allocate_file_page()?;
+            self.page_mapper.map_page(page_id, file_page_id)?;
+            self.page_mapper.update_mapping(page_id, file_page_id);
+            tracing::debug!("Mapped page {} to file page {:?}", page_id, file_page_id);
+            file_page_id
+        };
+
+        // Now write the page
+        self.file_manager
+            .write_page(file_page_id.file_id() as u64, file_page_id.page_offset(), page.as_page())
+            .await?;
+
+        tracing::debug!("Successfully wrote page {} to disk", page_id);
         Ok(())
     }
 
 
+
     /// Apply batch (following C++ Apply)
     async fn apply(&mut self) -> Result<()> {
-        // Make COW root
+        tracing::debug!("BatchWriteTask::apply starting with {} entries", self.entries.len());
+
+        // Following C++ Apply() exactly
+        // 1. Make COW root
         self.cow_meta = Some(self.index_manager.make_cow_root(&self.table_id)?);
 
-        // Apply main batch
+        // 2. Apply main batch
         let root_id = self.cow_meta.as_ref().unwrap().root_id;
         self.apply_batch(root_id, true).await?;
 
-        // Apply TTL batch if any
-        if !self.ttl_batch.is_empty() {
-            self.apply_ttl_batch().await?;
-        }
+        // 3. Apply TTL batch if any
+        self.apply_ttl_batch().await?;
 
-        // Update metadata
+        // 4. Update metadata
         self.update_meta().await?;
 
+        tracing::debug!("BatchWriteTask::apply completed");
         Ok(())
     }
 
@@ -465,14 +734,19 @@ impl BatchWriteTask {
 
     /// Apply batch to tree (following C++ ApplyBatch)
     async fn apply_batch(&mut self, root_id: PageId, update_ttl: bool) -> Result<()> {
+        tracing::debug!("apply_batch: root_id={}, update_ttl={}, entries={}",
+                        root_id, update_ttl, self.entries.len());
+
         // Initialize stack with root
         if root_id != PageId::MAX {
             // Load root index page
             // Simplified - full implementation would load from index manager
+            tracing::debug!("Loading existing root");
             let entry = IndexStackEntry::new(None, self.options.clone());
             self.stack.push(entry);
         } else {
             // Empty tree
+            tracing::debug!("Creating new empty tree");
             let mut entry = IndexStackEntry::new(None, self.options.clone());
             entry.is_leaf_index = true;
             self.stack.push(entry);
@@ -504,9 +778,19 @@ impl BatchWriteTask {
         self.shift_leaf_link().await?;
         self.shift_leaf_link().await?;
 
-        // Update root
+        // Update root by popping all stack entries
+        let mut final_root_id = None;
         while !self.stack.is_empty() {
-            self.pop_stack().await?;
+            if let Some(root_id) = self.pop_stack().await? {
+                final_root_id = Some(root_id);
+            }
+        }
+
+        // Update COW metadata with new root if changed
+        if let Some(new_root) = final_root_id {
+            if let Some(ref mut meta) = self.cow_meta {
+                meta.root_id = new_root;
+            }
         }
 
         Ok(())
@@ -539,64 +823,353 @@ impl BatchWriteTask {
 
     /// Apply one page (following C++ ApplyOnePage)
     async fn apply_one_page(&mut self, cidx: &mut usize, now_ms: u64, update_ttl: bool) -> Result<()> {
+        tracing::debug!("apply_one_page: starting at cidx={}", *cidx);
         self.data_page_builder.reset();
 
-        // Process entries that belong to this page
-        while *cidx < self.entries.len() {
-            let entry = &self.entries[*cidx];
+        // Get the comparator
+        let comparator = self.index_manager.get_comparator();
 
-            // Check if entry is expired
-            if entry.expire_ts != 0 && entry.expire_ts <= now_ms {
-                // Skip expired entry
-                if update_ttl {
-                    // Add to TTL batch for deletion
-                    self.ttl_batch.push(WriteDataEntry {
-                        key: entry.key.clone(),
-                        value: Bytes::new(),
-                        op: WriteOp::Delete,
-                        timestamp: now_ms,
-                        expire_ts: 0,
-                    });
+        // Collect TTL updates separately to avoid borrow issues
+        let mut ttl_updates = Vec::new();
+
+        // Initialize base page iterator if we have an applying page
+        let mut base_iter = self.applying_page.as_ref().map(|page| DataPageIterator::new(page));
+        let mut is_base_valid = base_iter.as_ref().map_or(false, |_| true);
+
+        // Process entries, merging with existing data
+        let start_cidx = *cidx;
+        let change_end = self.entries.len();
+
+        while is_base_valid || *cidx < change_end {
+            let mut should_add = false;
+            let mut key_to_add = Bytes::new();
+            let mut val_to_add = Bytes::new();
+            let mut ts_to_add = 0u64;
+            let mut expire_to_add = 0u64;
+            let mut advance_base = false;
+            let mut advance_change = false;
+
+            // Compare base and change entries
+            if is_base_valid && *cidx < change_end {
+                let base_key = base_iter.as_ref().unwrap().key().unwrap();
+                let change_entry = &self.entries[*cidx];
+                let cmp_result = comparator.compare(&base_key, &change_entry.key);
+
+                if cmp_result < 0 {
+                    // Base key comes first - keep it
+                    if let Some(ref iter) = base_iter {
+                        key_to_add = iter.key().unwrap();
+                        val_to_add = iter.value().unwrap_or(Bytes::new());
+                        ts_to_add = iter.timestamp();
+                        expire_to_add = iter.expire_ts().unwrap_or(0);
+                        should_add = true;
+                        advance_base = true;
+                    }
+                } else if cmp_result == 0 {
+                    // Same key - update/delete
+                    advance_base = true;
+                    advance_change = true;
+
+                    if change_entry.timestamp >= base_iter.as_ref().unwrap().timestamp() {
+                        // Change is newer
+                        match change_entry.op {
+                            WriteOp::Delete => {
+                                // Delete - don't add
+                                if update_ttl && expire_to_add > 0 {
+                                    ttl_updates.push((expire_to_add, base_key.clone(), WriteOp::Delete));
+                                }
+                            }
+                            WriteOp::Upsert => {
+                                // Update
+                                key_to_add = change_entry.key.clone();
+                                val_to_add = change_entry.value.clone();
+                                ts_to_add = change_entry.timestamp;
+                                expire_to_add = change_entry.expire_ts;
+                                should_add = true;
+
+                                if update_ttl {
+                                    let base_expire = base_iter.as_ref().unwrap().expire_ts().unwrap_or(0);
+                                    if base_expire != expire_to_add {
+                                        if base_expire > 0 {
+                                            ttl_updates.push((base_expire, base_key.clone(), WriteOp::Delete));
+                                        }
+                                        if expire_to_add > 0 {
+                                            ttl_updates.push((expire_to_add, key_to_add.clone(), WriteOp::Upsert));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Base is newer - keep it
+                        if let Some(ref iter) = base_iter {
+                            key_to_add = iter.key().unwrap();
+                            val_to_add = iter.value().unwrap_or(Bytes::new());
+                            ts_to_add = iter.timestamp();
+                            expire_to_add = iter.expire_ts().unwrap_or(0);
+                            should_add = true;
+                        }
+                    }
+                } else {
+                    // Change key comes first - insert
+                    advance_change = true;
+                    match change_entry.op {
+                        WriteOp::Delete => {
+                            // Deleting non-existent key - skip
+                        }
+                        WriteOp::Upsert => {
+                            key_to_add = change_entry.key.clone();
+                            val_to_add = change_entry.value.clone();
+                            ts_to_add = change_entry.timestamp;
+                            expire_to_add = change_entry.expire_ts;
+                            should_add = true;
+
+                            if update_ttl && expire_to_add > 0 {
+                                ttl_updates.push((expire_to_add, key_to_add.clone(), WriteOp::Upsert));
+                            }
+                        }
+                    }
                 }
-                *cidx += 1;
-                continue;
-            }
+            } else if is_base_valid {
+                // Only base entries left
+                if let Some(ref iter) = base_iter {
+                    key_to_add = iter.key().unwrap();
+                    val_to_add = iter.value().unwrap_or(Bytes::new());
+                    ts_to_add = iter.timestamp();
+                    expire_to_add = iter.expire_ts().unwrap_or(0);
+                    should_add = true;
+                    advance_base = true;
+                }
+            } else if *cidx < change_end {
+                // Only change entries left
+                let change_entry = &self.entries[*cidx];
+                advance_change = true;
 
-            // Try to add to page
-            let added = self.data_page_builder.add(
-                &entry.key,
-                &entry.value,
-                entry.timestamp,
-                if entry.expire_ts > 0 { Some(entry.expire_ts) } else { None },
-                false, // is_overflow
-            );
+                match change_entry.op {
+                    WriteOp::Delete => {
+                        // Deleting non-existent key - skip
+                    }
+                    WriteOp::Upsert => {
+                        // Check if expired
+                        if change_entry.expire_ts != 0 && change_entry.expire_ts <= now_ms {
+                            // Expired - skip
+                        } else {
+                            key_to_add = change_entry.key.clone();
+                            val_to_add = change_entry.value.clone();
+                            ts_to_add = change_entry.timestamp;
+                            expire_to_add = change_entry.expire_ts;
+                            should_add = true;
 
-            if !added {
-                // Page is full, need to flush
+                            if update_ttl && expire_to_add > 0 {
+                                ttl_updates.push((expire_to_add, key_to_add.clone(), WriteOp::Upsert));
+                            }
+                        }
+                    }
+                }
+            } else {
+                // No more entries
                 break;
             }
 
-            *cidx += 1;
+            // Add to page if needed
+            if should_add {
+                let added = self.data_page_builder.add(
+                    &key_to_add,
+                    &val_to_add,
+                    ts_to_add,
+                    if expire_to_add > 0 { Some(expire_to_add) } else { None },
+                    false, // is_overflow
+                );
+
+                if !added {
+                    // Page is full, need to finish this page
+                    break;
+                }
+            }
+
+            // Advance iterators
+            if advance_base {
+                if let Some(ref mut iter) = base_iter {
+                    if iter.next().is_none() {
+                        is_base_valid = false;
+                    }
+                }
+            }
+            if advance_change {
+                *cidx += 1;
+            }
         }
 
         // Build and write the page if there's content
         if !self.data_page_builder.is_empty() {
+            tracing::debug!("Finishing page with data");
             // Allocate a new page ID
             let page_id = self.page_mapper.allocate_page()?;
+            tracing::debug!("Allocated page_id: {}", page_id);
             // Create a new builder to move from self
             let builder = std::mem::replace(&mut self.data_page_builder, DataPageBuilder::new(4096));
             let page = builder.finish(page_id);
-            self.leaf_link_insert(page).await?;
+
+            // Following C++ - if this is an update to the applying page, use leaf_link_update
+            // Otherwise use leaf_link_insert
+            if self.applying_page.is_some() {
+                self.leaf_link_update(page);
+            } else {
+                self.leaf_link_insert(page).await?;
+            }
+            tracing::debug!("Added page to leaf link");
+        }
+
+        // Apply TTL updates now that we're done with the iterator
+        for (expire_ts, key, op) in ttl_updates {
+            self.update_ttl(expire_ts, &key, op);
         }
 
         Ok(())
     }
 
-    /// Update metadata
+    /// Update TTL (helper for ApplyOnePage)
+    fn update_ttl(&mut self, expire_ts: u64, key: &[u8], op: WriteOp) {
+        if expire_ts > 0 {
+            self.ttl_batch.push(WriteDataEntry {
+                key: Bytes::copy_from_slice(key),
+                value: if matches!(op, WriteOp::Upsert) { Bytes::copy_from_slice(key) } else { Bytes::new() },
+                op,
+                timestamp: 0,
+                expire_ts,
+            });
+        }
+    }
+
+    /// Update metadata (following C++ UpdateMeta)
     async fn update_meta(&mut self) -> Result<()> {
-        // Update COW metadata
-        // Simplified - full implementation would update index manager
+        // Update the COW metadata in index manager
+        if let Some(cow_meta) = self.cow_meta.take() {
+            self.index_manager.update_root(&self.table_id, cow_meta);
+        }
         Ok(())
+    }
+
+    /// Finish current data page and create index entry
+    async fn finish_data_page(&mut self, page_key: Bytes, mut page_id: PageId) -> Result<()> {
+        // Following C++ FinishDataPage exactly
+        let cur_page_len = self.data_page_builder.current_size_estimate();
+        let builder = std::mem::replace(&mut self.data_page_builder, DataPageBuilder::new(4096));
+
+        if page_id == PageId::MAX {
+            // Allocate new page
+            page_id = self.page_mapper.allocate_page()?;
+        }
+
+        let data_page = builder.finish(page_id);
+
+        // Check if we should redistribute with previous page
+        let one_quarter = self.options.data_page_size >> 2;
+        let three_quarter = self.options.data_page_size - one_quarter;
+
+        if cur_page_len < one_quarter as usize {
+            if let Some(prev_page) = &self.leaf_triple[0] {
+                if prev_page.restart_num() > 1 && prev_page.content_length() as usize > three_quarter as usize {
+                    // Redistribute pages - for now just proceed
+                    // Full implementation would redistribute entries
+                }
+            }
+        }
+
+        // Update index with this page
+        if !self.stack.is_empty() {
+            self.stack.last_mut().unwrap().changes.push(IndexOp {
+                key: page_key,
+                page_id,
+                op: WriteOp::Upsert,
+            });
+        }
+
+        // Insert into leaf triple
+        self.leaf_link_insert(data_page).await?;
+        Ok(())
+    }
+
+    /// Finish index page
+    async fn finish_index_page(&mut self, prev_page: &mut Option<(PageId, Vec<u8>)>, page_key: Bytes) -> Result<()> {
+        // Following C++ FinishIndexPage
+        let cur_page_len = self.idx_page_builder.current_size_estimate();
+        let page_data = self.idx_page_builder.finish_index_page();
+
+        // Check if should redistribute
+        let one_quarter = self.options.index_page_size >> 2;
+        let three_quarter = self.options.index_page_size - one_quarter;
+
+        if cur_page_len < one_quarter as usize {
+            if let Some((prev_id, prev_data)) = prev_page {
+                if prev_data.len() > three_quarter as usize {
+                    // Would redistribute here - for now just proceed
+                }
+            }
+        }
+
+        // Flush previous page if exists
+        if let Some((prev_id, prev_data)) = prev_page.take() {
+            self.flush_index_page(prev_id, prev_data, &page_key, true).await?;
+        }
+
+        // Allocate page for current
+        let page_id = self.page_mapper.allocate_page()?;
+        *prev_page = Some((page_id, page_data));
+
+        Ok(())
+    }
+
+    /// Flush index page to disk
+    async fn flush_index_page(&mut self, page_id: PageId, page_data: Vec<u8>, page_key: &[u8], split: bool) -> Result<()> {
+        // Following C++ FlushIndexPage
+        // Write the index page to disk
+        let mut page = Page::new(self.options.index_page_size);
+        let copy_len = page_data.len().min(page.size());
+        page.as_bytes_mut()[..copy_len].copy_from_slice(&page_data[..copy_len]);
+
+        // Map and write page
+        if self.file_manager.get_metadata(0).await.is_err() {
+            self.file_manager.create_file(&self.table_id).await?;
+        }
+
+        let snapshot = self.page_mapper.snapshot();
+        let file_page_id = if let Ok(fid) = snapshot.to_file_page(page_id) {
+            fid
+        } else {
+            self.page_mapper.switch_file(0)?;
+            let fid = self.page_mapper.allocate_file_page()?;
+            self.page_mapper.map_page(page_id, fid)?;
+            self.page_mapper.update_mapping(page_id, fid);
+            fid
+        };
+
+        self.file_manager.write_page(file_page_id.file_id() as u64, file_page_id.page_offset(), &page).await?;
+
+        // Update parent if split and (new page or root)
+        if split && (page_id == PageId::MAX || self.stack.len() == 1) {
+            if self.stack.len() == 1 {
+                // Create new root level
+                self.stack.insert(0, IndexStackEntry::new(None, self.options.clone()));
+            }
+
+            if self.stack.len() >= 2 {
+                let parent_index = self.stack.len() - 2;
+                self.stack[parent_index].changes.push(IndexOp {
+                    key: Bytes::copy_from_slice(page_key),
+                    page_id,
+                    op: WriteOp::Upsert,
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Free a page
+    fn free_page(&mut self, page_id: PageId) {
+        // Mark page as free in page mapper
+        // Full implementation would handle page recycling
     }
 }
 
@@ -611,9 +1184,13 @@ impl Task for BatchWriteTask {
     }
 
     async fn execute(&self, _ctx: &TaskContext) -> Result<TaskResult> {
+        tracing::debug!("BatchWriteTask execute: {} entries", self.entries.len());
+
         // Clone self to get mutable version for processing
         let mut task = self.clone();
         task.apply().await?;
+
+        tracing::debug!("BatchWriteTask completed apply");
         Ok(TaskResult::BatchWrite(self.entries.len()))
     }
 

@@ -170,11 +170,8 @@ impl TaskScheduler {
 
                 // Create context
                 let context = TaskContext {
-                    task_id: task.id,
-                    table: Default::default(),
-                    priority: task.priority,
-                    timeout: Some(timeout),
-                    cancel_token: task.cancel_token.clone(),
+                    shard_id: 0, // TODO: get from scheduler
+                    options: std::sync::Arc::new(crate::config::KvOptions::default()),
                 };
 
                 // Execute task
