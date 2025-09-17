@@ -1,8 +1,8 @@
 //! Unit tests for index module
 
-use eloqstore_rs::index::{IndexPageManager, CowRootMeta, MemIndexPage};
-use eloqstore_rs::types::{PageId, FilePageId, TableIdent, Key, Value};
-use eloqstore_rs::page::PageMapper;
+use eloqstore::index::{IndexPageManager, CowRootMeta, MemIndexPage};
+use eloqstore::types::{PageId, FilePageId, TableIdent, Key, Value};
+use eloqstore::page::PageMapper;
 use std::sync::Arc;
 
 #[cfg(test)]

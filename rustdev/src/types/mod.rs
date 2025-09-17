@@ -190,6 +190,10 @@ pub enum PageType {
     Overflow = 3,
     /// Meta page
     Meta = 4,
+    /// Leaf index page
+    LeafIndex = 5,
+    /// Non-leaf index page
+    NonLeafIndex = 6,
 }
 
 impl PageType {
@@ -200,6 +204,8 @@ impl PageType {
             2 => Some(PageType::Index),
             3 => Some(PageType::Overflow),
             4 => Some(PageType::Meta),
+            5 => Some(PageType::LeafIndex),
+            6 => Some(PageType::NonLeafIndex),
             _ => None,
         }
     }

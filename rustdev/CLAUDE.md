@@ -9,6 +9,8 @@ Notice that in C++ version, a shard is single threaded and no need to handle mul
 
 When a key value pair is written, it is written to a page, since we do not have logging mechanism, a write must be flushed to disk before returning. We use copy on write mechanism to make sure that we do not overwrite existing pages. When a page does not have sufficient capacity, another page is allocated. Garbage collection task is invoked to compact pages with deleted entries and free spaces, while older version of pages are also deleted (all these recorded in a manifest). 
 
+Do NOT make any simplifications, always follow the C++ code implementation. DO NOT invent new features or new data structures. Except the I/O abstraction mentioned below. 
+
 ### 🚧 Known Limitations:
 - io_uring disabled (tokio-uring thread safety)
 - Archive cron partial (in background_write)

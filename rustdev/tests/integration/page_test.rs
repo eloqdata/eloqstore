@@ -1,10 +1,10 @@
 //! Integration tests for page operations
 
-extern crate eloqstore_rs;
+extern crate eloqstore;
 
-use eloqstore_rs::page::{DataPage, DataPageBuilder};
-use eloqstore_rs::types::{PageId, Key, Value};
-use eloqstore_rs::codec::{BytewiseComparator, Comparator};
+use eloqstore::page::{DataPage, DataPageBuilder};
+use eloqstore::types::{PageId, Key, Value};
+use eloqstore::codec::{BytewiseComparator, Comparator};
 
 #[test]
 fn test_page_build_basic() {

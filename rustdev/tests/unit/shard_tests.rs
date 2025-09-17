@@ -1,8 +1,8 @@
 //! Unit tests for shard module
 
-use eloqstore_rs::shard::{Shard, ShardId, ShardState};
-use eloqstore_rs::config::KvOptions;
-use eloqstore_rs::types::{TableIdent, Key, Value};
+use eloqstore::shard::{Shard, ShardId, ShardState};
+use eloqstore::config::KvOptions;
+use eloqstore::types::{TableIdent, Key, Value};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 

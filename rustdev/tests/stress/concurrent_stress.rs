@@ -1,9 +1,9 @@
 //! Concurrent stress tests for EloqStore
 
-use eloqstore_rs::store::EloqStore;
-use eloqstore_rs::config::KvOptions;
-use eloqstore_rs::types::{Key, Value, TableIdent};
-use eloqstore_rs::api::request::{KvRequest, ReadRequest, WriteRequest, BatchWriteRequest, ScanRequest};
+use eloqstore::store::EloqStore;
+use eloqstore::config::KvOptions;
+use eloqstore::types::{Key, Value, TableIdent};
+use eloqstore::api::request::{KvRequest, ReadRequest, WriteRequest, BatchWriteRequest, ScanRequest, WriteEntry};
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicBool, Ordering};
@@ -122,7 +122,7 @@ async fn stress_worker(
             match store.read(request).await {
                 Ok(_) => stats.successful_reads.fetch_add(1, Ordering::Relaxed),
                 Err(_) => stats.failed_reads.fetch_add(1, Ordering::Relaxed),
-            }
+            };
 
         } else if op_type < config.read_ratio + config.write_ratio {
             // Write operation
@@ -145,7 +145,7 @@ async fn stress_worker(
                 match store.batch_write(request).await {
                     Ok(_) => stats.successful_writes.fetch_add(1, Ordering::Relaxed),
                     Err(_) => stats.failed_writes.fetch_add(1, Ordering::Relaxed),
-                }
+                };
             } else {
                 // Single write
                 let key = generate_key(config.key_range);
@@ -160,7 +160,7 @@ async fn stress_worker(
                 match store.write(request).await {
                     Ok(_) => stats.successful_writes.fetch_add(1, Ordering::Relaxed),
                     Err(_) => stats.failed_writes.fetch_add(1, Ordering::Relaxed),
-                }
+                };
             }
 
         } else {
@@ -188,7 +188,7 @@ async fn stress_worker(
             match store.scan(request).await {
                 Ok(_) => stats.successful_scans.fetch_add(1, Ordering::Relaxed),
                 Err(_) => stats.failed_scans.fetch_add(1, Ordering::Relaxed),
-            }
+            };
         }
 
         operation_count += 1;

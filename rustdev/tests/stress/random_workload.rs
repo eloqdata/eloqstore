@@ -1,9 +1,9 @@
 //! Random workload generator for stress testing
 
-use eloqstore_rs::store::EloqStore;
-use eloqstore_rs::config::KvOptions;
-use eloqstore_rs::types::{Key, Value, TableIdent};
-use eloqstore_rs::api::request::{WriteRequest, ReadRequest, DeleteRequest, ScanRequest};
+use eloqstore::store::EloqStore;
+use eloqstore::config::KvOptions;
+use eloqstore::types::{Key, Value, TableIdent};
+use eloqstore::api::request::{WriteRequest, ReadRequest, DeleteRequest, ScanRequest};
 
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -278,7 +278,7 @@ async fn run_workload_test(pattern: WorkloadPattern, num_operations: usize) {
                     entries.push((key, value));
                 }
 
-                let request = eloqstore_rs::api::request::BatchWriteRequest {
+                let request = eloqstore::api::request::BatchWriteRequest {
                     table_id: table_id.clone(),
                     entries,
                 };

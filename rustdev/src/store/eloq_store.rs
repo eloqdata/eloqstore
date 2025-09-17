@@ -148,6 +148,7 @@ impl EloqStore {
         // Give shards a moment to start their run loops
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
+        println!("DEBUG: All shards started");
         tracing::info!("EloqStore started with {} shards", self.shards.len());
         Ok(())
     }
@@ -224,6 +225,8 @@ impl EloqStore {
 
     /// Write a batch of key-value pairs
     pub async fn batch_write(&self, req: crate::api::request::BatchWriteRequest) -> Result<crate::api::response::BatchWriteResponse> {
+        println!("DEBUG: EloqStore::batch_write called with {} entries", req.entries.len());
+        tracing::info!("batch_write called with {} entries for table {:?}", req.entries.len(), req.table_id);
         // Convert API request to store request
         let mut entries = Vec::new();
         for entry in req.entries {

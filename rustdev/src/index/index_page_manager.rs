@@ -13,7 +13,8 @@ use crate::page::MappingSnapshot;
 use crate::storage::AsyncFileManager;
 use crate::Result;
 
-use super::index_page::{MemIndexPage, IndexPageIter};
+use super::index_page::MemIndexPage;
+use super::index_page_iter::IndexPageIter;
 use super::root_meta::{RootMeta, CowRootMeta};
 
 /// Index page manager for managing in-memory index pages
@@ -118,6 +119,7 @@ impl IndexPageManager {
         let roots = self.roots.read().unwrap();
 
         if let Some(root) = roots.get(table_ident) {
+            tracing::debug!("find_root: Found root for {:?}, root_id={}", table_ident, root.root_id);
             // Create a simplified RootMeta copy
             // Note: This is a workaround - in production we'd need proper Arc wrapping
             let meta = RootMeta {
@@ -134,34 +136,36 @@ impl IndexPageManager {
             return Ok(meta);
         }
 
+        tracing::debug!("find_root: No root found for {:?}", table_ident);
         Err(Error::from(KvError::NotFound))
     }
 
     /// Create a COW root for write transaction
     pub fn make_cow_root(&self, table_ident: &TableIdent) -> Result<CowRootMeta> {
-        let roots = self.roots.read().unwrap();
+        let mut roots = self.roots.write().unwrap();
 
-        if let Some(root) = roots.get(table_ident) {
-            // Lock the root for exclusive access
-            // Create a COW copy of the mapper
-            let cow_meta = CowRootMeta {
-                root_id: root.root_id,
-                ttl_root_id: root.ttl_root_id,
-                mapper: root.mapper.as_ref().map(|m| Box::new((**m).clone())),
-                manifest_size: root.manifest_size,
-                old_mapping: None,
-                next_expire_ts: root.next_expire_ts,
-            };
+        // Ensure the table has a root entry
+        let root = roots.entry(table_ident.clone()).or_insert_with(|| {
+            // Create initial root - default is MAX_PAGE_ID for empty tree
+            RootMeta::default()
+        });
 
-            return Ok(cow_meta);
-        }
+        // Create a COW copy
+        let cow_meta = CowRootMeta {
+            root_id: root.root_id,
+            ttl_root_id: root.ttl_root_id,
+            mapper: root.mapper.as_ref().map(|m| Box::new((**m).clone())),
+            manifest_size: root.manifest_size,
+            old_mapping: None,
+            next_expire_ts: root.next_expire_ts,
+        };
 
-        // Create new COW root for new table
-        Ok(CowRootMeta::default())
+        Ok(cow_meta)
     }
 
     /// Update root metadata after commit
     pub fn update_root(&self, table_ident: &TableIdent, new_meta: CowRootMeta) {
+        tracing::debug!("update_root: Updating root for {:?} to root_id={}", table_ident, new_meta.root_id);
         let mut roots = self.roots.write().unwrap();
 
         let root = roots.entry(table_ident.clone()).or_insert_with(RootMeta::default);
@@ -210,21 +214,35 @@ impl IndexPageManager {
         mapping: &MappingSnapshot,
         page_id: PageId,
     ) -> Result<Box<MemIndexPage>> {
+        tracing::debug!("find_page: Looking for page_id={}", page_id);
         // Check if page is already in memory (swizzled pointer)
         // For now, always load from disk
 
         // Map logical page to file page
         let file_page_id = mapping.to_file_page(page_id)?;
+        tracing::debug!("find_page: Mapped page_id={} to file_page_id={:?}",
+            page_id, file_page_id);
 
         // Load page from disk
-        let page_data = self.io_manager
+        let page_data = match self.io_manager
             .read_page(file_page_id.file_id() as u64, file_page_id.page_offset())
-            .await?;
+            .await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!("find_page: Failed to read page_id={} file_page_id={:?}: {:?}",
+                    page_id, file_page_id, e);
+                return Err(e);
+            }
+        };
+
+        tracing::debug!("find_page: Loaded {} bytes from disk for page_id={}",
+            page_data.len(), page_id);
 
         let mut index_page = self.alloc_index_page();
         index_page.set_page_id(page_id);
         index_page.set_file_page_id(file_page_id.into());
-        // TODO: Copy page_data into index_page
+        // Set the loaded page data
+        index_page.set_page_data(page_data.data());
 
         Ok(index_page)
     }
@@ -258,30 +276,38 @@ impl IndexPageManager {
         page_id: PageId,
         key: &[u8],
     ) -> Result<PageId> {
+        tracing::debug!("seek_index: Starting with page_id={}, key={:?}",
+            page_id, String::from_utf8_lossy(key));
+
         if page_id == MAX_PAGE_ID {
+            tracing::debug!("seek_index: page_id is MAX_PAGE_ID, returning");
             return Ok(MAX_PAGE_ID);
         }
 
         let mut current_page_id = page_id;
 
         loop {
+            tracing::debug!("seek_index: Loading index page {}", current_page_id);
             // Load the index page
             let index_page = self.find_page(mapping, current_page_id).await?;
 
             // Create iterator for the page
-            let mut iter = IndexPageIter::new(&index_page, &self.options);
+            let mut iter = IndexPageIter::new(index_page.page_ptr(), self.options.comparator());
 
             // Seek to the key
             iter.seek(key);
 
             // Get the page ID that might contain the key
             let next_page_id = iter.get_page_id();
+            tracing::debug!("seek_index: Iterator returned next_page_id={}", next_page_id);
 
             // If this index page points to leaf (data pages), we're done
             if index_page.is_pointing_to_leaf() {
+                tracing::debug!("seek_index: Index page points to leaf, returning {}", next_page_id);
                 return Ok(next_page_id);
             }
 
+            tracing::debug!("seek_index: Not a leaf pointer, continuing with page_id={}", next_page_id);
             // Otherwise, continue traversing down the tree
             current_page_id = next_page_id;
         }

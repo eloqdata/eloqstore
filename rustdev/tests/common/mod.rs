@@ -1,7 +1,7 @@
 //! Common test utilities and helpers
 
-use eloqstore_rs::types::{Key, Value, TableIdent};
-use eloqstore_rs::config::KvOptions;
+use eloqstore::types::{Key, Value, TableIdent};
+use eloqstore::config::KvOptions;
 use std::path::{Path, PathBuf};
 use rand::{Rng, thread_rng, distributions::Alphanumeric};
 use std::sync::Arc;

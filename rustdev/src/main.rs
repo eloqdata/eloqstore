@@ -8,12 +8,17 @@ use std::collections::HashMap;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<()> {
+    println!("Main function started");
+
     // Initialize tracing
     tracing_subscriber::fmt()
-        .with_env_filter("eloqstore=debug,info")
+        .with_env_filter("eloqstore_rs=debug,info")
         .init();
 
+    println!("Tracing initialized");
+
     tracing::info!("Starting EloqStore test program");
+    println!("Starting EloqStore test program");
 
     // Create configuration
     let mut options = KvOptions::default();
@@ -26,8 +31,11 @@ async fn main() -> Result<()> {
     options.overflow_pointers = 4;
 
     // Create and start the store
+    println!("Creating store...");
     let mut store = EloqStore::new(options)?;
+    println!("Starting store...");
     store.start().await?;
+    println!("Store started successfully");
 
     let table_id = TableIdent::new("test_table", 0);
 
@@ -59,7 +67,9 @@ async fn main() -> Result<()> {
         };
 
         println!("Writing key='{}', value='{}'", key_str, value_str);
+        println!("DEBUG: Calling batch_write...");
         let result = store.batch_write(write_req).await?;
+        println!("DEBUG: batch_write returned");
         println!("Write completed successfully!");
         assert!(result.success, "Write should succeed");
 

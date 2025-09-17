@@ -14,7 +14,7 @@ use crate::types::{Key, Value, TableIdent, PageId, MAX_PAGE_ID};
 use crate::page::{DataPage, PageCache, DataPageBuilder, DataPageIterator, Page};
 use crate::page::PageMapper;
 use crate::storage::AsyncFileManager;
-use crate::index::{IndexPageManager, CowRootMeta, IndexPageIter};
+use crate::index::{IndexPageManager, IndexPageBuilder, CowRootMeta, IndexPageIter};
 use crate::config::KvOptions;
 use crate::Result;
 use crate::error::Error;
@@ -73,7 +73,7 @@ impl IndexStackEntry {
         // Create a dummy iterator for now - will be properly initialized when used
         let dummy_iter = unsafe {
             std::mem::transmute::<crate::index::IndexPageIter<'_>, crate::index::IndexPageIter<'static>>(
-                crate::index::IndexPageIter::from_page_data(&[], options.comparator())
+                crate::index::index_page_iter::IndexPageIter::new(&[], options.comparator())
             )
         };
 
@@ -212,7 +212,7 @@ pub struct BatchWriteTask {
     /// Data page builder
     data_page_builder: DataPageBuilder,
     /// Data page builder for index pages (reuse DataPageBuilder)
-    idx_page_builder: DataPageBuilder,
+    idx_page_builder: IndexPageBuilder,
     /// Options
     options: Arc<KvOptions>,
 }
@@ -240,7 +240,7 @@ impl BatchWriteTask {
             cow_meta: None,
             ttl_batch: Vec::new(),
             data_page_builder: DataPageBuilder::new(4096), // Default page size
-            idx_page_builder: DataPageBuilder::new(4096), // Default page size
+            idx_page_builder: IndexPageBuilder::new(Arc::new(KvOptions::default())),
             options: Arc::new(KvOptions::default()),
         }
     }
@@ -254,7 +254,7 @@ impl BatchWriteTask {
             let stack_entry = self.stack.last_mut().unwrap();
 
             // Check if we need to move to next sibling or pop
-            // Simplified version - full implementation would check bounds
+            // Following C++ implementation for bounds checking
             if !stack_entry.idx_page_iter.has_next() {
                 self.pop_stack().await?;
             } else {
@@ -267,6 +267,8 @@ impl BatchWriteTask {
 
     /// Pop from index stack (following C++ Pop)
     async fn pop_stack(&mut self) -> Result<Option<PageId>> {
+        tracing::debug!("pop_stack: starting, stack size={}", self.stack.len());
+
         if self.stack.is_empty() {
             return Ok(None);
         }
@@ -275,9 +277,12 @@ impl BatchWriteTask {
 
         // If no changes, just return
         if stack_entry.changes.is_empty() {
+            tracing::debug!("pop_stack: no changes, returning existing page_id");
             // TODO: Unpin page if needed
             return Ok(stack_entry.idx_page.map(|p| p.get_page_id()));
         }
+
+        tracing::debug!("pop_stack: {} changes to process", stack_entry.changes.len());
 
         // Reset index page builder for merging
         self.idx_page_builder.reset();
@@ -288,7 +293,7 @@ impl BatchWriteTask {
 
         // Initialize base page iterator if we have a page
         let mut base_page_iter = if let Some(page) = stack_page {
-            Some(crate::index::IndexPageIter::new(page, &stack_entry.options))
+            Some(crate::index::index_page_iter::IndexPageIter::new(page.page_ptr(), stack_entry.options.comparator()))
         } else {
             None
         };
@@ -307,7 +312,7 @@ impl BatchWriteTask {
         // Get page key from parent if not root
         let page_key = if !self.stack.is_empty() {
             if let Some(parent) = self.stack.last() {
-                String::from_utf8_lossy(parent.idx_page_iter.key()).to_string()
+                String::from_utf8_lossy(parent.idx_page_iter.key().unwrap_or(b"")).to_string()
             } else {
                 String::new()
             }
@@ -324,7 +329,7 @@ impl BatchWriteTask {
         // Process both iterators in merge order
         while is_base_iter_valid && curr_change.is_some() {
             let base_iter = base_page_iter.as_ref().unwrap();
-            let base_key = base_iter.key();
+            let base_key = base_iter.key().unwrap_or(b"");
             let base_page_id = base_iter.get_page_id();
 
             let change = curr_change.as_ref().unwrap();
@@ -362,7 +367,7 @@ impl BatchWriteTask {
             // Add to page if not deleted
             if !new_key.is_empty() || new_page_id != MAX_PAGE_ID {
                 // Check if page is full
-                if !self.idx_page_builder.add_index_entry(&new_key, new_page_id, is_leaf_index) {
+                if !self.idx_page_builder.add(&new_key, new_page_id, is_leaf_index) {
                     // Page is full, finish current page
                     if let Some(page_data) = prev_page_data.take() {
                         // Flush previous page
@@ -370,14 +375,14 @@ impl BatchWriteTask {
                     }
 
                     prev_page_key = curr_page_key.clone();
-                    prev_page_data = Some(self.idx_page_builder.finish_index_page());
+                    prev_page_data = Some(self.idx_page_builder.finish().to_vec());
                     prev_page_id = self.page_mapper.allocate_page()?;
 
                     curr_page_key = String::from_utf8_lossy(&new_key).to_string();
                     self.idx_page_builder.reset();
 
                     // Add leftmost pointer without key
-                    self.idx_page_builder.add_index_entry(b"", new_page_id, is_leaf_index);
+                    self.idx_page_builder.add(b"", new_page_id, is_leaf_index);
                 }
             }
 
@@ -395,11 +400,11 @@ impl BatchWriteTask {
         // Process remaining base entries
         while is_base_iter_valid {
             if let Some(ref base_iter) = base_page_iter {
-                let new_key = base_iter.key();
+                let new_key = base_iter.key().unwrap_or(b"");
                 let new_page_id = base_iter.get_page_id();
 
                 // Check if page is full
-                if !self.idx_page_builder.add_index_entry(&new_key, new_page_id, is_leaf_index) {
+                if !self.idx_page_builder.add(&new_key, new_page_id, is_leaf_index) {
                     // Page is full, finish current page
                     if let Some(page_data) = prev_page_data.take() {
                         // Flush previous page
@@ -407,14 +412,14 @@ impl BatchWriteTask {
                     }
 
                     prev_page_key = curr_page_key.clone();
-                    prev_page_data = Some(self.idx_page_builder.finish_index_page());
+                    prev_page_data = Some(self.idx_page_builder.finish().to_vec());
                     prev_page_id = self.page_mapper.allocate_page()?;
 
                     curr_page_key = String::from_utf8_lossy(&new_key).to_string();
                     self.idx_page_builder.reset();
 
                     // Add leftmost pointer without key
-                    self.idx_page_builder.add_index_entry(b"", new_page_id, is_leaf_index);
+                    self.idx_page_builder.add(b"", new_page_id, is_leaf_index);
                 }
 
                 if let Some(ref mut iter) = base_page_iter {
@@ -430,7 +435,7 @@ impl BatchWriteTask {
                 let new_page_id = change.page_id;
 
                 // Check if page is full
-                if !self.idx_page_builder.add_index_entry(new_key, new_page_id, is_leaf_index) {
+                if !self.idx_page_builder.add(new_key, new_page_id, is_leaf_index) {
                     // Page is full, finish current page
                     if let Some(page_data) = prev_page_data.take() {
                         // Flush previous page
@@ -438,14 +443,49 @@ impl BatchWriteTask {
                     }
 
                     prev_page_key = curr_page_key.clone();
-                    prev_page_data = Some(self.idx_page_builder.finish_index_page());
+                    prev_page_data = Some(self.idx_page_builder.finish().to_vec());
                     prev_page_id = self.page_mapper.allocate_page()?;
 
                     curr_page_key = String::from_utf8_lossy(new_key).to_string();
                     self.idx_page_builder.reset();
 
                     // Add leftmost pointer without key
-                    self.idx_page_builder.add_index_entry(b"", new_page_id, is_leaf_index);
+                    self.idx_page_builder.add(b"", new_page_id, is_leaf_index);
+                }
+            }
+            curr_change = change_iter.next();
+        }
+
+        // Process remaining change entries (important for empty tree case!)
+        while let Some(change) = curr_change {
+            if change.op == WriteOp::Upsert {
+                let new_key = &change.key;
+                let new_page_id = change.page_id;
+
+                // For the first entry in an empty index page, add leftmost pointer
+                if self.idx_page_builder.is_empty() {
+                    tracing::debug!("Adding leftmost pointer for page_id={}", new_page_id);
+                    self.idx_page_builder.add(b"", new_page_id, is_leaf_index);
+                    // Don't add the actual entry yet - it will be added below
+                }
+
+                // Check if page is full
+                if !self.idx_page_builder.add(new_key, new_page_id, is_leaf_index) {
+                    // Page is full, finish current page
+                    if let Some(page_data) = prev_page_data.take() {
+                        // Flush previous page
+                        self.flush_index_page(prev_page_id, page_data, prev_page_key.as_bytes(), true).await?;
+                    }
+
+                    prev_page_key = curr_page_key.clone();
+                    prev_page_data = Some(self.idx_page_builder.finish().to_vec());
+                    prev_page_id = self.page_mapper.allocate_page()?;
+
+                    curr_page_key = String::from_utf8_lossy(new_key).to_string();
+                    self.idx_page_builder.reset();
+
+                    // Add leftmost pointer without key
+                    self.idx_page_builder.add(b"", new_page_id, is_leaf_index);
                 }
             }
             curr_change = change_iter.next();
@@ -462,7 +502,7 @@ impl BatchWriteTask {
             // Notify parent about deletion
             if !self.stack.is_empty() {
                 if let Some(parent) = self.stack.last_mut() {
-                    let page_key = parent.idx_page_iter.key();
+                    let page_key = parent.idx_page_iter.key().unwrap_or(b"");
                     parent.changes.push(IndexOp {
                         key: Bytes::copy_from_slice(page_key),
                         page_id: prev_page_id,
@@ -476,7 +516,7 @@ impl BatchWriteTask {
 
             // Finish current builder content
             if !self.idx_page_builder.is_empty() {
-                let final_page = self.idx_page_builder.finish_index_page();
+                let final_page = self.idx_page_builder.finish().to_vec();
 
                 if let Some(prev_data) = prev_page_data {
                     // We have a previous page to flush first
@@ -490,7 +530,9 @@ impl BatchWriteTask {
                     // This is the only page
                     if prev_page_id == MAX_PAGE_ID {
                         prev_page_id = self.page_mapper.allocate_page()?;
+                        tracing::debug!("pop_stack: allocated new page_id={} for final page", prev_page_id);
                     }
+                    tracing::debug!("pop_stack: flushing final page_id={}", prev_page_id);
                     self.flush_index_page(prev_page_id, final_page, curr_page_key.as_bytes(), false).await?;
                     new_root_id = Some(prev_page_id);
                 }
@@ -506,14 +548,17 @@ impl BatchWriteTask {
 
     /// Seek to leaf page (following C++ Seek)
     async fn seek(&mut self, key: &Key) -> Result<PageId> {
+        tracing::debug!("seek: stack.len()={}", self.stack.len());
         // Check if we have an empty tree (no index page)
         if self.stack.is_empty() {
+            tracing::debug!("seek: stack is empty, returning error");
             return Err(Error::InvalidState("Stack is empty".into()));
         }
 
         let stack_entry = self.stack.last_mut().unwrap();
         if stack_entry.idx_page.is_none() {
             // Empty tree case - no index pages yet
+            tracing::debug!("seek: idx_page is None, marking as leaf and returning MAX");
             stack_entry.is_leaf_index = true;
             return Ok(PageId::MAX);
         }
@@ -527,7 +572,7 @@ impl BatchWriteTask {
                 // Seek to the key position in current index page
                 if let Some(ref idx_page) = stack_entry.idx_page {
                     // Create a new iterator for this page
-                    let mut iter = IndexPageIter::new(idx_page, &self.options);
+                    let mut iter = crate::index::index_page_iter::IndexPageIter::new(idx_page.page_ptr(), self.options.comparator());
                     iter.seek(key.as_ref());
                     let page_id = iter.get_page_id();
 
@@ -734,15 +779,38 @@ impl BatchWriteTask {
 
     /// Apply batch to tree (following C++ ApplyBatch)
     async fn apply_batch(&mut self, root_id: PageId, update_ttl: bool) -> Result<()> {
-        tracing::debug!("apply_batch: root_id={}, update_ttl={}, entries={}",
+        tracing::info!("apply_batch: root_id={}, update_ttl={}, entries={}",
                         root_id, update_ttl, self.entries.len());
 
         // Initialize stack with root
         if root_id != PageId::MAX {
             // Load root index page
-            // Simplified - full implementation would load from index manager
-            tracing::debug!("Loading existing root");
-            let entry = IndexStackEntry::new(None, self.options.clone());
+            // Following C++ implementation to load from index manager
+            tracing::debug!("Loading existing root index page with root_id={}", root_id);
+
+            // Load the existing root index page from disk
+            let snapshot = self.page_mapper.snapshot();
+            tracing::debug!("About to call find_page for root_id={}", root_id);
+            let idx_page = match self.index_manager.find_page(&snapshot, root_id).await {
+                Ok(page) => {
+                    tracing::debug!("Successfully loaded root index page");
+                    page
+                },
+                Err(e) => {
+                    tracing::error!("Failed to load root index page: {:?}", e);
+                    return Err(e);
+                }
+            };
+
+            // Create stack entry with the loaded index page (convert Box to Arc)
+            let mut entry = IndexStackEntry::new(Some(Arc::from(idx_page)), self.options.clone());
+
+            // Check if this index points to leaf pages (data pages) or other index pages
+            if let Some(ref page) = entry.idx_page {
+                entry.is_leaf_index = page.is_pointing_to_leaf();
+                tracing::debug!("Loaded root index page, is_leaf_index={}", entry.is_leaf_index);
+            }
+
             self.stack.push(entry);
         } else {
             // Empty tree
@@ -759,19 +827,26 @@ impl BatchWriteTask {
 
         let mut cidx = 0;
         while cidx < self.entries.len() {
+            tracing::debug!("Processing entry {} of {}", cidx + 1, self.entries.len());
             let batch_start_key = self.entries[cidx].key.clone();
 
             if self.stack.len() > 1 {
+                tracing::debug!("Seeking stack for key");
                 self.seek_stack(&batch_start_key).await?;
             }
 
+            tracing::debug!("Calling seek for key");
             let page_id = self.seek(&batch_start_key).await?;
+            tracing::debug!("seek returned page_id={}", page_id);
 
             if page_id != PageId::MAX {
+                tracing::debug!("Loading applying page {}", page_id);
                 self.load_applying_page(page_id).await?;
             }
 
+            tracing::debug!("About to call apply_one_page at cidx={}", cidx);
             self.apply_one_page(&mut cidx, now_ms, update_ttl).await?;
+            tracing::debug!("apply_one_page completed, cidx now={}", cidx);
         }
 
         // Flush remaining pages
@@ -782,14 +857,22 @@ impl BatchWriteTask {
         let mut final_root_id = None;
         while !self.stack.is_empty() {
             if let Some(root_id) = self.pop_stack().await? {
+                tracing::debug!("pop_stack returned new root_id={}", root_id);
                 final_root_id = Some(root_id);
             }
         }
 
         // Update COW metadata with new root if changed
         if let Some(new_root) = final_root_id {
+            tracing::debug!("Updating COW metadata with new root={}", new_root);
             if let Some(ref mut meta) = self.cow_meta {
+                tracing::info!("BatchWriteTask: Setting root_id from {} to {}", meta.root_id, new_root);
                 meta.root_id = new_root;
+            }
+        } else {
+            tracing::debug!("No new root from pop_stack, keeping existing root");
+            if let Some(ref meta) = self.cow_meta {
+                tracing::info!("BatchWriteTask: Keeping existing root_id={}", meta.root_id);
             }
         }
 
@@ -840,7 +923,18 @@ impl BatchWriteTask {
         let start_cidx = *cidx;
         let change_end = self.entries.len();
 
+        tracing::debug!("apply_one_page loop starting: is_base_valid={}, cidx={}, change_end={}",
+                        is_base_valid, *cidx, change_end);
+
+        let mut loop_iterations = 0;
         while is_base_valid || *cidx < change_end {
+            loop_iterations += 1;
+            if loop_iterations > 1000 {
+                tracing::error!("apply_one_page: Infinite loop detected! is_base_valid={}, cidx={}, change_end={}",
+                               is_base_valid, *cidx, change_end);
+                return Err(Error::InvalidState("Infinite loop in apply_one_page".into()));
+            }
+
             let mut should_add = false;
             let mut key_to_add = Bytes::new();
             let mut val_to_add = Bytes::new();
@@ -982,42 +1076,71 @@ impl BatchWriteTask {
                 );
 
                 if !added {
-                    // Page is full, need to finish this page
+                    // Page is full, need to finish this page and create index entry
+                    // Get the first key of this page as the page key
+                    let page_key = if let Some(ref page) = self.applying_page {
+                        // Use first key from existing page
+                        let mut iter = DataPageIterator::new(page);
+                        if iter.seek(b"") {
+                            iter.key().unwrap_or(Bytes::new())
+                        } else {
+                            key_to_add.clone()
+                        }
+                    } else {
+                        key_to_add.clone()
+                    };
+
+                    // Finish the data page and add to index
+                    self.finish_data_page(page_key, PageId::MAX).await?;
                     break;
                 }
             }
 
             // Advance iterators
+            tracing::debug!("Loop iteration {}: advance_base={}, advance_change={}, cidx={}, is_base_valid={}",
+                          loop_iterations, advance_base, advance_change, *cidx, is_base_valid);
+
             if advance_base {
                 if let Some(ref mut iter) = base_iter {
                     if iter.next().is_none() {
                         is_base_valid = false;
+                        tracing::debug!("Base iterator exhausted, is_base_valid now false");
                     }
                 }
             }
             if advance_change {
                 *cidx += 1;
+                tracing::debug!("Advanced cidx to {}", *cidx);
+            }
+
+            // Safety check - at least one must advance
+            if !advance_base && !advance_change {
+                tracing::error!("Neither base nor change advanced! Breaking infinite loop");
+                return Err(Error::InvalidState("No progress in apply_one_page loop".into()));
             }
         }
 
         // Build and write the page if there's content
         if !self.data_page_builder.is_empty() {
             tracing::debug!("Finishing page with data");
-            // Allocate a new page ID
-            let page_id = self.page_mapper.allocate_page()?;
-            tracing::debug!("Allocated page_id: {}", page_id);
-            // Create a new builder to move from self
-            let builder = std::mem::replace(&mut self.data_page_builder, DataPageBuilder::new(4096));
-            let page = builder.finish(page_id);
 
-            // Following C++ - if this is an update to the applying page, use leaf_link_update
-            // Otherwise use leaf_link_insert
-            if self.applying_page.is_some() {
-                self.leaf_link_update(page);
+            // Get the first key for this page - this will be the index entry key
+            let page_key = if *cidx > 0 && *cidx <= self.entries.len() {
+                // Use the first entry we added to this page
+                self.entries[start_cidx].key.clone()
             } else {
-                self.leaf_link_insert(page).await?;
-            }
-            tracing::debug!("Added page to leaf link");
+                Bytes::from("")
+            };
+
+            // Use finish_data_page which will add index entry
+            let page_id = if let Some(ref page) = self.applying_page {
+                page.page_id()
+            } else {
+                PageId::MAX
+            };
+
+            self.finish_data_page(page_key, page_id).await?;
+            tracing::debug!("Added page with index entry");
         }
 
         // Apply TTL updates now that we're done with the iterator
@@ -1045,7 +1168,11 @@ impl BatchWriteTask {
     async fn update_meta(&mut self) -> Result<()> {
         // Update the COW metadata in index manager
         if let Some(cow_meta) = self.cow_meta.take() {
+            tracing::debug!("update_meta: Updating root for table {:?} with root_id={}",
+                self.table_id, cow_meta.root_id);
             self.index_manager.update_root(&self.table_id, cow_meta);
+        } else {
+            tracing::warn!("update_meta: No COW metadata to update for table {:?}", self.table_id);
         }
         Ok(())
     }
@@ -1078,6 +1205,8 @@ impl BatchWriteTask {
 
         // Update index with this page
         if !self.stack.is_empty() {
+            tracing::debug!("Adding index change: key={:?}, page_id={}",
+                String::from_utf8_lossy(&page_key), page_id);
             self.stack.last_mut().unwrap().changes.push(IndexOp {
                 key: page_key,
                 page_id,
@@ -1094,7 +1223,7 @@ impl BatchWriteTask {
     async fn finish_index_page(&mut self, prev_page: &mut Option<(PageId, Vec<u8>)>, page_key: Bytes) -> Result<()> {
         // Following C++ FinishIndexPage
         let cur_page_len = self.idx_page_builder.current_size_estimate();
-        let page_data = self.idx_page_builder.finish_index_page();
+        let page_data = self.idx_page_builder.finish().to_vec();
 
         // Check if should redistribute
         let one_quarter = self.options.index_page_size >> 2;
@@ -1122,6 +1251,7 @@ impl BatchWriteTask {
 
     /// Flush index page to disk
     async fn flush_index_page(&mut self, page_id: PageId, page_data: Vec<u8>, page_key: &[u8], split: bool) -> Result<()> {
+        tracing::debug!("flush_index_page: page_id={}, data_len={}, split={}", page_id, page_data.len(), split);
         // Following C++ FlushIndexPage
         // Write the index page to disk
         let mut page = Page::new(self.options.index_page_size);
@@ -1130,21 +1260,26 @@ impl BatchWriteTask {
 
         // Map and write page
         if self.file_manager.get_metadata(0).await.is_err() {
+            tracing::debug!("flush_index_page: creating file for table");
             self.file_manager.create_file(&self.table_id).await?;
         }
 
         let snapshot = self.page_mapper.snapshot();
         let file_page_id = if let Ok(fid) = snapshot.to_file_page(page_id) {
+            tracing::debug!("flush_index_page: page {} already mapped to file_page {}", page_id, fid);
             fid
         } else {
             self.page_mapper.switch_file(0)?;
             let fid = self.page_mapper.allocate_file_page()?;
             self.page_mapper.map_page(page_id, fid)?;
             self.page_mapper.update_mapping(page_id, fid);
+            tracing::debug!("flush_index_page: mapped page {} to file_page {}", page_id, fid);
             fid
         };
 
+        tracing::debug!("flush_index_page: writing page {} to disk at file_page {}", page_id, file_page_id);
         self.file_manager.write_page(file_page_id.file_id() as u64, file_page_id.page_offset(), &page).await?;
+        tracing::debug!("flush_index_page: successfully wrote page {} to disk", page_id);
 
         // Update parent if split and (new page or root)
         if split && (page_id == PageId::MAX || self.stack.len() == 1) {
@@ -1263,7 +1398,7 @@ impl Clone for BatchWriteTask {
             cow_meta: None,
             ttl_batch: Vec::new(),
             data_page_builder: DataPageBuilder::new(4096),
-            idx_page_builder: DataPageBuilder::new(4096),
+            idx_page_builder: IndexPageBuilder::new(Arc::new(KvOptions::default())),
             options: Arc::new(KvOptions::default()),
         }
     }
@@ -1313,10 +1448,38 @@ impl Task for DeleteTask {
         TaskPriority::Normal
     }
 
-    async fn execute(&self, _ctx: &TaskContext) -> Result<TaskResult> {
-        // TODO: Implement proper delete logic with page lookup
-        // For now, just return success
-        Ok(TaskResult::Delete(true))
+    async fn execute(&self, ctx: &TaskContext) -> Result<TaskResult> {
+        // Implement delete as a batch write with a single delete entry
+        let entry = WriteDataEntry {
+            key: self.key.clone(),
+            value: Bytes::new(), // Empty value for delete
+            op: WriteOp::Delete,
+            timestamp: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+            expire_ts: 0,
+        };
+
+        // Create a BatchWriteTask with single delete entry
+        let batch_task = BatchWriteTask::new(
+            vec![entry],
+            self.table_id.clone(),
+            self.page_cache.clone(),
+            self.page_mapper.clone(),
+            self.file_manager.clone(),
+            // Need index manager - get it from context or create one
+            Arc::new(IndexPageManager::new(
+                self.file_manager.clone(),
+                ctx.options.clone(),
+            )),
+        );
+
+        // Execute the batch write
+        match batch_task.execute(ctx).await? {
+            TaskResult::BatchWrite(_) => Ok(TaskResult::Delete(true)),
+            _ => Ok(TaskResult::Delete(false)),
+        }
     }
 
     fn can_merge(&self, other: &dyn Task) -> bool {

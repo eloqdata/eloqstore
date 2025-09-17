@@ -58,6 +58,57 @@ pub fn decode_varint(data: &[u8]) -> Option<(u64, usize)> {
     None
 }
 
+/// Encode varint32 (for compatibility)
+pub fn encode_varint32(buf: &mut impl bytes::BufMut, value: u32) {
+    let mut val = value;
+    while val >= 0x80 {
+        buf.put_u8((val as u8) | 0x80);
+        val >>= 7;
+    }
+    buf.put_u8(val as u8);
+}
+
+/// Decode varint32 from data at offset
+pub fn decode_varint32(data: &[u8], offset: usize) -> Option<(u32, usize)> {
+    if offset >= data.len() {
+        return None;
+    }
+
+    let mut result = 0u32;
+    let mut shift = 0;
+    let mut pos = offset;
+
+    while pos < data.len() {
+        let byte = data[pos];
+        pos += 1;
+
+        if shift >= 32 {
+            return None;
+        }
+
+        result |= ((byte & 0x7F) as u32) << shift;
+
+        if byte & 0x80 == 0 {
+            return Some((result, pos));
+        }
+
+        shift += 7;
+    }
+
+    None
+}
+
+/// Get size of varint32
+pub fn varint32_size(value: u32) -> usize {
+    let mut v = value;
+    let mut size = 1;
+    while v >= 0x80 {
+        v >>= 7;
+        size += 1;
+    }
+    size
+}
+
 /// Encode a fixed 32-bit integer
 pub fn encode_fixed32(value: u32) -> [u8; 4] {
     value.to_le_bytes()

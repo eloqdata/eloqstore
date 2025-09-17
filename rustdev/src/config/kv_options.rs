@@ -18,6 +18,8 @@ pub struct KvOptions {
     pub overflow_pointers: usize,
     /// Maximum index pages in memory
     pub max_index_pages: usize,
+    /// Index page restart interval for prefix compression
+    pub index_page_restart_interval: u16,
     /// Data directories
     pub data_dirs: Vec<PathBuf>,
     /// Append-only mode
@@ -52,6 +54,7 @@ impl Default for KvOptions {
             max_write_batch_pages: 32,
             overflow_pointers: 8,
             max_index_pages: 10000,
+            index_page_restart_interval: 16,
             data_dirs: vec![PathBuf::from("./data")],
             data_append_mode: false,
             archive_path: None,

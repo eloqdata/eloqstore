@@ -99,6 +99,11 @@ impl Page {
         &self.data
     }
 
+    /// Get page data as Bytes (clones the data)
+    pub fn data(&self) -> Bytes {
+        self.data.clone()
+    }
+
     /// Get mutable page data
     pub fn as_bytes_mut(&mut self) -> &mut [u8] {
         // Make the data unique if it's shared

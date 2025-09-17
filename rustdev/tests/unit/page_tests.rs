@@ -1,7 +1,7 @@
 //! Unit tests for page module
 
-use eloqstore_rs::page::{Page, DataPage, DataPageBuilder, PageMapper, PageCache};
-use eloqstore_rs::types::{Key, Value, PageId, FilePageId, TableIdent};
+use eloqstore::page::{Page, DataPage, DataPageBuilder, PageMapper, PageCache};
+use eloqstore::types::{Key, Value, PageId, FilePageId, TableIdent};
 use bytes::{Bytes, BytesMut};
 use std::sync::Arc;
 

@@ -1,9 +1,9 @@
 //! Durability tests - ensure data persists across crashes
 
-use eloqstore_rs::store::EloqStore;
-use eloqstore_rs::config::KvOptions;
-use eloqstore_rs::types::{Key, Value, TableIdent};
-use eloqstore_rs::api::request::{WriteRequest, ReadRequest};
+use eloqstore::store::EloqStore;
+use eloqstore::config::KvOptions;
+use eloqstore::types::{Key, Value, TableIdent};
+use eloqstore::api::request::{WriteRequest, ReadRequest};
 use std::sync::Arc;
 
 #[cfg(test)]

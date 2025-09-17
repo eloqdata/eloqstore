@@ -1,11 +1,11 @@
 //! Integration tests for manifest operations
 
-extern crate eloqstore_rs;
+extern crate eloqstore;
 
-use eloqstore_rs::storage::{ManifestData, ManifestFile};
-use eloqstore_rs::types::{PageId, FilePageId, TableIdent};
-use eloqstore_rs::index::CowRootMeta;
-use eloqstore_rs::page::PageMapper;
+use eloqstore::storage::{ManifestData, ManifestFile};
+use eloqstore::types::{PageId, FilePageId, TableIdent};
+use eloqstore::index::CowRootMeta;
+use eloqstore::page::PageMapper;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tempfile::TempDir;

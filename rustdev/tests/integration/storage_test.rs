@@ -1,10 +1,10 @@
 //! Integration tests for storage operations
 
-extern crate eloqstore_rs;
+extern crate eloqstore;
 
-use eloqstore_rs::page::{Page, PageMapper};
-use eloqstore_rs::storage::FileManager;
-use eloqstore_rs::types::{PageId, FilePageId, TableIdent};
+use eloqstore::page::{Page, PageMapper};
+use eloqstore::storage::FileManager;
+use eloqstore::types::{PageId, FilePageId, TableIdent};
 use tempfile::TempDir;
 use bytes::BytesMut;
 

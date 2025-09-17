@@ -1,11 +1,11 @@
 //! Unit tests for codec module
 
-use eloqstore_rs::codec::{
+use eloqstore::codec::{
     Comparator, BytewiseComparator,
     encode_varint, decode_varint, encode_fixed32, decode_fixed32,
     encode_fixed64, decode_fixed64, encode_key, decode_key
 };
-use eloqstore_rs::types::{Key, Value};
+use eloqstore::types::{Key, Value};
 use bytes::BytesMut;
 
 #[cfg(test)]

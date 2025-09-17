@@ -359,7 +359,7 @@ impl Shard {
                 self.stats.reads.fetch_add(1, Ordering::Relaxed);
 
                 if let Some(read_req) = request.as_any().downcast_ref::<crate::store::ReadRequest>() {
-                    // Use simplified read for now
+                    // Use proper ReadTask following C++
                     let index_manager = match self.index_manager.as_ref() {
                         Some(mgr) => mgr.clone(),
                         None => {
@@ -368,15 +368,25 @@ impl Shard {
                         }
                     };
 
-                    match crate::task::write_simple::simple_read(
-                        &read_req.key,
-                        &read_req.base.table_id,
+                    // Create ReadTask following C++
+                    let read_task = crate::task::read::ReadTask::new(
+                        read_req.base.table_id.clone(),
+                        read_req.key.clone(),
                         self.page_cache.clone(),
                         self.page_mapper.clone(),
                         self.file_manager.clone(),
                         index_manager,
-                    ).await {
-                        Ok(value) => {
+                        self.options.clone(),
+                    );
+
+                    // Execute the task
+                    let context = crate::task::traits::TaskContext {
+                        shard_id: self.id as u32,
+                        options: self.options.clone(),
+                    };
+
+                    match read_task.execute(&context).await {
+                        Ok(crate::task::traits::TaskResult::Read(value)) => {
                             // Set result on request BEFORE marking as done
                             *read_req.value.lock() = value;
                             // Mark as done AFTER setting the value
@@ -385,6 +395,10 @@ impl Shard {
                         Err(e) => {
                             tracing::error!("Read error: {:?}", e);
                             self.stats.errors.fetch_add(1, Ordering::Relaxed);
+                            Self::set_request_done(original, &request,Some(KvError::InternalError));
+                        }
+                        _ => {
+                            tracing::warn!("Unexpected task result");
                             Self::set_request_done(original, &request,Some(KvError::InternalError));
                         }
                     }
@@ -521,22 +535,30 @@ impl Shard {
                             return;
                         }
                     };
-                    let task = ReadTask::floor(
-                        floor_req.key.clone(),
+                    // Create ReadTask and call floor method
+                    let read_task = crate::task::read::ReadTask::new(
                         floor_req.base.table_id.clone(),
+                        floor_req.key.clone(),
                         self.page_cache.clone(),
                         self.page_mapper.clone(),
                         self.file_manager.clone(),
                         index_manager.clone(),
+                        self.options.clone(),
                     );
 
-                    let ctx = TaskContext::default();
-                    match task.execute(&ctx).await {
-                        Ok(_result) => {
-                            // TODO: Set result on request
+                    // Call floor method directly
+                    match read_task.floor().await {
+                        Ok(Some((_floor_key, value, _timestamp, _expire_ts))) => {
+                            // Set result on request
+                            *floor_req.value.lock() = Some(value.into());
                             Self::set_request_done(original, &request,None);
                         }
-                        Err(_e) => {
+                        Ok(None) => {
+                            *floor_req.value.lock() = None;
+                            Self::set_request_done(original, &request,None);
+                        }
+                        Err(e) => {
+                            tracing::error!("Floor error: {:?}", e);
                             self.stats.errors.fetch_add(1, Ordering::Relaxed);
                             Self::set_request_done(original, &request,Some(KvError::InternalError));
                         }
