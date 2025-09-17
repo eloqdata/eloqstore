@@ -24,7 +24,6 @@ pub mod storage;
 pub mod store;
 pub mod task;
 pub mod types;
-pub mod utils;
 
 #[cfg(feature = "ffi")]
 pub mod ffi;

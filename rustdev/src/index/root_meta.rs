@@ -10,6 +10,13 @@ use crate::page::PageMapper;
 use crate::page::MappingSnapshot;
 use crate::Result;
 
+/// Calculate CRC32 checksum
+fn crc32(data: &[u8]) -> u64 {
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(data);
+    hasher.finalize() as u64
+}
+
 /// COW (Copy-on-Write) root metadata for write transactions
 #[derive(Debug)]
 pub struct CowRootMeta {
@@ -234,7 +241,7 @@ impl ManifestBuilder {
             .copy_from_slice(&log_size.to_le_bytes());
 
         // Calculate and write checksum
-        let checksum = crate::utils::crc32(&self.buffer[8..]);
+        let checksum = crc32(&self.buffer[8..]);
         self.buffer[0..8].copy_from_slice(&checksum.to_le_bytes());
 
         &self.buffer
@@ -257,7 +264,7 @@ impl ManifestBuilder {
             .copy_from_slice(&log_size.to_le_bytes());
 
         // Calculate checksum
-        let checksum = crate::utils::crc32(&self.buffer[8..]);
+        let checksum = crc32(&self.buffer[8..]);
         self.buffer[0..8].copy_from_slice(&checksum.to_le_bytes());
 
         &self.buffer

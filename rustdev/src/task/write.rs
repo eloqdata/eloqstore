@@ -16,7 +16,7 @@ use crate::page::{DataPage, PageCache, Page, DataPageBuilder};
 use crate::page::PageMapper;
 use crate::storage::AsyncFileManager;
 use crate::index::{IndexPageManager, CowRootMeta, MemIndexPage};
-use crate::utils::Comparator;
+use crate::codec::Comparator;
 use crate::Result;
 use crate::error::{Error, KvError};
 
