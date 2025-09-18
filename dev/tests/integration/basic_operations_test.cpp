@@ -96,7 +96,8 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_BatchOperations", "[integr
     DataGenerator gen(42);
 
     SECTION("Batch write multiple keys") {
-        auto batch_req = MakeBatchWriteRequest(table);
+        auto batch_req = std::make_unique<BatchWriteRequest>();
+        batch_req->SetTableId(table);
 
         std::map<std::string, std::string> data;
         for (int i = 0; i < 100; ++i) {
@@ -107,7 +108,6 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_BatchOperations", "[integr
         }
 
         store_->ExecSync(batch_req.get());
-        WaitForRequest(batch_req.get());
         AssertNoError(batch_req->Error());
 
         // Verify all written
@@ -123,7 +123,8 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_BatchOperations", "[integr
         }
 
         // Batch with mixed operations
-        auto batch_req = MakeBatchWriteRequest(table);
+        auto batch_req = std::make_unique<BatchWriteRequest>();
+        batch_req->SetTableId(table);
 
         // Updates
         for (int i = 0; i < 10; ++i) {
@@ -141,7 +142,6 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_BatchOperations", "[integr
         }
 
         store_->ExecSync(batch_req.get());
-        WaitForRequest(batch_req.get());
         AssertNoError(batch_req->Error());
 
         // Verify updates
@@ -151,9 +151,9 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_BatchOperations", "[integr
 
         // Verify deletes
         for (int i = 10; i < 15; ++i) {
-            auto read_req = MakeReadRequest(table, "key_" + std::to_string(i));
+            auto read_req = std::make_unique<ReadRequest>();
+            read_req->SetArgs(table, "key_" + std::to_string(i));
             store_->ExecSync(read_req.get());
-            WaitForRequest(read_req.get());
             REQUIRE(read_req->Error() == KvError::NotFound);
         }
 
@@ -183,9 +183,10 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_ScanOperations", "[integra
         }
 
         // Scan a range
-        auto scan_req = MakeScanRequest(table, "key_020", "key_030", 20);
+        auto scan_req = std::make_unique<ScanRequest>();
+        scan_req->SetArgs(table, "key_020", "key_030");
+        scan_req->SetPagination(20, SIZE_MAX);
         store_->ExecSync(scan_req.get());
-        WaitForRequest(scan_req.get());
         AssertNoError(scan_req->Error());
 
         auto entries = scan_req->Entries();
@@ -205,9 +206,10 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_ScanOperations", "[integra
         }
 
         // Scan entire range
-        auto scan_req = MakeScanRequest(table, "", "", 1000);
+        auto scan_req = std::make_unique<ScanRequest>();
+        scan_req->SetArgs(table, "", "");
+        scan_req->SetPagination(1000, SIZE_MAX);
         store_->ExecSync(scan_req.get());
-        WaitForRequest(scan_req.get());
         AssertNoError(scan_req->Error());
 
         REQUIRE(scan_req->Entries().size() == 50);
@@ -220,9 +222,10 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_ScanOperations", "[integra
         }
 
         // Scan with small limit
-        auto scan_req = MakeScanRequest(table, "", "", 10);
+        auto scan_req = std::make_unique<ScanRequest>();
+        scan_req->SetArgs(table, "", "");
+        scan_req->SetPagination(10, SIZE_MAX);
         store_->ExecSync(scan_req.get());
-        WaitForRequest(scan_req.get());
         AssertNoError(scan_req->Error());
 
         REQUIRE(scan_req->Entries().size() == 10);
@@ -238,9 +241,9 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_DeleteOperations", "[integ
 
         DeleteKey(table, "to_delete");
 
-        auto read_req = MakeReadRequest(table, "to_delete");
+        auto read_req = std::make_unique<ReadRequest>();
+        read_req->SetArgs(table, "to_delete");
         store_->ExecSync(read_req.get());
-        WaitForRequest(read_req.get());
         REQUIRE(read_req->Error() == KvError::NotFound);
     }
 
@@ -264,19 +267,19 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_DeleteOperations", "[integ
         }
 
         // Delete half
-        auto batch_req = MakeBatchWriteRequest(table);
+        auto batch_req = std::make_unique<BatchWriteRequest>();
+        batch_req->SetTableId(table);
         for (int i = 0; i < 50; ++i) {
             batch_req->AddWrite("del_" + std::to_string(i), "", 0, WriteOp::Delete);
         }
         store_->ExecSync(batch_req.get());
-        WaitForRequest(batch_req.get());
         AssertNoError(batch_req->Error());
 
         // Verify deletes
         for (int i = 0; i < 50; ++i) {
-            auto read_req = MakeReadRequest(table, "del_" + std::to_string(i));
+            auto read_req = std::make_unique<ReadRequest>();
+            read_req->SetArgs(table, "del_" + std::to_string(i));
             store_->ExecSync(read_req.get());
-            WaitForRequest(read_req.get());
             REQUIRE(read_req->Error() == KvError::NotFound);
         }
 
@@ -330,9 +333,9 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_EdgeCases", "[integration]
     SECTION("Empty values") {
         WriteKeyValue(table, "empty_val", "");
 
-        auto read_req = MakeReadRequest(table, "empty_val");
+        auto read_req = std::make_unique<ReadRequest>();
+        read_req->SetArgs(table, "empty_val");
         store_->ExecSync(read_req.get());
-        WaitForRequest(read_req.get());
         AssertNoError(read_req->Error());
         REQUIRE(read_req->value_ == "");
     }
@@ -391,9 +394,9 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_ConcurrentOperations", "[i
         for (int t = 0; t < 8; ++t) {
             threads.emplace_back([this, &table, &successful_reads, t]() {
                 for (int i = t; i < 100; i += 8) {
-                    auto read_req = MakeReadRequest(table, "key_" + std::to_string(i));
+                    auto read_req = std::make_unique<ReadRequest>();
+                    read_req->SetArgs(table, "key_" + std::to_string(i));
                     store_->ExecSync(read_req.get());
-                    WaitForRequest(read_req.get());
 
                     if (read_req->Error() == KvError::NoError &&
                         read_req->value_ == "value_" + std::to_string(i)) {
@@ -420,10 +423,10 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_ConcurrentOperations", "[i
                     std::string key = "thread_" + std::to_string(t) + "_key_" + std::to_string(i);
                     std::string value = "thread_" + std::to_string(t) + "_value_" + std::to_string(i);
 
-                    auto write_req = MakeBatchWriteRequest(table);
+                    auto write_req = std::make_unique<BatchWriteRequest>();
+                    write_req->SetTableId(table);
                     write_req->AddWrite(key, value, 0, WriteOp::Upsert);
                     store_->ExecSync(write_req.get());
-                    WaitForRequest(write_req.get());
 
                     if (write_req->Error() == KvError::NoError) {
                         successful_writes++;
@@ -461,9 +464,9 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_ConcurrentOperations", "[i
             threads.emplace_back([this, &table]() {
                 for (int i = 0; i < 100; ++i) {
                     int key_id = rand() % 50;
-                    auto read_req = MakeReadRequest(table, "shared_" + std::to_string(key_id));
+                    auto read_req = std::make_unique<ReadRequest>();
+                    read_req->SetArgs(table, "shared_" + std::to_string(key_id));
                     store_->ExecSync(read_req.get());
-                    WaitForRequest(read_req.get());
                 }
             });
         }
@@ -472,10 +475,10 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_ConcurrentOperations", "[i
         for (int t = 0; t < 2; ++t) {
             threads.emplace_back([this, &table, t]() {
                 for (int i = 0; i < 25; ++i) {
-                    auto write_req = MakeBatchWriteRequest(table);
+                    auto write_req = std::make_unique<BatchWriteRequest>();
+                    write_req->SetTableId(table);
                     write_req->AddWrite("new_" + std::to_string(t * 25 + i), "value", 0, WriteOp::Upsert);
                     store_->ExecSync(write_req.get());
-                    WaitForRequest(write_req.get());
                 }
             });
         }
@@ -483,9 +486,10 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_ConcurrentOperations", "[i
         // Scanner thread
         threads.emplace_back([this, &table]() {
             for (int i = 0; i < 10; ++i) {
-                auto scan_req = MakeScanRequest(table, "", "", 100);
+                auto scan_req = std::make_unique<ScanRequest>();
+                scan_req->SetArgs(table, "", "");
+                scan_req->SetPagination(100, SIZE_MAX);
                 store_->ExecSync(scan_req.get());
-                WaitForRequest(scan_req.get());
                 std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
         });
@@ -496,9 +500,9 @@ TEST_CASE_METHOD(IntegrationTestFixture, "Integration_ConcurrentOperations", "[i
 
         // System should remain consistent
         // Verify some data is still readable
-        auto read_req = MakeReadRequest(table, "shared_0");
+        auto read_req = std::make_unique<ReadRequest>();
+        read_req->SetArgs(table, "shared_0");
         store_->ExecSync(read_req.get());
-        WaitForRequest(read_req.get());
         REQUIRE((read_req->Error() == KvError::NoError ||
                 read_req->Error() == KvError::NotFound));  // May have been deleted
     }

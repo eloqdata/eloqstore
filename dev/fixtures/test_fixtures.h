@@ -30,6 +30,9 @@ public:
     void InitStoreWithDefaults();
     void ShutdownStore();
 
+    // Store access
+    EloqStore* GetStore() const { return store_.get(); }
+
     // Helper methods
     KvOptions GetDefaultOptions() const;
     KvOptions GetMemoryOnlyOptions() const;

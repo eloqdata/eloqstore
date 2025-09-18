@@ -98,7 +98,8 @@ TEST_CASE_METHOD(AsyncOpsTestFixture, "AsyncOps_BatchOperations", "[async][integ
 
         // Create batch write requests
         for (int batch = 0; batch < 5; ++batch) {
-            auto req = MakeBatchWriteRequest(table);
+            auto req = std::make_unique<BatchWriteRequest>();
+            req->SetTableId(table);
             for (int i = 0; i < 10; ++i) {
                 std::string key = "batch" + std::to_string(batch) + "_key" + std::to_string(i);
                 std::string value = "value_" + std::to_string(batch * 10 + i);
@@ -124,7 +125,8 @@ TEST_CASE_METHOD(AsyncOpsTestFixture, "AsyncOps_BatchOperations", "[async][integ
         for (int batch = 0; batch < 5; ++batch) {
             for (int i = 0; i < 10; ++i) {
                 std::string key = "batch" + std::to_string(batch) + "_key" + std::to_string(i);
-                auto req = MakeReadRequest(table, key);
+                auto req = std::make_unique<ReadRequest>();
+                req->SetArgs(table, key);
                 read_reqs.push_back(std::move(req));
             }
         }

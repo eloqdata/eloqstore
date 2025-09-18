@@ -102,7 +102,8 @@ TEST_CASE_METHOD(ReadTaskTestFixture, "ReadTask_BasicRead", "[read][task][unit]"
 
     SECTION("Read after delete") {
         // Delete a key using BatchWriteRequest with Delete operation
-        auto delete_req = MakeBatchWriteRequest(table_);
+        auto delete_req = std::make_unique<BatchWriteRequest>();
+        delete_req->SetTableId(table_);
         delete_req->AddWrite("key_75", "", 0, WriteOp::Delete);
 
         store_->ExecSync(delete_req.get());

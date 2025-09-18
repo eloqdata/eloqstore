@@ -21,76 +21,77 @@ TEST_CASE_METHOD(BoundaryTestFixture, "Boundary_EmptyOperations", "[edge-case][b
 
     SECTION("Empty database operations") {
         // Read from empty database
-        auto read_req = MakeReadRequest(table, "any_key");
-        store_->Read(read_req.get());
-        WaitForRequest(read_req.get());
+        auto read_req = std::make_unique<ReadRequest>();
+        read_req->SetArgs(table, "any_key");
+        store_->ExecSync(read_req.get());
         REQUIRE(read_req->Error() == KvError::NotFound);
 
         // Scan empty database
-        auto scan_req = MakeScanRequest(table, "", "", 100);
-        store_->Scan(scan_req.get());
-        WaitForRequest(scan_req.get());
-        AssertNoError(scan_req->Error());
-        REQUIRE(scan_req->keys_.empty());
-        REQUIRE(scan_req->values_.empty());
+        auto scan_req = std::make_unique<ScanRequest>();
+        scan_req->SetArgs(table, "", "");
+        scan_req->SetPagination(100, SIZE_MAX);
+        store_->ExecSync(scan_req.get());
+        REQUIRE(scan_req->Error() == KvError::NoError);
+        auto entries = scan_req->Entries();
+        REQUIRE(entries.empty());
 
         // Delete from empty database
-        auto batch_req = MakeBatchWriteRequest(table);
-        batch_req->AddDelete("non_existent");
-        store_->BatchWrite(batch_req.get());
-        WaitForRequest(batch_req.get());
-        AssertNoError(batch_req->Error());
+        auto batch_req = std::make_unique<BatchWriteRequest>();
+        batch_req->SetTableId(table);
+        batch_req->AddWrite("non_existent", "", 0, WriteOp::Delete);
+        store_->ExecSync(batch_req.get());
+        REQUIRE(batch_req->Error() == KvError::NoError);
     }
 
     SECTION("Empty key operations") {
         // Write empty key
-        auto write_req = MakeBatchWriteRequest(table);
-        write_req->AddPut("", "value_for_empty_key");
-        store_->BatchWrite(write_req.get());
-        WaitForRequest(write_req.get());
+        auto write_req = std::make_unique<BatchWriteRequest>();
+        write_req->SetTableId(table);
+        write_req->AddWrite("", "value_for_empty_key", 0, WriteOp::Upsert);
+        store_->ExecSync(write_req.get());
         AssertNoError(write_req->Error());
 
         // Read empty key
-        auto read_req = MakeReadRequest(table, "");
-        store_->Read(read_req.get());
-        WaitForRequest(read_req.get());
+        auto read_req = std::make_unique<ReadRequest>();
+        read_req->SetArgs(table, "");
+        store_->ExecSync(read_req.get());
         AssertNoError(read_req->Error());
         REQUIRE(read_req->value_ == "value_for_empty_key");
 
         // Delete empty key
-        auto delete_req = MakeBatchWriteRequest(table);
-        delete_req->AddDelete("");
-        store_->BatchWrite(delete_req.get());
-        WaitForRequest(delete_req.get());
+        auto delete_req = std::make_unique<BatchWriteRequest>();
+        delete_req->SetTableId(table);
+        delete_req->AddWrite("", "", 0, WriteOp::Delete);
+        store_->ExecSync(delete_req.get());
         AssertNoError(delete_req->Error());
     }
 
     SECTION("Empty value operations") {
         // Write empty value
-        auto write_req = MakeBatchWriteRequest(table);
-        write_req->AddPut("key_with_empty_value", "");
-        store_->BatchWrite(write_req.get());
-        WaitForRequest(write_req.get());
+        auto write_req = std::make_unique<BatchWriteRequest>();
+        write_req->SetTableId(table);
+        write_req->AddWrite("key_with_empty_value", "", 0, WriteOp::Upsert);
+        store_->ExecSync(write_req.get());
         AssertNoError(write_req->Error());
 
         // Read empty value
-        auto read_req = MakeReadRequest(table, "key_with_empty_value");
-        store_->Read(read_req.get());
-        WaitForRequest(read_req.get());
+        auto read_req = std::make_unique<ReadRequest>();
+        read_req->SetArgs(table, "key_with_empty_value");
+        store_->ExecSync(read_req.get());
         AssertNoError(read_req->Error());
         REQUIRE(read_req->value_ == "");
     }
 
     SECTION("Empty key and value") {
-        auto write_req = MakeBatchWriteRequest(table);
-        write_req->AddPut("", "");
-        store_->BatchWrite(write_req.get());
-        WaitForRequest(write_req.get());
+        auto write_req = std::make_unique<BatchWriteRequest>();
+        write_req->SetTableId(table);
+        write_req->AddWrite("", "", 0, WriteOp::Upsert);
+        store_->ExecSync(write_req.get());
         AssertNoError(write_req->Error());
 
-        auto read_req = MakeReadRequest(table, "");
-        store_->Read(read_req.get());
-        WaitForRequest(read_req.get());
+        auto read_req = std::make_unique<ReadRequest>();
+        read_req->SetArgs(table, "");
+        store_->ExecSync(read_req.get());
         AssertNoError(read_req->Error());
         REQUIRE(read_req->value_ == "");
     }
@@ -108,16 +109,16 @@ TEST_CASE_METHOD(BoundaryTestFixture, "Boundary_MaximumSizes", "[edge-case][boun
             std::string key = gen.GenerateValue(size);
             std::string value = "value_for_" + std::to_string(size);
 
-            auto write_req = MakeBatchWriteRequest(table);
-            write_req->AddPut(key, value);
-            store_->BatchWrite(write_req.get());
-            WaitForRequest(write_req.get());
+            auto write_req = std::make_unique<BatchWriteRequest>();
+            write_req->SetTableId(table);
+            write_req->AddWrite(key, value, 0, WriteOp::Upsert);
+            store_->ExecSync(write_req.get());
 
             if (write_req->Error() == KvError::NoError) {
                 // Verify can read back
-                auto read_req = MakeReadRequest(table, key);
-                store_->Read(read_req.get());
-                WaitForRequest(read_req.get());
+                auto read_req = std::make_unique<ReadRequest>();
+                read_req->SetArgs(table, key);
+                store_->ExecSync(read_req.get());
 
                 if (read_req->Error() == KvError::NoError) {
                     REQUIRE(read_req->value_ == value);
@@ -134,15 +135,15 @@ TEST_CASE_METHOD(BoundaryTestFixture, "Boundary_MaximumSizes", "[edge-case][boun
             std::string key = "large_value_" + std::to_string(size);
             std::string value = gen.GenerateValue(size);
 
-            auto write_req = MakeBatchWriteRequest(table);
-            write_req->AddPut(key, value);
-            store_->BatchWrite(write_req.get());
-            WaitForRequest(write_req.get());
+            auto write_req = std::make_unique<BatchWriteRequest>();
+            write_req->SetTableId(table);
+            write_req->AddWrite(key, value, 0, WriteOp::Upsert);
+            store_->ExecSync(write_req.get());
 
             if (write_req->Error() == KvError::NoError) {
-                auto read_req = MakeReadRequest(table, key);
-                store_->Read(read_req.get());
-                WaitForRequest(read_req.get());
+                auto read_req = std::make_unique<ReadRequest>();
+                read_req->SetArgs(table, key);
+                store_->ExecSync(read_req.get());
 
                 if (read_req->Error() == KvError::NoError) {
                     REQUIRE(read_req->value_ == value);
@@ -156,28 +157,28 @@ TEST_CASE_METHOD(BoundaryTestFixture, "Boundary_MaximumSizes", "[edge-case][boun
         std::vector<size_t> batch_sizes = {10, 100, 1000, 10000};
 
         for (size_t batch_size : batch_sizes) {
-            auto batch_req = MakeBatchWriteRequest(table);
+            auto batch_req = std::make_unique<BatchWriteRequest>();
+            batch_req->SetTableId(table);
 
             for (size_t i = 0; i < batch_size; ++i) {
                 std::string key = "batch_" + std::to_string(batch_size) + "_" + std::to_string(i);
                 std::string value = "val_" + std::to_string(i);
-                batch_req->AddPut(key, value);
+                batch_req->AddWrite(key, value, 0, WriteOp::Upsert);
             }
 
-            store_->BatchWrite(batch_req.get());
-            WaitForRequest(batch_req.get());
+            store_->ExecSync(batch_req.get());
 
             // Check if batch succeeded
             if (batch_req->Error() == KvError::NoError) {
                 // Verify first and last entries
-                auto read_first = MakeReadRequest(table, "batch_" + std::to_string(batch_size) + "_0");
-                store_->Read(read_first.get());
-                WaitForRequest(read_first.get());
+                auto read_first = std::make_unique<ReadRequest>();
+                read_first->SetArgs(table, "batch_" + std::to_string(batch_size) + "_0");
+                store_->ExecSync(read_first.get());
 
-                auto read_last = MakeReadRequest(table,
+                auto read_last = std::make_unique<ReadRequest>();
+                read_last->SetArgs(table,
                     "batch_" + std::to_string(batch_size) + "_" + std::to_string(batch_size - 1));
-                store_->Read(read_last.get());
-                WaitForRequest(read_last.get());
+                store_->ExecSync(read_last.get());
 
                 if (read_first->Error() == KvError::NoError) {
                     REQUIRE(read_first->value_ == "val_0");
@@ -195,41 +196,45 @@ TEST_CASE_METHOD(BoundaryTestFixture, "Boundary_SingleEntry", "[edge-case][bound
 
     SECTION("Database with single entry") {
         // Write single entry
-        auto write_req = MakeBatchWriteRequest(table);
-        write_req->AddPut("only_key", "only_value");
-        store_->BatchWrite(write_req.get());
-        WaitForRequest(write_req.get());
+        auto write_req = std::make_unique<BatchWriteRequest>();
+        write_req->SetTableId(table);
+        write_req->AddWrite("only_key", "only_value", 0, WriteOp::Upsert);
+        store_->ExecSync(write_req.get());
         AssertNoError(write_req->Error());
 
         // Read the single entry
-        auto read_req = MakeReadRequest(table, "only_key");
-        store_->Read(read_req.get());
-        WaitForRequest(read_req.get());
+        auto read_req = std::make_unique<ReadRequest>();
+        read_req->SetArgs(table, "only_key");
+        store_->ExecSync(read_req.get());
         AssertNoError(read_req->Error());
         REQUIRE(read_req->value_ == "only_value");
 
         // Scan should return only one entry
-        auto scan_req = MakeScanRequest(table, "", "", 100);
-        store_->Scan(scan_req.get());
-        WaitForRequest(scan_req.get());
+        auto scan_req = std::make_unique<ScanRequest>();
+        scan_req->SetArgs(table, "", "");
+        scan_req->SetPagination(100, SIZE_MAX);
+        store_->ExecSync(scan_req.get());
         AssertNoError(scan_req->Error());
-        REQUIRE(scan_req->keys_.size() == 1);
-        REQUIRE(scan_req->keys_[0] == "only_key");
-        REQUIRE(scan_req->values_[0] == "only_value");
+        auto entries = scan_req->Entries();
+        REQUIRE(entries.size() == 1);
+        REQUIRE(entries[0].key_ == "only_key");
+        REQUIRE(entries[0].value_ == "only_value");
 
         // Delete the single entry
-        auto delete_req = MakeBatchWriteRequest(table);
-        delete_req->AddDelete("only_key");
-        store_->BatchWrite(delete_req.get());
-        WaitForRequest(delete_req.get());
+        auto delete_req = std::make_unique<BatchWriteRequest>();
+        delete_req->SetTableId(table);
+        delete_req->AddWrite("only_key", "", 0, WriteOp::Delete);
+        store_->ExecSync(delete_req.get());
         AssertNoError(delete_req->Error());
 
         // Database should be empty again
-        auto scan_after = MakeScanRequest(table, "", "", 100);
-        store_->Scan(scan_after.get());
-        WaitForRequest(scan_after.get());
+        auto scan_after = std::make_unique<ScanRequest>();
+        scan_after->SetArgs(table, "", "");
+        scan_after->SetPagination(100, SIZE_MAX);
+        store_->ExecSync(scan_after.get());
         AssertNoError(scan_after->Error());
-        REQUIRE(scan_after->keys_.empty());
+        auto after_entries = scan_after->Entries();
+        REQUIRE(after_entries.empty());
     }
 }
 
@@ -255,15 +260,15 @@ TEST_CASE_METHOD(BoundaryTestFixture, "Boundary_NumericLimits", "[edge-case][bou
             std::string key = std::to_string(value);
             std::string val = name;
 
-            auto write_req = MakeBatchWriteRequest(table);
-            write_req->AddPut(key, val);
-            store_->BatchWrite(write_req.get());
-            WaitForRequest(write_req.get());
+            auto write_req = std::make_unique<BatchWriteRequest>();
+            write_req->SetTableId(table);
+            write_req->AddWrite(key, val, 0, WriteOp::Upsert);
+            store_->ExecSync(write_req.get());
             AssertNoError(write_req->Error());
 
-            auto read_req = MakeReadRequest(table, key);
-            store_->Read(read_req.get());
-            WaitForRequest(read_req.get());
+            auto read_req = std::make_unique<ReadRequest>();
+            read_req->SetArgs(table, key);
+            store_->ExecSync(read_req.get());
             AssertNoError(read_req->Error());
             REQUIRE(read_req->value_ == val);
         }
@@ -285,15 +290,15 @@ TEST_CASE_METHOD(BoundaryTestFixture, "Boundary_NumericLimits", "[edge-case][bou
             std::string key = name;
             std::string val = oss.str();
 
-            auto write_req = MakeBatchWriteRequest(table);
-            write_req->AddPut(key, val);
-            store_->BatchWrite(write_req.get());
-            WaitForRequest(write_req.get());
+            auto write_req = std::make_unique<BatchWriteRequest>();
+            write_req->SetTableId(table);
+            write_req->AddWrite(key, val, 0, WriteOp::Upsert);
+            store_->ExecSync(write_req.get());
             AssertNoError(write_req->Error());
 
-            auto read_req = MakeReadRequest(table, key);
-            store_->Read(read_req.get());
-            WaitForRequest(read_req.get());
+            auto read_req = std::make_unique<ReadRequest>();
+            read_req->SetArgs(table, key);
+            store_->ExecSync(read_req.get());
             AssertNoError(read_req->Error());
             REQUIRE(read_req->value_ == val);
         }
@@ -308,15 +313,15 @@ TEST_CASE_METHOD(BoundaryTestFixture, "Boundary_SpecialCharacters", "[edge-case]
         std::string key_with_null = "key\x00with\x00null";
         std::string value_with_null = "value\x00with\x00null\x00bytes";
 
-        auto write_req = MakeBatchWriteRequest(table);
-        write_req->AddPut(key_with_null, value_with_null);
-        store_->BatchWrite(write_req.get());
-        WaitForRequest(write_req.get());
+        auto write_req = std::make_unique<BatchWriteRequest>();
+        write_req->SetTableId(table);
+        write_req->AddWrite(key_with_null, value_with_null, 0, WriteOp::Upsert);
+        store_->ExecSync(write_req.get());
         AssertNoError(write_req->Error());
 
-        auto read_req = MakeReadRequest(table, key_with_null);
-        store_->Read(read_req.get());
-        WaitForRequest(read_req.get());
+        auto read_req = std::make_unique<ReadRequest>();
+        read_req->SetArgs(table, key_with_null);
+        store_->ExecSync(read_req.get());
         AssertNoError(read_req->Error());
         REQUIRE(read_req->value_ == value_with_null);
     }
@@ -328,15 +333,15 @@ TEST_CASE_METHOD(BoundaryTestFixture, "Boundary_SpecialCharacters", "[edge-case]
             all_bytes += static_cast<char>(i);
         }
 
-        auto write_req = MakeBatchWriteRequest(table);
-        write_req->AddPut("all_bytes_key", all_bytes);
-        store_->BatchWrite(write_req.get());
-        WaitForRequest(write_req.get());
+        auto write_req = std::make_unique<BatchWriteRequest>();
+        write_req->SetTableId(table);
+        write_req->AddWrite("all_bytes_key", all_bytes, 0, WriteOp::Upsert);
+        store_->ExecSync(write_req.get());
         AssertNoError(write_req->Error());
 
-        auto read_req = MakeReadRequest(table, "all_bytes_key");
-        store_->Read(read_req.get());
-        WaitForRequest(read_req.get());
+        auto read_req = std::make_unique<ReadRequest>();
+        read_req->SetArgs(table, "all_bytes_key");
+        store_->ExecSync(read_req.get());
         AssertNoError(read_req->Error());
         REQUIRE(read_req->value_ == all_bytes);
     }
@@ -353,15 +358,15 @@ TEST_CASE_METHOD(BoundaryTestFixture, "Boundary_SpecialCharacters", "[edge-case]
         };
 
         for (const auto& [key, value] : control_chars) {
-            auto write_req = MakeBatchWriteRequest(table);
-            write_req->AddPut(key, value);
-            store_->BatchWrite(write_req.get());
-            WaitForRequest(write_req.get());
+            auto write_req = std::make_unique<BatchWriteRequest>();
+            write_req->SetTableId(table);
+            write_req->AddWrite(key, value, 0, WriteOp::Upsert);
+            store_->ExecSync(write_req.get());
             AssertNoError(write_req->Error());
 
-            auto read_req = MakeReadRequest(table, key);
-            store_->Read(read_req.get());
-            WaitForRequest(read_req.get());
+            auto read_req = std::make_unique<ReadRequest>();
+            read_req->SetArgs(table, key);
+            store_->ExecSync(read_req.get());
             AssertNoError(read_req->Error());
             REQUIRE(read_req->value_ == value);
         }
@@ -384,15 +389,15 @@ TEST_CASE_METHOD(BoundaryTestFixture, "Boundary_Patterns", "[edge-case][boundary
         };
 
         for (const auto& [key, value] : patterns) {
-            auto write_req = MakeBatchWriteRequest(table);
-            write_req->AddPut(key, value);
-            store_->BatchWrite(write_req.get());
-            WaitForRequest(write_req.get());
+            auto write_req = std::make_unique<BatchWriteRequest>();
+            write_req->SetTableId(table);
+            write_req->AddWrite(key, value, 0, WriteOp::Upsert);
+            store_->ExecSync(write_req.get());
             AssertNoError(write_req->Error());
 
-            auto read_req = MakeReadRequest(table, key);
-            store_->Read(read_req.get());
-            WaitForRequest(read_req.get());
+            auto read_req = std::make_unique<ReadRequest>();
+            read_req->SetArgs(table, key);
+            store_->ExecSync(read_req.get());
             AssertNoError(read_req->Error());
             REQUIRE(read_req->value_ == value);
         }
@@ -404,15 +409,15 @@ TEST_CASE_METHOD(BoundaryTestFixture, "Boundary_Patterns", "[edge-case][boundary
             alternating += (i % 2) ? '\xAA' : '\x55';
         }
 
-        auto write_req = MakeBatchWriteRequest(table);
-        write_req->AddPut("alternating", alternating);
-        store_->BatchWrite(write_req.get());
-        WaitForRequest(write_req.get());
+        auto write_req = std::make_unique<BatchWriteRequest>();
+        write_req->SetTableId(table);
+        write_req->AddWrite("alternating", alternating, 0, WriteOp::Upsert);
+        store_->ExecSync(write_req.get());
         AssertNoError(write_req->Error());
 
-        auto read_req = MakeReadRequest(table, "alternating");
-        store_->Read(read_req.get());
-        WaitForRequest(read_req.get());
+        auto read_req = std::make_unique<ReadRequest>();
+        read_req->SetArgs(table, "alternating");
+        store_->ExecSync(read_req.get());
         AssertNoError(read_req->Error());
         REQUIRE(read_req->value_ == alternating);
     }
@@ -425,22 +430,22 @@ TEST_CASE_METHOD(BoundaryTestFixture, "Boundary_Patterns", "[edge-case][boundary
             decreasing += static_cast<char>(255 - i);
         }
 
-        auto write_req = MakeBatchWriteRequest(table);
-        write_req->AddPut("increasing", increasing);
-        write_req->AddPut("decreasing", decreasing);
-        store_->BatchWrite(write_req.get());
-        WaitForRequest(write_req.get());
+        auto write_req = std::make_unique<BatchWriteRequest>();
+        write_req->SetTableId(table);
+        write_req->AddWrite("increasing", increasing, 0, WriteOp::Upsert);
+        write_req->AddWrite("decreasing", decreasing, 0, WriteOp::Upsert);
+        store_->ExecSync(write_req.get());
         AssertNoError(write_req->Error());
 
-        auto read_inc = MakeReadRequest(table, "increasing");
-        store_->Read(read_inc.get());
-        WaitForRequest(read_inc.get());
+        auto read_inc = std::make_unique<ReadRequest>();
+        read_inc->SetArgs(table, "increasing");
+        store_->ExecSync(read_inc.get());
         AssertNoError(read_inc->Error());
         REQUIRE(read_inc->value_ == increasing);
 
-        auto read_dec = MakeReadRequest(table, "decreasing");
-        store_->Read(read_dec.get());
-        WaitForRequest(read_dec.get());
+        auto read_dec = std::make_unique<ReadRequest>();
+        read_dec->SetArgs(table, "decreasing");
+        store_->ExecSync(read_dec.get());
         AssertNoError(read_dec->Error());
         REQUIRE(read_dec->value_ == decreasing);
     }
@@ -456,15 +461,15 @@ TEST_CASE_METHOD(BoundaryTestFixture, "Boundary_ResourceLimits", "[edge-case][bo
 
         // Submit many operations without waiting
         for (int i = 0; i < num_operations; ++i) {
-            auto req = MakeReadRequest(table, "key_" + std::to_string(i));
-            store_->Read(req.get());
+            auto req = std::make_unique<ReadRequest>();
+            req->SetArgs(table, "key_" + std::to_string(i));
+            store_->ExecSync(req.get());
             requests.push_back(std::move(req));
         }
 
         // Wait for all
         int completed = 0;
         for (const auto& req : requests) {
-            WaitForRequest(req.get());
             if (req->Error() == KvError::NoError ||
                 req->Error() == KvError::NotFound) {
                 completed++;
@@ -482,17 +487,17 @@ TEST_CASE_METHOD(BoundaryTestFixture, "Boundary_ResourceLimits", "[edge-case][bo
             tables.push_back(CreateTestTable("rapid_table_" + std::to_string(i)));
 
             // Write to each table
-            auto write_req = MakeBatchWriteRequest(tables.back());
-            write_req->AddPut("key", "value_" + std::to_string(i));
-            store_->BatchWrite(write_req.get());
-            WaitForRequest(write_req.get());
+            auto write_req = std::make_unique<BatchWriteRequest>();
+            write_req->SetTableId(tables.back());
+            write_req->AddWrite("key", "value_" + std::to_string(i), 0, WriteOp::Upsert);
+            store_->ExecSync(write_req.get());
         }
 
         // Verify all tables are accessible
         for (size_t i = 0; i < tables.size(); ++i) {
-            auto read_req = MakeReadRequest(tables[i], "key");
-            store_->Read(read_req.get());
-            WaitForRequest(read_req.get());
+            auto read_req = std::make_unique<ReadRequest>();
+            read_req->SetArgs(tables[i], "key");
+            store_->ExecSync(read_req.get());
 
             if (read_req->Error() == KvError::NoError) {
                 REQUIRE(read_req->value_ == "value_" + std::to_string(i));

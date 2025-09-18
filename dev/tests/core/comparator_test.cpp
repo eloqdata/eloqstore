@@ -54,8 +54,12 @@ TEST_CASE("Comparator_DefaultComparator_EdgeCases", "[comparator][unit][edge-cas
     }
 
     SECTION("Null bytes in strings") {
-        std::string s1 = "abc\x00def";
-        std::string s2 = "abc\x00xyz";
+        std::string s1("abc", 3);
+        s1.append(1, '\0');
+        s1.append("def", 3);
+        std::string s2("abc", 3);
+        s2.append(1, '\0');
+        s2.append("xyz", 3);
         std::string s3 = "abc";
 
         // Strings with null bytes

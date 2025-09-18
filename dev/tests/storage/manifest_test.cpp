@@ -1,16 +1,16 @@
 #include <catch2/catch_test_macros.hpp>
-#include <boost/filesystem.hpp>
+#include <filesystem>
 #include <fstream>
 #include <random>
 
-#include "../../fixtures/test_fixtures.h"
-#include "../../fixtures/random_generator.h"
+#include "fixtures/test_fixtures.h"
+#include "fixtures/data_generator.h"
 
-namespace fs = boost::filesystem;
+namespace fs = std::filesystem;
 
 class ManifestTestFixture {
 public:
-    ManifestTestFixture() : gen_(42) {
+    ManifestTestFixture() : gen_(42), rng_(42) {
         test_dir_ = "/mnt/ramdisk/manifest_test_" + std::to_string(std::time(nullptr));
         fs::create_directories(test_dir_);
         manifest_path_ = test_dir_ + "/MANIFEST";
@@ -169,15 +169,17 @@ public:
         entry.table_name = "test_table_" + std::to_string(seq % 10);
         entry.table_id = seq % 100;
         entry.file_number = file_num;
-        entry.file_size = gen_.GetUInt(1024, 1024 * 1024);
-        entry.min_key = gen_.GetKey(10, 20);
-        entry.max_key = gen_.GetKey(10, 20);
-        entry.entry_count = gen_.GetUInt(100, 10000);
+        std::uniform_int_distribution<uint64_t> file_size_dist(1024, 1024 * 1024);
+        entry.file_size = file_size_dist(rng_);
+        entry.min_key = gen_.GenerateRandomKey(10, 20);
+        entry.max_key = gen_.GenerateRandomKey(10, 20);
+        std::uniform_int_distribution<uint64_t> count_dist(100, 10000);
+        entry.entry_count = count_dist(rng_);
         entry.timestamp = std::time(nullptr) + seq;
         return entry;
     }
 
-private:
+protected:
     uint32_t CalculateChecksum(const std::vector<ManifestEntry>& entries) {
         uint32_t checksum = 0;
         for (const auto& entry : entries) {
@@ -190,7 +192,8 @@ private:
 
     std::string test_dir_;
     std::string manifest_path_;
-    RandomGenerator gen_;
+    eloqstore::test::DataGenerator gen_;
+    std::mt19937 rng_;
 };
 
 TEST_CASE_METHOD(ManifestTestFixture, "Manifest basic operations", "[storage][manifest]") {
