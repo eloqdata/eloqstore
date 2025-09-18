@@ -297,7 +297,9 @@ std::unique_ptr<FilePageAllocator> FilePageAllocator::Instance(
 }
 
 FilePageAllocator::FilePageAllocator(const KvOptions *opts, FilePageId max_id)
-    : pages_per_file_shift_(opts->pages_per_file_shift), max_fp_id_(max_id){};
+    : pages_per_file_shift_(opts->pages_per_file_shift), max_fp_id_(max_id)
+{
+}
 
 FilePageId FilePageAllocator::MaxFilePageId() const
 {

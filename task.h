@@ -85,7 +85,7 @@ class KvTask
 public:
     virtual ~KvTask() = default;
     virtual TaskType Type() const = 0;
-    virtual void Abort(){};
+    virtual void Abort() {};
     void Yield();
     /**
      * @brief Re-schedules the task to run. Note: the resumed task does not run
