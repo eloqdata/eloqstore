@@ -1075,7 +1075,7 @@ int IouringMgr::RegisterFile(int fd)
     uint32_t idx = AllocRegisterIndex();
     if (idx == UINT32_MAX)
     {
-        LOG(WARNING) << "register file slot used up: " << lru_fd_count_;
+        DLOG(WARNING) << "register file slot used up: " << lru_fd_count_;
         return -1;
     }
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
