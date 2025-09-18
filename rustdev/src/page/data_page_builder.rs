@@ -74,6 +74,14 @@ impl DataPageBuilder {
         expire_ts: Option<u64>,
         is_overflow: bool,
     ) -> bool {
+        if key.is_empty() {
+            tracing::warn!("DataPageBuilder::add called with empty key! value_len={}, timestamp={}",
+                         value.len(), timestamp);
+        }
+
+        tracing::debug!("DataPageBuilder::add key='{}', value_len={}, ts={}",
+                      String::from_utf8_lossy(key), value.len(), timestamp);
+
         // Check if we need a restart point
         if self.entries_since_restart >= self.restart_interval {
             self.restart_points.push(self.content_size as u16);
@@ -134,6 +142,9 @@ impl DataPageBuilder {
 
     /// Finish building and return the data page
     pub fn finish(mut self, page_id: PageId) -> DataPage {
+        tracing::debug!("DataPageBuilder::finish page_id={}, content_size={}, restart_points={}",
+                      page_id, self.content_size, self.restart_points.len());
+
         // Always add the first entry as a restart point
         if self.content_size > 0 && (self.restart_points.is_empty() || self.restart_points[0] != 0) {
             self.restart_points.insert(0, 0);

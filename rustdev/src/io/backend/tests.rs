@@ -224,7 +224,6 @@ mod backend_tests {
 
     /// Run all tests for a given backend
     async fn test_backend(backend_type: IoBackendType) -> Result<()> {
-        println!("Testing backend: {:?}", backend_type);
 
         let backend = IoBackendFactory::create_default(backend_type)?;
 
@@ -247,7 +246,6 @@ mod backend_tests {
         // Shutdown
         backend.shutdown().await?;
 
-        println!("Backend {:?} passed all tests!", backend_type);
         Ok(())
     }
 

@@ -112,8 +112,6 @@ impl ReadTask {
 
     /// Read implementation (following C++ Read exactly)
     pub async fn read(&self) -> Result<Option<(Value, u64, u64)>> {
-        println!("DEBUG: ReadTask::read key={}, table={:?}",
-            String::from_utf8_lossy(&self.key), self.table_id);
 
         // Following C++ line 17-18: FindRoot
         let root_id = {
@@ -125,7 +123,6 @@ impl ReadTask {
 
         // Following C++ line 19-22: Check if empty
         if root_id == MAX_PAGE_ID {
-            println!("DEBUG: Root is MAX_PAGE_ID, key not found");
             return Ok(None);
         }
 
@@ -139,8 +136,6 @@ impl ReadTask {
             &self.key
         ).await?;
 
-        println!("DEBUG: SeekIndex returned page_id={}", page_id);
-
         // Following C++ line 29: ToFilePage
         let file_page = mapping.to_file_page(page_id)?;
 
@@ -150,21 +145,12 @@ impl ReadTask {
         // Following C++ line 33: Create DataPageIter
         let mut iter = DataPageIterator::new(&data_page);
 
-        // Debug: List all keys in the page
-        println!("DEBUG: Listing all keys in page {}:", page_id);
-        let mut debug_iter = DataPageIterator::new(&data_page);
-        while let Some((key, _, _, _)) = debug_iter.next() {
-            println!("DEBUG:   - Key: {}", String::from_utf8_lossy(&key));
-        }
 
         // Following C++ line 34: Seek
-        println!("DEBUG: Seeking key: {}", String::from_utf8_lossy(&self.key));
         let found = iter.seek(&self.key);
-        println!("DEBUG: Seek result: found={}", found);
 
         // Following C++ line 35-38: Check if found and exact match
         if !found {
-            println!("DEBUG: Key not found in data page");
             return Ok(None);
         }
 
@@ -172,9 +158,6 @@ impl ReadTask {
         if let Some(iter_key) = iter.key() {
             // Use comparator to check if keys match
             if iter_key != self.key.as_ref() {
-                println!("DEBUG: Key mismatch: {} != {}",
-                    String::from_utf8_lossy(&iter_key),
-                    String::from_utf8_lossy(&self.key));
                 return Ok(None);
             }
         } else {

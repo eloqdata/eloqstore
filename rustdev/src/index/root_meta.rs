@@ -18,7 +18,7 @@ fn crc32(data: &[u8]) -> u64 {
 }
 
 /// COW (Copy-on-Write) root metadata for write transactions
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CowRootMeta {
     /// Root page ID of the index tree
     pub root_id: PageId,

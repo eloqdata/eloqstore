@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
     // Create configuration
     let mut options = KvOptions::default();
     options.num_threads = 1; // Single shard for testing
-    options.data_dirs = vec![PathBuf::from("/tmp/eloqstore_test")];
+    options.data_dirs = vec![PathBuf::from("/mnt/ramdisk/eloqstore_test")];
     options.data_page_size = 4096;
     options.data_append_mode = true;
     options.fd_limit = 1000;
@@ -67,9 +67,7 @@ async fn main() -> Result<()> {
         };
 
         println!("Writing key='{}', value='{}'", key_str, value_str);
-        println!("DEBUG: Calling batch_write...");
         let result = store.batch_write(write_req).await?;
-        println!("DEBUG: batch_write returned");
         println!("Write completed successfully!");
         assert!(result.success, "Write should succeed");
 
@@ -279,7 +277,7 @@ async fn main() -> Result<()> {
     println!("\n=== Restarting store to test persistence ===");
     let mut options2 = KvOptions::default();
     options2.num_threads = 1;
-    options2.data_dirs = vec![PathBuf::from("/tmp/eloqstore_test")];
+    options2.data_dirs = vec![PathBuf::from("/mnt/ramdisk/eloqstore_test")];
     options2.data_page_size = 4096;
     options2.data_append_mode = true;
     options2.fd_limit = 1000;

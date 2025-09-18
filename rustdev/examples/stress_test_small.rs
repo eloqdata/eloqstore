@@ -91,8 +91,8 @@ struct TestConfig {
 impl Default for TestConfig {
     fn default() -> Self {
         Self {
-            num_operations: 1_000,    // Reduced to test performance
-            num_keys: 100,            // Reduced to test performance
+            num_operations: 100_000,  // Reduced from 10M
+            num_keys: 10_000,         // Reduced from 1M
             min_key_size: 1,
             max_key_size: 50,         // Reduced from 100
             // Mix of small, medium, and large values

@@ -179,17 +179,30 @@ impl Shard {
                 Ok(manifest) => {
                     // Apply manifest to restore state
 
-                    // Restore page mappings
+                    // First restore roots with their COW mappers
+                    let mut roots_with_mappings = manifest.roots.clone();
+
+                    // Populate COW mappers with the saved mappings
+                    for (_table_id, root_meta) in roots_with_mappings.iter_mut() {
+                        if let Some(ref mut mapper) = root_meta.mapper {
+                            // Clear any existing mappings and rebuild from manifest
+                            for (page_id, file_page_id) in &manifest.mappings {
+                                mapper.update_mapping(*page_id, *file_page_id);
+                            }
+                        }
+                    }
+
+                    // Restore page mappings to shard's page_mapper
                     for (page_id, file_page_id) in &manifest.mappings {
                         self.page_mapper.update_mapping(*page_id, *file_page_id);
                     }
                     let num_mappings = manifest.mappings.len();
-                    let num_roots = manifest.roots.len();
+                    let num_roots = roots_with_mappings.len();
                     tracing::info!("Restored {} page mappings", num_mappings);
 
                     // Restore root metadata for each table
                     if let Some(index_mgr) = &self.index_manager {
-                        index_mgr.restore_roots(manifest.roots);
+                        index_mgr.restore_roots(roots_with_mappings);
                         tracing::info!("Restored {} root entries", num_roots);
                     }
 
@@ -629,18 +642,31 @@ impl Shard {
             .unwrap()
             .as_secs();
 
-        // Collect page mappings from PageMapper
-        let mappings = self.page_mapper.export_mappings();
-        for (page_id, file_page_id) in mappings {
-            manifest.mappings.insert(page_id, file_page_id);
-        }
-        tracing::debug!("Collected {} page mappings", manifest.mappings.len());
-
-        // Collect root metadata from index manager
+        // Collect root metadata from index manager (includes COW mappers)
         if let Some(index_mgr) = &self.index_manager {
             manifest.roots = index_mgr.export_roots();
             tracing::debug!("Collected {} root entries", manifest.roots.len());
+
+            // Extract all page mappings from COW metadata mappers
+            for (_table_id, root_meta) in &manifest.roots {
+                if let Some(ref mapper) = root_meta.mapper {
+                    // The mapper contains the page mappings for this table
+                    let cow_mappings = mapper.export_mappings();
+                    for (page_id, file_page_id) in cow_mappings {
+                        manifest.mappings.insert(page_id, file_page_id);
+                    }
+                }
+            }
         }
+
+        // Also collect any mappings from the shard's page_mapper (for non-COW operations)
+        let shard_mappings = self.page_mapper.export_mappings();
+        for (page_id, file_page_id) in shard_mappings {
+            // Only insert if not already present (COW mappings take precedence)
+            manifest.mappings.entry(page_id).or_insert(file_page_id);
+        }
+
+        tracing::debug!("Collected {} total page mappings", manifest.mappings.len());
 
         // Save the manifest
         ManifestFile::save_to_file(&manifest, &manifest_path).await?;

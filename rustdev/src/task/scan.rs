@@ -58,14 +58,16 @@ impl ScanIterator {
 
     /// Seek to a key position (following C++ Seek)
     pub async fn seek(&mut self, key: &Key, ttl: bool) -> Result<()> {
+
         // Find root metadata
         let root_id = {
             let meta = self.index_manager.find_root(&self.table_id)?;
-            if ttl {
+            let root = if ttl {
                 meta.ttl_root_id
             } else {
                 meta.root_id
-            }
+            };
+            root
         }; // meta dropped here
 
 
@@ -92,6 +94,7 @@ impl ScanIterator {
 
         // Seek within the page (following C++ line 41)
         if let Some(ref data_page) = self.data_page {
+
             // Create an iterator and seek to find the position
             let mut iter = DataPageIterator::new(data_page);
             let found = iter.seek(key);
@@ -111,7 +114,16 @@ impl ScanIterator {
             } else {
                 // No key >= target found, need to move to next page
                 // Following C++ line 42-44
-                self.next_internal().await?;
+                match self.next_internal().await {
+                    Ok(_) => {},
+                    Err(Error::Eof) => {
+                        // EOF is not an error during seek - it means no keys >= target exist
+                        // Clear the page to indicate we're at EOF
+                        self.data_page = None;
+                        self.current_position = None;
+                    }
+                    Err(e) => return Err(e),
+                }
             }
         }
 
@@ -125,9 +137,11 @@ impl ScanIterator {
 
     /// Internal next implementation
     async fn next_internal(&mut self) -> Result<()> {
+
         // Check if we can move to next position in current page
         if let Some(ref data_page) = self.data_page {
             if let Some(pos) = self.current_position {
+
                 // Try to advance position
                 let mut iter = DataPageIterator::new(data_page);
                 // Skip to current position
@@ -147,6 +161,7 @@ impl ScanIterator {
         // Need to move to next page
         if let Some(ref data_page) = self.data_page {
             let next_page_id = data_page.next_page_id();
+
             if next_page_id == MAX_PAGE_ID {
                 return Err(Error::Eof);
             }
@@ -162,6 +177,7 @@ impl ScanIterator {
 
     /// Load a data page
     async fn load_page(&mut self, page_id: PageId) -> Result<()> {
+
         if let Some(ref mapping) = self.mapping {
             let file_page_id = mapping.to_file_page(page_id)?;
 
@@ -325,6 +341,7 @@ impl ScanTask {
 
     /// Execute the scan
     pub async fn scan(&self) -> Result<Vec<(Key, Value)>> {
+
         let mut results = Vec::new();
 
         // Create iterator
@@ -343,6 +360,7 @@ impl ScanTask {
         // Collect results up to limit
         // First check if we're already positioned at a valid entry after seek
         if let (Some(key), Some(value)) = (iter.key(), iter.value()) {
+
             // Check if it's within range
             if let Some(ref end_key) = self.end_key {
                 if &key < end_key {
@@ -354,16 +372,27 @@ impl ScanTask {
         }
 
         // Then continue iterating
-        while results.len() < self.limit && iter.next().await.is_ok() {
-            if let (Some(key), Some(value)) = (iter.key(), iter.value()) {
-                // Check if we've reached the end key
-                if let Some(ref end_key) = self.end_key {
-                    if &key >= end_key {
+        while results.len() < self.limit {
+
+            match iter.next().await {
+                Ok(()) => {
+                    if let (Some(key), Some(value)) = (iter.key(), iter.value()) {
+
+                        // Check if we've reached the end key
+                        if let Some(ref end_key) = self.end_key {
+                            if &key >= end_key {
+                                break;
+                            }
+                        }
+
+                        results.push((key, value));
+                    } else {
                         break;
                     }
                 }
-
-                results.push((key, value));
+                Err(_) => {
+                    break;
+                }
             }
         }
 

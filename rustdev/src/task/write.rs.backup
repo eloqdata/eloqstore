@@ -301,44 +301,35 @@ impl BatchWriteTask {
 
         // If no changes, just return
         if stack_entry.changes.is_empty() {
-            let page_id = stack_entry.idx_page.as_ref().map(|p| p.get_page_id());
             tracing::debug!("pop_stack: no changes, returning existing page_id");
             // Unpin the index page if we have one
             if let Some(ref idx_page) = stack_entry.idx_page {
                 idx_page.unpin();
             }
-            return Ok(page_id);
+            return Ok(stack_entry.idx_page.map(|p| p.get_page_id()));
         }
 
         tracing::debug!("pop_stack: {} changes to process", stack_entry.changes.len());
+
+        // Reset index page builder for merging
+        self.idx_page_builder.reset();
 
         let changes = stack_entry.changes;
         let stack_page = stack_entry.idx_page.as_ref();
         let is_leaf_index = stack_entry.is_leaf_index;
 
-        // Reset index page builder for merging
-        self.idx_page_builder.reset();
-
-        // Add leftmost pointer if we have a base page
-        if let Some(page) = stack_page {
-            let iter = crate::index::index_page_iter::IndexPageIter::new(page.page_ptr(), stack_entry.options.comparator());
-            // The first entry is the leftmost pointer with empty key
-            self.idx_page_builder.add(b"", iter.get_page_id(), is_leaf_index);
-        }
-
         // Initialize base page iterator if we have a page
         let mut base_page_iter = if let Some(page) = stack_page {
-            let mut iter = crate::index::index_page_iter::IndexPageIter::new(page.page_ptr(), stack_entry.options.comparator());
-            // The iterator starts at the leftmost pointer which has empty key
-            // We need to advance to the first real entry
-            let first_valid = iter.next();
-            Some(iter)
+            Some(crate::index::index_page_iter::IndexPageIter::new(page.page_ptr(), stack_entry.options.comparator()))
         } else {
             None
         };
 
-        // Check if we have a valid entry
-        let mut is_base_iter_valid = base_page_iter.is_some();
+        // Advance iterator to first valid entry
+        let mut is_base_iter_valid = false;
+        if let Some(ref mut iter) = base_page_iter {
+            is_base_iter_valid = iter.next();
+        }
 
         // Keep track of previous page for redistribution
         let mut prev_page_id = stack_page.map_or(MAX_PAGE_ID, |p| p.get_page_id());
@@ -358,36 +349,9 @@ impl BatchWriteTask {
 
         let mut curr_page_key = page_key.clone();
 
-        // Check if base iterator has real entries (beyond leftmost pointer)
-        let base_has_entries = if let Some(iter) = &base_page_iter {
-            // Check if we found a valid first entry (which would be after the leftmost ptr)
-            iter.key().is_some() && !iter.key().unwrap().is_empty()
-        } else {
-            false
-        };
-
-        // Special case: if we have exactly one change and the base page has no real entries
-        // (only leftmost pointer), then we should replace the leftmost pointer
-        let single_change_replaces_all = changes.len() == 1 && !base_has_entries;
-
-
         // Merge changes with existing entries
         let mut change_iter = changes.into_iter();
         let mut curr_change = change_iter.next();
-
-        // Handle special case: single change replaces entire index
-        if single_change_replaces_all {
-            if let Some(change) = &curr_change {
-                if change.op == WriteOp::Upsert {
-                    // Reset builder and set new leftmost pointer
-                    self.idx_page_builder.reset();
-                    self.idx_page_builder.add(b"", change.page_id, is_leaf_index);
-                    // Skip normal merge processing
-                    curr_change = None;
-                    is_base_iter_valid = false;
-                }
-            }
-        }
 
         // Process both iterators in merge order
         while is_base_iter_valid && curr_change.is_some() {
@@ -449,22 +413,13 @@ impl BatchWriteTask {
 
                     prev_page_key = curr_page_key.clone();
                     prev_page_data = Some(self.idx_page_builder.finish().to_vec());
-                    // COW: Always allocate new page for index pages
-                    let old_prev = prev_page_id;
                     prev_page_id = self.page_mapper.allocate_page()?;
-                    if old_prev != MAX_PAGE_ID {
-                        // TODO: Add to GC list instead of immediate free
-                        // self.free_page(old_prev);
-                    }
 
                     curr_page_key = String::from_utf8_lossy(&new_key).to_string();
                     self.idx_page_builder.reset();
 
-                    // Add the entry that failed to the new page (must succeed)
-                    tracing::debug!("Adding entry to new index page after split: key_len={}, page_id={}, is_leaf={}",
-                                  new_key.len(), new_page_id, is_leaf_index);
-                    let success = self.idx_page_builder.add(&new_key, new_page_id, is_leaf_index);
-                    assert!(success, "Failed to add entry to empty index page");
+                    // Add leftmost pointer without key
+                    self.idx_page_builder.add(b"", new_page_id, is_leaf_index);
                 }
             }
 
@@ -484,15 +439,6 @@ impl BatchWriteTask {
             if let Some(ref base_iter) = base_page_iter {
                 // Skip entries with no key (shouldn't happen in valid index)
                 if let Some(new_key) = base_iter.key() {
-                    // Skip empty keys (leftmost pointer was already added)
-                    if new_key.is_empty() {
-                        tracing::debug!("Skipping empty key in base iterator");
-                        if let Some(ref mut iter) = base_page_iter {
-                            is_base_iter_valid = iter.next();
-                        }
-                        continue;
-                    }
-
                     let new_page_id = base_iter.get_page_id();
 
                     // Check if page is full
@@ -510,11 +456,8 @@ impl BatchWriteTask {
                         curr_page_key = String::from_utf8_lossy(new_key).to_string();
                         self.idx_page_builder.reset();
 
-                        // Add the entry that failed to the new page (must succeed)
-                        tracing::debug!("Adding base entry to new index page after split: key_len={}, page_id={}, is_leaf={}",
-                                      new_key.len(), new_page_id, is_leaf_index);
-                        let success = self.idx_page_builder.add(new_key, new_page_id, is_leaf_index);
-                        assert!(success, "Failed to add entry to empty index page");
+                        // Add leftmost pointer without key
+                        self.idx_page_builder.add(b"", new_page_id, is_leaf_index);
                     }
                 }
 
@@ -530,7 +473,6 @@ impl BatchWriteTask {
                 let new_key = change.key.as_ref();
                 let new_page_id = change.page_id;
 
-                // Add the actual key entry (not for leftmost pointer)
                 // Check if page is full
                 if !self.idx_page_builder.add(new_key, new_page_id, is_leaf_index) {
                     // Page is full, finish current page
@@ -541,13 +483,7 @@ impl BatchWriteTask {
 
                     prev_page_key = curr_page_key.clone();
                     prev_page_data = Some(self.idx_page_builder.finish().to_vec());
-                    // COW: Always allocate new page for index pages
-                    let old_prev = prev_page_id;
                     prev_page_id = self.page_mapper.allocate_page()?;
-                    if old_prev != MAX_PAGE_ID {
-                        // TODO: Add to GC list instead of immediate free
-                        // self.free_page(old_prev);
-                    }
 
                     curr_page_key = String::from_utf8_lossy(new_key).to_string();
                     self.idx_page_builder.reset();
@@ -565,38 +501,30 @@ impl BatchWriteTask {
                 let new_key = &change.key;
                 let new_page_id = change.page_id;
 
-                // For the first entry in an empty index page, just use it as leftmost pointer
-                // We don't need separate key entries when there's only one data page
+                // For the first entry in an empty index page, add leftmost pointer
                 if self.idx_page_builder.is_empty() {
                     tracing::debug!("Adding leftmost pointer for page_id={}", new_page_id);
                     self.idx_page_builder.add(b"", new_page_id, is_leaf_index);
-                    // For single-page case, we're done - no need to add key entry
-                } else {
-                    // Add the actual key entry for multi-page case
-                    // Check if page is full
-                    if !self.idx_page_builder.add(new_key, new_page_id, is_leaf_index) {
-                        // Page is full, finish current page
-                        if let Some(page_data) = prev_page_data.take() {
-                            // Flush previous page
-                            self.flush_index_page(prev_page_id, page_data, prev_page_key.as_bytes(), true).await?;
-                        }
+                    // Don't add the actual entry yet - it will be added below
+                }
 
-                        prev_page_key = curr_page_key.clone();
-                        prev_page_data = Some(self.idx_page_builder.finish().to_vec());
-                        // COW: Always allocate new page for index pages
-                        let old_prev = prev_page_id;
-                        prev_page_id = self.page_mapper.allocate_page()?;
-                        if old_prev != MAX_PAGE_ID {
-                            // TODO: Add to GC list instead of immediate free
-                            // self.free_page(old_prev);
-                        }
-
-                        curr_page_key = String::from_utf8_lossy(new_key).to_string();
-                        self.idx_page_builder.reset();
-
-                        // Add leftmost pointer without key
-                        self.idx_page_builder.add(b"", new_page_id, is_leaf_index);
+                // Check if page is full
+                if !self.idx_page_builder.add(new_key, new_page_id, is_leaf_index) {
+                    // Page is full, finish current page
+                    if let Some(page_data) = prev_page_data.take() {
+                        // Flush previous page
+                        self.flush_index_page(prev_page_id, page_data, prev_page_key.as_bytes(), true).await?;
                     }
+
+                    prev_page_key = curr_page_key.clone();
+                    prev_page_data = Some(self.idx_page_builder.finish().to_vec());
+                    prev_page_id = self.page_mapper.allocate_page()?;
+
+                    curr_page_key = String::from_utf8_lossy(new_key).to_string();
+                    self.idx_page_builder.reset();
+
+                    // Add leftmost pointer without key
+                    self.idx_page_builder.add(b"", new_page_id, is_leaf_index);
                 }
             }
             curr_change = change_iter.next();
@@ -638,30 +566,19 @@ impl BatchWriteTask {
                     self.flush_index_page(final_page_id, final_page, curr_page_key.as_bytes(), false).await?;
                     new_root_id = Some(final_page_id);
                 } else {
-                    // This is the only page - COW: Always allocate new page for modified pages
-                    let old_page = prev_page_id;
-                    prev_page_id = self.page_mapper.allocate_page()?;
-                    tracing::debug!("pop_stack: allocated new page_id={} (was {})", prev_page_id, old_page);
-
-                    // Mark old page for freeing (but don't free immediately - GC will handle it)
-                    if old_page != MAX_PAGE_ID {
-                        // TODO: Add to garbage collection list instead of immediate free
-                        // For now, don't free to preserve data
+                    // This is the only page
+                    if prev_page_id == MAX_PAGE_ID {
+                        prev_page_id = self.page_mapper.allocate_page()?;
+                        tracing::debug!("pop_stack: allocated new page_id={} for final page", prev_page_id);
                     }
-
+                    tracing::debug!("pop_stack: flushing final page_id={}", prev_page_id);
                     self.flush_index_page(prev_page_id, final_page, curr_page_key.as_bytes(), false).await?;
                     new_root_id = Some(prev_page_id);
                 }
             } else if let Some(prev_data) = prev_page_data {
-                // COW: Always allocate a new page for modified index pages
-                let new_page_id = self.page_mapper.allocate_page()?;
-                // Mark for GC instead of immediate free
-                if prev_page_id != MAX_PAGE_ID {
-                    // TODO: Add to GC list
-                    // self.free_page(prev_page_id);
-                }
-                self.flush_index_page(new_page_id, prev_data, prev_page_key.as_bytes(), false).await?;
-                new_root_id = Some(new_page_id);
+                // Just flush the previous page
+                self.flush_index_page(prev_page_id, prev_data, prev_page_key.as_bytes(), false).await?;
+                new_root_id = Some(prev_page_id);
             }
         }
 
@@ -766,10 +683,7 @@ impl BatchWriteTask {
         } else {
             tracing::debug!("shift_leaf_link: no page in leaf_triple[0]");
         }
-        // Move element 1 to element 0
         self.leaf_triple[0] = self.leaf_triple[1].take();
-        // Move element 2 to element 1 (for future use if needed)
-        self.leaf_triple[1] = self.leaf_triple[2].take();
         Ok(())
     }
 
@@ -816,17 +730,21 @@ impl BatchWriteTask {
     /// Load data page
     async fn load_data_page(&self, page_id: PageId) -> Result<DataPage> {
         // Get mapping and load from disk
-        // Use our page_mapper which should have been restored from COW metadata
-        let snapshot = self.page_mapper.snapshot();
-
+        // CRITICAL: Use the snapshot from COW metadata, not our empty page_mapper!
+        let snapshot = if let Some(ref cow_meta) = self.cow_meta {
+            if let Some(ref mapper) = cow_meta.mapper {
+                mapper.snapshot()
+            } else {
+                self.page_mapper.snapshot()
+            }
+        } else {
+            self.page_mapper.snapshot()
+        };
         if let Ok(file_page_id) = snapshot.to_file_page(page_id) {
             let page_data = self.file_manager
                 .read_page(file_page_id.file_id() as u64, file_page_id.page_offset())
                 .await?;
-            let data_page = DataPage::from_page(page_id, page_data);
-
-
-            Ok(data_page)
+            Ok(DataPage::from_page(page_id, page_data))
         } else {
             // Create new page if not found
             Ok(DataPage::new(page_id, 4096))
@@ -894,28 +812,8 @@ impl BatchWriteTask {
             }
         }
 
-        // 2. Sort entries before applying (following C++ line 1660: std::sort(data_batch.begin(), data_batch.end()))
-        let comparator = self.index_manager.get_comparator();
-        self.entries.sort_by(|a, b| {
-            use std::cmp::Ordering;
-            match comparator.compare(&a.key, &b.key) {
-                x if x < 0 => Ordering::Less,
-                x if x > 0 => Ordering::Greater,
-                _ => Ordering::Equal,
-            }
-        });
-        tracing::info!("Sorted {} entries before applying", self.entries.len());
-
-        // Debug: Log first few sorted entries
-        for (i, entry) in self.entries.iter().take(5).enumerate() {
-            tracing::info!("  Sorted entry[{}]: key='{}', op={:?}",
-                          i, String::from_utf8_lossy(&entry.key), entry.op);
-        }
-
-        // 3. Apply main batch
+        // 2. Apply main batch
         let root_id = self.cow_meta.as_ref().unwrap().root_id;
-        tracing::warn!("BatchWriteTask::apply - Starting with root_id={}, processing {} entries",
-                      root_id, self.entries.len());
         self.apply_batch(root_id, true).await?;
 
         // 3. Apply TTL batch if any
@@ -1054,10 +952,15 @@ impl BatchWriteTask {
 
         // Update COW metadata with new root if changed
         if let Some(new_root) = final_root_id {
-            tracing::warn!("Updating COW metadata with new root={}", new_root);
+            tracing::debug!("Updating COW metadata with new root={}", new_root);
             if let Some(ref mut meta) = self.cow_meta {
-                tracing::warn!("BatchWriteTask: Setting root_id from {} to {}", meta.root_id, new_root);
+                tracing::info!("BatchWriteTask: Setting root_id from {} to {}", meta.root_id, new_root);
                 meta.root_id = new_root;
+            }
+        } else {
+            tracing::debug!("No new root from pop_stack, keeping existing root");
+            if let Some(ref meta) = self.cow_meta {
+                tracing::info!("BatchWriteTask: Keeping existing root_id={}", meta.root_id);
             }
         }
 
@@ -1079,8 +982,6 @@ impl BatchWriteTask {
 
         // Load from disk
         let page = self.load_data_page(page_id).await?;
-
-
         self.applying_page = Some(page);
 
         // Shift link if needed
@@ -1102,105 +1003,80 @@ impl BatchWriteTask {
         // Get comparator
         let comparator = self.index_manager.get_comparator();
 
+        //     *cidx, self.entries.len());
+        tracing::info!("apply_one_page: starting at cidx={}, total entries={}",
+            *cidx, self.entries.len());
+        self.data_page_builder.reset();
+
+        // Get the comparator
+        let comparator = self.index_manager.get_comparator();
+
+        // Collect TTL updates separately to avoid borrow issues
+        let mut ttl_updates = Vec::new();
+
+        // Collect all entries that will go into the page
+        let mut page_entries: Vec<PageEntry> = Vec::new();
+
         // Initialize base page iterator if we have an applying page
-        // We need to work around the borrow checker here
-        let base_page_id = self.applying_page.as_ref().map(|p| p.page_id()).unwrap_or(PageId::MAX);
+        let mut base_iter = self.applying_page.as_ref().map(|page| DataPageIterator::new(page));
+        let mut is_base_valid = base_iter.as_ref().map_or(false, |_| true);
 
-        // We need to handle the applying page carefully to avoid lifetime issues
-        // The issue is that DataPageIterator borrows the page, so we can't move it
-        // Solution: Process the page entries into a vector first
-        let mut base_entries = Vec::new();
-        if let Some(ref page) = self.applying_page {
-            let mut temp_iter = DataPageIterator::new(page);
-            while let Some((k, v, ts, exp)) = temp_iter.next() {
-                tracing::info!("Loading base entry: key='{}'", String::from_utf8_lossy(&k));
-                base_entries.push((k, v, ts, exp));
-            }
-            tracing::info!("Loaded {} entries from base page", base_entries.len());
-        }
-        let mut base_idx = 0;
-        let has_base = !base_entries.is_empty();
-
-        // Get the page key for index entry
-        let page_key = if let Some(entry) = self.stack.last() {
-            Bytes::copy_from_slice(entry.idx_page_iter.key().unwrap_or(&[]))
-        } else {
-            Bytes::new()
-        };
-        let mut curr_page_key = page_key.clone();
-        let mut prev_key = Bytes::new();
-
-        // Initialize page_id - for COW, we always allocate new pages when modifying
-        // We only track the old page_id to know what to free later
-        let old_page_id = if has_base {
-            Some(base_page_id)
-        } else {
-            None
-        };
-        // Always start with MAX to force new allocation
-        let mut page_id = PageId::MAX;
-
-        // Process entries one by one, following C++ lines 476+
+        // Process entries, merging with existing data
+        let start_cidx = *cidx;
         let change_end = self.entries.len();
-        let mut entries_added = 0;
 
-        tracing::info!("Starting merge: base_entries={}, change_entries={} (from cidx={})",
-                     base_entries.len(), change_end - *cidx, *cidx);
+        // Build a set of keys being deleted for quick lookup
+        let mut deleted_keys = std::collections::HashSet::new();
+        for i in *cidx..change_end {
+            if matches!(self.entries[i].op, WriteOp::Delete) {
+                deleted_keys.insert(self.entries[i].key.clone());
+            }
+        }
 
-        while base_idx < base_entries.len() || *cidx < change_end {
+        tracing::debug!("apply_one_page loop starting: is_base_valid={}, cidx={}, change_end={}, deleted_keys={}",
+                        is_base_valid, *cidx, change_end, deleted_keys.len());
+
+        let mut loop_iterations = 0;
+        while is_base_valid || *cidx < change_end {
+            loop_iterations += 1;
+            //     loop_iterations, *cidx, is_base_valid, change_end);
+            if loop_iterations > 1000 {
+                tracing::error!("apply_one_page: Infinite loop detected! is_base_valid={}, cidx={}, change_end={}",
+                               is_base_valid, *cidx, change_end);
+                return Err(Error::InvalidState("Infinite loop in apply_one_page".into()));
+            }
+
             let mut should_add = false;
             let mut key_to_add = Bytes::new();
             let mut val_to_add = Bytes::new();
             let mut ts_to_add = 0u64;
             let mut expire_to_add = 0u64;
-            let mut is_overflow = false;
             let mut advance_base = false;
             let mut advance_change = false;
 
-            // Merge logic - compare base and change entries
-            if base_idx < base_entries.len() && *cidx < change_end {
-                let (ref base_key, _, _, _) = base_entries[base_idx];
-                let change_entry = &self.entries[*cidx];
-                let cmp = comparator.compare(base_key, &change_entry.key);
-
-                if cmp < 0 {
-                    // Base key comes first
-                    let (ref k, ref v, ts, exp) = base_entries[base_idx];
-                    key_to_add = k.clone();
-                    val_to_add = v.clone();
-                    ts_to_add = ts;
-                    expire_to_add = exp.unwrap_or(0);
-                    is_overflow = false; // TODO: track overflow flag properly
-                    should_add = true;
-                    advance_base = true;
-                } else if cmp == 0 {
-                    // Same key - apply change
-                    advance_base = true;
-                    advance_change = true;
-
-                    // Get base entry values
-                    let (_, ref base_val, base_ts, base_exp) = base_entries[base_idx];
-                    // Set key from base since we're deleting/updating existing key
-                    key_to_add = base_key.clone();
-
-                    match change_entry.op {
-                        WriteOp::Delete => {
-                            // Delete - don't add
-                            should_add = false;
-                        }
-                        WriteOp::Upsert => {
-                            // Update with new value
-                            // key_to_add already set from base
-                            val_to_add = change_entry.value.clone();
-                            ts_to_add = change_entry.timestamp;
-                            expire_to_add = change_entry.expire_ts;
-                            should_add = true;
-                        }
+            // Compare base and change entries
+            //     loop_iterations, is_base_valid, *cidx);
+            if is_base_valid && *cidx < change_end {
+                let base_key = if let Some(ref iter) = base_iter {
+                    if let Some(key) = iter.key() {
+                        key
+                    } else {
+                        // Base iterator has no key, mark as invalid
+                        is_base_valid = false;
+                        Bytes::new()
                     }
                 } else {
-                    // Change key comes first
+                    // Base iterator doesn't exist
+                    is_base_valid = false;
+                    Bytes::new()
+                };
+
+                if !is_base_valid {
+                    // Base is invalid, only process change
+                    let change_entry = &self.entries[*cidx];
                     advance_change = true;
 
+                    // Check operation type - don't add if it's a delete
                     match change_entry.op {
                         WriteOp::Delete => {
                             // Deleting non-existent key - skip
@@ -1214,132 +1090,314 @@ impl BatchWriteTask {
                             should_add = true;
                         }
                     }
+                } else {
+                    //     String::from_utf8_lossy(&base_key),
+                    //     String::from_utf8_lossy(&self.entries[*cidx].key),
+                    //     *cidx);
+                    let change_entry = &self.entries[*cidx];
+                    let cmp_result = comparator.compare(&base_key, &change_entry.key);
+
+                    if cmp_result < 0 {
+                    // Base key comes first - check if it's being deleted
+                    if let Some(ref iter) = base_iter {
+                        let base_key_bytes = iter.key().unwrap();
+
+                        // Check if this key is being deleted by a later change
+                        if deleted_keys.contains(&base_key_bytes) {
+                            // Skip this entry, it will be deleted
+                            should_add = false;
+                        } else {
+                            key_to_add = base_key_bytes;
+                            val_to_add = iter.value().unwrap_or(Bytes::new());
+                            ts_to_add = iter.timestamp();
+                            expire_to_add = iter.expire_ts().unwrap_or(0);
+                            should_add = true;
+                        }
+                        advance_base = true;
+                    }
+                } else if cmp_result == 0 {
+                    // Same key - update/delete
+                    advance_base = true;
+                    advance_change = true;
+
+                    if change_entry.timestamp >= base_iter.as_ref().unwrap().timestamp() {
+                        // Change is newer
+                        match change_entry.op {
+                            WriteOp::Delete => {
+                                // Delete - don't add
+                                if update_ttl && expire_to_add > 0 {
+                                    ttl_updates.push((expire_to_add, base_key.clone(), WriteOp::Delete));
+                                }
+                            }
+                            WriteOp::Upsert => {
+                                // Update
+                                key_to_add = change_entry.key.clone();
+                                val_to_add = change_entry.value.clone();
+                                ts_to_add = change_entry.timestamp;
+                                expire_to_add = change_entry.expire_ts;
+                                should_add = true;
+
+                                if update_ttl {
+                                    let base_expire = base_iter.as_ref().unwrap().expire_ts().unwrap_or(0);
+                                    if base_expire != expire_to_add {
+                                        if base_expire > 0 {
+                                            ttl_updates.push((base_expire, base_key.clone(), WriteOp::Delete));
+                                        }
+                                        if expire_to_add > 0 {
+                                            ttl_updates.push((expire_to_add, key_to_add.clone(), WriteOp::Upsert));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Base is newer - keep it
+                        if let Some(ref iter) = base_iter {
+                            key_to_add = iter.key().unwrap();
+                            val_to_add = iter.value().unwrap_or(Bytes::new());
+                            ts_to_add = iter.timestamp();
+                            expire_to_add = iter.expire_ts().unwrap_or(0);
+                            should_add = true;
+                        }
+                    }
+                } else {
+                    // Change key comes first - insert
+                    advance_change = true;
+                    match change_entry.op {
+                        WriteOp::Delete => {
+                            // Deleting non-existent key - skip
+                        }
+                        WriteOp::Upsert => {
+                            key_to_add = change_entry.key.clone();
+                            val_to_add = change_entry.value.clone();
+                            ts_to_add = change_entry.timestamp;
+                            expire_to_add = change_entry.expire_ts;
+                            should_add = true;
+
+                            if update_ttl && expire_to_add > 0 {
+                                ttl_updates.push((expire_to_add, key_to_add.clone(), WriteOp::Upsert));
+                            }
+                        }
+                    }
                 }
-            } else if base_idx < base_entries.len() {
+                }  // Close the else block from line 1005
+            } else if is_base_valid {
                 // Only base entries left
-                let (ref k, ref v, ts, exp) = base_entries[base_idx];
-                key_to_add = k.clone();
-                val_to_add = v.clone();
-                ts_to_add = ts;
-                expire_to_add = exp.unwrap_or(0);
-                is_overflow = false; // TODO: track overflow flag properly
-                should_add = true;
-                advance_base = true;
+                if let Some(ref iter) = base_iter {
+                    if let Some(key) = iter.key() {
+                        key_to_add = key;
+                        val_to_add = iter.value().unwrap_or(Bytes::new());
+                        ts_to_add = iter.timestamp();
+                        expire_to_add = iter.expire_ts().unwrap_or(0);
+                        should_add = true;
+                        advance_base = true;
+                    } else {
+                        // Iterator has no valid key, skip
+                        advance_base = true;
+                    }
+                }
             } else if *cidx < change_end {
                 // Only change entries left
+                //     *cidx, String::from_utf8_lossy(&self.entries[*cidx].key));
                 let change_entry = &self.entries[*cidx];
                 advance_change = true;
 
                 match change_entry.op {
                     WriteOp::Delete => {
                         // Deleting non-existent key - skip
-                        should_add = false;
                     }
                     WriteOp::Upsert => {
-                        key_to_add = change_entry.key.clone();
-                        val_to_add = change_entry.value.clone();
-                        ts_to_add = change_entry.timestamp;
-                        expire_to_add = change_entry.expire_ts;
-                        should_add = true;
+                        // Check if expired
+                        if change_entry.expire_ts != 0 && change_entry.expire_ts <= now_ms {
+                            // Expired - skip
+                        } else {
+                            key_to_add = change_entry.key.clone();
+                            val_to_add = change_entry.value.clone();
+                            ts_to_add = change_entry.timestamp;
+                            expire_to_add = change_entry.expire_ts;
+                            should_add = true;
+
+                            if update_ttl && expire_to_add > 0 {
+                                ttl_updates.push((expire_to_add, key_to_add.clone(), WriteOp::Upsert));
+                            }
+                        }
                     }
                 }
+            } else {
+                // No more entries
+                break;
             }
 
-            // Add the entry if needed - following C++ add_to_page lambda
+            // Collect entry if needed (don't add to builder yet)
             if should_add {
-                // Check for expired entries
-                if expire_to_add != 0 && expire_to_add <= now_ms {
-                    // Skip expired entries
-                    if update_ttl {
-                        self.update_ttl(expire_to_add, &key_to_add, WriteOp::Delete);
-                    }
+                tracing::debug!("Collecting key={} for sorting",
+                    String::from_utf8_lossy(&key_to_add));
+
+                // For overflow estimation, use pointer size not actual value size
+                let size_for_estimate = if self.is_overflow_kv(&key_to_add, &val_to_add) {
+                    // Overflow values are stored as pointers (typically 4-8 bytes per page pointer)
+                    // Estimate based on number of pages needed
+                    let num_pages = (val_to_add.len() + 3900) / 3900; // ~3900 bytes per overflow page
+                    num_pages * 4  // 4 bytes per page pointer
                 } else {
-                    // Handle overflow if needed
-                    let (val_for_page, is_overflow_entry) = if !is_overflow && self.is_overflow_kv(&key_to_add, &val_to_add) {
-                        // Write overflow value
-                        self.write_overflow_value(&val_to_add).await?;
-                        (Bytes::copy_from_slice(&self.overflow_ptrs), true)
-                    } else {
-                        (val_to_add.clone(), is_overflow)
-                    };
+                    val_to_add.len()
+                };
 
-                    // Try to add to the current page
-                    entries_added += 1;
-                    tracing::info!("Adding entry #{} to data page: key='{}', val_len={}, ts={}",
-                                  entries_added, String::from_utf8_lossy(&key_to_add), val_for_page.len(), ts_to_add);
-                    let added = self.data_page_builder.add(
-                        &key_to_add,
-                        &val_for_page,
-                        ts_to_add,
-                        if expire_to_add > 0 { Some(expire_to_add) } else { None },
-                        is_overflow_entry,
-                    );
+                page_entries.push(PageEntry {
+                    key: key_to_add.clone(),
+                    value: val_to_add.clone(),
+                    timestamp: ts_to_add,
+                    expire_ts: expire_to_add,
+                });
 
-                    if !added {
-                        // Page is full - following C++ lines 458-469
-                        // Finish current page
-                        self.finish_data_page(curr_page_key, page_id).await?;
+                // Check if we're approaching page size limit
+                let estimated_size = page_entries.iter()
+                    .map(|e| {
+                        let val_size = if self.is_overflow_kv(&e.key, &e.value) {
+                            // For overflow entries, count pointer size not value size
+                            let num_pages = (e.value.len() + 3900) / 3900;
+                            num_pages * 4
+                        } else {
+                            e.value.len()
+                        };
+                        8 + e.key.len() + val_size + 16 // Rough estimate with encoding overhead
+                    })
+                    .sum::<usize>();
 
-                        // Start new page
-                        // Use FindShortestSeparator like C++ does
-                        let mut separator = prev_key.to_vec();
-                        comparator.find_shortest_separator(&mut separator, &key_to_add);
-                        curr_page_key = Bytes::from(separator);
-                        self.data_page_builder.reset();
-
-                        // Add to new page (must succeed)
-                        let success = self.data_page_builder.add(
-                            &key_to_add,
-                            &val_for_page,
-                            ts_to_add,
-                            if expire_to_add > 0 { Some(expire_to_add) } else { None },
-                            is_overflow_entry,
-                        );
-                        assert!(success, "Failed to add entry to empty page");
-
-                        // Set page_id to MAX for new page allocation
-                        page_id = PageId::MAX;
-                    }
-
-                    prev_key = key_to_add.clone();
-
-                    // Update TTL if needed
-                    if update_ttl && expire_to_add > 0 {
-                        self.update_ttl(expire_to_add, &key_to_add, WriteOp::Upsert);
-                    }
+                if estimated_size > 3500 { // Leave some buffer
+                    // We have enough entries, stop collecting
+                    break;
                 }
             }
 
             // Advance iterators
+            tracing::debug!("Loop iteration {}: advance_base={}, advance_change={}, cidx={}, is_base_valid={}",
+                          loop_iterations, advance_base, advance_change, *cidx, is_base_valid);
+
             if advance_base {
-                base_idx += 1;
+                if let Some(ref mut iter) = base_iter {
+                    if iter.next().is_none() {
+                        is_base_valid = false;
+                        tracing::debug!("Base iterator exhausted, is_base_valid now false");
+                    }
+                    // else {
+                    //         iter.key().map(|k| String::from_utf8_lossy(&k).to_string()));
+                    // }
+                }
             }
             if advance_change {
                 *cidx += 1;
+                //     *cidx, advance_base, should_add);
+                tracing::debug!("Advanced cidx to {}", *cidx);
             }
 
-            // Safety check
+            // Safety check - at least one must advance
             if !advance_base && !advance_change {
-                return Err(Error::InvalidState("No progress in merge loop".into()));
+                tracing::error!("Neither base nor change advanced! Breaking infinite loop");
+                return Err(Error::InvalidState("No progress in apply_one_page loop".into()));
             }
         }
 
-        // Finish the last page if there's content
+        // Sort all collected entries by key
+        page_entries.sort_by(|a, b| a.key.as_ref().cmp(b.key.as_ref()));
+
+        // Log sorted entries for debugging
+        tracing::debug!("Sorted {} entries for page", page_entries.len());
+
+        // Add sorted entries to the page builder
+        let mut any_added = false;
+        let mut last_added_index = 0;
+        for (i, entry) in page_entries.iter().enumerate() {
+            // Check if value would overflow
+            let (value_to_add, is_overflow) = if self.is_overflow_kv(&entry.key, &entry.value) {
+                tracing::debug!("Detected overflow for key={}, value_size={}",
+                    String::from_utf8_lossy(&entry.key), entry.value.len());
+                // Write overflow value
+                self.write_overflow_value(&entry.value).await?;
+                tracing::debug!("Wrote overflow value, ptrs_size={}", self.overflow_ptrs.len());
+                // Use overflow pointers as the value
+                (Bytes::copy_from_slice(&self.overflow_ptrs), true)
+            } else {
+                (entry.value.clone(), false)
+            };
+
+            let added = self.data_page_builder.add(
+                &entry.key,
+                &value_to_add,
+                entry.timestamp,
+                if entry.expire_ts > 0 { Some(entry.expire_ts) } else { None },
+                is_overflow,
+            );
+
+            tracing::debug!("Added key={} to page builder, added={}, is_overflow={}",
+                String::from_utf8_lossy(&entry.key), added, is_overflow);
+
+            if added {
+                any_added = true;
+                last_added_index = i;
+            } else {
+                tracing::debug!("Page full while adding key={}, need to handle remaining {} entries",
+                    String::from_utf8_lossy(&entry.key), page_entries.len() - i);
+                // Page is full - we need to handle remaining entries
+                // Adjust cidx to point to the first unprocessed entry
+                // Find the corresponding entry in self.entries
+                for j in start_cidx..*cidx {
+                    if self.entries[j].key == entry.key {
+                        *cidx = j;  // Reset to the unprocessed entry
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+
+        // Ensure we processed at least one entry
+        if !any_added && !page_entries.is_empty() {
+            // This shouldn't happen - even overflow values should fit as pointers
+            return Err(Error::InvalidState("Could not add any entries to page".into()));
+        }
+
+        // Check if we couldn't add any entries from the change batch
+        // This happens when the page is already full with existing entries
+        if *cidx == start_cidx && *cidx < self.entries.len() && !page_entries.is_empty() {
+            // The page is full with existing entries but we have new entries to process
+            // This shouldn't happen if we're properly handling page splits
+            // For now, just log a warning and continue
+            tracing::warn!("Page full, couldn't add entry at cidx={}, this may indicate a page split is needed", *cidx);
+        }
+
+        // Build and write the page if there's content
         if !self.data_page_builder.is_empty() {
-            tracing::info!("Finishing final data page with {} entries, key='{}', page_id={}",
-                         entries_added, String::from_utf8_lossy(&curr_page_key), page_id);
-            self.finish_data_page(curr_page_key, page_id).await?;
+            tracing::info!("Finishing page with data in builder");
+
+            // Get the first key for this page - use the first sorted entry
+            let page_key = page_entries.first()
+                .map(|e| e.key.clone())
+                .unwrap_or_else(|| Bytes::from(""));
+            tracing::info!("Using page_key={:?} for index entry", String::from_utf8_lossy(&page_key));
+
+            // Use finish_data_page which will add index entry
+            // In COW, we reuse the page ID if we're modifying an existing page
+            // Only allocate a new page if this is truly a new page
+            let page_id = if let Some(ref page) = self.applying_page {
+                // Reusing existing page ID for in-place update
+                let id = page.page_id();
+                id
+            } else {
+                // New page needed
+                PageId::MAX
+            };
+
+            self.finish_data_page(page_key, page_id).await?;
+            tracing::info!("finish_data_page completed, page should be written");
         } else {
-            tracing::info!("No entries to finish (entries_added={})", entries_added);
+            tracing::warn!("data_page_builder is empty at end of apply_one_page");
         }
 
-        // Mark old page for GC if we modified an existing page
-        if let Some(old_id) = old_page_id {
-            // TODO: Add to GC list instead of immediate free
+        // Apply TTL updates now that we're done with the iterator
+        for (expire_ts, key, op) in ttl_updates {
+            self.update_ttl(expire_ts, &key, op);
         }
-
-        // Don't clear applying_page here - it's managed by the caller
-        // self.applying_page = None;
 
         Ok(())
     }
@@ -1599,32 +1657,14 @@ impl BatchWriteTask {
         let cur_page_len = self.data_page_builder.current_size_estimate();
         let builder = std::mem::replace(&mut self.data_page_builder, DataPageBuilder::new(4096));
 
-        // In COW, we always allocate a new page when modifying
-        // If we had an existing page, we need to free it
-        let old_page_id = if page_id != PageId::MAX {
-            Some(page_id)
-        } else {
-            None
-        };
-
-        // Always allocate a new page for COW
-        page_id = self.page_mapper.allocate_page()?;
-        let was_new_allocation = old_page_id.is_none();
+        if page_id == PageId::MAX {
+            // Allocate new page
+            page_id = self.page_mapper.allocate_page()?;
+        }
 
         let data_page = builder.finish(page_id);
-        tracing::info!("Built data page id={} with content_length={} bytes, restart_count={}",
-            page_id, data_page.content_length(), data_page.restart_count());
-
-        // Debug: List entries in this page
-        let mut iter = DataPageIterator::new(&data_page);
-        let mut count = 0;
-        while let Some((k, _, _, _)) = iter.next() {
-            if count < 3 {
-                tracing::info!("  Page {} entry[{}]: key='{}'", page_id, count, String::from_utf8_lossy(&k));
-            }
-            count += 1;
-        }
-        tracing::info!("  Page {} total entries: {}", page_id, count);
+        tracing::info!("Built data page id={} with content_length={} bytes",
+            page_id, data_page.content_length());
 
         // Check if we should redistribute with previous page
         let one_quarter = self.options.data_page_size >> 2;
@@ -1641,57 +1681,17 @@ impl BatchWriteTask {
 
         // Update index with this page
         if !self.stack.is_empty() {
-            // Get the first key from the data page to use as index key
-            let index_key = if count > 0 {
-                // Re-iterate to get first key
-                let mut temp_iter = DataPageIterator::new(&data_page);
-                if let Some((first_key, _, _, _)) = temp_iter.next() {
-                    Bytes::copy_from_slice(&first_key)
-                } else {
-                    page_key.clone()
-                }
-            } else {
-                page_key.clone()
-            };
-
             tracing::debug!("Adding index change: key={:?}, page_id={}",
-                String::from_utf8_lossy(&index_key), page_id);
+                String::from_utf8_lossy(&page_key), page_id);
             self.stack.last_mut().unwrap().changes.push(IndexOp {
-                key: index_key,
+                key: page_key,
                 page_id,
                 op: WriteOp::Upsert,
             });
         }
 
-        // Mark old page for GC if we had one (COW semantics)
-        if let Some(old_id) = old_page_id {
-            // TODO: Add to GC list instead of immediate free
-            // self.free_page(old_id);
-            tracing::info!("Would free old page_id={}, new page_id={} (deferred for GC)", old_id, page_id);
-        }
-
-        // Insert or update in leaf triple (following C++ FinishDataPage logic)
-        if was_new_allocation {
-            // This is a new data page that does not exist in the tree
-            self.leaf_link_insert(data_page).await?;
-        } else {
-            // This is an existing data page with updated content (COW copy)
-            self.leaf_link_update(data_page);
-        }
-
-        // Shift leaf link after insertion/update (following C++ which calls ShiftLeafLink)
-        self.shift_leaf_link().await?;
-
-        // Debug: Log current leaf_triple state
-        tracing::info!("After shift_leaf_link, leaf_triple state:");
-        for i in 0..3 {
-            if let Some(ref p) = self.leaf_triple[i] {
-                tracing::info!("  leaf_triple[{}] = page_id={}", i, p.page_id());
-            } else {
-                tracing::info!("  leaf_triple[{}] = None", i);
-            }
-        }
-
+        // Insert into leaf triple
+        self.leaf_link_insert(data_page).await?;
         Ok(())
     }
 
