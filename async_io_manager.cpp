@@ -227,7 +227,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               fd_ref_(std::move(fd)),
               offset_(offset),
-              page_(true){};
+              page_(true) {};
 
         LruFD::Ref fd_ref_;
         uint32_t offset_;
@@ -701,7 +701,8 @@ void IouringMgr::Submit()
 
 void IouringMgr::PollComplete()
 {
-    io_uring_cqe *cqe;
+    io_uring_cqe *cqe = nullptr;
+    io_uring_peek_cqe(&ring_, &cqe);
     unsigned head;
     unsigned cnt = 0;
     io_uring_for_each_cqe(&ring_, head, cqe)
@@ -888,7 +889,7 @@ int IouringMgr::Write(FdIdx fd, const char *src, size_t n, uint64_t offset)
 KvError IouringMgr::SyncFile(LruFD::Ref fd)
 {
     int res = Fdatasync(fd.FdPair());
-    if (res >= 0)
+    if (res == 0)
     {
         fd.Get()->dirty_ = false;
     }
@@ -901,7 +902,7 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)){};
+            : BaseReq(task), fd_ref_(std::move(fd)) {};
         LruFD::Ref fd_ref_;
     };
 

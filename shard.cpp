@@ -70,7 +70,7 @@ void Shard::WorkLoop()
             // Exit.
             break;
         }
-        for (size_t i = 0; i < nreqs; i++)
+        for (int i = 0; i < nreqs; i++)
         {
             OnReceivedReq(reqs[i]);
         }
