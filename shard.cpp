@@ -21,6 +21,25 @@ KvError Shard::Init()
     return res;
 }
 
+/**
+ * @brief Main worker loop for the shard: drives I/O, executes tasks, and processes requests.
+ *
+ * This function runs the shard's primary work loop on the calling thread. It:
+ * - sets the global shard reference,
+ * - starts the shard's AsyncIoManager,
+ * - repeatedly submits and polls I/O completions, executes any ready tasks, and
+ *   dequeues incoming KvRequests in batches (up to 128) for processing via OnReceivedReq.
+ *
+ * When the shard is idle (no ready tasks, no active tasks, and I/O is idle) it will
+ * block waiting for new requests, polling the queue with a short timeout (100 ms) so
+ * the loop can detect store shutdown and exit promptly. The loop exits when the
+ * store is stopped and there are no pending requests or active tasks, and then the
+ * I/O manager is stopped.
+ *
+ * Side effects:
+ * - Updates the global `shard` reference.
+ * - Starts and eventually stops the AsyncIoManager.
+ */
 void Shard::WorkLoop()
 {
     shard = this;

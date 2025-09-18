@@ -11,6 +11,21 @@
 #undef BLOCK_SIZE
 #include "concurrentqueue/blockingconcurrentqueue.h"
 
+/**
+ * Start execution of a KvTask inside a coroutine.
+ *
+ * Creates a coroutine that runs the provided callable `lbd` (executed on the task's coroutine stack)
+ * and makes `task` the currently running task for the duration. The callable must return a KvError;
+ * its return value is passed to the associated request via `req->SetDone(err)`. After the callable
+ * returns the request pointer is cleared and the task status is set to Finished. If the task
+ * finished immediately on startup, OnTaskFinished(task) is invoked before returning.
+ *
+ * @param task Pointer to the KvTask to start; this object's fields (req_, status_, coro_) are set.
+ * @param req  KvRequest associated with the task; SetDone(err) will be called on it when the task's
+ *             coroutine function returns.
+ * @param lbd  Callable invoked inside the new coroutine. Must be callable with no arguments and
+ *             return a KvError.
+ */
 namespace eloqstore
 {
 #ifdef ELOQ_MODULE_ENABLED

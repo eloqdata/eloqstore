@@ -214,6 +214,30 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
     return {std::move(page), KvError::NoError};
 }
 
+/**
+ * @brief Reads a batch of pages using io_uring into provided Page objects.
+ *
+ * Reads the files identified by the FilePageId span, performs asynchronous
+ * buffered reads (using buffer select), waits for completion, optionally
+ * verifies checksums, and returns the pages in the same order. The function
+ * uses a small stack-allocated request buffer and asserts that the batch size
+ * does not exceed max_read_pages_batch.
+ *
+ * @param tbl_id Identifier of the table whose files are being read.
+ * @param page_ids Span of FilePageId values indicating which pages to read;
+ *        ordering is preserved in the output pages vector.
+ * @param[out] pages On success this will be cleared and filled with Page
+ *        objects containing the read data (one Page per input FilePageId).
+ *
+ * @return KvError::NoError on success.
+ * @return KvError::Corrupted if checksum verification fails for any page.
+ * @return Other KvError codes propagated from OpenFD/Read operations on error.
+ *
+ * @note The function may block waiting for outstanding io_uring completions
+ *       (via ThdTask()->WaitIo()). It also ensures all in-flight requests are
+ *       completed before returning in error cases to avoid dangling stack
+ *       references from completion callbacks.
+ */
 KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
                               std::span<FilePageId> page_ids,
                               std::vector<Page> &pages)
@@ -699,6 +723,24 @@ void IouringMgr::Submit()
     }
 }
 
+/**
+ * @brief Process completed io_uring events and dispatch their results to waiting tasks.
+ *
+ * Polls the completion queue for finished IO events, decodes each event's user_data
+ * to determine the associated task/request type, applies the completion result to
+ * the corresponding KvTask or request, invokes write-completion callbacks for
+ * WriteReq entries, releases pooled write requests, and marks tasks as finished.
+ *
+ * Side effects:
+ * - Advances the io_uring completion queue.
+ * - Updates task fields (io_res_, io_flags_) or request result fields (res_, flags_).
+ * - Calls KvTask::WritePageCallback and returns WriteReq objects to the write pool.
+ * - Calls KvTask::FinishIo() for each completed task.
+ * - Wakes up waiting submission-slot waiters via waiting_sqe_.WakeN().
+ *
+ * Notes:
+ * - Asserts if an unknown UserDataType is encountered.
+ */
 void IouringMgr::PollComplete()
 {
     io_uring_cqe *cqe = nullptr;
@@ -886,6 +928,16 @@ int IouringMgr::Write(FdIdx fd, const char *src, size_t n, uint64_t offset)
     return ThdTask()->WaitIoResult();
 }
 
+/**
+ * @brief Synchronize a tracked file descriptor to durable storage.
+ *
+ * Calls fdatasync on the underlying file descriptor held by the provided
+ * LruFD::Ref. If the syscall reports exact success (return value == 0),
+ * the LruFD's dirty_ flag is cleared to mark the file as clean.
+ *
+ * @param fd Reference to the LRU-tracked file descriptor to sync.
+ * @return KvError Result mapped from the underlying fdatasync return code.
+ */
 KvError IouringMgr::SyncFile(LruFD::Ref fd)
 {
     int res = Fdatasync(fd.FdPair());
@@ -896,6 +948,26 @@ KvError IouringMgr::SyncFile(LruFD::Ref fd)
     return ToKvError(res);
 }
 
+/**
+ * @brief Ensure on-disk durability for a set of file descriptors associated with a table.
+ *
+ * Schedules asynchronous data-only fsync (datasync) operations for each provided
+ * LruFD reference using the manager's io_uring submission path, waits for all
+ * operations to complete, and updates per-file state.
+ *
+ * On successful completion of a file's fsync the function clears that file's
+ * dirty flag (LruFD::dirty_ = false). If any fsync fails the function maps
+ * the underlying negative POSIX error to a KvError and returns it; if multiple
+ * fsyncs fail the last observed error is returned. If all fsyncs succeed
+ * KvError::NoError is returned.
+ *
+ * @param tbl_id Identifier of the table whose files are being synced (used for logging/context).
+ * @param fds Span of LruFD::Ref objects representing the file descriptors to fsync. Each reference
+ *            will be held for the duration of the operation; the function issues fsync for every
+ *            entry in this span.
+ * @return KvError KvError::NoError on success, or a mapped KvError corresponding to the last fsync
+ *         failure encountered.
+ */
 KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
                               std::span<LruFD::Ref> fds)
 {
