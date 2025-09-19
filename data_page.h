@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <span>
 #include <string>
+#include <utility>
 
 #include "comparator.h"
 #include "kv_options.h"
