@@ -256,6 +256,13 @@ public:
     bool IsStopped() const;
     const KvOptions &Options() const;
 
+    /**
+     * @brief Validate KvOptions configuration.
+     * @param opts The options to validate
+     * @return true if options are valid, false otherwise
+     */
+    static bool ValidateOptions(const KvOptions &opts);
+
     template <typename F>
     bool ExecAsyn(KvRequest *req, uint64_t data, F callback)
     {

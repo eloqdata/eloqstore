@@ -26,51 +26,56 @@
 namespace eloqstore
 {
 
-EloqStore::EloqStore(const KvOptions &opts) : options_(opts), stopped_(true)
+bool EloqStore::ValidateOptions(const KvOptions &opts)
 {
-    if ((options_.data_page_size & (page_align - 1)) != 0)
+    if ((opts.data_page_size & (page_align - 1)) != 0)
     {
-        LOG(FATAL) << "Option data_page_size is not page aligned";
+        LOG(ERROR) << "Option data_page_size is not page aligned";
+        return false;
     }
-    if ((options_.coroutine_stack_size & (page_align - 1)) != 0)
+    if ((opts.coroutine_stack_size & (page_align - 1)) != 0)
     {
-        LOG(FATAL) << "Option coroutine_stack_size is not page aligned";
-    }
-
-    if (options_.overflow_pointers == 0 ||
-        options_.overflow_pointers > max_overflow_pointers)
-    {
-        LOG(FATAL) << "Invalid option overflow_pointers";
-    }
-    if (options_.max_write_batch_pages == 0)
-    {
-        LOG(FATAL) << "Invalid option max_write_batch_pages";
+        LOG(ERROR) << "Option coroutine_stack_size is not page aligned";
+        return false;
     }
 
-    if (!options_.cloud_store_path.empty())
+    if (opts.overflow_pointers == 0 ||
+        opts.overflow_pointers > max_overflow_pointers)
+    {
+        LOG(ERROR) << "Invalid option overflow_pointers";
+        return false;
+    }
+    if (opts.max_write_batch_pages == 0)
+    {
+        LOG(ERROR) << "Invalid option max_write_batch_pages";
+        return false;
+    }
+
+    if (!opts.cloud_store_path.empty())
     {
         // Cloud storage is enabled.
-        if (options_.num_gc_threads > 0)
+        if (opts.num_gc_threads > 0)
         {
-            LOG(FATAL)
+            LOG(ERROR)
                 << "num_gc_threads must be 0 when cloud store is enabled";
+            return false;
         }
-        if (options_.local_space_limit == 0)
+        if (opts.local_space_limit == 0)
         {
-            LOG(FATAL)
+            LOG(ERROR)
                 << "Must set local_space_limit when cloud store is enabled ";
+            return false;
         }
-        if (!options_.data_append_mode)
+        if (!opts.data_append_mode)
         {
             LOG(WARNING) << "append write mode should be enabled when cloud "
                             "storage is enabled";
         }
     }
 
-    if (options_.data_append_mode)
+    if (opts.data_append_mode)
     {
-        if (!options_.cloud_store_path.empty() &&
-            options_.DataFileSize() > (8 << 20))
+        if (!opts.cloud_store_path.empty() && opts.DataFileSize() > (8 << 20))
         {
             LOG(WARNING) << "smaller file size is recommended in append write "
                             "mode with cloud storage";
@@ -78,11 +83,20 @@ EloqStore::EloqStore(const KvOptions &opts) : options_(opts), stopped_(true)
     }
     else
     {
-        if (options_.DataFileSize() < (512 << 20))
+        if (opts.DataFileSize() < (512 << 20))
         {
             LOG(WARNING) << "bigger file size is recommended in non-append "
                             "write mode";
         }
+    }
+    return true;
+}
+
+EloqStore::EloqStore(const KvOptions &opts) : options_(opts), stopped_(true)
+{
+    if (!ValidateOptions(opts))
+    {
+        LOG(FATAL) << "Invalid KvOptions configuration";
     }
 }
 
@@ -96,6 +110,11 @@ EloqStore::~EloqStore()
 
 KvError EloqStore::Start()
 {
+    if (!IsStopped())
+    {
+        LOG(ERROR) << "EloqStore started , do not start again";
+        return KvError::NoError;
+    }
     eloq_store = this;
     // Initialize
     if (!options_.store_path.empty())

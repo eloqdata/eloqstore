@@ -14,6 +14,7 @@ set(UTEST_SOURCES
     manifest.cpp
     concurrency.cpp
     cloud.cpp
+    eloq_store_test.cpp
 )
 
 string( REPLACE ".cpp" "" BASENAMES_UTEST "${UTEST_SOURCES}" )
