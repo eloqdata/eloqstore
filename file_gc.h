@@ -22,7 +22,7 @@ void GetRetainedFiles(std::unordered_set<FileId> &result,
 class FileGarbageCollector
 {
 public:
-    FileGarbageCollector(const KvOptions *opts) : options_(opts){};
+    explicit FileGarbageCollector(const KvOptions *opts) : options_(opts) {};
     ~FileGarbageCollector();
     void Start(uint16_t n_workers);
     void Stop();

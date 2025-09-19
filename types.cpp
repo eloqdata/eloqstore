@@ -65,7 +65,9 @@ WriteDataEntry::WriteDataEntry(std::string key,
       val_(std::move(val)),
       timestamp_(ts),
       op_(op),
-      expire_ts_(expire_ts){};
+      expire_ts_(expire_ts)
+{
+}
 
 bool WriteDataEntry::operator<(const WriteDataEntry &other) const
 {

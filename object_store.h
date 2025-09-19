@@ -1,6 +1,7 @@
 #pragma once
 
 #include <thread>
+#include <utility>
 
 #include "error.h"
 #include "kv_options.h"
@@ -18,7 +19,7 @@ class CloudStoreMgr;
 class ObjectStore
 {
 public:
-    ObjectStore(const KvOptions *options) : options_(options){};
+    explicit ObjectStore(const KvOptions *options) : options_(options) {};
     ~ObjectStore();
     void Start();
     void Stop();
@@ -27,8 +28,9 @@ public:
     class Task
     {
     public:
+        virtual ~Task() = default;
         Task(CloudStoreMgr *io_mgr, KvTask *kv_task, const TableIdent *tbl_id)
-            : kv_task_(kv_task), tbl_id_(tbl_id), io_mgr_(io_mgr){};
+            : kv_task_(kv_task), tbl_id_(tbl_id), io_mgr_(io_mgr) {};
         enum class Type : uint8_t
         {
             Download = 0,
@@ -53,7 +55,7 @@ public:
                      KvTask *kv_task,
                      const TableIdent *tbl_id,
                      std::string_view filename)
-            : Task(io_mgr, kv_task, tbl_id), filename_(filename){};
+            : Task(io_mgr, kv_task, tbl_id), filename_(filename) {};
         Type TaskType() override
         {
             return Type::Download;
@@ -68,7 +70,8 @@ public:
                    KvTask *kv_task,
                    const TableIdent *tbl_id,
                    std::vector<std::string> filenames)
-            : Task(io_mgr, kv_task, tbl_id), filenames_(std::move(filenames)){};
+            : Task(io_mgr, kv_task, tbl_id),
+              filenames_(std::move(filenames)) {};
         Type TaskType() override
         {
             return Type::Upload;
@@ -82,7 +85,7 @@ private:
     class StopSignal : public Task
     {
     public:
-        StopSignal() : Task(nullptr, nullptr, nullptr){};
+        StopSignal() : Task(nullptr, nullptr, nullptr) {};
         Type TaskType() override
         {
             return Type::Stop;

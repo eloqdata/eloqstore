@@ -2,6 +2,7 @@
 
 #include <boost/context/pooled_fixedsize_stack.hpp>
 #include <boost/context/protected_fixedsize_stack.hpp>
+#include <utility>  // NOLINT(build/include_order)
 
 #include "circular_queue.h"
 #include "eloq_store.h"
@@ -82,6 +83,7 @@ private:
                                                  {
                                                      task->Abort();
                                                  }
+
                                                  task->req_->SetDone(err);
                                                  task->req_ = nullptr;
                                                  task->status_ =

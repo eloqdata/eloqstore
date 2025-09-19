@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <ostream>
 #include <string>
+#include <utility>  // NOLINT(build/include_order)
 
 #include "external/span.hpp"
 
@@ -41,7 +42,7 @@ struct TableIdent
 
     TableIdent() = default;
     TableIdent(std::string tbl_name, uint32_t id)
-        : tbl_name_(std::move(tbl_name)), partition_id_(id){};
+        : tbl_name_(std::move(tbl_name)), partition_id_(id) {};
     std::string ToString() const;
     static TableIdent FromString(const std::string &str);
     uint8_t DiskIndex(uint8_t num_disks) const;

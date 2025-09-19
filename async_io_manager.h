@@ -52,16 +52,16 @@ class EloqStore;
 class AsyncIoManager
 {
 public:
-    AsyncIoManager(const KvOptions *opts) : options_(opts){};
+    explicit AsyncIoManager(const KvOptions *opts) : options_(opts) {};
     virtual ~AsyncIoManager() = default;
     static std::unique_ptr<AsyncIoManager> Instance(const EloqStore *store,
                                                     uint32_t fd_limit);
 
     /** These methods are provided for worker thread. */
     virtual KvError Init(Shard *shard) = 0;
-    virtual void Start(){};
+    virtual void Start() {};
     virtual bool IsIdle();
-    virtual void Stop(){};
+    virtual void Stop() {};
     virtual void Submit() = 0;
     virtual void PollComplete() = 0;
 
@@ -200,7 +200,7 @@ protected:
 
     struct BaseReq
     {
-        BaseReq(KvTask *task = nullptr) : task_(task){};
+        explicit BaseReq(KvTask *task = nullptr) : task_(task) {};
         KvTask *task_;
         int res_{0};
         uint32_t flags_{0};
@@ -426,7 +426,7 @@ private:
     class FileCleaner : public KvTask
     {
     public:
-        FileCleaner(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr){};
+        FileCleaner(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr) {};
         TaskType Type() const override;
         void Run();
         void Shutdown();
@@ -449,8 +449,8 @@ class MemStoreMgr : public AsyncIoManager
 public:
     MemStoreMgr(const KvOptions *opts);
     KvError Init(Shard *shard) override;
-    void Submit() override{};
-    void PollComplete() override{};
+    void Submit() override {};
+    void PollComplete() override {};
 
     std::pair<Page, KvError> ReadPage(const TableIdent &tbl_id,
                                       FilePageId file_page_id,
@@ -483,7 +483,7 @@ public:
     class Manifest : public ManifestFile
     {
     public:
-        Manifest(std::string_view content) : content_(content){};
+        explicit Manifest(std::string_view content) : content_(content) {};
         KvError Read(char *dst, size_t n) override;
         void Skip(size_t n);
 
