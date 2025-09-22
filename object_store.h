@@ -141,8 +141,8 @@ public:
         bool has_error_{false};
         KvError first_error_{KvError::NoError};
     };
-    moodycamel::BlockingConcurrentQueue<Task *> submit_q_;
 
+private:
     std::unique_ptr<AsyncHttpManager> async_http_mgr_;
 };
 

@@ -226,7 +226,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               fd_ref_(std::move(fd)),
               offset_(offset),
-              page_(true) {};
+              page_(true){};
 
         LruFD::Ref fd_ref_;
         uint32_t offset_;
@@ -902,7 +902,7 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
     };
 
@@ -1944,9 +1944,9 @@ KvError CloudStoreMgr::ReadArchiveFileAndDelete(const std::string &file_path,
     KvTask *current_task = ThdTask();
 
     // Step 1: Async open file
-    current_task->inflight_io_++;
     io_uring_sqe *open_sqe = GetSQE(UserDataType::KvTask, current_task);
-    io_uring_prep_openat(open_sqe, AT_FDCWD, file_path.c_str(), O_RDONLY, 0);
+    io_uring_prep_openat(
+        open_sqe, AT_FDCWD, file_path.c_str(), O_RDONLY | O_CLOEXEC, 0);
 
     int fd = current_task->WaitIoResult();
 
@@ -1956,9 +1956,10 @@ KvError CloudStoreMgr::ReadArchiveFileAndDelete(const std::string &file_path,
         return ToKvError(fd);
     }
 
-    // Step 2: Get file size
-    struct stat file_stat;
-    if (stat(file_path.c_str(), &file_stat) != 0)
+    // Step 2: Get file size via io_uring statx on the opened fd
+    struct statx stx = {};
+    int sres = Statx(fd, "", &stx);
+    if (sres < 0)
     {
         io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, current_task);
         io_uring_prep_close(sqe, fd);
@@ -1968,47 +1969,38 @@ KvError CloudStoreMgr::ReadArchiveFileAndDelete(const std::string &file_path,
             LOG(ERROR) << "Failed to close file: " << file_path
                        << ", error: " << res;
         }
-        LOG(ERROR) << "Failed to get file size: " << file_path;
-        return KvError::IoFail;
+        LOG(ERROR) << "Failed to statx file: " << file_path
+                   << ", error: " << sres;
+        return ToKvError(sres);
     }
 
-    size_t file_size = file_stat.st_size;
+    size_t file_size = stx.stx_size;
     content.resize(file_size);
 
-    // Step 3: Async read file content
-    current_task->inflight_io_++;
-    io_uring_sqe *read_sqe = GetSQE(UserDataType::KvTask, current_task);
-    io_uring_prep_read(read_sqe, fd, content.data(), file_size, 0);
-
-    int read_res = current_task->WaitIoResult();
-    if (read_res < 0)
+    // Step 3: Async read file content (handle partial reads)
+    size_t off = 0;
+    while (off < file_size)
     {
-        io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, current_task);
-        io_uring_prep_close(sqe, fd);
-        int res = current_task->WaitIoResult();
-        if (res < 0)
+        size_t to_read = file_size - off;
+        io_uring_sqe *read_sqe = GetSQE(UserDataType::KvTask, current_task);
+        io_uring_prep_read(read_sqe, fd, content.data() + off, to_read, off);
+        int rres = current_task->WaitIoResult();
+        if (rres < 0)
         {
-            LOG(ERROR) << "Failed to close file: " << file_path
-                       << ", error: " << res;
+            io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, current_task);
+            io_uring_prep_close(sqe, fd);
+            (void) current_task->WaitIoResult();
+            LOG(ERROR) << "Failed to read file: " << file_path
+                       << ", error: " << rres;
+            return ToKvError(rres);
         }
-        LOG(ERROR) << "Failed to read file: " << file_path
-                   << ", error: " << read_res;
-        return ToKvError(read_res);
-    }
-
-    if (static_cast<size_t>(read_res) != file_size)
-    {
-        io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, current_task);
-        io_uring_prep_close(sqe, fd);
-        int res = current_task->WaitIoResult();
-        if (res < 0)
+        if (rres == 0)
         {
-            LOG(ERROR) << "Failed to close file: " << file_path
-                       << ", error: " << res;
+            LOG(ERROR) << "Unexpected EOF: expected " << file_size << ", got "
+                       << off;
+            return KvError::EndOfFile;
         }
-        LOG(ERROR) << "Partial read: expected " << file_size << ", got "
-                   << read_res;
-        return KvError::IoFail;
+        off += static_cast<size_t>(rres);
     }
 
     // Step 4: Close file
@@ -2022,7 +2014,6 @@ KvError CloudStoreMgr::ReadArchiveFileAndDelete(const std::string &file_path,
     }
 
     // Step 5: Async unlink file
-    current_task->inflight_io_++;
     io_uring_sqe *unlink_sqe = GetSQE(UserDataType::KvTask, current_task);
     io_uring_prep_unlinkat(unlink_sqe, AT_FDCWD, file_path.c_str(), 0);
 
