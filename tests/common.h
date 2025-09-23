@@ -7,7 +7,6 @@
 #include "../common.h"
 #include "coding.h"
 #include "eloq_store.h"
-#include "kv_options.h"
 
 constexpr char test_path[] = "/tmp/eloqstore";
 static const eloqstore::TableIdent test_tbl_id = {"t0", 0};
