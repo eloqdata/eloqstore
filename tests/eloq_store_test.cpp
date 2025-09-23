@@ -74,6 +74,7 @@ TEST_CASE("EloqStore ValidateOptions validates all parameters", "[eloq_store]")
     options.cloud_store_path = "test";
     REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
     options.local_space_limit = 1024 * 1024 * 1024;
+    options.cloud_store_path = "";
 
     REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == true);
 

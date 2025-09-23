@@ -5,8 +5,8 @@
 #include <memory>
 #include <string>
 #include <string_view>
-#include <vector>
 #include <unordered_map>
+#include <vector>
 
 #include "error.h"
 #include "kv_options.h"
@@ -105,14 +105,12 @@ public:
     class ListTask : public Task
     {
     public:
-        ListTask(std::string_view remote_path, std::vector<std::string> *result)
-            : remote_path_(remote_path), result_(result){};
+        ListTask(std::string_view remote_path) : remote_path_(remote_path){};
         Type TaskType() override
         {
             return Type::AsyncList;
         }
         std::string remote_path_;
-        std::vector<std::string> *result_;
         curl_slist *headers_{nullptr};
         std::string json_data_;
     };
