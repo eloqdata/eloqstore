@@ -10,7 +10,7 @@ using namespace test_util;
 const eloqstore::KvOptions cloud_options = {
     .manifest_limit = 1 << 20,
     .fd_limit = 30 + eloqstore::num_reserved_fd,
-    .local_space_limit = 100 << 20,  // 100MB
+    .local_space_limit = 200 << 20,  // 100MB
     .store_path = {"/tmp/test-data"},
     .cloud_store_path = "docker-minio:eloqstore/unit-test",
     .pages_per_file_shift = 8,  // 1MB per datafile

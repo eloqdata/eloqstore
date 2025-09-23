@@ -412,6 +412,7 @@ void AsyncHttpManager::CleanupTaskResources(ObjectStore::Task *task)
         delete_task->json_data_list_.clear();
     }
 }
+
 void AsyncHttpManager::Cleanup()
 {
     for (auto &[easy, task] : active_requests_)
