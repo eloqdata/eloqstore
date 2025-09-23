@@ -5,7 +5,10 @@
 
 #include <chrono>
 #include <filesystem>
+#include <memory>
+#include <string>
 #include <string_view>
+#include <utility>
 
 #include "async_io_manager.h"
 #include "task.h"
@@ -252,7 +255,7 @@ void AsyncHttpManager::ProcessCompletedRequests()
                 continue;
             }
 
-            long response_code;
+            int response_code;
             curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &response_code);
 
             if (msg->data.result == CURLE_OK)
