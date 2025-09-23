@@ -29,7 +29,7 @@ static size_t DirEntryCount(std::filesystem::path path)
                          std::filesystem::directory_iterator{});
 }
 
-static size_t CountUsedFD()
+[[maybe_unused]] static size_t CountUsedFD()
 {
     return DirEntryCount("/proc/self/fd");
 }

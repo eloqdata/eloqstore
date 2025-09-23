@@ -263,7 +263,7 @@ KvError EloqStore::InitStoreSpace()
         {
             for (int fd : root_fds_)
             {
-                int r = close(fd);
+                [[maybe_unused]] int r = close(fd);
                 assert(r == 0);
             }
             root_fds_.clear();
@@ -337,7 +337,7 @@ void EloqStore::Stop()
 
     for (int fd : root_fds_)
     {
-        int res = close(fd);
+        [[maybe_unused]] int res = close(fd);
         assert(res == 0);
     }
     root_fds_.clear();
