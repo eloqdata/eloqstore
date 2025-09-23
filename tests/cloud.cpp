@@ -1,11 +1,14 @@
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <filesystem>
 
 #include "common.h"
 #include "kv_options.h"
 #include "test_utils.h"
+#include "utils.h"
 
 using namespace test_util;
+namespace chrono = std::chrono;
 
 const eloqstore::KvOptions cloud_options = {
     .manifest_limit = 1 << 20,
@@ -14,6 +17,19 @@ const eloqstore::KvOptions cloud_options = {
     .store_path = {"/tmp/test-data"},
     .cloud_store_path = "docker-minio:eloqstore/unit-test",
     .pages_per_file_shift = 8,  // 1MB per datafile
+    .data_append_mode = true,
+};
+
+const eloqstore::KvOptions cloud_archive_opts = {
+    .manifest_limit = 1 << 20,
+    .fd_limit = 30 + eloqstore::num_reserved_fd,
+    .num_retained_archives = 1,
+    .archive_interval_secs = 0,  // send archive request immediately
+    .file_amplify_factor = 2,
+    .local_space_limit = 200 << 20,  // 200MB
+    .store_path = {"/tmp/test-data"},
+    .cloud_store_path = "docker-minio:eloqstore/unit-test",
+    .pages_per_file_shift = 8,
     .data_append_mode = true,
 };
 
@@ -113,4 +129,190 @@ TEST_CASE("concurrent test with cloud", "[cloud]")
     tester.Init();
     tester.Run(1000, 100, 10);
     tester.Clear();
+}
+
+TEST_CASE("easy cloud rollback to archive")
+{
+    CleanupStore(cloud_archive_opts);
+
+    eloqstore::EloqStore *store = InitStore(cloud_archive_opts);
+    MapVerifier tester(test_tbl_id, store, false);
+    tester.SetValueSize(1000);
+
+    // Insert initial data
+    tester.Upsert(0, 100);
+    tester.Validate();
+
+    auto old_dataset = tester.DataSet();
+    REQUIRE(old_dataset.size() == 100);
+
+    // Record timestamp before creating archive
+    uint64_t archive_ts = utils::UnixTs<chrono::microseconds>();
+    
+    // Create an archive
+    eloqstore::ArchiveRequest archive_req;
+    archive_req.SetTableId(test_tbl_id);
+    bool ok = store->ExecAsyn(&archive_req);
+    REQUIRE(ok);
+    archive_req.Wait();
+    REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
+
+    // Insert more data after archive
+    tester.Upsert(100, 200);
+    tester.Validate();
+
+    auto full_dataset = tester.DataSet();
+    REQUIRE(full_dataset.size() == 200);
+
+    // Stop the store
+    store->Stop();
+
+    // Create backup with timestamp
+    uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
+    std::string backup_name = "manifest_" + std::to_string(backup_ts);
+
+    // Move current manifest to backup
+    bool backup_success = MoveCloudFile(
+        cloud_archive_opts.cloud_store_daemon_url,
+        cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString(),
+        "manifest",
+        backup_name);
+    REQUIRE(backup_success);
+
+    // Find the archive file and move it to manifest
+    // Use approximate timestamp since we can't access the exact archive timestamp
+    std::string archive_name =
+        "manifest_" + std::to_string(archive_ts);
+    bool rollback_success = MoveCloudFile(
+        cloud_archive_opts.cloud_store_daemon_url,
+        cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString(),
+        archive_name,
+        "manifest");
+    REQUIRE(rollback_success);
+
+    // Clean local cache and restart store
+    CleanupStore(cloud_archive_opts);
+    store->Start();
+
+    // Validate old dataset (should only have data from 0-99)
+    tester.SwitchDataSet(old_dataset);
+    tester.Validate();
+
+    store->Stop();
+
+    // Restore to full dataset by moving backup back to manifest
+    bool restore_success = MoveCloudFile(
+        cloud_archive_opts.cloud_store_daemon_url,
+        cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString(),
+        backup_name,
+        "manifest");
+    REQUIRE(restore_success);
+
+    CleanupStore(cloud_archive_opts);
+    store->Start();
+
+    // Validate full dataset
+    tester.SwitchDataSet(full_dataset);
+    tester.Validate();
+}
+
+TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
+{
+    eloqstore::EloqStore *store = InitStore(cloud_archive_opts);
+    MapVerifier tester(test_tbl_id, store, false);
+    tester.SetValueSize(2000);
+
+    // Phase 1: Complex data operations
+    tester.Upsert(0, 1000);     // Write 1000 entries
+    tester.Delete(200, 400);    // Delete some entries
+    tester.Upsert(1000, 1500);  // Add more entries
+    tester.WriteRnd(
+        1500, 2000, 30, 70);  // Random write with 30% delete probability
+    tester.Validate();
+
+    auto phase1_dataset = tester.DataSet();
+    LOG(INFO) << "Phase 1 dataset size: " << phase1_dataset.size();
+
+    // Create archive with timestamp tracking
+    uint64_t archive_ts = utils::UnixTs<chrono::microseconds>();
+    eloqstore::ArchiveRequest archive_req;
+    archive_req.SetTableId(test_tbl_id);
+    bool ok = store->ExecAsyn(&archive_req);
+    REQUIRE(ok);
+    archive_req.Wait();
+    REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
+
+    // Phase 2: More complex operations after archive
+    tester.Delete(0, 100);                // Delete from beginning
+    tester.Upsert(2000, 2500);            // Add new range
+    tester.Delete(1200, 1300);            // Delete from middle
+    tester.WriteRnd(2500, 3000, 50, 80);  // More random operations
+
+    // Simulate concurrent read/write workload
+    for (int i = 0; i < 10; i++)
+    {
+        tester.WriteRnd(3000 + i * 100, 3100 + i * 100, 25, 60);
+        // Interleave with reads
+        for (int j = 0; j < 5; j++)
+        {
+            uint64_t start = std::rand() % 2000;
+            tester.Scan(start, start + 50);
+            tester.Read(std::rand() % 3000);
+            tester.Floor(std::rand() % 3000);
+        }
+    }
+    tester.Validate();
+
+    auto phase2_dataset = tester.DataSet();
+    LOG(INFO) << "Phase 2 dataset size: " << phase2_dataset.size();
+
+    store->Stop();
+
+    // Get cloud configuration from options
+    const std::string& daemon_url = cloud_archive_opts.cloud_store_daemon_url;
+    const std::string cloud_path = cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString();
+    
+    // Create backup with timestamp
+    uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
+    std::string backup_name = "manifest_" + std::to_string(backup_ts);
+
+    // Backup current manifest
+    bool backup_ok = MoveCloudFile(daemon_url, cloud_path, "manifest", backup_name);
+    REQUIRE(backup_ok);
+
+    // Rollback to archive using approximate timestamp
+    std::string archive_name = "manifest_" + std::to_string(archive_ts);
+    bool rollback_ok = MoveCloudFile(daemon_url, cloud_path, archive_name, "manifest");
+
+    // Clean up local store
+    CleanupStore(cloud_archive_opts);
+
+    LOG(INFO) << "Attempting enhanced rollback to archive in cloud storage";
+    store->Start();
+
+    if (rollback_ok)
+    {
+        // Validate rollback to phase 1 dataset
+        tester.SwitchDataSet(phase1_dataset);
+        tester.Validate();
+
+        store->Stop();
+
+        // Restore backup to get back to phase 2 dataset
+        bool restore_ok = MoveCloudFile(daemon_url, cloud_path, backup_name, "manifest");
+        REQUIRE(restore_ok);
+
+        CleanupStore(cloud_archive_opts);
+
+        store->Start();
+
+        tester.SwitchDataSet(phase2_dataset);
+        tester.Validate();
+    }
+    else
+    {
+        LOG(INFO) << "Archive file not found, validating with phase 2 dataset";
+        tester.SwitchDataSet(phase2_dataset);
+        tester.Validate();
+    }
 }

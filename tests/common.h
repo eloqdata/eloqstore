@@ -56,3 +56,34 @@ inline void CleanupStore(eloqstore::KvOptions opts)
         int res = system(command.c_str());
     }
 }
+
+// Helper function to send HTTP request to rclone server
+inline bool SendRcloneRequest(const std::string &daemon_url,
+                              const std::string &operation,
+                              const std::string &json_data)
+{
+    std::string command =
+        "curl -s -X POST -H 'Content-Type: application/json' -d '";
+    command += json_data;
+    command += "' " + daemon_url + "/" + operation;
+
+    int result = std::system(command.c_str());
+    return result == 0;
+}
+
+// Helper function to move cloud file using rclone server
+inline bool MoveCloudFile(const std::string &daemon_url,
+                          const std::string &cloud_path,
+                          const std::string &src_file,
+                          const std::string &dst_file)
+{
+    std::string src_path = cloud_path + "/" + src_file;
+    std::string dst_path = cloud_path + "/" + dst_file;
+
+    std::string json_data = "{\"srcFs\":\"" + cloud_path +
+                            "\",\"srcRemote\":\"" + src_file +
+                            "\",\"dstFs\":\"" + cloud_path +
+                            "\",\"dstRemote\":\"" + dst_file + "\"}";
+
+    return SendRcloneRequest(daemon_url, "operations/movefile", json_data);
+}
