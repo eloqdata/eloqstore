@@ -81,7 +81,7 @@ public:
             return Type::AsyncDownload;
         };
         const TableIdent *tbl_id_;
-        std::string filename_;
+        std::string_view filename_;
         curl_slist *headers_{nullptr};
         std::string json_data_;
     };
