@@ -92,7 +92,7 @@ public:
         Type TaskType() override
         {
             return Type::AsyncUpload;
-        };
+        }
 
         const TableIdent *tbl_id_;
         std::vector<std::string> filenames_;
@@ -110,7 +110,7 @@ public:
         Type TaskType() override
         {
             return Type::AsyncList;
-        };
+        }
         std::string remote_path_;
         std::vector<std::string> *result_;
         curl_slist *headers_{nullptr};
@@ -125,7 +125,7 @@ public:
         {
             headers_list_.resize(file_paths_.size(), nullptr);
             json_data_list_.resize(file_paths_.size());
-        };
+        }
         Type TaskType() override
         {
             return Type::AsyncDelete;
