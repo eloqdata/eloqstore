@@ -70,6 +70,8 @@ public:
     void SetMaxTTL(uint32_t max_ttl);
 
     const std::map<std::string, eloqstore::KvEntry> &DataSet() const;
+    void SwitchDataSet(
+        const std::map<std::string, eloqstore::KvEntry> &new_dataset);
 
 private:
     const eloqstore::TableIdent tid_;

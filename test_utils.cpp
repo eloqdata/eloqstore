@@ -470,6 +470,12 @@ const std::map<std::string, eloqstore::KvEntry> &MapVerifier::DataSet() const
     return answer_;
 }
 
+void MapVerifier::SwitchDataSet(
+    const std::map<std::string, eloqstore::KvEntry> &new_dataset)
+{
+    answer_ = new_dataset;
+}
+
 bool ConcurrencyTester::Partition::IsWriting() const
 {
     return ticks_ & 1;
