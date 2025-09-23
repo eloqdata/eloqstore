@@ -122,7 +122,7 @@ public:
     class DeleteTask : public Task
     {
     public:
-        DeleteTask(std::vector<std::string> file_paths)
+        explicit DeleteTask(std::vector<std::string> file_paths)
             : file_paths_(std::move(file_paths)), current_index_(0)
         {
             headers_list_.resize(file_paths_.size(), nullptr);
@@ -184,7 +184,12 @@ private:
 
     CURLM *multi_handle_{nullptr};
     std::unordered_map<CURL *, ObjectStore::Task *> active_requests_;
-    std::string daemon_url_;
+    const std::string daemon_url_;
+    const std::string daemon_upload_url_;
+    const std::string daemon_download_url_;
+    const std::string daemon_list_url_;
+    const std::string daemon_delete_url_;
+    const std::string daemon;
     AsyncIoManager *io_mgr_;
     int running_handles_{0};
 };

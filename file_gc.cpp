@@ -502,29 +502,28 @@ KvError FileGarbageCollector::DeleteUnreferencedDataFiles(
     KvTask *current_task = ThdTask();
 
     // Create delete task for all files
-    auto delete_task =
-        std::make_unique<ObjectStore::DeleteTask>(files_to_delete);
+    ObjectStore::DeleteTask delete_task(files_to_delete);
 
     // Set KvTask pointer
-    delete_task->SetKvTask(current_task);
+    delete_task.SetKvTask(current_task);
 
     // Submit each file separately by updating current_index_
-    for (size_t i = 0; i < delete_task->file_paths_.size(); ++i)
+    for (size_t i = 0; i < delete_task.file_paths_.size(); ++i)
     {
-        delete_task->current_index_ = i;
+        delete_task.current_index_ = i;
         cloud_mgr->GetObjectStore()->GetHttpManager()->SubmitRequest(
-            delete_task.get());
+            &delete_task);
     }
 
     current_task->status_ = TaskStatus::Blocked;
     current_task->Yield();
 
     // Check for errors after all tasks complete
-    if (delete_task->error_ != KvError::NoError)
+    if (delete_task.error_ != KvError::NoError)
     {
         LOG(ERROR) << "Failed to delete files: "
-                   << ErrorString(delete_task->error_);
-        return delete_task->error_;
+                   << ErrorString(delete_task.error_);
+        return delete_task.error_;
     }
 
     return KvError::NoError;

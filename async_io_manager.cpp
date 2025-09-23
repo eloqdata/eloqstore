@@ -2100,7 +2100,6 @@ void CloudStoreMgr::FileCleaner::Run()
 
             io_uring_sqe *sqe = io_mgr_->GetSQE(UserDataType::BaseReq, &req);
             int root_fd = io_mgr_->GetRootFD(req.file_->key_->tbl_id_).first;
-            // LOG(INFO) << "file cleaner unlink file: " << req.path_;
             io_uring_prep_unlinkat(sqe, root_fd, req.path_.c_str(), 0);
         }
 

@@ -1,10 +1,11 @@
 #include "object_store.h"
 
-#include <jsoncpp/json/json.h>
 #include <glog/logging.h>
+#include <jsoncpp/json/json.h>
 
 #include <chrono>
 #include <filesystem>
+#include <string_view>
 
 #include "async_io_manager.h"
 #include "task.h"
@@ -25,7 +26,12 @@ ObjectStore::~ObjectStore()
 
 AsyncHttpManager::AsyncHttpManager(const std::string &daemon_url,
                                    AsyncIoManager *io_mgr)
-    : daemon_url_(daemon_url), io_mgr_(io_mgr)
+    : daemon_url_(daemon_url),
+      daemon_upload_url_(daemon_url + "/operations/uploadfile?remote=&fs="),
+      daemon_download_url_(daemon_url + "/operations/copyfile"),
+      daemon_list_url_(daemon_url + "/operations/list"),
+      daemon_delete_url_(daemon_url + "/operations/deletefile"),
+      io_mgr_(io_mgr)
 {
     multi_handle_ = curl_multi_init();
     if (!multi_handle_)
@@ -130,13 +136,10 @@ void AsyncHttpManager::SetupDownloadRequest(ObjectStore::DownloadTask *task,
     Json::StreamWriterBuilder builder;
     task->json_data_ = Json::writeString(builder, request);
 
-    std::string endpoint = "/operations/copyfile";
-    std::string url = daemon_url_ + endpoint;
-
     struct curl_slist *headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
 
-    curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(easy, CURLOPT_URL, daemon_download_url_.c_str());
     curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->json_data_.c_str());
     curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
 
@@ -164,8 +167,7 @@ void AsyncHttpManager::SetupMultipartUpload(ObjectStore::UploadTask *task,
 
     std::string fs_param =
         io_mgr_->options_->cloud_store_path + "/" + task->tbl_id_->ToString();
-    std::string url =
-        daemon_url_ + "/operations/uploadfile?fs=" + fs_param + "&remote=";
+    std::string url = daemon_upload_url_ + fs_param;
 
     curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
     curl_easy_setopt(easy, CURLOPT_MIMEPOST, mime);
@@ -173,6 +175,7 @@ void AsyncHttpManager::SetupMultipartUpload(ObjectStore::UploadTask *task,
     // store mine object for later clean
     task->mime_ = mime;
 }
+
 void AsyncHttpManager::SetupListRequest(ObjectStore::ListTask *task, CURL *easy)
 {
     Json::Value request;
@@ -185,13 +188,10 @@ void AsyncHttpManager::SetupListRequest(ObjectStore::ListTask *task, CURL *easy)
     Json::StreamWriterBuilder builder;
     task->json_data_ = Json::writeString(builder, request);
 
-    std::string endpoint = "/operations/list";
-    std::string url = daemon_url_ + endpoint;
-
-    struct curl_slist *headers = nullptr;
+    curl_slist *headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
 
-    curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(easy, CURLOPT_URL, daemon_list_url_.c_str());
     curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->json_data_.c_str());
     curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
 
@@ -216,14 +216,11 @@ void AsyncHttpManager::SetupDeleteRequest(ObjectStore::DeleteTask *task,
     Json::StreamWriterBuilder builder;
     task->json_data_list_[index] = Json::writeString(builder, request);
 
-    std::string endpoint = "/operations/deletefile";
-    std::string url = daemon_url_ + endpoint;
-
-    struct curl_slist *headers = nullptr;
+    curl_slist *headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
     task->headers_list_[index] = headers;
 
-    curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(easy, CURLOPT_URL, daemon_delete_url_.c_str());
     curl_easy_setopt(
         easy, CURLOPT_POSTFIELDS, task->json_data_list_[index].c_str());
     curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
@@ -244,7 +241,8 @@ void AsyncHttpManager::ProcessCompletedRequests()
         {
             CURL *easy = msg->easy_handle;
             ObjectStore::Task *task;
-            curl_easy_getinfo(easy, CURLINFO_PRIVATE, (void **) &task);
+            curl_easy_getinfo(
+                easy, CURLINFO_PRIVATE, reinterpret_cast<void **>(&task));
 
             if (!task)
             {

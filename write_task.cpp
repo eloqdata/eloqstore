@@ -354,7 +354,7 @@ void WriteTask::TriggerFileGC() const
     if (!Options()->cloud_store_path.empty())
     {
         // Cloud mode: execute GC directly
-        CloudStoreMgr *cloud_mgr = dynamic_cast<CloudStoreMgr *>(shard->IoManager());
+        CloudStoreMgr *cloud_mgr = static_cast<CloudStoreMgr *>(shard->IoManager());
         if (!cloud_mgr)
         {
             LOG(ERROR) << "CloudStoreMgr not available";
