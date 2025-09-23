@@ -222,7 +222,7 @@ KvError FileGarbageCollector::ListCloudFiles(
     KvTask *current_task = ThdTask();
 
     // List all files in cloud.
-    ObjectStore::ListTask list_task(table_path, &cloud_files);
+    ObjectStore::ListTask list_task(table_path);
 
     // Set KvTask pointer and initialize inflight_io_
     list_task.SetKvTask(current_task);
@@ -332,8 +332,7 @@ KvError FileGarbageCollector::DownloadArchiveFile(
     // Set KvTask pointer and initialize inflight_io_
     download_task.SetKvTask(current_task);
 
-    cloud_mgr->GetObjectStore().GetHttpManager()->SubmitRequest(
-        &download_task);
+    cloud_mgr->GetObjectStore().GetHttpManager()->SubmitRequest(&download_task);
     current_task->status_ = TaskStatus::Blocked;
     current_task->Yield();
 
