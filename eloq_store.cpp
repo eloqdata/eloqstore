@@ -166,6 +166,12 @@ KvError EloqStore::Start()
         else if (!options_.cloud_store_path.empty())
         {
             LOG(INFO) << "file gc initialized for cloud mode";
+            if (options_.num_gc_threads > 0)
+            {
+                LOG(WARNING)
+                    << "num_gc_threads=" << options_.num_gc_threads
+                    << " is ignored in cloud mode; GC executes via cloud path.";
+            }
         }
 
         if (options_.num_retained_archives > 0 &&
@@ -226,26 +232,19 @@ KvError EloqStore::InitStoreSpace()
                 LOG(ERROR) << "path " << store_path << " is not directory";
                 return KvError::InvalidArgs;
             }
-            if (cloud_store)
+            if (cloud_store && !std::filesystem::is_empty(store_path))
             {
-                if (!std::filesystem::is_empty(store_path))
-                {
-                    LOG(WARNING) << store_path
-                                 << " is not empty in cloud store mode, clear "
-                                    "the directory";
-                    std::filesystem::remove_all(store_path);
-                    std::filesystem::create_directories(store_path);
-                }
+                LOG(ERROR) << store_path
+                           << " is not empty in cloud store mode, clear "
+                              "the directory";
+                return KvError::InvalidArgs;
             }
-            else
+            for (auto &ent : fs::directory_iterator{store_path})
             {
-                for (auto &ent : fs::directory_iterator{store_path})
+                if (!ent.is_directory())
                 {
-                    if (!ent.is_directory())
-                    {
-                        LOG(ERROR) << ent.path() << " is not directory";
-                        return KvError::InvalidArgs;
-                    }
+                    LOG(ERROR) << ent.path() << " is not directory";
+                    return KvError::InvalidArgs;
                 }
             }
         }
