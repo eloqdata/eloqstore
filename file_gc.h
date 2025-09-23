@@ -70,11 +70,6 @@ private:
     void WorkerRoutine();
 
     // Cloud mode implementation
-    KvError ProcessManifestFiles(const std::string &table_path,
-                                 uint64_t mapping_ts,
-                                 std::unordered_set<FileId> &all_retained_files,
-                                 ObjectStore *object_store);
-
     KvError ListCloudFiles(const TableIdent &tbl_id,
                            std::vector<std::string> &cloud_files,
                            class CloudStoreMgr *cloud_mgr);

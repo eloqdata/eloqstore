@@ -49,6 +49,7 @@ AsyncHttpManager::~AsyncHttpManager()
         curl_multi_cleanup(multi_handle_);
     }
 }
+
 void AsyncHttpManager::PerformRequests()
 {
     curl_multi_perform(multi_handle_, &running_handles_);
@@ -126,11 +127,11 @@ void AsyncHttpManager::SetupDownloadRequest(ObjectStore::DownloadTask *task,
     Json::Value request;
     request["srcFs"] =
         options_->cloud_store_path + "/" + task->tbl_id_->ToString();
-    request["srcRemote"] = task->filename_;
+    request["srcRemote"] = task->filename_.data();
 
     fs::path dir_path = task->tbl_id_->StorePath(options_->store_path);
     request["dstFs"] = dir_path.string();
-    request["dstRemote"] = task->filename_;
+    request["dstRemote"] = task->filename_.data();
 
     Json::StreamWriterBuilder builder;
     task->json_data_ = Json::writeString(builder, request);

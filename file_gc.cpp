@@ -135,7 +135,7 @@ KvError FileGarbageCollector::ExecuteLocalGC(const GcTask &task)
         }
         else if (ret.first == FileNameData)
         {
-            FileId file_id = std::stoull(ret.second.data());
+            FileId file_id = std::stoull(std::string(ret.second));
             if (file_id < task.max_file_id_)
             {
                 gc_data_files.emplace_back(file_id);
@@ -477,7 +477,7 @@ KvError FileGarbageCollector::DeleteUnreferencedDataFiles(
             continue;
         }
 
-        FileId file_id = std::stoull(ret.second.data());
+        FileId file_id = std::stoull(std::string(ret.second));
 
         // Only delete files that meet the following conditions:
         // 1. File ID < max_file_id (not the current writing file)

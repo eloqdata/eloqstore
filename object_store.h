@@ -1,12 +1,11 @@
 #pragma once
 
 #include <curl/curl.h>
-#include <jsoncpp/json/json.h>
 
-#include <atomic>
-#include <functional>
 #include <memory>
-#include <thread>
+#include <string>
+#include <string_view>
+#include <vector>
 #include <unordered_map>
 
 #include "error.h"
@@ -45,8 +44,7 @@ public:
             AsyncDownload = 0,
             AsyncUpload,
             AsyncList,
-            AsyncDelete,
-            Stop
+            AsyncDelete
         };
         virtual Type TaskType() = 0;
 
@@ -149,7 +147,7 @@ private:
 class AsyncHttpManager
 {
 public:
-    AsyncHttpManager(const KvOptions *options);
+    explicit AsyncHttpManager(const KvOptions *options);
     ~AsyncHttpManager();
 
     void SubmitRequest(ObjectStore::Task *task);
@@ -189,7 +187,6 @@ private:
     const std::string daemon_download_url_;
     const std::string daemon_list_url_;
     const std::string daemon_delete_url_;
-    const std::string daemon;
     const KvOptions *options_;
     int running_handles_{0};
 };
