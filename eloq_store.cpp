@@ -217,17 +217,26 @@ KvError EloqStore::InitStoreSpace()
                 LOG(ERROR) << "path " << store_path << " is not directory";
                 return KvError::InvalidArgs;
             }
-            if (cloud_store && !std::filesystem::is_empty(store_path))
+            if (cloud_store)
             {
-                LOG(ERROR) << store_path << " is not empty in cloud store mode";
-                return KvError::InvalidArgs;
-            }
-            for (auto &ent : fs::directory_iterator{store_path})
-            {
-                if (!ent.is_directory())
+                if (!std::filesystem::is_empty(store_path))
                 {
-                    LOG(ERROR) << ent.path() << " is not directory";
-                    return KvError::InvalidArgs;
+                    LOG(WARNING) << store_path
+                                 << " is not empty in cloud store mode, clear "
+                                    "the directory";
+                    std::filesystem::remove_all(store_path);
+                    std::filesystem::create_directories(store_path);
+                }
+            }
+            else
+            {
+                for (auto &ent : fs::directory_iterator{store_path})
+                {
+                    if (!ent.is_directory())
+                    {
+                        LOG(ERROR) << ent.path() << " is not directory";
+                        return KvError::InvalidArgs;
+                    }
                 }
             }
         }

@@ -1,5 +1,6 @@
 #include "object_store.h"
 
+#include <jsoncpp/json/json.h>
 #include <glog/logging.h>
 
 #include <chrono>
