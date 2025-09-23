@@ -64,6 +64,15 @@ bool EloqStore::ValidateOptions(const KvOptions &opts)
             LOG(WARNING) << "append write mode should be enabled when cloud "
                             "storage is enabled";
         }
+        if (opts.fd_limit * opts.data_page_size *
+                (1 << opts.pages_per_file_shift) >
+            opts.local_space_limit)
+        {
+            LOG(ERROR) << "fd_limit * data_page_size * (1 << "
+                          "pages_per_file_shift) should be smaller than "
+                       << "local_space_limit";
+            return false;
+        }
     }
 
     if (opts.data_append_mode)

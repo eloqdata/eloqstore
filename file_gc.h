@@ -77,8 +77,7 @@ private:
 
     KvError ListCloudFiles(const TableIdent &tbl_id,
                            std::vector<std::string> &cloud_files,
-                           class CloudStoreMgr *cloud_mgr,
-                           const KvOptions *options);
+                           class CloudStoreMgr *cloud_mgr);
     void ClassifyFiles(const std::vector<std::string> &cloud_files,
                        std::vector<std::string> &archive_files,
                        std::vector<uint64_t> &archive_timestamps,

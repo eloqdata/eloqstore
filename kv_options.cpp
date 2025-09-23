@@ -114,9 +114,10 @@ int KvOptions::LoadFromIni(const char *path)
         reserve_space_ratio =
             reader.GetUnsigned(sec_run, "reserve_space_ratio", 100);
     }
-    if (reader.HasValue(sec_run, "rclone_threads"))
+    if (reader.HasValue(sec_run, "cloud_store_daemon_url"))
     {
-        rclone_threads = reader.GetUnsigned(sec_run, "rclone_threads", 1);
+        cloud_store_daemon_url = reader.Get(
+            sec_run, "cloud_store_daemon_url", "http://127.0.0.1:5572");
     }
 
     constexpr char sec_permanent[] = "permanent";
@@ -178,7 +179,6 @@ bool KvOptions::operator==(const KvOptions &other) const
            num_gc_threads == other.num_gc_threads &&
            local_space_limit == other.local_space_limit &&
            reserve_space_ratio == other.reserve_space_ratio &&
-           rclone_threads == other.rclone_threads &&
            store_path == other.store_path &&
            cloud_store_path == other.cloud_store_path &&
            data_page_size == other.data_page_size &&

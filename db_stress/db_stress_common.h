@@ -57,7 +57,6 @@ DECLARE_uint32(file_amplify_factor);
 DECLARE_uint32(num_gc_threads);
 DECLARE_uint64(local_space_limit);
 DECLARE_uint32(reserve_space_ratio);
-DECLARE_uint32(rclone_threads);
 DECLARE_uint32(overflow_pointers);
 DECLARE_bool(data_append_mode);
 DECLARE_string(cloud_store_path);

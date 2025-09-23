@@ -92,8 +92,9 @@ struct KvOptions
      */
     uint8_t file_amplify_factor = 2;
     /**
-     * @brief Number of background file GC threads.
-     * Only take effect when data_append_mode is enabled.
+     * @brief Number of background local file GC threads.
+     * Only take effect when data_append_mode is enabled and cloud_store_path is
+     * set.
      */
     uint16_t num_gc_threads = 1;
     /**
@@ -107,11 +108,6 @@ struct KvOptions
      * Only take effect when cloud store is enabled.
      */
     uint16_t reserve_space_ratio = 100;
-    /**
-     * @brief Number of threads used by rclone to upload/download files.
-     * Only take effect when cloud store is enabled.
-     */
-    uint16_t rclone_threads = 1;
 
     /* NOTE:
      * The following options will be persisted in storage, so after the first
@@ -131,6 +127,12 @@ struct KvOptions
      * Example: eloq-s3:mybucket/eloqstore
      */
     std::string cloud_store_path;
+
+    /**
+     * @brief URL of cloud store daemon.
+     * you should start rclone server before using cloud mode
+     */
+    std::string cloud_store_daemon_url = "http://127.0.0.1:5572";
 
     /**
      * @brief Size of B+Tree index/data node (page).

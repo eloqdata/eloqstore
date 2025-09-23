@@ -150,7 +150,6 @@ def randomize_dynamic_params():
         "file_amplify_factor": random.choice([2]),
         #"num_gc_threads": random.choice([1, 2, 4]),
         "reserve_space_ratio": random.choice([50, 100, 150, 200]),
-        "rclone_threads": random.choice([1, 2, 4]),
     }
 
 def init_csv_file(test_type):
@@ -169,7 +168,7 @@ def init_csv_file(test_type):
                 'num_threads', 'data_page_restart_interval', 'index_page_restart_interval',
                 'index_buffer_pool_size', 'fd_limit', 'io_queue_size', 'max_inflight_write',
                 'max_write_batch_pages', 'buf_ring_size', 'file_amplify_factor',
-                'reserve_space_ratio', 'rclone_threads', 'open_wfile','command'
+                'reserve_space_ratio', 'open_wfile','command'
             ]
             
             # Add specific fields based on test type
@@ -208,7 +207,6 @@ def record_test_result(test_type, start_time, end_time, exit_code, hit_timeout, 
         'buf_ring_size': cmd_params.get('buf_ring_size', ''),
         'file_amplify_factor': cmd_params.get('file_amplify_factor', ''),
         'reserve_space_ratio': cmd_params.get('reserve_space_ratio', ''),
-        'rclone_threads': cmd_params.get('rclone_threads', ''),
         'open_wfile': cmd_params.get('open_wfile', ''),
         'command': cmd_str if cmd_str else ''
     }
@@ -244,7 +242,6 @@ default_params = {
     "num_gc_threads":1,#default 1
     "local_space_limit":20*1024*1024*1024,#2G
     "reserve_space_ratio":100,#default 100
-    "rclone_threads":1,#default 1
     "overflow_pointers":16,#default 16
     "open_wfile":1,
 }

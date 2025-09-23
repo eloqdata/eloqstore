@@ -71,6 +71,7 @@ TEST_CASE("EloqStore ValidateOptions validates all parameters", "[eloq_store]")
     // Test cloud storage configuration - local space limit
     options.local_space_limit =
         0;  // must set local space limit in cloud storage mode
+    options.cloud_store_path = "test";
     REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
     options.local_space_limit = 1024 * 1024 * 1024;
 

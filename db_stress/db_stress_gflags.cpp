@@ -107,9 +107,6 @@ DEFINE_uint64(local_space_limit,
 DEFINE_uint32(reserve_space_ratio,
               100,
               "reserved space ratio for new created/download files");
-DEFINE_uint32(rclone_threads,
-              1,
-              "number of threads used by rclone to upload/download files");
 DEFINE_uint32(overflow_pointers,
               16,
               "amount of pointers stored in overflow page");

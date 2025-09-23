@@ -15,8 +15,8 @@ namespace fs = std::filesystem;
 ObjectStore::ObjectStore(AsyncIoManager *io_mgr)
 {
     curl_global_init(CURL_GLOBAL_DEFAULT);
-    async_http_mgr_ =
-        std::make_unique<AsyncHttpManager>("http://127.0.0.1:5572", io_mgr);
+    async_http_mgr_ = std::make_unique<AsyncHttpManager>(
+        io_mgr->options_->cloud_store_daemon_url, io_mgr);
 }
 
 ObjectStore::~ObjectStore()

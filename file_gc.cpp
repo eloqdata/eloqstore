@@ -216,8 +216,7 @@ KvError FileGarbageCollector::ExecuteLocalGC(const GcTask &task)
 KvError FileGarbageCollector::ListCloudFiles(
     const TableIdent &tbl_id,
     std::vector<std::string> &cloud_files,
-    CloudStoreMgr *cloud_mgr,
-    const KvOptions *options)
+    CloudStoreMgr *cloud_mgr)
 {
     std::string table_path = tbl_id.ToString();
     KvTask *current_task = ThdTask();
@@ -538,7 +537,7 @@ KvError FileGarbageCollector::ExecuteCloudGC(
 {
     // 1. list all files in cloud.
     std::vector<std::string> cloud_files;
-    KvError err = ListCloudFiles(tbl_id, cloud_files, cloud_mgr, options_);
+    KvError err = ListCloudFiles(tbl_id, cloud_files, cloud_mgr);
     if (err != KvError::NoError)
     {
         return err;

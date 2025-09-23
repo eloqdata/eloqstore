@@ -145,7 +145,6 @@ void RunStressTest(int argc, char **argv)
         opts.num_gc_threads = FLAGS_num_gc_threads;
         opts.local_space_limit = FLAGS_local_space_limit;
         opts.reserve_space_ratio = FLAGS_reserve_space_ratio;
-        opts.rclone_threads = FLAGS_rclone_threads;
         opts.overflow_pointers = FLAGS_overflow_pointers;
         opts.data_append_mode = FLAGS_data_append_mode;
     }
