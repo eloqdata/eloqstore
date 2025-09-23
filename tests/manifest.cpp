@@ -207,8 +207,6 @@ TEST_CASE("easy rollback to archive", "[archive]")
 
     LOG(INFO) << "roll back to archive: " << archive_file;
     store->Start();
-    // MapVerifier tester(test_tbl_id, store, false);
-    // tester.SetValueSize(1000);
 
     tester.SwitchDataSet(old_dataset);
     tester.Validate();
