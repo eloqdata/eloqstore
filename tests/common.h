@@ -37,12 +37,18 @@ inline uint64_t ConvertIntKey(std::string_view key)
     uint64_t big_endian = eloqstore::DecodeFixed64(key.data());
     return __builtin_bswap64(big_endian);
 }
-inline void CleanupStore(eloqstore::KvOptions opts)
+
+inline void CleanupLocalStore(eloqstore::KvOptions opts)
 {
     for (const std::string &db_path : opts.store_path)
     {
         std::filesystem::remove_all(db_path);
     }
+}
+
+inline void CleanupStore(eloqstore::KvOptions opts)
+{
+    CleanupLocalStore(opts);
     if (!opts.cloud_store_path.empty())
     {
         std::string command = "rclone delete ";

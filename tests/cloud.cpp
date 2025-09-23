@@ -56,6 +56,7 @@ TEST_CASE("cloud store with restart", "[cloud]")
             part->WriteRnd(0, 1000);
         }
         store->Stop();
+        CleanupLocalStore(cloud_options);
         store->Start();
         for (auto &part : partitions)
         {
@@ -68,7 +69,7 @@ TEST_CASE("cloud store cached file LRU", "[cloud]")
 {
     eloqstore::KvOptions options = cloud_options;
     options.manifest_limit = 8 << 10;
-    options.fd_limit = 20 + eloqstore::num_reserved_fd;
+    options.fd_limit = 2;
     options.local_space_limit = 2 << 20;
     options.num_retained_archives = 1;
     options.archive_interval_secs = 3;
