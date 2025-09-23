@@ -131,7 +131,7 @@ TEST_CASE("concurrent test with cloud", "[cloud]")
     tester.Clear();
 }
 
-TEST_CASE("easy cloud rollback to archive")
+TEST_CASE("easy cloud rollback to archive","[cloud][archive]")
 {
     CleanupStore(cloud_archive_opts);
 
@@ -157,6 +157,19 @@ TEST_CASE("easy cloud rollback to archive")
     archive_req.Wait();
     REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
 
+    std::vector<std::string> cloud_files = ListCloudFiles(
+        cloud_archive_opts.cloud_store_daemon_url,
+        cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString());
+
+    std::string archive_name;
+    for (const auto& filename : cloud_files) {
+        if (filename.find("manifest_") == 0) {
+            archive_name = filename;
+            break;
+        }
+    }
+    REQUIRE(!archive_name.empty());
+
     // Insert more data after archive
     tester.Upsert(100, 200);
     tester.Validate();
@@ -179,10 +192,7 @@ TEST_CASE("easy cloud rollback to archive")
         backup_name);
     REQUIRE(backup_success);
 
-    // Find the archive file and move it to manifest
-    // Use approximate timestamp since we can't access the exact archive timestamp
-    std::string archive_name =
-        "manifest_" + std::to_string(archive_ts);
+    // Move archive to manifest
     bool rollback_success = MoveCloudFile(
         cloud_archive_opts.cloud_store_daemon_url,
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString(),
@@ -191,11 +201,13 @@ TEST_CASE("easy cloud rollback to archive")
     REQUIRE(rollback_success);
 
     // Clean local cache and restart store
-    CleanupStore(cloud_archive_opts);
+    CleanupLocalStore(cloud_archive_opts);
+
+    tester.SwitchDataSet(old_dataset);
     store->Start();
 
     // Validate old dataset (should only have data from 0-99)
-    tester.SwitchDataSet(old_dataset);
+
     tester.Validate();
 
     store->Stop();
@@ -208,11 +220,11 @@ TEST_CASE("easy cloud rollback to archive")
         "manifest");
     REQUIRE(restore_success);
 
-    CleanupStore(cloud_archive_opts);
+    CleanupLocalStore(cloud_archive_opts);
+    tester.SwitchDataSet(full_dataset);
     store->Start();
 
     // Validate full dataset
-    tester.SwitchDataSet(full_dataset);
     tester.Validate();
 }
 
@@ -280,12 +292,26 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
     bool backup_ok = MoveCloudFile(daemon_url, cloud_path, "manifest", backup_name);
     REQUIRE(backup_ok);
 
-    // Rollback to archive using approximate timestamp
-    std::string archive_name = "manifest_" + std::to_string(archive_ts);
-    bool rollback_ok = MoveCloudFile(daemon_url, cloud_path, archive_name, "manifest");
+    // List cloud files to find the archive file
+    std::vector<std::string> cloud_files = ListCloudFiles(daemon_url, cloud_path);
+    
+    // Find archive file (starts with "manifest_")
+    std::string archive_name;
+    for (const auto& filename : cloud_files) {
+        if (filename.find("manifest_") == 0) {
+            archive_name = filename;
+            break;
+        }
+    }
+    
+    // Rollback to archive if found
+    bool rollback_ok = false;
+    if (!archive_name.empty()) {
+        rollback_ok = MoveCloudFile(daemon_url, cloud_path, archive_name, "manifest");
+    }
 
     // Clean up local store
-    CleanupStore(cloud_archive_opts);
+    CleanupLocalStore(cloud_archive_opts);
 
     LOG(INFO) << "Attempting enhanced rollback to archive in cloud storage";
     store->Start();
@@ -302,7 +328,7 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
         bool restore_ok = MoveCloudFile(daemon_url, cloud_path, backup_name, "manifest");
         REQUIRE(restore_ok);
 
-        CleanupStore(cloud_archive_opts);
+        CleanupLocalStore(cloud_archive_opts);
 
         store->Start();
 
