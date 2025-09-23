@@ -73,7 +73,7 @@ public:
     {
     public:
         DownloadTask(const TableIdent *tbl_id, std::string_view filename)
-            : tbl_id_(tbl_id), filename_(filename){};
+            : tbl_id_(tbl_id), filename_(filename) {};
         Type TaskType() override
         {
             return Type::AsyncDownload;
@@ -88,7 +88,7 @@ public:
     {
     public:
         UploadTask(const TableIdent *tbl_id, std::vector<std::string> filenames)
-            : tbl_id_(tbl_id), filenames_(std::move(filenames)){};
+            : tbl_id_(tbl_id), filenames_(std::move(filenames)) {};
         Type TaskType() override
         {
             return Type::AsyncUpload;
@@ -105,7 +105,8 @@ public:
     class ListTask : public Task
     {
     public:
-        ListTask(std::string_view remote_path) : remote_path_(remote_path){};
+        explicit ListTask(std::string_view remote_path)
+            : remote_path_(remote_path) {};
         Type TaskType() override
         {
             return Type::AsyncList;

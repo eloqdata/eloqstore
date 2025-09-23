@@ -44,7 +44,7 @@ public:
         std::unordered_set<FileId> retained_files_;
     };
 
-    explicit FileGarbageCollector(const KvOptions *opts) : options_(opts){};
+    explicit FileGarbageCollector(const KvOptions *opts) : options_(opts) {};
     ~FileGarbageCollector();
 
     // Local mode methods (using thread pool)

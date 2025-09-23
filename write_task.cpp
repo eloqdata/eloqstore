@@ -349,21 +349,22 @@ void WriteTask::TriggerFileGC() const
 
     const uint64_t ts = utils::UnixTs<chrono::microseconds>();
     FileId cur_file_id = meta->mapper_->FilePgAllocator()->CurrentFileId();
-    
+
     // Check if we're in cloud mode or local mode
     if (!Options()->cloud_store_path.empty())
     {
         // Cloud mode: execute GC directly
-        CloudStoreMgr *cloud_mgr = static_cast<CloudStoreMgr *>(shard->IoManager());
+        CloudStoreMgr *cloud_mgr =
+            static_cast<CloudStoreMgr *>(shard->IoManager());
         if (!cloud_mgr)
         {
             LOG(ERROR) << "CloudStoreMgr not available";
             return;
         }
-        
+
         KvError gc_err = eloq_store->file_gc_->ExecuteCloudGC(
             tbl_ident_, ts, cur_file_id, retained_files, cloud_mgr);
-        
+
         if (gc_err != KvError::NoError)
         {
             LOG(ERROR) << "Cloud GC failed for table " << tbl_ident_.ToString();

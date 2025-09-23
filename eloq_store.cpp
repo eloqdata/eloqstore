@@ -62,7 +62,7 @@ bool EloqStore::ValidateOptions(const KvOptions &opts)
         if (!opts.data_append_mode)
         {
             LOG(ERROR) << "append write mode should be enabled when cloud "
-                            "storage is enabled";
+                          "storage is enabled";
             return false;
         }
         if (opts.fd_limit * opts.data_page_size *
