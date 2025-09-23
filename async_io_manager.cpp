@@ -1566,7 +1566,7 @@ void IouringMgr::WriteReq::SetPage(VarPage page)
 }
 
 CloudStoreMgr::CloudStoreMgr(const KvOptions *opts, uint32_t fd_limit)
-    : IouringMgr(opts, fd_limit), file_cleaner_(this), obj_store_(options_)
+    : IouringMgr(opts, fd_limit), file_cleaner_(this), obj_store_(opts)
 {
     lru_file_head_.next_ = &lru_file_tail_;
     lru_file_tail_.prev_ = &lru_file_head_;

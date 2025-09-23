@@ -3,14 +3,10 @@
 #include <glog/logging.h>
 #include <jsoncpp/json/json.h>
 
-#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <string>
 #include <string_view>
-#include <utility>
-
-#include "async_io_manager.h"
 #include "task.h"
 namespace eloqstore
 {
@@ -255,7 +251,7 @@ void AsyncHttpManager::ProcessCompletedRequests()
                 continue;
             }
 
-            int response_code;
+            int64_t response_code;
             curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &response_code);
 
             if (msg->data.result == CURLE_OK)
