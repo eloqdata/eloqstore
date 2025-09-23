@@ -119,6 +119,7 @@ void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
     // record the active request using CURL handle as key
     active_requests_[easy] = task;
 }
+
 void AsyncHttpManager::SetupDownloadRequest(ObjectStore::DownloadTask *task,
                                             CURL *easy)
 {

@@ -217,7 +217,7 @@ KvError EloqStore::InitStoreSpace()
     }
 
     const bool cloud_store = !options_.cloud_store_path.empty();
-    for (const fs::path &store_path : options_.store_path)
+    for (const fs::path store_path : options_.store_path)
     {
         if (fs::exists(store_path))
         {
@@ -256,9 +256,9 @@ KvError EloqStore::InitStoreSpace()
     }
 
     assert(root_fds_.empty());
-    for (const fs::path &store_path : options_.store_path)
+    for (const fs::path store_path : options_.store_path)
     {
-        int res = open(store_path.c_str(), IouringMgr::oflags_dir);
+        res = open(store_path.c_str(), IouringMgr::oflags_dir);
         if (res < 0)
         {
             for (int fd : root_fds_)
