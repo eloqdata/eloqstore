@@ -1566,11 +1566,10 @@ void IouringMgr::WriteReq::SetPage(VarPage page)
 }
 
 CloudStoreMgr::CloudStoreMgr(const KvOptions *opts, uint32_t fd_limit)
-    : IouringMgr(opts, fd_limit), file_cleaner_(this)
+    : IouringMgr(opts, fd_limit), file_cleaner_(this), obj_store_(options_)
 {
     lru_file_head_.next_ = &lru_file_tail_;
     lru_file_tail_.prev_ = &lru_file_head_;
-    obj_store_ = std::make_unique<ObjectStore>(this);
     shard_local_space_limit_ = opts->local_space_limit / opts->num_threads;
 }
 
@@ -1597,14 +1596,14 @@ void CloudStoreMgr::Stop()
 
 void CloudStoreMgr::Submit()
 {
-    obj_store_->GetHttpManager()->PerformRequests();
+    obj_store_.GetHttpManager()->PerformRequests();
 
     IouringMgr::Submit();
 }
 
 void CloudStoreMgr::PollComplete()
 {
-    obj_store_->GetHttpManager()->ProcessCompletedRequests();
+    obj_store_.GetHttpManager()->ProcessCompletedRequests();
 
     IouringMgr::PollComplete();
 }
@@ -1909,7 +1908,7 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id, FileId file_id)
     // Set KvTask pointer and initialize inflight_io_
     download_task.SetKvTask(current_task);
 
-    obj_store_->GetHttpManager()->SubmitRequest(&download_task);
+    obj_store_.GetHttpManager()->SubmitRequest(&download_task);
     current_task->status_ = TaskStatus::Blocked;
     current_task->Yield();
 
@@ -1931,7 +1930,7 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
     // Set KvTask pointer and initialize inflight_io_
     upload_task.SetKvTask(current_task);
 
-    obj_store_->GetHttpManager()->SubmitRequest(&upload_task);
+    obj_store_.GetHttpManager()->SubmitRequest(&upload_task);
     current_task->status_ = TaskStatus::Blocked;
     current_task->Yield();
 

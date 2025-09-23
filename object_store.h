@@ -27,7 +27,7 @@ class AsyncIoManager;
 class ObjectStore
 {
 public:
-    ObjectStore(AsyncIoManager *io_mgr);
+    explicit ObjectStore(const KvOptions *options);
     ~ObjectStore();
 
     AsyncHttpManager *GetHttpManager()
@@ -51,7 +51,7 @@ public:
         virtual Type TaskType() = 0;
 
         KvError error_{KvError::NoError};
-        std::string response_data_;
+        std::string response_data_{};
 
         uint8_t retry_count_ = 0;
         const uint8_t max_retries_ = 3;
@@ -82,7 +82,7 @@ public:
         };
         const TableIdent *tbl_id_;
         std::string filename_;
-        struct curl_slist *headers_{nullptr};
+        curl_slist *headers_{nullptr};
         std::string json_data_;
     };
 
@@ -101,7 +101,7 @@ public:
 
         // cURL related members
         curl_mime *mime_{nullptr};
-        struct curl_slist *headers_{nullptr};
+        curl_slist *headers_{nullptr};
     };
 
     class ListTask : public Task
@@ -115,7 +115,7 @@ public:
         };
         std::string remote_path_;
         std::vector<std::string> *result_;
-        struct curl_slist *headers_{nullptr};
+        curl_slist *headers_{nullptr};
         std::string json_data_;
     };
 
@@ -149,7 +149,7 @@ private:
 class AsyncHttpManager
 {
 public:
-    AsyncHttpManager(const std::string &daemon_url, AsyncIoManager *io_mgr);
+    AsyncHttpManager(const KvOptions *options);
     ~AsyncHttpManager();
 
     void SubmitRequest(ObjectStore::Task *task);
@@ -178,7 +178,7 @@ private:
                                 size_t nmemb,
                                 std::string *userp)
     {
-        return ((std::string *) userp)->append((char *) contents, size * nmemb),
+        return userp->append(static_cast<char *>(contents), size * nmemb),
                size * nmemb;
     }
 
@@ -190,7 +190,7 @@ private:
     const std::string daemon_list_url_;
     const std::string daemon_delete_url_;
     const std::string daemon;
-    AsyncIoManager *io_mgr_;
+    const KvOptions *options_;
     int running_handles_{0};
 };
 

@@ -26,7 +26,7 @@ inline std::string DataFileName(FileId file_id)
     name.append(FileNameData);
     name.push_back(FileNameSeparator);
     name.append(std::to_string(file_id));
-    return std::move(name);
+    return name;
 }
 
 inline std::string ArchiveName(uint64_t ts)
@@ -36,6 +36,6 @@ inline std::string ArchiveName(uint64_t ts)
     name.append(FileNameManifest);
     name.push_back(FileNameSeparator);
     name.append(std::to_string(ts));
-    return std::move(name);
+    return name;
 }
 }  // namespace eloqstore

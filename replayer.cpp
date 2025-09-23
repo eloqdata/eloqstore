@@ -84,14 +84,14 @@ KvError Replayer::ParseNextRecord(ManifestFile *file)
 
 void Replayer::DeserializeSnapshot(std::string_view snapshot)
 {
-    bool ok = GetVarint64(&snapshot, &max_fp_id_);
+    [[maybe_unused]] bool ok = GetVarint64(&snapshot, &max_fp_id_);
     assert(ok);
 
     mapping_tbl_.reserve(opts_->init_page_count);
     while (!snapshot.empty())
     {
         uint64_t value;
-        bool ok = GetVarint64(&snapshot, &value);
+        ok = GetVarint64(&snapshot, &value);
         assert(ok);
         mapping_tbl_.push_back(value);
     }
@@ -102,7 +102,7 @@ void Replayer::ReplayLog()
     while (!payload_.empty())
     {
         PageId page_id;
-        bool ok = GetVarint32(&payload_, &page_id);
+        [[maybe_unused]] bool ok = GetVarint32(&payload_, &page_id);
         assert(ok);
         while (page_id >= mapping_tbl_.size())
         {
@@ -206,6 +206,6 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
             opts_, max_fp_id_, std::move(free_ids));
     }
 
-    return std::move(mapper);
+    return mapper;
 }
 }  // namespace eloqstore

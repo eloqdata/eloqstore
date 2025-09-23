@@ -227,7 +227,7 @@ KvError FileGarbageCollector::ListCloudFiles(
     // Set KvTask pointer and initialize inflight_io_
     list_task.SetKvTask(current_task);
 
-    cloud_mgr->GetObjectStore()->GetHttpManager()->SubmitRequest(&list_task);
+    cloud_mgr->GetObjectStore().GetHttpManager()->SubmitRequest(&list_task);
     current_task->status_ = TaskStatus::Blocked;
     current_task->Yield();
 
@@ -332,7 +332,7 @@ KvError FileGarbageCollector::DownloadArchiveFile(
     // Set KvTask pointer and initialize inflight_io_
     download_task.SetKvTask(current_task);
 
-    cloud_mgr->GetObjectStore()->GetHttpManager()->SubmitRequest(
+    cloud_mgr->GetObjectStore().GetHttpManager()->SubmitRequest(
         &download_task);
     current_task->status_ = TaskStatus::Blocked;
     current_task->Yield();
@@ -510,7 +510,7 @@ KvError FileGarbageCollector::DeleteUnreferencedDataFiles(
     for (size_t i = 0; i < delete_task.file_paths_.size(); ++i)
     {
         delete_task.current_index_ = i;
-        cloud_mgr->GetObjectStore()->GetHttpManager()->SubmitRequest(
+        cloud_mgr->GetObjectStore().GetHttpManager()->SubmitRequest(
             &delete_task);
     }
 

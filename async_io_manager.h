@@ -363,9 +363,9 @@ public:
                           std::string_view snapshot,
                           uint64_t ts) override;
 
-    ObjectStore *GetObjectStore()
+    ObjectStore &GetObjectStore()
     {
-        return obj_store_.get();
+        return obj_store_;
     }
 
     KvError ReadArchiveFileAndDelete(const std::string &file_path,
@@ -448,7 +448,7 @@ private:
 
     FileCleaner file_cleaner_;
 
-    std::unique_ptr<ObjectStore> obj_store_;
+    ObjectStore obj_store_;
 };
 
 class MemStoreMgr : public AsyncIoManager
