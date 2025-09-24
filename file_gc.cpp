@@ -520,7 +520,7 @@ KvError FileGarbageCollector::DeleteUnreferencedDataFiles(
     
     // Check if we should delete the entire directory instead of individual files
     // If files_to_delete.size() == data_files.size() - 1, it means we're deleting all data files except manifest
-    if (files_to_delete.size() == data_files.size() - 1 && !files_to_delete.empty())
+    if (files_to_delete.size() == data_files.size() && !files_to_delete.empty())
     {
         LOG(INFO) << "Deleting entire directory instead of individual files";
         // Clear files_to_delete and add the directory path
@@ -619,6 +619,7 @@ KvError FileGarbageCollector::ExecuteCloudGC(
                                        mapping_ts,
                                        least_not_archived_file_id,
                                        cloud_mgr);
+    LOG(INFO) << "GetOrUpdateArchivedMaxFileId, least_not_archived_file_id: " << least_not_archived_file_id;
     if (err != KvError::NoError)
     {
         return err;

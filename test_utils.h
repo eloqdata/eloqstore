@@ -41,7 +41,7 @@ public:
     void Upsert(uint64_t key);
     void Upsert(uint64_t begin, uint64_t end);
     void Delete(uint64_t begin, uint64_t end);
-    void Truncate(uint64_t position);
+    void Truncate(uint64_t position, bool delete_all = false);
     void WriteRnd(uint64_t begin,
                   uint64_t end,
                   uint8_t del = 20,

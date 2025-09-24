@@ -7,6 +7,7 @@
 #include <liburing/io_uring.h>
 #include <linux/openat2.h>
 
+#include <boost/algorithm/string/predicate.hpp>
 #include <cassert>
 #include <cerrno>
 #include <cstddef>
@@ -18,7 +19,6 @@
 #include <string>
 #include <utility>
 #include <vector>
-#include <boost/algorithm/string/predicate.hpp>
 
 #include "common.h"
 #include "eloq_store.h"
@@ -502,8 +502,7 @@ void IouringMgr::CleanTable(const TableIdent &tbl_id)
     assert(false);
 }
 
-KvError IouringMgr::RemovePartitionDirIfOnlyManifest(
-    const TableIdent &tbl_id)
+KvError IouringMgr::RemovePartitionDirIfOnlyManifest(const TableIdent &tbl_id)
 {
     if (options_->store_path.empty())
     {
@@ -512,6 +511,8 @@ KvError IouringMgr::RemovePartitionDirIfOnlyManifest(
 
     auto close_all_fds = [this, &tbl_id]() -> KvError
     {
+        DLOG(INFO) << "close all fids " << tbl_id.tbl_name_ << ":"
+                   << tbl_id.partition_id_;
         while (true)
         {
             auto it_tbl = tables_.find(tbl_id);
@@ -559,8 +560,9 @@ KvError IouringMgr::RemovePartitionDirIfOnlyManifest(
     {
         if (ec)
         {
-            LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: exists check failed "
-                       << dir_path << ": " << ec.message();
+            LOG(ERROR)
+                << "RemovePartitionDirIfOnlyManifest: exists check failed "
+                << dir_path << ": " << ec.message();
             return ToKvError(-ec.value());
         }
         return KvError::NoError;
@@ -569,17 +571,25 @@ KvError IouringMgr::RemovePartitionDirIfOnlyManifest(
     fs::directory_iterator it(dir_path, ec);
     if (ec)
     {
+        if (ec == std::errc::no_such_file_or_directory)
+        {
+            return KvError::NoError;
+        }
         LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: iterate failed "
                    << dir_path << ": " << ec.message();
         return ToKvError(-ec.value());
     }
 
     fs::directory_iterator end;
-    fs::path manifest_path;
+    std::vector<fs::path> manifest_paths;
     for (; it != end; it.increment(ec))
     {
         if (ec)
         {
+            if (ec == std::errc::no_such_file_or_directory)
+            {
+                return KvError::NoError;
+            }
             LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: iteration failed "
                        << dir_path << ": " << ec.message();
             return ToKvError(-ec.value());
@@ -589,9 +599,13 @@ KvError IouringMgr::RemovePartitionDirIfOnlyManifest(
         {
             if (ec)
             {
-                LOG(ERROR)
-                    << "RemovePartitionDirIfOnlyManifest: is_regular_file failed "
-                    << ent.path() << ": " << ec.message();
+                if (ec == std::errc::no_such_file_or_directory)
+                {
+                    return KvError::NoError;
+                }
+                LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: "
+                              "is_regular_file failed "
+                           << ent.path() << ": " << ec.message();
                 return ToKvError(-ec.value());
             }
             return KvError::NoError;
@@ -604,26 +618,30 @@ KvError IouringMgr::RemovePartitionDirIfOnlyManifest(
         }
 
         const auto [file_type, file_suffix] = ParseFileName(name);
-        if (file_type == FileNameManifest && file_suffix.empty())
+        if (file_type == FileNameManifest)
         {
-            manifest_path = ent.path();
+            manifest_paths.push_back(ent.path());
             continue;
+        }
+
+        if (file_type == FileNameData)
+        {
+            return KvError::NoError;
         }
 
         return KvError::NoError;
     }
 
-    if (manifest_path.empty())
+    for (const fs::path &path : manifest_paths)
     {
-        return KvError::NoError;
-    }
-
-    fs::remove(manifest_path, ec);
-    if (ec)
-    {
-        LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: remove manifest failed "
-                   << manifest_path << ": " << ec.message();
-        return ToKvError(-ec.value());
+        fs::remove(path, ec);
+        if (ec)
+        {
+            LOG(ERROR)
+                << "RemovePartitionDirIfOnlyManifest: remove manifest failed "
+                << path << ": " << ec.message();
+            return ToKvError(-ec.value());
+        }
     }
 
     fs::remove(dir_path, ec);
@@ -634,6 +652,7 @@ KvError IouringMgr::RemovePartitionDirIfOnlyManifest(
         return ToKvError(-ec.value());
     }
 
+    tables_.erase(tbl_id);
     least_not_archived_file_ids_.erase(tbl_id);
     LOG(INFO) << "Removed empty partition directory " << dir_path;
     return KvError::NoError;
@@ -650,6 +669,7 @@ KvError ToKvError(int err_no)
     case -EPERM:
         return KvError::NoPermission;
     case -ENOENT:
+        LOG(INFO) << "ToKvError: NotFound";
         return KvError::NotFound;
     case -EINTR:
     case -EAGAIN:
@@ -734,6 +754,9 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     auto it_fd = tbl->fds_.find(file_id);
     if (it_fd == tbl->fds_.end())
     {
+        DLOG(INFO) << "fds emplace " << file_id
+                   << ", tbl_id=" << tbl_id.tbl_name_ << ":"
+                   << tbl_id.partition_id_;
         auto [it, _] = tbl->fds_.try_emplace(file_id, tbl, file_id);
         it_fd = it;
     }
@@ -769,7 +792,8 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
             // This must be data file because manifest should always be
             // created by call WriteSnapshot.
             assert(file_id <= LruFD::kMaxDataFile);
-            auto [dfd_ref, err] = OpenOrCreateFD(tbl_id, LruFD::kDirectory);
+            auto [dfd_ref, err] =
+                OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true);
             error = err;
             if (dfd_ref != nullptr)
             {

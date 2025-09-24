@@ -168,13 +168,18 @@ void MapVerifier::Delete(uint64_t begin, uint64_t end)
     ExecWrite(&req);
 }
 
-void MapVerifier::Truncate(uint64_t position)
+void MapVerifier::Truncate(uint64_t position, bool delete_all)
 {
-    LOG(INFO) << "Truncate(" << position << ')';
+    LOG(INFO) << "Truncate(" << position << ", delete_all=" << delete_all << ')';
 
     eloqstore::TruncateRequest req;
-    std::string key = Key(position, key_len_);
-    req.SetArgs(tid_, key);
+    if (delete_all) {
+        // Empty position means delete all data
+        req.SetTableId(tid_);
+    } else {
+        std::string key = Key(position, key_len_);
+        req.SetArgs(tid_, key);
+    }
     ExecWrite(&req);
 }
 
@@ -422,8 +427,13 @@ void MapVerifier::ExecWrite(eloqstore::KvRequest *req)
     case eloqstore::RequestType::Truncate:
     {
         const auto treq = static_cast<eloqstore::TruncateRequest *>(req);
-        auto it = answer_.lower_bound(std::string(treq->position_));
-        answer_.erase(it, answer_.end());
+        if (treq->position_.empty()) {
+            // Delete all data when position is empty
+            answer_.clear();
+        } else {
+            auto it = answer_.lower_bound(std::string(treq->position_));
+            answer_.erase(it, answer_.end());
+        }
         break;
     }
     default:
