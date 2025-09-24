@@ -30,6 +30,7 @@ AsyncHttpManager::AsyncHttpManager(const KvOptions *options)
       daemon_download_url_(daemon_url_ + "/operations/copyfile"),
       daemon_list_url_(daemon_url_ + "/operations/list"),
       daemon_delete_url_(daemon_url_ + "/operations/deletefile"),
+      daemon_purge_url_(daemon_url_ + "/operations/purge"),
       options_(options)
 {
     multi_handle_ = curl_multi_init();
@@ -221,7 +222,10 @@ void AsyncHttpManager::SetupDeleteRequest(ObjectStore::DeleteTask *task,
     headers = curl_slist_append(headers, "Content-Type: application/json");
     task->headers_list_[index] = headers;
 
-    curl_easy_setopt(easy, CURLOPT_URL, daemon_delete_url_.c_str());
+    // Choose URL based on whether it's a directory or file
+    const char* url = task->IsDir(index) ? daemon_purge_url_.c_str() : daemon_delete_url_.c_str();
+    
+    curl_easy_setopt(easy, CURLOPT_URL, url);
     curl_easy_setopt(
         easy, CURLOPT_POSTFIELDS, task->json_data_list_[index].c_str());
     curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
@@ -400,18 +404,18 @@ void AsyncHttpManager::CleanupTaskResources(ObjectStore::Task *task)
         }
     }
     else if (task->TaskType() == ObjectStore::Task::Type::AsyncDelete)
-    {
-        auto delete_task = static_cast<ObjectStore::DeleteTask *>(task);
-        for (auto &headers : delete_task->headers_list_)
         {
-            if (headers)
+            auto delete_task = static_cast<ObjectStore::DeleteTask *>(task);
+            for (auto &headers : delete_task->headers_list_)
             {
-                curl_slist_free_all(headers);
+                if (headers)
+                {
+                    curl_slist_free_all(headers);
+                }
             }
+            delete_task->headers_list_.clear();
+            delete_task->json_data_list_.clear();
         }
-        delete_task->headers_list_.clear();
-        delete_task->json_data_list_.clear();
-    }
 }
 
 void AsyncHttpManager::Cleanup()

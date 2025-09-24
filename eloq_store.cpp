@@ -11,9 +11,9 @@
 #include <memory>
 #include <string_view>
 #include <system_error>
+#include <unordered_set>
 #include <utility>
 #include <vector>
-#include <unordered_set>
 
 #include "archive_crond.h"
 #include "async_io_manager.h"
@@ -353,10 +353,35 @@ KvError EloqStore::CollectTablePartitions(
     }
     else
     {
-        ListObjectRequest list_object_request(options_.cloud_store_path);
-        list_object_request.callback_ = [](eloqstore::KvRequest *req){};
-        shards_[utils::RandomInt(static_cast<int>(shards_.size()))]->AddKvRequest(&list_object_request);
-
+        std::vector<std::string> objects;
+        ListObjectRequest list_object_request(options_.cloud_store_path,
+                                              &objects);
+        std::mutex mu;
+        std::condition_variable cv;
+        bool finish = false;
+        list_object_request.callback_ =
+            [&mu, &cv, &finish](eloqstore::KvRequest *req)
+        {
+            std::unique_lock<std::mutex> lk(mu);
+            finish = true;
+            cv.notify_all();
+        };
+        shards_[utils::RandomInt(static_cast<int>(shards_.size()))]
+            ->AddKvRequest(&list_object_request);
+        std::unique_lock<std::mutex> lk(mu);
+        cv.wait(lk, [&finish] { return finish; });
+        LOG(INFO) << "Get " << objects.size() << " objects";
+        for (auto &object_name : objects)
+        {
+            TableIdent ident = TableIdent::FromString(object_name);
+            if (!ident.IsValid() || ident.tbl_name_ != table_name)
+            {
+                LOG(INFO) << "ident.tbl_name:" << ident.tbl_name_
+                          << ", table_name:" << table_name;
+                continue;
+            }
+            partitions.push_back(std::move(ident));
+        }
     }
     return KvError::NoError;
 }
@@ -411,6 +436,8 @@ void EloqStore::HandleDropTableRequest(DropTableRequest *req)
     req->truncate_reqs_.reserve(partitions.size());
     for (const TableIdent &partition : partitions)
     {
+        LOG(INFO) << "truncate partiiton " << partition.tbl_name_ << ":"
+                  << partition.partition_id_;
         auto trunc_req = std::make_unique<TruncateRequest>();
         trunc_req->SetArgs(partition, std::string_view{});
         TruncateRequest *ptr = trunc_req.get();

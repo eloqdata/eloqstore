@@ -93,10 +93,12 @@ public:
     virtual std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) = 0;
     virtual void CleanTable(const TableIdent &tbl_id) = 0;
+    virtual KvError RemovePartitionDirIfOnlyManifest(
+        const TableIdent &tbl_id) = 0;
 
     const KvOptions *options_;
 
-    std::unordered_map<TableIdent, FileId> archived_max_file_ids_;
+    std::unordered_map<TableIdent, FileId> least_not_archived_file_ids_;
 };
 
 KvError ToKvError(int err_no);
@@ -137,6 +139,7 @@ public:
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
     void CleanTable(const TableIdent &tbl_id) override;
+    KvError RemovePartitionDirIfOnlyManifest(const TableIdent &tbl_id) override;
 
     static constexpr uint64_t oflags_dir = O_DIRECTORY | O_RDONLY;
 
@@ -486,6 +489,7 @@ public:
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
     void CleanTable(const TableIdent &tbl_id) override;
+    KvError RemovePartitionDirIfOnlyManifest(const TableIdent &tbl_id) override;
 
     class Manifest : public ManifestFile
     {

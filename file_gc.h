@@ -98,7 +98,7 @@ private:
         const std::vector<std::string> &data_files,
         FileId max_file_id,
         const std::unordered_set<FileId> &retained_files,
-        FileId archived_max_file_id,
+        FileId least_not_archived_file_id,
         class CloudStoreMgr *cloud_mgr);
 
     // Thread pool for local mode

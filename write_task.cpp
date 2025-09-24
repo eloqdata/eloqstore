@@ -291,6 +291,10 @@ void WriteTask::CompactIfNeeded(PageMapper *mapper) const
     {
         shard->AddPendingCompact(tbl_ident_);
     }
+    else
+    {
+        LOG(INFO) << "No Need to Compact";
+    }
     /*
     if (mapping_cnt == 0)
     {
@@ -339,6 +343,7 @@ void WriteTask::TriggerFileGC() const
     if (eloq_store->file_gc_ == nullptr)
     {
         // File garbage collector is not enabled.
+        LOG(INFO) << "TriggerFileGC not enabled";
         return;
     }
     assert(Options()->data_append_mode);
@@ -365,6 +370,7 @@ void WriteTask::TriggerFileGC() const
     // Check if we're in cloud mode or local mode
     if (!Options()->cloud_store_path.empty())
     {
+        LOG(INFO) << "Begin GC in Cloud mode";
         // Cloud mode: execute GC directly
         CloudStoreMgr *cloud_mgr =
             static_cast<CloudStoreMgr *>(shard->IoManager());

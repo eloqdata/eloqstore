@@ -124,16 +124,34 @@ public:
         {
             headers_list_.resize(file_paths_.size(), nullptr);
             json_data_list_.resize(file_paths_.size());
+            is_dir_list_.resize(file_paths_.size(), false);
         }
         Type TaskType() override
         {
             return Type::AsyncDelete;
         };
+        
+        // Set whether the current file is a directory
+        void SetIsDir(size_t index, bool is_dir)
+        {
+            if (index < is_dir_list_.size())
+            {
+                is_dir_list_[index] = is_dir;
+            }
+        }
+        
+        // Check if the current file is a directory
+        bool IsDir(size_t index) const
+        {
+            return index < is_dir_list_.size() ? is_dir_list_[index] : false;
+        }
+        
         std::vector<std::string> file_paths_;  // Support batch delete
         size_t current_index_;  // Current index being processed in file_paths_
 
         std::vector<struct curl_slist *> headers_list_;
         std::vector<std::string> json_data_list_;
+        std::vector<bool> is_dir_list_;  // Track which paths are directories
 
         bool has_error_{false};
         KvError first_error_{KvError::NoError};
@@ -186,6 +204,7 @@ private:
     const std::string daemon_download_url_;
     const std::string daemon_list_url_;
     const std::string daemon_delete_url_;
+    const std::string daemon_purge_url_;
     const KvOptions *options_;
     int running_handles_{0};
 };

@@ -27,6 +27,14 @@ BackgroundWrite *TaskManager::GetBackgroundWrite(const TableIdent &tbl_id)
     return task;
 }
 
+GcCleanupTask *TaskManager::GetGcCleanupTask(const TableIdent &tbl_id)
+{
+    num_active_++;
+    GcCleanupTask *task = gc_cleanup_pool_.GetTask();
+    task->Reset(tbl_id);
+    return task;
+}
+
 ReadTask *TaskManager::GetReadTask()
 {
     num_active_++;
@@ -63,6 +71,12 @@ void TaskManager::FreeTask(KvTask *task)
         break;
     case TaskType::BackgroundWrite:
         bg_write_pool_.FreeTask(static_cast<BackgroundWrite *>(task));
+        break;
+    case TaskType::ListObject:
+        list_object_poll.FreeTask(static_cast<ListObjectTask *>(task));
+        break;
+    case TaskType::GcCleanup:
+        gc_cleanup_pool_.FreeTask(static_cast<GcCleanupTask *>(task));
         break;
     case TaskType::EvictFile:
         assert(false && "EvictFile task should not be freed here");

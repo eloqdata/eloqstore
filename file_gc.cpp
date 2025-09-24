@@ -9,80 +9,29 @@
 #include <vector>
 
 #include "common.h"
+#include "eloq_store.h"
 #include "error.h"
 #include "replayer.h"
+#include "task.h"
 #include "utils.h"
 
 namespace eloqstore
 {
-bool RemovePartitionDirIfOnlyManifest(const fs::path &dir_path)
+namespace
 {
-    LOG(INFO) << "RemovePartitionDirIfOnlyManifest " << dir_path;
-    if (!fs::exists(dir_path))
+KvError SubmitGcCleanup(const TableIdent &tbl_id)
+{
+    if (eloq_store == nullptr)
     {
-        LOG(ERROR) << "dir_path not exist " << dir_path;
-        return false;
-    }
-    if (!fs::exists(dir_path))
-    {
-        return false;
+        return KvError::NotRunning;
     }
 
-    fs::path manifest_path;
-    for (const auto &ent : fs::directory_iterator{dir_path})
-    {
-        LOG(INFO) << "ent: " << ent.path().string();
-        if (!ent.is_regular_file())
-        {
-            LOG(INFO) << "ent is not regular file";
-            return false;
-        }
-
-        const std::string name = ent.path().filename().string();
-        if (boost::algorithm::ends_with(name, TmpSuffix))
-        {
-            LOG(INFO) << "tmp";
-            return false;
-        }
-
-        const auto [file_type, file_suffix] = ParseFileName(name);
-        LOG(INFO) << "name:" << name << ", file_type=(" << file_type.size()
-                  << "), file_suffix=(" << file_suffix << ")";
-        if (file_type == FileNameManifest && file_suffix.empty())
-        {
-            manifest_path = ent.path();
-            LOG(INFO) << "manifest_path =" << manifest_path;
-            continue;
-        }
-
-        return false;
-    }
-
-    if (manifest_path.empty())
-    {
-        LOG(INFO) << "manifest empty";
-        return false;
-    }
-
-    std::error_code ec;
-    fs::remove(manifest_path, ec);
-    if (ec)
-    {
-        LOG(ERROR) << "can not remove " << manifest_path << ": "
-                   << ec.message();
-        return false;
-    }
-
-    fs::remove(dir_path, ec);
-    if (ec)
-    {
-        LOG(ERROR) << "can not remove " << dir_path << ": " << ec.message();
-        return false;
-    }
-
-    LOG(INFO) << "Removed empty partition directory " << dir_path;
-    return true;
+    GcCleanupRequest req;
+    req.SetTableId(tbl_id);
+    eloq_store->ExecSync(&req);
+    return req.Error();
 }
+}  // namespace
 
 void GetRetainedFiles(std::unordered_set<FileId> &result,
                       const std::vector<uint64_t> &tbl,
@@ -289,7 +238,12 @@ KvError FileGarbageCollector::ExecuteLocalGC(const GcTask &task)
     {
         LOG(ERROR) << "dir_path not exist " << dir_path;
     }
-    RemovePartitionDirIfOnlyManifest(dir_path);
+    if (KvError cleanup_err = SubmitGcCleanup(task.tbl_id_);
+        cleanup_err != KvError::NoError)
+    {
+        LOG(ERROR) << "SubmitGcCleanup failed for " << dir_path << ": "
+                   << ErrorString(cleanup_err);
+    }
     return KvError::NoError;
 }
 
@@ -468,15 +422,15 @@ KvError FileGarbageCollector::GetOrUpdateArchivedMaxFileId(
     const std::vector<std::string> &archive_files,
     const std::vector<uint64_t> &archive_timestamps,
     uint64_t mapping_ts,
-    FileId &archived_max_file_id,
+    FileId &least_not_archived_file_id,
     CloudStoreMgr *cloud_mgr)
 {
     // 1. check cached max file id.
-    auto &cached_max_ids = cloud_mgr->archived_max_file_ids_;
+    auto &cached_max_ids = cloud_mgr->least_not_archived_file_ids_;
     auto it = cached_max_ids.find(tbl_id);
     if (it != cached_max_ids.end())
     {
-        archived_max_file_id = it->second;
+        least_not_archived_file_id = it->second;
         return KvError::NoError;
     }
 
@@ -498,8 +452,8 @@ KvError FileGarbageCollector::GetOrUpdateArchivedMaxFileId(
     if (latest_archive.empty())
     {
         // No available archive file, use default value.
-        archived_max_file_id = 0;
-        cached_max_ids[tbl_id] = archived_max_file_id;
+        assert(least_not_archived_file_id == 0);
+        cached_max_ids[tbl_id] = least_not_archived_file_id;
         return KvError::NoError;
     }
 
@@ -516,10 +470,10 @@ KvError FileGarbageCollector::GetOrUpdateArchivedMaxFileId(
     }
 
     // 4. parse the archive file to get the maximum file ID.
-    archived_max_file_id = ParseArchiveForMaxFileId(archive_content);
+    least_not_archived_file_id = ParseArchiveForMaxFileId(archive_content) + 1;
 
     // 6. cache the result.
-    cached_max_ids[tbl_id] = archived_max_file_id;
+    cached_max_ids[tbl_id] = least_not_archived_file_id;
 
     return KvError::NoError;
 }
@@ -529,7 +483,7 @@ KvError FileGarbageCollector::DeleteUnreferencedDataFiles(
     const std::vector<std::string> &data_files,
     FileId max_file_id,
     const std::unordered_set<FileId> &retained_files,
-    FileId archived_max_file_id,
+    FileId least_not_archived_file_id,
     CloudStoreMgr *cloud_mgr)
 {
     std::vector<std::string> files_to_delete;
@@ -546,17 +500,58 @@ KvError FileGarbageCollector::DeleteUnreferencedDataFiles(
 
         // Only delete files that meet the following conditions:
         // 1. File ID < max_file_id (not the current writing file)
-        // 2. File ID > archived_max_file_id (greater than the archived max file
+        // 2. File ID > least_not_archived_file_id (greater than the archived max file
         // ID)
         // 3. Not in retained_files (files not needed in the current version)
-        if (file_id < max_file_id && file_id > archived_max_file_id &&
+        if (file_id < max_file_id && file_id >= least_not_archived_file_id &&
             !retained_files.contains(file_id))
         {
             std::string remote_path = tbl_id.ToString() + "/" + file_name;
             files_to_delete.push_back(remote_path);
         }
+        else
+        {
+            LOG(INFO) << "skip file since file_id=" << file_id
+                      << ", max_file_id=" << max_file_id
+                      << ", least_not_archived_file_id=" << least_not_archived_file_id;
+        }
     }
-
+    LOG(INFO) << "delete unreference " << files_to_delete.size() << " files";
+    
+    // Check if we should delete the entire directory instead of individual files
+    // If files_to_delete.size() == data_files.size() - 1, it means we're deleting all data files except manifest
+    if (files_to_delete.size() == data_files.size() - 1 && !files_to_delete.empty())
+    {
+        LOG(INFO) << "Deleting entire directory instead of individual files";
+        // Clear files_to_delete and add the directory path
+        files_to_delete.clear();
+        files_to_delete.push_back(tbl_id.ToString());
+        
+        // Create delete task for directory
+        KvTask *current_task = ThdTask();
+        ObjectStore::DeleteTask delete_task(files_to_delete);
+        delete_task.SetKvTask(current_task);
+        
+        // Set the first (and only) entry as a directory
+        delete_task.SetIsDir(0, true);
+        
+        // Submit the directory delete request
+        delete_task.current_index_ = 0;
+        cloud_mgr->GetObjectStore().GetHttpManager()->SubmitRequest(&delete_task);
+        
+        current_task->status_ = TaskStatus::Blocked;
+        current_task->Yield();
+        
+        if (delete_task.error_ != KvError::NoError)
+        {
+            LOG(ERROR) << "Failed to delete directory: " << ErrorString(delete_task.error_);
+            return delete_task.error_;
+        }
+        
+        return KvError::NoError;
+    }
+    
+    // TODO also delete cloud objects and local directory.
     if (files_to_delete.empty())
     {
         return KvError::NoError;
@@ -600,9 +595,11 @@ KvError FileGarbageCollector::ExecuteCloudGC(
     const std::unordered_set<FileId> &retained_files,
     CloudStoreMgr *cloud_mgr)
 {
+    LOG(INFO) << "ExecuteCloudGC";
     // 1. list all files in cloud.
     std::vector<std::string> cloud_files;
     KvError err = ListCloudFiles(tbl_id, cloud_files, cloud_mgr);
+    LOG(INFO) << "ListCloudFiles got " << cloud_files.size() << " files";
     if (err != KvError::NoError)
     {
         return err;
@@ -615,24 +612,26 @@ KvError FileGarbageCollector::ExecuteCloudGC(
     ClassifyFiles(cloud_files, archive_files, archive_timestamps, data_files);
 
     // 3. get or update archived max file id.
-    FileId archived_max_file_id = 0;
+    FileId least_not_archived_file_id = 0;
     err = GetOrUpdateArchivedMaxFileId(tbl_id,
                                        archive_files,
                                        archive_timestamps,
                                        mapping_ts,
-                                       archived_max_file_id,
+                                       least_not_archived_file_id,
                                        cloud_mgr);
     if (err != KvError::NoError)
     {
         return err;
     }
 
+    LOG(INFO) << "Delete " << data_files.size() << " data files, "
+              << retained_files.size() << " retained files";
     // 4. delete unreferenced data files.
     err = DeleteUnreferencedDataFiles(tbl_id,
                                       data_files,
                                       max_file_id,
                                       retained_files,
-                                      archived_max_file_id,
+                                      least_not_archived_file_id,
                                       cloud_mgr);
     if (err != KvError::NoError)
     {

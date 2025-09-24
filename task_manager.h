@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "background_write.h"
+#include "gc_cleanup_task.h"
 #include "batch_write_task.h"
 #include "list_object_task.h"
 #include "read_task.h"
@@ -18,6 +19,7 @@ class TaskManager
 public:
     BatchWriteTask *GetBatchWriteTask(const TableIdent &tbl_id);
     BackgroundWrite *GetBackgroundWrite(const TableIdent &tbl_id);
+    GcCleanupTask *GetGcCleanupTask(const TableIdent &tbl_id);
     ReadTask *GetReadTask();
     ScanTask *GetScanTask();
     ListObjectTask *GetListObjectTask();
@@ -77,6 +79,7 @@ private:
 
     TaskPool<BatchWriteTask> batch_write_pool_{1024};
     TaskPool<BackgroundWrite> bg_write_pool_{1024};
+    TaskPool<GcCleanupTask> gc_cleanup_pool_{512};
     TaskPool<ReadTask> read_pool_{2048};
     TaskPool<ScanTask> scan_pool_{2048};
     TaskPool<ListObjectTask> list_object_poll{512};
