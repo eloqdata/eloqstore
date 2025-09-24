@@ -139,8 +139,7 @@ public:
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
     void CleanTable(const TableIdent &tbl_id) override;
-    KvError RemovePartitionDirIfOnlyManifest(
-        const TableIdent &tbl_id) override;
+    KvError RemovePartitionDirIfOnlyManifest(const TableIdent &tbl_id) override;
 
     static constexpr uint64_t oflags_dir = O_DIRECTORY | O_RDONLY;
 
@@ -490,8 +489,7 @@ public:
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
     void CleanTable(const TableIdent &tbl_id) override;
-    KvError RemovePartitionDirIfOnlyManifest(
-        const TableIdent &tbl_id) override;
+    KvError RemovePartitionDirIfOnlyManifest(const TableIdent &tbl_id) override;
 
     class Manifest : public ManifestFile
     {

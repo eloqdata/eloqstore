@@ -44,6 +44,7 @@ enum struct TaskType
     Scan,
     BatchWrite,
     BackgroundWrite,
+    GcCleanup,
     EvictFile,
     ListObject
 };
