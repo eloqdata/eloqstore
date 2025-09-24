@@ -252,8 +252,7 @@ void Shard::ProcessReq(KvRequest *req)
             KvTask *current_task = ThdTask();
             auto list_object_req = static_cast<ListObjectRequest *>(req);
             task->SetResults(list_object_req->GetObjects());
-            auto storage_path = list_object_req->GetStoragePath();
-            ObjectStore::ListTask list_task(list_object_req->GetStoragePath());
+            ObjectStore::ListTask list_task("");
 
             list_task.SetKvTask(task);
             auto cloud_mgr = static_cast<CloudStoreMgr *>(shard->io_mgr_.get());
@@ -264,15 +263,17 @@ void Shard::ProcessReq(KvRequest *req)
 
             if (list_task.error_ != KvError::NoError)
             {
-                LOG(ERROR) << "Failed to list objects for " << storage_path
-                           << ", error: " << static_cast<int>(list_task.error_);
+                LOG(ERROR) << "Failed to list objects, error: "
+                           << static_cast<int>(list_task.error_);
                 return list_task.error_;
             }
 
             utils::ParseRCloneListObjectsResponse(
                 list_task.response_data_, *list_object_req->GetObjects());
+            return KvError::NoError;
         };
         StartTask(task, req, lbd);
+        break;
     }
     case RequestType::BatchWrite:
     {

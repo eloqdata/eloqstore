@@ -468,15 +468,15 @@ KvError FileGarbageCollector::GetOrUpdateArchivedMaxFileId(
     const std::vector<std::string> &archive_files,
     const std::vector<uint64_t> &archive_timestamps,
     uint64_t mapping_ts,
-    FileId &archived_max_file_id,
+    FileId &least_not_archived_file_id,
     CloudStoreMgr *cloud_mgr)
 {
     // 1. check cached max file id.
-    auto &cached_max_ids = cloud_mgr->archived_max_file_ids_;
+    auto &cached_max_ids = cloud_mgr->least_not_archived_file_ids_;
     auto it = cached_max_ids.find(tbl_id);
     if (it != cached_max_ids.end())
     {
-        archived_max_file_id = it->second;
+        least_not_archived_file_id = it->second;
         return KvError::NoError;
     }
 
@@ -498,8 +498,8 @@ KvError FileGarbageCollector::GetOrUpdateArchivedMaxFileId(
     if (latest_archive.empty())
     {
         // No available archive file, use default value.
-        archived_max_file_id = 0;
-        cached_max_ids[tbl_id] = archived_max_file_id;
+        assert(least_not_archived_file_id == 0);
+        cached_max_ids[tbl_id] = least_not_archived_file_id;
         return KvError::NoError;
     }
 
@@ -516,10 +516,10 @@ KvError FileGarbageCollector::GetOrUpdateArchivedMaxFileId(
     }
 
     // 4. parse the archive file to get the maximum file ID.
-    archived_max_file_id = ParseArchiveForMaxFileId(archive_content);
+    least_not_archived_file_id = ParseArchiveForMaxFileId(archive_content) + 1;
 
     // 6. cache the result.
-    cached_max_ids[tbl_id] = archived_max_file_id;
+    cached_max_ids[tbl_id] = least_not_archived_file_id;
 
     return KvError::NoError;
 }
@@ -529,7 +529,7 @@ KvError FileGarbageCollector::DeleteUnreferencedDataFiles(
     const std::vector<std::string> &data_files,
     FileId max_file_id,
     const std::unordered_set<FileId> &retained_files,
-    FileId archived_max_file_id,
+    FileId least_not_archived_file_id,
     CloudStoreMgr *cloud_mgr)
 {
     std::vector<std::string> files_to_delete;
@@ -546,17 +546,24 @@ KvError FileGarbageCollector::DeleteUnreferencedDataFiles(
 
         // Only delete files that meet the following conditions:
         // 1. File ID < max_file_id (not the current writing file)
-        // 2. File ID > archived_max_file_id (greater than the archived max file
+        // 2. File ID > least_not_archived_file_id (greater than the archived max file
         // ID)
         // 3. Not in retained_files (files not needed in the current version)
-        if (file_id < max_file_id && file_id > archived_max_file_id &&
+        if (file_id < max_file_id && file_id >= least_not_archived_file_id &&
             !retained_files.contains(file_id))
         {
             std::string remote_path = tbl_id.ToString() + "/" + file_name;
             files_to_delete.push_back(remote_path);
         }
+        else
+        {
+            LOG(INFO) << "skip file since file_id=" << file_id
+                      << ", max_file_id=" << max_file_id
+                      << ", least_not_archived_file_id=" << least_not_archived_file_id;
+        }
     }
-
+    LOG(INFO) << "delete unreference " << files_to_delete.size() << " files";
+    // TODO also delete cloud objects and local directory.
     if (files_to_delete.empty())
     {
         return KvError::NoError;
@@ -600,9 +607,11 @@ KvError FileGarbageCollector::ExecuteCloudGC(
     const std::unordered_set<FileId> &retained_files,
     CloudStoreMgr *cloud_mgr)
 {
+    LOG(INFO) << "ExecuteCloudGC";
     // 1. list all files in cloud.
     std::vector<std::string> cloud_files;
     KvError err = ListCloudFiles(tbl_id, cloud_files, cloud_mgr);
+    LOG(INFO) << "ListCloudFiles got " << cloud_files.size() << " files";
     if (err != KvError::NoError)
     {
         return err;
@@ -615,24 +624,26 @@ KvError FileGarbageCollector::ExecuteCloudGC(
     ClassifyFiles(cloud_files, archive_files, archive_timestamps, data_files);
 
     // 3. get or update archived max file id.
-    FileId archived_max_file_id = 0;
+    FileId least_not_archived_file_id = 0;
     err = GetOrUpdateArchivedMaxFileId(tbl_id,
                                        archive_files,
                                        archive_timestamps,
                                        mapping_ts,
-                                       archived_max_file_id,
+                                       least_not_archived_file_id,
                                        cloud_mgr);
     if (err != KvError::NoError)
     {
         return err;
     }
 
+    LOG(INFO) << "Delete " << data_files.size() << " data files, "
+              << retained_files.size() << " retained files";
     // 4. delete unreferenced data files.
     err = DeleteUnreferencedDataFiles(tbl_id,
                                       data_files,
                                       max_file_id,
                                       retained_files,
-                                      archived_max_file_id,
+                                      least_not_archived_file_id,
                                       cloud_mgr);
     if (err != KvError::NoError)
     {

@@ -184,13 +184,8 @@ public:
     }
 
     ListObjectRequest(const std::string &cloud_storage_path, std::vector<std::string> *objects)
-        : cloud_storage_path_(cloud_storage_path), objects_(objects)
+        : objects_(objects)
     {
-    }
-
-    std::string_view GetStoragePath()
-    {
-        return cloud_storage_path_;
     }
 
     std::vector<std::string> *GetObjects()
@@ -199,7 +194,6 @@ public:
     }
 
 private:
-    std::string_view cloud_storage_path_;
     std::vector<std::string> *objects_;
 };
 
