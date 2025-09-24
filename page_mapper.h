@@ -134,6 +134,13 @@ public:
     void UpdateStat(FileId min_file_id, uint32_t hole_cnt);
     FileId MinFileId() const;
     /**
+     * @brief Advances allocation to the next data file boundary so that
+     * future writes land in a new file. This allows GC to reclaim the
+     * previous file safely once no mapping references remain.
+     * @return File id that subsequent allocations will use.
+     */
+    FileId AdvanceCurrentFileId();
+    /**
      * @brief Calculates number of pages this allocator occupied.
      * This result includes pages that is not actually used by mapping but
      * belong to a file used by mapping.

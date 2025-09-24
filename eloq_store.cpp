@@ -7,12 +7,16 @@
 #include <cassert>
 #include <cstddef>
 #include <filesystem>
+#include <limits>
 #include <memory>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
+#include <unordered_set>
 
 #include "archive_crond.h"
+#include "async_io_manager.h"
 #include "common.h"
 #include "file_gc.h"
 #include "object_store.h"
@@ -295,6 +299,131 @@ void EloqStore::ExecSync(KvRequest *req)
     }
 }
 
+KvError EloqStore::CollectTablePartitions(
+    const std::string &table_name, std::vector<TableIdent> &partitions) const
+{
+    partitions.clear();
+    std::error_code ec;
+    if (options_.cloud_store_path.empty())
+    {
+#ifndef NDEBUG
+        std::unordered_set<TableIdent> seen;
+#endif
+        for (const fs::path root : options_.store_path)
+        {
+            fs::directory_iterator dir_it(root, ec);
+            if (ec)
+            {
+                return ToKvError(-ec.value());
+            }
+            fs::directory_iterator end;
+            for (; dir_it != end; dir_it.increment(ec))
+            {
+                if (ec)
+                {
+                    return ToKvError(-ec.value());
+                }
+                const fs::directory_entry &entry = *dir_it;
+                bool is_dir = entry.is_directory(ec);
+                if (ec)
+                {
+                    return ToKvError(-ec.value());
+                }
+                if (!is_dir)
+                {
+                    continue;
+                }
+                std::string name = entry.path().filename().string();
+                DLOG(INFO) << "CollectTablePartitions: " << name;
+                TableIdent ident = TableIdent::FromString(name);
+                if (!ident.IsValid() || ident.tbl_name_ != table_name)
+                {
+                    continue;
+                }
+#ifndef NDEBUG
+                if (!seen.insert(ident).second)
+                {
+                    LOG(FATAL) << "Duplicated partition directory for table "
+                               << table_name << ": " << ident;
+                }
+#endif
+                partitions.push_back(std::move(ident));
+            }
+        }
+    }
+    else
+    {
+        ListObjectRequest list_object_request(options_.cloud_store_path);
+        list_object_request.callback_ = [](eloqstore::KvRequest *req){};
+        shards_[utils::RandomInt(static_cast<int>(shards_.size()))]->AddKvRequest(&list_object_request);
+
+    }
+    return KvError::NoError;
+}
+
+void EloqStore::HandleDropTableRequest(DropTableRequest *req)
+{
+    req->first_error_.store(static_cast<uint8_t>(KvError::NoError),
+                            std::memory_order_relaxed);
+    req->pending_.store(0, std::memory_order_relaxed);
+    req->truncate_reqs_.clear();
+
+    std::vector<TableIdent> partitions;
+    KvError err = CollectTablePartitions(req->TableName(), partitions);
+    if (err != KvError::NoError)
+    {
+        req->SetDone(err);
+        return;
+    }
+
+    if (partitions.empty())
+    {
+        LOG(INFO) << "No partition found.";
+        req->SetDone(KvError::NoError);
+        return;
+    }
+
+    req->truncate_reqs_.reserve(partitions.size());
+    req->pending_.store(static_cast<uint32_t>(partitions.size()),
+                        std::memory_order_relaxed);
+
+    auto on_truncate_done = [req](KvRequest *sub_req)
+    {
+        KvError sub_err = sub_req->Error();
+        if (sub_err != KvError::NoError)
+        {
+            uint8_t expected = static_cast<uint8_t>(KvError::NoError);
+            uint8_t desired = static_cast<uint8_t>(sub_err);
+            req->first_error_.compare_exchange_strong(
+                expected,
+                desired,
+                std::memory_order_relaxed,
+                std::memory_order_relaxed);
+        }
+        if (req->pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        {
+            KvError final_err = static_cast<KvError>(
+                req->first_error_.load(std::memory_order_relaxed));
+            req->SetDone(final_err);
+        }
+    };
+
+    req->truncate_reqs_.reserve(partitions.size());
+    for (const TableIdent &partition : partitions)
+    {
+        auto trunc_req = std::make_unique<TruncateRequest>();
+        trunc_req->SetArgs(partition, std::string_view{});
+        TruncateRequest *ptr = trunc_req.get();
+        req->truncate_reqs_.push_back(std::move(trunc_req));
+        if (!ExecAsyn(ptr, 0, on_truncate_done))
+        {
+            LOG(ERROR)
+                << "Handle droptable request, enqueue truncate request fail";
+            ptr->SetDone(KvError::NotRunning);
+        }
+    }
+}
+
 bool EloqStore::SendRequest(KvRequest *req)
 {
     if (stopped_.load(std::memory_order_relaxed))
@@ -304,6 +433,12 @@ bool EloqStore::SendRequest(KvRequest *req)
 
     req->err_ = KvError::NoError;
     req->done_.store(false, std::memory_order_relaxed);
+
+    if (req->Type() == RequestType::DropTable)
+    {
+        HandleDropTableRequest(static_cast<DropTableRequest *>(req));
+        return true;
+    }
 
     Shard *shard = shards_[req->TableId().ShardIndex(shards_.size())].get();
     return shard->AddKvRequest(req);
@@ -529,6 +664,28 @@ void TruncateRequest::SetArgs(TableIdent tbl_id, std::string_view position)
 {
     SetTableId(std::move(tbl_id));
     position_ = position;
+}
+
+void DropTableRequest::SetArgs(std::string table_name)
+{
+    if (!table_name.empty())
+    {
+        SetTableId({table_name, std::numeric_limits<uint32_t>::max()});
+    }
+    else
+    {
+        SetTableId({});
+    }
+    table_name_ = std::move(table_name);
+    truncate_reqs_.clear();
+    pending_.store(0, std::memory_order_relaxed);
+    first_error_.store(static_cast<uint8_t>(KvError::NoError),
+                       std::memory_order_relaxed);
+}
+
+const std::string &DropTableRequest::TableName() const
+{
+    return table_name_;
 }
 
 const TableIdent &KvRequest::TableId() const

@@ -10,12 +10,19 @@ inline std::pair<std::string_view, std::string_view> ParseFileName(
     std::string_view name)
 {
     size_t pos = name.find(FileNameSeparator);
-    std::string_view file_type(name.data(), pos);
+    std::string_view file_type;
     std::string_view file_id;
-    if (pos != std::string::npos)
+
+    if (pos == std::string::npos)
     {
-        file_id = std::string_view{name.data() + pos + 1};
+        file_type = name;
     }
+    else
+    {
+        file_type = name.substr(0, pos);
+        file_id = name.substr(pos + 1);
+    }
+
     return {file_type, file_id};
 }
 

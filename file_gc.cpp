@@ -11,9 +11,79 @@
 #include "common.h"
 #include "error.h"
 #include "replayer.h"
+#include "utils.h"
 
 namespace eloqstore
 {
+bool RemovePartitionDirIfOnlyManifest(const fs::path &dir_path)
+{
+    LOG(INFO) << "RemovePartitionDirIfOnlyManifest " << dir_path;
+    if (!fs::exists(dir_path))
+    {
+        LOG(ERROR) << "dir_path not exist " << dir_path;
+        return false;
+    }
+    if (!fs::exists(dir_path))
+    {
+        return false;
+    }
+
+    fs::path manifest_path;
+    for (const auto &ent : fs::directory_iterator{dir_path})
+    {
+        LOG(INFO) << "ent: " << ent.path().string();
+        if (!ent.is_regular_file())
+        {
+            LOG(INFO) << "ent is not regular file";
+            return false;
+        }
+
+        const std::string name = ent.path().filename().string();
+        if (boost::algorithm::ends_with(name, TmpSuffix))
+        {
+            LOG(INFO) << "tmp";
+            return false;
+        }
+
+        const auto [file_type, file_suffix] = ParseFileName(name);
+        LOG(INFO) << "name:" << name << ", file_type=(" << file_type.size()
+                  << "), file_suffix=(" << file_suffix << ")";
+        if (file_type == FileNameManifest && file_suffix.empty())
+        {
+            manifest_path = ent.path();
+            LOG(INFO) << "manifest_path =" << manifest_path;
+            continue;
+        }
+
+        return false;
+    }
+
+    if (manifest_path.empty())
+    {
+        LOG(INFO) << "manifest empty";
+        return false;
+    }
+
+    std::error_code ec;
+    fs::remove(manifest_path, ec);
+    if (ec)
+    {
+        LOG(ERROR) << "can not remove " << manifest_path << ": "
+                   << ec.message();
+        return false;
+    }
+
+    fs::remove(dir_path, ec);
+    if (ec)
+    {
+        LOG(ERROR) << "can not remove " << dir_path << ": " << ec.message();
+        return false;
+    }
+
+    LOG(INFO) << "Removed empty partition directory " << dir_path;
+    return true;
+}
+
 void GetRetainedFiles(std::unordered_set<FileId> &result,
                       const std::vector<uint64_t> &tbl,
                       uint8_t pages_per_file_shift)
@@ -139,6 +209,8 @@ KvError FileGarbageCollector::ExecuteLocalGC(const GcTask &task)
             if (file_id < task.max_file_id_)
             {
                 gc_data_files.emplace_back(file_id);
+                LOG(INFO) << "Clear unused data, gc data files size "
+                          << gc_data_files.size();
             }
         }
     }
@@ -198,6 +270,9 @@ KvError FileGarbageCollector::ExecuteLocalGC(const GcTask &task)
     }
 
     // Clear unused data files by any archive.
+    LOG(INFO) << "Clear unused data, gc data files size "
+              << gc_data_files.size() << ", retained data files size "
+              << all_retained_files.size();
     for (FileId file_id : gc_data_files)
     {
         if (!all_retained_files.contains(file_id))
@@ -209,6 +284,12 @@ KvError FileGarbageCollector::ExecuteLocalGC(const GcTask &task)
             }
         }
     }
+
+    if (!fs::exists(dir_path))
+    {
+        LOG(ERROR) << "dir_path not exist " << dir_path;
+    }
+    RemovePartitionDirIfOnlyManifest(dir_path);
     return KvError::NoError;
 }
 
@@ -241,23 +322,8 @@ KvError FileGarbageCollector::ListCloudFiles(
     // Parse the JSON response.
     try
     {
-        Json::Value response;
-        Json::Reader reader;
-        if (reader.parse(list_task.response_data_, response))
-        {
-            if (response.isMember("list") && response["list"].isArray())
-            {
-                cloud_files.clear();
-                for (const auto &item : response["list"])
-                {
-                    if (item.isMember("Name") && item["Name"].isString())
-                    {
-                        cloud_files.push_back(item["Name"].asString());
-                    }
-                }
-            }
-        }
-        else
+        if (!utils::ParseRCloneListObjectsResponse(list_task.response_data_,
+                                                   cloud_files))
         {
             LOG(ERROR) << "Failed to parse JSON response: "
                        << list_task.response_data_;
