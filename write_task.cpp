@@ -286,14 +286,12 @@ void WriteTask::CompactIfNeeded(PageMapper *mapper) const
     uint32_t mapping_cnt = mapper->MappingCount();
     size_t space_size = allocator->SpaceSize();
     assert(space_size >= mapping_cnt);
-    if (mapping_cnt == 0 || static_cast<double>(space_size) / static_cast<double>(mapping_cnt) >
-                                static_cast<double>(opts->file_amplify_factor))
+    if (mapping_cnt == 0 ||
+        (space_size >= allocator->PagesPerFile() &&
+         static_cast<double>(space_size) / static_cast<double>(mapping_cnt) >
+             static_cast<double>(opts->file_amplify_factor)))
     {
         shard->AddPendingCompact(tbl_ident_);
-    }
-    else
-    {
-        LOG(INFO) << "No Need to Compact";
     }
     /*
     if (mapping_cnt == 0)
@@ -362,11 +360,6 @@ void WriteTask::TriggerFileGC() const
         GetRetainedFiles(retained_files, mapping->mapping_tbl_, shift);
     }
 
-    const uint64_t ts = utils::UnixTs<chrono::microseconds>();
-    auto allocator =
-        static_cast<AppendAllocator *>(meta->mapper_->FilePgAllocator());
-    FileId cur_file_id = allocator->AdvanceCurrentFileId();
-
     // Check if we're in cloud mode or local mode
     if (!Options()->cloud_store_path.empty())
     {
@@ -381,7 +374,7 @@ void WriteTask::TriggerFileGC() const
         }
 
         KvError gc_err = eloq_store->file_gc_->ExecuteCloudGC(
-            tbl_ident_, ts, cur_file_id, retained_files, cloud_mgr);
+            tbl_ident_, retained_files, cloud_mgr);
 
         if (gc_err != KvError::NoError)
         {
@@ -390,9 +383,16 @@ void WriteTask::TriggerFileGC() const
     }
     else
     {
-        // Local mode: add task to thread pool
-        eloq_store->file_gc_->AddTask(
-            tbl_ident_, ts, cur_file_id, std::move(retained_files));
+        // Local mode: execute GC directly
+        LOG(INFO) << "Begin GC in Local mode";
+        IouringMgr *io_mgr = static_cast<IouringMgr *>(shard->IoManager());
+        KvError gc_err = eloq_store->file_gc_->ExecuteLocalGC(
+            tbl_ident_, retained_files, io_mgr);
+
+        if (gc_err != KvError::NoError)
+        {
+            LOG(ERROR) << "Local GC failed for table " << tbl_ident_.ToString();
+        }
     }
 }
 

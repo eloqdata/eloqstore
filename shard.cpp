@@ -277,6 +277,7 @@ void Shard::ProcessReq(KvRequest *req)
     }
     case RequestType::BatchWrite:
     {
+        DLOG(INFO) << "ProcessReq BatchWrite";
         BatchWriteTask *task = task_mgr_.GetBatchWriteTask(req->TableId());
         auto lbd = [task, req]() -> KvError
         {
@@ -333,6 +334,7 @@ void Shard::ProcessReq(KvRequest *req)
     }
     case RequestType::GcCleanup:
     {
+        DLOG(INFO) << "ProcessReq GcCleanup";
         GcCleanupTask *task = task_mgr_.GetGcCleanupTask(req->TableId());
         auto lbd = [task]() -> KvError { return task->CleanupPartition(); };
         StartTask(task, req, lbd);

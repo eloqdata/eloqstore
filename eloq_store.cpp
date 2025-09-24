@@ -157,27 +157,7 @@ KvError EloqStore::Start()
     if (options_.data_append_mode)
     {
         // Initialize file garbage collector for both local and cloud modes
-        if (file_gc_ == nullptr)
-        {
-            file_gc_ = std::make_unique<FileGarbageCollector>(&options_);
-        }
-
-        // Only start thread pool in local mode
-        if (options_.cloud_store_path.empty() && options_.num_gc_threads > 0)
-        {
-            LOG(INFO) << "local file gc thread pool started";
-            file_gc_->StartLocalThreadPool(options_.num_gc_threads);
-        }
-        else if (!options_.cloud_store_path.empty())
-        {
-            LOG(INFO) << "file gc initialized for cloud mode";
-            if (options_.num_gc_threads > 0)
-            {
-                LOG(WARNING)
-                    << "num_gc_threads=" << options_.num_gc_threads
-                    << " is ignored in cloud mode; GC executes via cloud path.";
-            }
-        }
+        file_gc_ = std::make_unique<FileGarbageCollector>();
 
         if (options_.num_retained_archives > 0 &&
             options_.archive_interval_secs > 0)
@@ -486,11 +466,6 @@ void EloqStore::Stop()
     for (auto &shard : shards_)
     {
         shard->Stop();
-    }
-
-    if (file_gc_ != nullptr)
-    {
-        file_gc_->Stop();
     }
 
     // Start clear resources after all threads stopped.
