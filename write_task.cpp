@@ -284,6 +284,14 @@ void WriteTask::CompactIfNeeded(PageMapper *mapper) const
 
     auto allocator = static_cast<AppendAllocator *>(mapper->FilePgAllocator());
     uint32_t mapping_cnt = mapper->MappingCount();
+    size_t space_size = allocator->SpaceSize();
+    assert(space_size >= mapping_cnt);
+    if (mapping_cnt == 0 || static_cast<double>(space_size) / static_cast<double>(mapping_cnt) >
+                                static_cast<double>(opts->file_amplify_factor))
+    {
+        shard->AddPendingCompact(tbl_ident_);
+    }
+    /*
     if (mapping_cnt == 0)
     {
         // Update statistic.
@@ -300,6 +308,7 @@ void WriteTask::CompactIfNeeded(PageMapper *mapper) const
             shard->AddPendingCompact(tbl_ident_);
         }
     }
+    */
 }
 
 void WriteTask::TriggerTTL()
@@ -337,6 +346,7 @@ void WriteTask::TriggerFileGC() const
     auto [meta, err] = shard->IndexManager()->FindRoot(tbl_ident_);
     if (err != KvError::NoError)
     {
+        LOG(INFO) << "TriggerFileGC meta not found";
         return;
     }
 
@@ -348,7 +358,9 @@ void WriteTask::TriggerFileGC() const
     }
 
     const uint64_t ts = utils::UnixTs<chrono::microseconds>();
-    FileId cur_file_id = meta->mapper_->FilePgAllocator()->CurrentFileId();
+    auto allocator =
+        static_cast<AppendAllocator *>(meta->mapper_->FilePgAllocator());
+    FileId cur_file_id = allocator->AdvanceCurrentFileId();
 
     // Check if we're in cloud mode or local mode
     if (!Options()->cloud_store_path.empty())

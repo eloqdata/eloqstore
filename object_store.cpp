@@ -3,6 +3,7 @@
 #include <glog/logging.h>
 #include <jsoncpp/json/json.h>
 
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -429,6 +430,55 @@ void AsyncHttpManager::Cleanup()
         task->inflight_io_--;
     }
     active_requests_.clear();
+}
+
+bool fetchObjectNames(const std::string &url,
+                      std::vector<std::string> &cloud_files)
+{
+    if (CURL *curl = curl_easy_init())
+    {
+        std::ostringstream oss;
+
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &oss);
+        curl_easy_setopt(
+            curl,
+            CURLOPT_WRITEFUNCTION,
+            +[](char *ptr, size_t size, size_t nmemb, void *userdata) -> size_t
+            {
+                auto *stream = static_cast<std::ostringstream *>(userdata);
+                stream->write(ptr, size * nmemb);
+                return size * nmemb;
+            });
+
+        CURLcode res = curl_easy_perform(curl);
+        curl_easy_cleanup(curl);
+
+        if (res != CURLE_OK)
+        {
+            LOG(ERROR) << "CURL error: " << curl_easy_strerror(res)
+                       << std::endl;
+            return false;
+        }
+
+        Json::Value response;
+        Json::Reader reader;
+        if (reader.parse(oss.str(), response))
+        {
+            if (response.isMember("list") && response["list"].isArray())
+            {
+                for (const auto &item : response["list"])
+                {
+                    if (item.isMember("Name") && item["Name"].isString())
+                    {
+                        cloud_files.push_back(item["Name"].asString());
+                    }
+                }
+            }
+        }
+    }
+
+    return true;
 }
 
 }  // namespace eloqstore

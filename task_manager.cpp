@@ -3,6 +3,7 @@
 #include <boost/context/continuation_fcontext.hpp>
 #include <cassert>
 
+#include "list_object_task.h"
 #include "read_task.h"
 #include "task.h"
 
@@ -36,6 +37,12 @@ ScanTask *TaskManager::GetScanTask()
 {
     num_active_++;
     return scan_pool_.GetTask();
+}
+
+ListObjectTask *TaskManager::GetListObjectTask()
+{
+    num_active_++;
+    return list_object_poll.GetTask();
 }
 
 void TaskManager::FreeTask(KvTask *task)

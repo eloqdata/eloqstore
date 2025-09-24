@@ -171,6 +171,7 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
             // 2. A MemIndexPage referencing this stub RootMeta is created.
             // 3. WriteTask aborts, but the stub RootMeta cannot be cleared
             //    because it is still referenced by the MemIndexPage.
+            LOG(INFO) << "Find Root NotFound";
             return {meta, KvError::NotFound};
         }
         return {meta, KvError::NoError};

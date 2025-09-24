@@ -2,6 +2,8 @@
 
 #include <atomic>
 #include <functional>
+#include <memory>
+#include <vector>
 
 #include "error.h"
 #include "kv_options.h"
@@ -16,8 +18,10 @@ enum class RequestType : uint8_t
     Read,
     Floor,
     Scan,
+    ListObject,
     BatchWrite,
     Truncate,
+    DropTable,
     Archive,
     Compact,
     CleanExpired
@@ -171,6 +175,34 @@ private:
     friend class ScanTask;
 };
 
+class ListObjectRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::ListObject;
+    }
+
+    ListObjectRequest(const std::string &cloud_storage_path, std::vector<std::string> *objects)
+        : cloud_storage_path_(cloud_storage_path), objects_(objects)
+    {
+    }
+
+    std::string_view GetStoragePath()
+    {
+        return cloud_storage_path_;
+    }
+
+    std::vector<std::string> *GetObjects()
+    {
+        return objects_;
+    }
+
+private:
+    std::string_view cloud_storage_path_;
+    std::vector<std::string> *objects_;
+};
+
 class WriteRequest : public KvRequest
 {
 public:
@@ -210,6 +242,25 @@ public:
 
     // input
     std::string_view position_;
+};
+
+class DropTableRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::DropTable;
+    }
+    void SetArgs(std::string table_name);
+    const std::string &TableName() const;
+
+private:
+    std::string table_name_;
+    std::vector<std::unique_ptr<TruncateRequest>> truncate_reqs_;
+    std::atomic<uint32_t> pending_{0};
+    std::atomic<uint8_t> first_error_{static_cast<uint8_t>(KvError::NoError)};
+
+    friend class EloqStore;
 };
 
 class ArchiveRequest : public WriteRequest
@@ -275,6 +326,9 @@ public:
 
 private:
     bool SendRequest(KvRequest *req);
+    void HandleDropTableRequest(DropTableRequest *req);
+    KvError CollectTablePartitions(const std::string &table_name,
+                                   std::vector<TableIdent> &partitions) const;
     KvError InitStoreSpace();
 
     const KvOptions options_;

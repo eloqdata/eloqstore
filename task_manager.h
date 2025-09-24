@@ -6,6 +6,7 @@
 
 #include "background_write.h"
 #include "batch_write_task.h"
+#include "list_object_task.h"
 #include "read_task.h"
 #include "scan_task.h"
 #include "types.h"
@@ -19,6 +20,7 @@ public:
     BackgroundWrite *GetBackgroundWrite(const TableIdent &tbl_id);
     ReadTask *GetReadTask();
     ScanTask *GetScanTask();
+    ListObjectTask *GetListObjectTask();
     void FreeTask(KvTask *task);
 
     size_t NumActive() const;
@@ -77,6 +79,7 @@ private:
     TaskPool<BackgroundWrite> bg_write_pool_{1024};
     TaskPool<ReadTask> read_pool_{2048};
     TaskPool<ScanTask> scan_pool_{2048};
+    TaskPool<ListObjectTask> list_object_poll{512};
     size_t num_active_{0};
 };
 }  // namespace eloqstore

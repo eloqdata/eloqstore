@@ -7,6 +7,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -61,6 +62,105 @@ TEST_CASE("persist with restart", "[persist]")
         }
         store->Stop();
         store->Start();
+    }
+}
+
+TEST_CASE("drop table clears all partitions", "[persist][droptable]")
+{
+    eloqstore::EloqStore *store = InitStore(default_opts);
+    const std::string tbl_name = "drop-table-persist";
+    const std::vector<uint32_t> partitions = {0, 1, 2};
+    constexpr size_t kNumKeysPerPartition = 16;
+
+    auto table_ident = [&tbl_name](uint32_t partition)
+    { return eloqstore::TableIdent{tbl_name, partition}; };
+
+    std::vector<std::vector<std::string>> expected_keys(partitions.size());
+
+    for (int round = 0; round < 3; ++round)
+    {
+        uint64_t ts = static_cast<uint64_t>(round + 1);
+        for (size_t idx = 0; idx < partitions.size(); ++idx)
+        {
+            uint32_t partition = partitions[idx];
+            expected_keys[idx].clear();
+            std::vector<eloqstore::WriteDataEntry> entries;
+            entries.reserve(kNumKeysPerPartition);
+            uint32_t base_key = static_cast<uint32_t>(round * 1000 +
+                                                     partition * 100);
+            for (size_t i = 0; i < kNumKeysPerPartition; ++i)
+            {
+                uint32_t key_id = base_key + static_cast<uint32_t>(i);
+                std::string key = test_util::Key(key_id);
+                std::string value = test_util::Value(key_id, 32);
+                expected_keys[idx].push_back(key);
+                entries.emplace_back(std::move(key),
+                                     std::move(value),
+                                     ts,
+                                     eloqstore::WriteOp::Upsert);
+            }
+
+            eloqstore::BatchWriteRequest write_req;
+            write_req.SetArgs(table_ident(partition), std::move(entries));
+            store->ExecSync(&write_req);
+            REQUIRE(write_req.Error() == eloqstore::KvError::NoError);
+        }
+
+        for (size_t idx = 0; idx < partitions.size(); ++idx)
+        {
+            uint32_t partition = partitions[idx];
+            eloqstore::ScanRequest scan_req;
+            uint32_t base_key = static_cast<uint32_t>(round * 1000 +
+                                                     partition * 100);
+            std::string begin_key = test_util::Key(base_key);
+            std::string end_key = test_util::Key(base_key +
+                                                 static_cast<uint32_t>(
+                                                     kNumKeysPerPartition));
+            scan_req.SetArgs(table_ident(partition), begin_key, end_key);
+            store->ExecSync(&scan_req);
+            REQUIRE(scan_req.Error() == eloqstore::KvError::NoError);
+
+            std::unordered_set<std::string> actual_keys;
+            auto entries = scan_req.Entries();
+            for (const auto &entry : entries)
+            {
+                actual_keys.insert(entry.key_);
+            }
+            REQUIRE(actual_keys.size() == expected_keys[idx].size());
+            for (const auto &key : expected_keys[idx])
+            {
+                REQUIRE(actual_keys.count(key) == 1);
+            }
+        }
+
+        eloqstore::DropTableRequest drop_req;
+        drop_req.SetArgs(tbl_name);
+        store->ExecSync(&drop_req);
+        REQUIRE(drop_req.Error() == eloqstore::KvError::NoError);
+
+        for (size_t idx = 0; idx < partitions.size(); ++idx)
+        {
+            uint32_t partition = partitions[idx];
+            eloqstore::ScanRequest scan_req;
+            uint32_t base_key = static_cast<uint32_t>(round * 1000 +
+                                                      partition * 100);
+            std::string begin_key = test_util::Key(base_key);
+            std::string end_key = test_util::Key(base_key +
+                                                 static_cast<uint32_t>(
+                                                     kNumKeysPerPartition));
+            scan_req.SetArgs(table_ident(partition), begin_key, end_key);
+            store->ExecSync(&scan_req);
+            REQUIRE(scan_req.Error() == eloqstore::KvError::NoError);
+            REQUIRE(scan_req.Entries().empty());
+
+            for (const auto &key : expected_keys[idx])
+            {
+                eloqstore::ReadRequest read_req;
+                read_req.SetArgs(table_ident(partition), key);
+                store->ExecSync(&read_req);
+                REQUIRE(read_req.Error() == eloqstore::KvError::NotFound);
+            }
+        }
     }
 }
 

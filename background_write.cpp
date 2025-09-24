@@ -52,7 +52,8 @@ KvError BackgroundWrite::CompactDataFile()
     CHECK_KV_ERR(err);
     if (meta->root_id_ == MaxPageId)
     {
-        return KvError::NotFound;
+        TriggerFileGC();
+        return KvError::NoError;
     }
 
     auto allocator =
@@ -62,6 +63,7 @@ KvError BackgroundWrite::CompactDataFile()
     {
         // Update statistic.
         allocator->UpdateStat(MaxFileId, 0);
+        TriggerFileGC();
         return KvError::NoError;
     }
     const uint32_t pages_per_file = allocator->PagesPerFile();

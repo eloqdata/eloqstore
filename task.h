@@ -44,7 +44,8 @@ enum struct TaskType
     Scan,
     BatchWrite,
     BackgroundWrite,
-    EvictFile
+    EvictFile,
+    ListObject
 };
 
 std::pair<Page, KvError> LoadPage(const TableIdent &tbl_id,

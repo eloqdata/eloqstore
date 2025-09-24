@@ -345,6 +345,15 @@ FileId AppendAllocator::MinFileId() const
     return min_file_id_;
 }
 
+FileId AppendAllocator::AdvanceCurrentFileId()
+{
+    FileId cur_file_id = CurrentFileId();
+
+    const FilePageId next_fp_id = (cur_file_id + 1) << pages_per_file_shift_;
+    max_fp_id_ = next_fp_id;
+    return CurrentFileId();
+}
+
 size_t AppendAllocator::SpaceSize() const
 {
     FilePageId min_fp_id = min_file_id_ << pages_per_file_shift_;
