@@ -1,11 +1,13 @@
 #pragma once
 
+#include <glog/logging.h>
+#include <jsoncpp/json/json.h>
+
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <string_view>
-#include <jsoncpp/json/json.h>
-#include <glog/logging.h>
+
 #include "../common.h"
 #include "coding.h"
 #include "eloq_store.h"
@@ -91,50 +93,62 @@ inline bool MoveCloudFile(const std::string &daemon_url,
 }
 
 // Helper function to list cloud files using rclone server
-inline std::vector<std::string> ListCloudFiles(const std::string &daemon_url,
-                                               const std::string &cloud_path,
-                                               const std::string &remote_path = "")
+inline std::vector<std::string> ListCloudFiles(
+    const std::string &daemon_url,
+    const std::string &cloud_path,
+    const std::string &remote_path = "")
 {
     std::vector<std::string> files;
-    
+
     // Construct JSON request similar to object_store.cpp SetupListRequest
-    std::string json_data = "{\"fs\":\"" + cloud_path + 
-                           "\",\"remote\":\"" + remote_path + 
-                           "\",\"opt\":{\"recurse\":false,\"showHash\":false}}";
-    
+    std::string json_data =
+        "{\"fs\":\"" + cloud_path + "\",\"remote\":\"" + remote_path +
+        "\",\"opt\":{\"recurse\":false,\"showHash\":false}}";
+
     // Send request to rclone daemon
-    std::string command = "curl -s -X POST -H 'Content-Type: application/json' -d '" +
-                         json_data + "' " + daemon_url + "/operations/list";
-    
-    FILE* pipe = popen(command.c_str(), "r");
-    if (!pipe) {
+    std::string command =
+        "curl -s -X POST -H 'Content-Type: application/json' -d '" + json_data +
+        "' " + daemon_url + "/operations/list";
+
+    FILE *pipe = popen(command.c_str(), "r");
+    if (!pipe)
+    {
         return files;
     }
-    
+
     std::string response;
     char buffer[1024];
-    while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
+    {
         response += buffer;
     }
     pclose(pipe);
-    
+
     // Parse JSON response similar to file_gc.cpp
-    try {
+    try
+    {
         Json::Value root;
         Json::Reader reader;
-        if (reader.parse(response, root)) {
-            if (root.isMember("list") && root["list"].isArray()) {
-                for (const auto& item : root["list"]) {
-                    if (item.isMember("Name") && item["Name"].isString()) {
+        if (reader.parse(response, root))
+        {
+            if (root.isMember("list") && root["list"].isArray())
+            {
+                for (const auto &item : root["list"])
+                {
+                    if (item.isMember("Name") && item["Name"].isString())
+                    {
                         files.push_back(item["Name"].asString());
                     }
                 }
             }
         }
-    } catch (const std::exception& e) {
+    }
+
+    catch (const std::exception &e)
+    {
         // Return empty vector on parse error
         files.clear();
     }
-    
+
     return files;
 }
