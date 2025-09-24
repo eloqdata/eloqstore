@@ -18,6 +18,7 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <boost/algorithm/string/predicate.hpp>
 
 #include "common.h"
 #include "eloq_store.h"
@@ -499,6 +500,143 @@ void IouringMgr::CleanTable(const TableIdent &tbl_id)
 {
     // TODO: io_uring_prep_unlinkat
     assert(false);
+}
+
+KvError IouringMgr::RemovePartitionDirIfOnlyManifest(
+    const TableIdent &tbl_id)
+{
+    if (options_->store_path.empty())
+    {
+        return KvError::NoError;
+    }
+
+    auto close_all_fds = [this, &tbl_id]() -> KvError
+    {
+        while (true)
+        {
+            auto it_tbl = tables_.find(tbl_id);
+            if (it_tbl == tables_.end())
+            {
+                return KvError::NoError;
+            }
+
+            bool closed_one = false;
+            for (auto it = it_tbl->second.fds_.begin();
+                 it != it_tbl->second.fds_.end();
+                 ++it)
+            {
+                LruFD &lru_fd = it->second;
+                if (lru_fd.fd_ == LruFD::FdEmpty)
+                {
+                    continue;
+                }
+                KvError err = CloseFile(LruFD::Ref(&lru_fd, this));
+                if (err != KvError::NoError)
+                {
+                    return err;
+                }
+                closed_one = true;
+                break;
+            }
+
+            if (!closed_one)
+            {
+                break;
+            }
+        }
+        return KvError::NoError;
+    };
+
+    KvError err = close_all_fds();
+    if (err != KvError::NoError)
+    {
+        return err;
+    }
+
+    fs::path dir_path = tbl_id.StorePath(options_->store_path);
+    std::error_code ec;
+    if (!fs::exists(dir_path, ec))
+    {
+        if (ec)
+        {
+            LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: exists check failed "
+                       << dir_path << ": " << ec.message();
+            return ToKvError(-ec.value());
+        }
+        return KvError::NoError;
+    }
+
+    fs::directory_iterator it(dir_path, ec);
+    if (ec)
+    {
+        LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: iterate failed "
+                   << dir_path << ": " << ec.message();
+        return ToKvError(-ec.value());
+    }
+
+    fs::directory_iterator end;
+    fs::path manifest_path;
+    for (; it != end; it.increment(ec))
+    {
+        if (ec)
+        {
+            LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: iteration failed "
+                       << dir_path << ": " << ec.message();
+            return ToKvError(-ec.value());
+        }
+        const fs::directory_entry &ent = *it;
+        if (!ent.is_regular_file(ec))
+        {
+            if (ec)
+            {
+                LOG(ERROR)
+                    << "RemovePartitionDirIfOnlyManifest: is_regular_file failed "
+                    << ent.path() << ": " << ec.message();
+                return ToKvError(-ec.value());
+            }
+            return KvError::NoError;
+        }
+
+        const std::string name = ent.path().filename().string();
+        if (boost::algorithm::ends_with(name, TmpSuffix))
+        {
+            return KvError::NoError;
+        }
+
+        const auto [file_type, file_suffix] = ParseFileName(name);
+        if (file_type == FileNameManifest && file_suffix.empty())
+        {
+            manifest_path = ent.path();
+            continue;
+        }
+
+        return KvError::NoError;
+    }
+
+    if (manifest_path.empty())
+    {
+        return KvError::NoError;
+    }
+
+    fs::remove(manifest_path, ec);
+    if (ec)
+    {
+        LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: remove manifest failed "
+                   << manifest_path << ": " << ec.message();
+        return ToKvError(-ec.value());
+    }
+
+    fs::remove(dir_path, ec);
+    if (ec)
+    {
+        LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: remove dir failed "
+                   << dir_path << ": " << ec.message();
+        return ToKvError(-ec.value());
+    }
+
+    least_not_archived_file_ids_.erase(tbl_id);
+    LOG(INFO) << "Removed empty partition directory " << dir_path;
+    return KvError::NoError;
 }
 
 KvError ToKvError(int err_no)
@@ -2243,6 +2381,11 @@ KvError MemStoreMgr::AbortWrite(const TableIdent &tbl_id)
 void MemStoreMgr::CleanTable(const TableIdent &tbl_id)
 {
     store_.erase(tbl_id);
+}
+
+KvError MemStoreMgr::RemovePartitionDirIfOnlyManifest(const TableIdent &)
+{
+    return KvError::NoError;
 }
 
 KvError MemStoreMgr::AppendManifest(const TableIdent &tbl_id,

@@ -331,6 +331,27 @@ void Shard::ProcessReq(KvRequest *req)
         StartTask(task, req, lbd);
         break;
     }
+    case RequestType::GcCleanup:
+    {
+        KvError cleanup_err = io_mgr_->RemovePartitionDirIfOnlyManifest(
+            req->TableId());
+        req->SetDone(cleanup_err);
+
+        auto it = pending_queues_.find(req->TableId());
+        assert(it != pending_queues_.end());
+        PendingWriteQueue &pending_q = it->second;
+        if (pending_q.Empty())
+        {
+            pending_queues_.erase(it);
+        }
+        else
+        {
+            WriteRequest *next = pending_q.PopFront();
+            assert(next != nullptr);
+            ProcessReq(next);
+        }
+        break;
+    }
     }
 }
 

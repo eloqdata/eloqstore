@@ -24,7 +24,8 @@ enum class RequestType : uint8_t
     DropTable,
     Archive,
     Compact,
-    CleanExpired
+    CleanExpired,
+    GcCleanup
 };
 
 class KvRequest
@@ -281,6 +282,15 @@ public:
     RequestType Type() const override
     {
         return RequestType::CleanExpired;
+    }
+};
+
+class GcCleanupRequest : public WriteRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::GcCleanup;
     }
 };
 

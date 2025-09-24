@@ -9,80 +9,29 @@
 #include <vector>
 
 #include "common.h"
+#include "eloq_store.h"
 #include "error.h"
 #include "replayer.h"
+#include "task.h"
 #include "utils.h"
 
 namespace eloqstore
 {
-bool RemovePartitionDirIfOnlyManifest(const fs::path &dir_path)
+namespace
 {
-    LOG(INFO) << "RemovePartitionDirIfOnlyManifest " << dir_path;
-    if (!fs::exists(dir_path))
+KvError SubmitGcCleanup(const TableIdent &tbl_id)
+{
+    if (eloq_store == nullptr)
     {
-        LOG(ERROR) << "dir_path not exist " << dir_path;
-        return false;
-    }
-    if (!fs::exists(dir_path))
-    {
-        return false;
+        return KvError::NotRunning;
     }
 
-    fs::path manifest_path;
-    for (const auto &ent : fs::directory_iterator{dir_path})
-    {
-        LOG(INFO) << "ent: " << ent.path().string();
-        if (!ent.is_regular_file())
-        {
-            LOG(INFO) << "ent is not regular file";
-            return false;
-        }
-
-        const std::string name = ent.path().filename().string();
-        if (boost::algorithm::ends_with(name, TmpSuffix))
-        {
-            LOG(INFO) << "tmp";
-            return false;
-        }
-
-        const auto [file_type, file_suffix] = ParseFileName(name);
-        LOG(INFO) << "name:" << name << ", file_type=(" << file_type.size()
-                  << "), file_suffix=(" << file_suffix << ")";
-        if (file_type == FileNameManifest && file_suffix.empty())
-        {
-            manifest_path = ent.path();
-            LOG(INFO) << "manifest_path =" << manifest_path;
-            continue;
-        }
-
-        return false;
-    }
-
-    if (manifest_path.empty())
-    {
-        LOG(INFO) << "manifest empty";
-        return false;
-    }
-
-    std::error_code ec;
-    fs::remove(manifest_path, ec);
-    if (ec)
-    {
-        LOG(ERROR) << "can not remove " << manifest_path << ": "
-                   << ec.message();
-        return false;
-    }
-
-    fs::remove(dir_path, ec);
-    if (ec)
-    {
-        LOG(ERROR) << "can not remove " << dir_path << ": " << ec.message();
-        return false;
-    }
-
-    LOG(INFO) << "Removed empty partition directory " << dir_path;
-    return true;
+    GcCleanupRequest req;
+    req.SetTableId(tbl_id);
+    eloq_store->ExecSync(&req);
+    return req.Error();
 }
+}  // namespace
 
 void GetRetainedFiles(std::unordered_set<FileId> &result,
                       const std::vector<uint64_t> &tbl,
@@ -289,7 +238,12 @@ KvError FileGarbageCollector::ExecuteLocalGC(const GcTask &task)
     {
         LOG(ERROR) << "dir_path not exist " << dir_path;
     }
-    RemovePartitionDirIfOnlyManifest(dir_path);
+    if (KvError cleanup_err = SubmitGcCleanup(task.tbl_id_);
+        cleanup_err != KvError::NoError)
+    {
+        LOG(ERROR) << "SubmitGcCleanup failed for " << dir_path << ": "
+                   << ErrorString(cleanup_err);
+    }
     return KvError::NoError;
 }
 
@@ -563,6 +517,40 @@ KvError FileGarbageCollector::DeleteUnreferencedDataFiles(
         }
     }
     LOG(INFO) << "delete unreference " << files_to_delete.size() << " files";
+    
+    // Check if we should delete the entire directory instead of individual files
+    // If files_to_delete.size() == data_files.size() - 1, it means we're deleting all data files except manifest
+    if (files_to_delete.size() == data_files.size() - 1 && !files_to_delete.empty())
+    {
+        LOG(INFO) << "Deleting entire directory instead of individual files";
+        // Clear files_to_delete and add the directory path
+        files_to_delete.clear();
+        files_to_delete.push_back(tbl_id.ToString());
+        
+        // Create delete task for directory
+        KvTask *current_task = ThdTask();
+        ObjectStore::DeleteTask delete_task(files_to_delete);
+        delete_task.SetKvTask(current_task);
+        
+        // Set the first (and only) entry as a directory
+        delete_task.SetIsDir(0, true);
+        
+        // Submit the directory delete request
+        delete_task.current_index_ = 0;
+        cloud_mgr->GetObjectStore().GetHttpManager()->SubmitRequest(&delete_task);
+        
+        current_task->status_ = TaskStatus::Blocked;
+        current_task->Yield();
+        
+        if (delete_task.error_ != KvError::NoError)
+        {
+            LOG(ERROR) << "Failed to delete directory: " << ErrorString(delete_task.error_);
+            return delete_task.error_;
+        }
+        
+        return KvError::NoError;
+    }
+    
     // TODO also delete cloud objects and local directory.
     if (files_to_delete.empty())
     {
