@@ -677,7 +677,6 @@ KvError ToKvError(int err_no)
     case -EPERM:
         return KvError::NoPermission;
     case -ENOENT:
-        LOG(INFO) << "ToKvError: NotFound";
         return KvError::NotFound;
     case -EINTR:
     case -EAGAIN:

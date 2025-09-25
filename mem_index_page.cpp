@@ -59,6 +59,7 @@ MemIndexPage *MemIndexPage::DequeNext()
     return target;
 }
 
+/*
 MemIndexPage *MemIndexPage::DequePrev()
 {
     MemIndexPage *target = prev_;
@@ -75,6 +76,7 @@ MemIndexPage *MemIndexPage::DequePrev()
 
     return target;
 }
+*/
 
 void MemIndexPage::EnqueNext(MemIndexPage *new_page)
 {

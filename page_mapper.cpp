@@ -232,10 +232,7 @@ MemIndexPage *MappingSnapshot::GetSwizzlingPointer(PageId page_id) const
         MemIndexPage *idx_page = reinterpret_cast<MemIndexPage *>(val);
         return idx_page;
     }
-    else
-    {
-        return nullptr;
-    }
+    return nullptr;
 }
 
 void MappingSnapshot::AddSwizzling(PageId page_id, MemIndexPage *idx_page)

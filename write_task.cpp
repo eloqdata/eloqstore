@@ -293,10 +293,6 @@ void WriteTask::CompactIfNeeded(PageMapper *mapper) const
     {
         shard->AddPendingCompact(tbl_ident_);
     }
-    else
-    {
-        LOG(INFO) << "No Need to Compact";
-    }
     /*
     if (mapping_cnt == 0)
     {

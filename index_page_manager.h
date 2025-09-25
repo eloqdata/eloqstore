@@ -41,7 +41,7 @@ public:
      *
      * @param page
      */
-    void EnqueuIndexPage(MemIndexPage *page);
+    void EnqueueIndexPage(MemIndexPage *page);
 
     std::pair<RootMeta *, KvError> FindRoot(const TableIdent &tbl_ident);
 

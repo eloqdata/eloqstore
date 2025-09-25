@@ -86,7 +86,7 @@ void IndexPageManager::FreeIndexPage(MemIndexPage *page)
     free_head_.EnqueNext(page);
 }
 
-void IndexPageManager::EnqueuIndexPage(MemIndexPage *page)
+void IndexPageManager::EnqueueIndexPage(MemIndexPage *page)
 {
     if (page->prev_ != nullptr)
     {
@@ -273,7 +273,7 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
             new_page->waiting_.WakeAll();
             return {new_page, KvError::NoError};
         }
-        else if (idx_page->IsDetached())
+        if (idx_page->IsDetached())
         {
             // This page is not loaded yet.
             idx_page->waiting_.Wait(ThdTask());
