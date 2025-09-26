@@ -1,5 +1,7 @@
 #include "page_mapper.h"
 
+#include <glog/logging.h>
+
 #include <cassert>
 #include <cstdint>
 
@@ -9,7 +11,8 @@
 namespace eloqstore
 {
 
-PageMapper::PageMapper(IndexPageManager *idx_mgr, const TablePartitionIdent *tbl_ident)
+PageMapper::PageMapper(IndexPageManager *idx_mgr,
+                       const TablePartitionIdent *tbl_ident)
     : mapping_(std::make_shared<MappingSnapshot>(idx_mgr, tbl_ident)),
       file_page_allocator_(FilePageAllocator::Instance(Options()))
 {
@@ -66,6 +69,8 @@ FilePageAllocator *PageMapper::FilePgAllocator() const
 
 uint32_t PageMapper::MappingCount() const
 {
+    CHECK(mapping_ != nullptr);
+
     return mapping_->mapping_tbl_.size() - free_page_cnt_;
 }
 

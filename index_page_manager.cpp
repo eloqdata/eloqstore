@@ -26,23 +26,19 @@ IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
 
 IndexPageManager::~IndexPageManager()
 {
-    // Destructs page mapper first, because destructing the mapping snapshot
-    // needs to access the root table in the index page manager.
-    std::vector<PageMapper *> mappers;
-    mappers.reserve(tbl_partiton_roots_.size());
-    for (auto &[tbl, meta] : tbl_partiton_roots_)
+    is_destructing_ = true;
+
+    for (auto &[tbl_id, meta] : tbl_partiton_roots_)
     {
-        // We can not call FreeMappingSnapshot directly in this loop, because it
-        // may delete elements from the root table we are currently iterating.
-        if (meta.mapper_ != nullptr)
+        if (meta.mapper_)
         {
-            mappers.push_back(meta.mapper_.get());
+            // i thinks we can set mapper = nullptr directly
+            // meta.mapper_ = nullptr;
+            meta.mapper_->FreeMappingSnapshot();
         }
     }
-    for (PageMapper *mapper : mappers)
-    {
-        mapper->FreeMappingSnapshot();
-    }
+
+    tbl_partiton_roots_.clear();
 }
 
 const Comparator *IndexPageManager::GetComparator() const
@@ -348,6 +344,11 @@ bool IndexPageManager::Evict()
 
 void IndexPageManager::EvictRootIfEmpty(const TablePartitionIdent &tbl_id)
 {
+    if (is_destructing_)
+    {
+        return;
+    }
+
     auto it = tbl_partiton_roots_.find(tbl_id);
     if (it != tbl_partiton_roots_.end())
     {
@@ -358,24 +359,62 @@ void IndexPageManager::EvictRootIfEmpty(const TablePartitionIdent &tbl_id)
 void IndexPageManager::EvictRootIfEmpty(
     std::unordered_map<TablePartitionIdent, RootMeta>::iterator root_it)
 {
-    RootMeta &meta = root_it->second;
-    if (meta.ref_cnt_ == 0)
+    if (is_destructing_)
     {
-        // TODO check mapping cnt, lock and delete directory and unlock
-        DLOG(INFO) << "metadata of " << root_it->first << " is evicted";
-        tbl_partiton_roots_.erase(root_it);
+        return;
     }
-    else if (meta.mapper_ != nullptr && meta.ref_cnt_ == 1)
+
+    RootMeta &meta = root_it->second;
+
+    CHECK(meta.mapper_ != nullptr || meta.ref_cnt_ == 0);
+
+    if (meta.mapper_ != nullptr && meta.ref_cnt_ == 1)
     {
         if (meta.mapper_->UseCount() <= 1)
         {
-            meta.mapper_ = nullptr;
-            // Call ~MappingSnapshot and decrease ref_cnt_
-            // Call EvictRootIfEmpty again
+            // Check if mapping table is empty (no data pages)
+            if (meta.mapper_->MappingCount() == 0)
+            {
+                // Lock the rootmeta to prevent other FindRoot operations
+                meta.locked_ = true;
+
+                const TablePartitionIdent &tbl_id = root_it->first;
+
+                // Clean up the table from io manager first
+                KvError err = IoMgr()->CleanManifest(tbl_id);
+                if (err != KvError::NoError)
+                {
+                    LOG(FATAL) << "Failed to clean manifest for table ";
+                }
+
+                // Wake up any waiting threads before erasing
+                meta.waiting_.WakeAll();
+
+                // Erase from memory - this will automatically destroy
+                // meta.mapper_ and trigger MappingSnapshot destructor, but
+                // FreeMappingSnapshot will return early since the table is
+                // already erased
+                tbl_partiton_roots_.erase(root_it);
+
+                // Note: No need to unlock since we've erased the entry
+                return;
+            }
+
+            // If mapping is not empty, we can directly erase the root since
+            // ref_cnt == 1 means only the mapper itself holds the reference
+
+            // meta.waiting_.WakeAll();
+
+            DLOG(INFO) << "metadata of " << root_it->first
+                       << " is evicted (ref_cnt == 1)";
+            tbl_partiton_roots_.erase(root_it);
         }
         else
         {
             // This is rare.
+            LOG(INFO) << "ref_cnt == 1 but mapper use count :"
+                      << meta.mapper_->UseCount();
+            CHECK(false) << "ref_cnt == 1 but mapper use count > 1";
         }
     }
 }

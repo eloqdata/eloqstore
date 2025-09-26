@@ -93,12 +93,13 @@ public:
     virtual std::pair<ManifestFilePtr, KvError> GetManifest(
         const TablePartitionIdent &tbl_id) = 0;
     virtual void CleanTable(const TablePartitionIdent &tbl_id) = 0;
-    virtual KvError RemovePartitionDirIfOnlyManifest(
-        const TablePartitionIdent &tbl_id) = 0;
+
+    virtual KvError CleanManifest(const TablePartitionIdent &tbl_id) = 0;
 
     const KvOptions *options_;
 
-    std::unordered_map<TablePartitionIdent, FileId> least_not_archived_file_ids_;
+    std::unordered_map<TablePartitionIdent, FileId>
+        least_not_archived_file_ids_;
 };
 
 KvError ToKvError(int err_no);
@@ -139,10 +140,11 @@ public:
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TablePartitionIdent &tbl_id) override;
     void CleanTable(const TablePartitionIdent &tbl_id) override;
-    KvError RemovePartitionDirIfOnlyManifest(const TablePartitionIdent &tbl_id) override;
 
     KvError ReadArchiveFile(const std::string &file_path, std::string &content);
     KvError DeleteFiles(const std::vector<std::string> &file_paths);
+
+    KvError CleanManifest(const TablePartitionIdent &tbl_id) override;
 
     static constexpr uint64_t oflags_dir = O_DIRECTORY | O_RDONLY;
 
@@ -288,7 +290,9 @@ protected:
                               std::string_view name,
                               std::string_view content);
     virtual int CreateFile(LruFD::Ref dir_fd, FileId file_id);
-    virtual int OpenFile(const TablePartitionIdent &tbl_id, FileId file_id, bool direct);
+    virtual int OpenFile(const TablePartitionIdent &tbl_id,
+                         FileId file_id,
+                         bool direct);
     virtual KvError SyncFile(LruFD::Ref fd);
     virtual KvError SyncFiles(const TablePartitionIdent &tbl_id,
                               std::span<LruFD::Ref> fds);
@@ -312,10 +316,11 @@ protected:
      * Only data file is opened with O_DIRECT by default. Set `direct` to true
      * to open manifest with O_DIRECT.
      */
-    std::pair<LruFD::Ref, KvError> OpenOrCreateFD(const TablePartitionIdent &tbl_id,
-                                                  FileId file_id,
-                                                  bool direct = false,
-                                                  bool create = true);
+    std::pair<LruFD::Ref, KvError> OpenOrCreateFD(
+        const TablePartitionIdent &tbl_id,
+        FileId file_id,
+        bool direct = false,
+        bool create = true);
     bool EvictFD();
 
     class WriteReqPool
@@ -492,7 +497,8 @@ public:
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TablePartitionIdent &tbl_id) override;
     void CleanTable(const TablePartitionIdent &tbl_id) override;
-    KvError RemovePartitionDirIfOnlyManifest(const TablePartitionIdent &tbl_id) override;
+
+    KvError CleanManifest(const TablePartitionIdent &tbl_id) override;
 
     class Manifest : public ManifestFile
     {

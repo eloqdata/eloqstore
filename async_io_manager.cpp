@@ -227,7 +227,7 @@ KvError IouringMgr::ReadPages(const TablePartitionIdent &tbl_id,
             : BaseReq(task),
               fd_ref_(std::move(fd)),
               offset_(offset),
-              page_(true) {};
+              page_(true){};
 
         LruFD::Ref fd_ref_;
         uint32_t offset_;
@@ -498,172 +498,50 @@ KvError IouringMgr::AbortWrite(const TablePartitionIdent &tbl_id)
 
 void IouringMgr::CleanTable(const TablePartitionIdent &tbl_id)
 {
-    // TODO: io_uring_prep_unlinkat
-    assert(false);
+    tables_.erase(tbl_id);
 }
 
-KvError IouringMgr::RemovePartitionDirIfOnlyManifest(
-    const TablePartitionIdent &tbl_id)
+KvError IouringMgr::CleanManifest(const TablePartitionIdent &tbl_id)
 {
-    if (options_->store_path.empty())
+    // Close manifest file if it's open
+    LruFD::Ref manifest_fd = GetOpenedFD(tbl_id, LruFD::kManifest);
+    if (manifest_fd.Get() != nullptr)
     {
-        return KvError::NoError;
-    }
-
-    auto close_all_fds = [this, &tbl_id]() -> KvError
-    {
-        DLOG(INFO) << "close all fids " << tbl_id.tbl_name_ << ":"
-                   << tbl_id.partition_id_;
-        while (true)
+        KvError err = CloseFile(std::move(manifest_fd));
+        if (err != KvError::NoError)
         {
-            auto it_tbl = tables_.find(tbl_id);
-            if (it_tbl == tables_.end())
-            {
-                return KvError::NoError;
-            }
-
-            bool closed_one = false;
-            for (auto it = it_tbl->second.fds_.begin();
-                 it != it_tbl->second.fds_.end();
-                 ++it)
-            {
-                LruFD &lru_fd = it->second;
-                if (lru_fd.fd_ == LruFD::FdEmpty)
-                {
-                    continue;
-                }
-                KvError err = CloseFile(LruFD::Ref(&lru_fd, this));
-                if (err != KvError::NoError)
-                {
-                    return err;
-                }
-                closed_one = true;
-                break;
-            }
-
-            if (!closed_one)
-            {
-                break;
-            }
-        }
-        return KvError::NoError;
-    };
-
-    KvError err = close_all_fds();
-    if (err != KvError::NoError)
-    {
-        return err;
-    }
-
-    fs::path dir_path = tbl_id.StorePath(options_->store_path);
-    std::error_code ec;
-    if (!fs::exists(dir_path, ec))
-    {
-        if (ec)
-        {
-            LOG(ERROR)
-                << "RemovePartitionDirIfOnlyManifest: exists check failed "
-                << dir_path << ": " << ec.message();
-            return ToKvError(-ec.value());
-        }
-        return KvError::NoError;
-    }
-
-    fs::directory_iterator it(dir_path, ec);
-    if (ec)
-    {
-        if (ec == std::errc::no_such_file_or_directory)
-        {
-            return KvError::NoError;
-        }
-        LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: iterate failed "
-                   << dir_path << ": " << ec.message();
-        return ToKvError(-ec.value());
-    }
-
-    fs::directory_iterator end;
-    std::vector<fs::path> manifest_paths;
-    for (; it != end; it.increment(ec))
-    {
-        if (ec)
-        {
-            if (ec == std::errc::no_such_file_or_directory)
-            {
-                return KvError::NoError;
-            }
-            LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: iteration failed "
-                       << dir_path << ": " << ec.message();
-            return ToKvError(-ec.value());
-        }
-        const fs::directory_entry &ent = *it;
-        if (!ent.is_regular_file(ec))
-        {
-            if (ec)
-            {
-                if (ec == std::errc::no_such_file_or_directory)
-                {
-                    return KvError::NoError;
-                }
-                LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: "
-                              "is_regular_file failed "
-                           << ent.path() << ": " << ec.message();
-                return ToKvError(-ec.value());
-            }
-            return KvError::NoError;
-        }
-
-        const std::string name = ent.path().filename().string();
-        if (boost::algorithm::ends_with(name, TmpSuffix))
-        {
-            return KvError::NoError;
-        }
-
-        const auto [file_type, file_suffix] = ParseFileName(name);
-        if (file_type == FileNameManifest)
-        {
-            manifest_paths.push_back(ent.path());
-            continue;
-        }
-
-        if (file_type == FileNameData)
-        {
-            return KvError::NoError;
-        }
-
-        return KvError::NoError;
-    }
-
-    for (const fs::path &path : manifest_paths)
-    {
-        fs::remove(path, ec);
-        if (ec)
-        {
-            LOG(ERROR)
-                << "RemovePartitionDirIfOnlyManifest: remove manifest failed "
-                << path << ": " << ec.message();
-            return ToKvError(-ec.value());
+            LOG(WARNING) << "Failed to close manifest file for table ";
+            return err;
         }
     }
 
-    fs::remove(dir_path, ec);
-    if (ec)
+    // Get directory fd and delete manifest file
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory);
+    if (err == KvError::NoError)
     {
-        LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: remove dir failed "
-                   << dir_path << ": " << ec.message();
-        return ToKvError(-ec.value());
+        int res = UnlinkAt(dir_fd.FdPair(), "manifest", false);
+        if (res < 0 && res != -ENOENT)
+        {
+            LOG(WARNING) << "Failed to delete manifest file for table "
+                         << tbl_id << ": " << strerror(-res);
+            return ToKvError(res);
+        }
+        else
+        {
+            DLOG(INFO) << "Successfully deleted manifest file for table "
+                       << tbl_id;
+        }
+    }
+    else
+    {
+        LOG(WARNING) << "Failed to open directory for table " << tbl_id
+                     << " during cleanup";
     }
 
+    // Remove table from internal structures
+    CHECK(tables_.find(tbl_id) != tables_.end());
+    CHECK(tables_.at(tbl_id).fds_.empty());
     tables_.erase(tbl_id);
-    least_not_archived_file_ids_.erase(tbl_id);
-
-    // Force evict cached root metadata for this table
-
-    if (shard != nullptr)
-    {
-        shard->IndexManager()->EvictRootIfEmpty(tbl_id);
-    }
-
-    LOG(INFO) << "Removed empty partition directory " << dir_path;
     return KvError::NoError;
 }
 
@@ -1074,7 +952,7 @@ KvError IouringMgr::SyncFiles(const TablePartitionIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
     };
 
@@ -2454,9 +2332,9 @@ void MemStoreMgr::CleanTable(const TablePartitionIdent &tbl_id)
     store_.erase(tbl_id);
 }
 
-KvError MemStoreMgr::RemovePartitionDirIfOnlyManifest(
-    const TablePartitionIdent &)
+KvError MemStoreMgr::CleanManifest(const TablePartitionIdent &tbl_id)
 {
+    //
     return KvError::NoError;
 }
 

@@ -118,5 +118,6 @@ private:
     std::unordered_map<TablePartitionIdent, RootMeta> tbl_partiton_roots_;
 
     AsyncIoManager *io_manager_;
+    bool is_destructing_ = false;
 };
 }  // namespace eloqstore
