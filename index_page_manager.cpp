@@ -391,6 +391,7 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
     {
         mapping->Unswizzling(page);
     }
+    meta.Unpin();
     EvictRootIfEmpty(tbl_it);
 
     // Removes the page from the active list.

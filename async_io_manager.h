@@ -52,7 +52,7 @@ class EloqStore;
 class AsyncIoManager
 {
 public:
-    explicit AsyncIoManager(const KvOptions *opts) : options_(opts) {};
+    explicit AsyncIoManager(const KvOptions *opts) : options_(opts){};
     virtual ~AsyncIoManager() = default;
     static std::unique_ptr<AsyncIoManager> Instance(const EloqStore *store,
                                                     uint32_t fd_limit);
@@ -141,6 +141,9 @@ public:
     void CleanTable(const TableIdent &tbl_id) override;
     KvError RemovePartitionDirIfOnlyManifest(const TableIdent &tbl_id) override;
 
+    KvError ReadArchiveFile(const std::string &file_path, std::string &content);
+    KvError DeleteFiles(const std::vector<std::string> &file_paths);
+
     static constexpr uint64_t oflags_dir = O_DIRECTORY | O_RDONLY;
 
 protected:
@@ -205,7 +208,7 @@ protected:
 
     struct BaseReq
     {
-        explicit BaseReq(KvTask *task = nullptr) : task_(task) {};
+        explicit BaseReq(KvTask *task = nullptr) : task_(task){};
         KvTask *task_;
         int res_{0};
         uint32_t flags_{0};
@@ -437,7 +440,7 @@ private:
     class FileCleaner : public KvTask
     {
     public:
-        FileCleaner(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr) {};
+        FileCleaner(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr){};
         TaskType Type() const override;
         void Run();
         void Shutdown();
@@ -494,7 +497,7 @@ public:
     class Manifest : public ManifestFile
     {
     public:
-        explicit Manifest(std::string_view content) : content_(content) {};
+        explicit Manifest(std::string_view content) : content_(content){};
         KvError Read(char *dst, size_t n) override;
         void Skip(size_t n);
 

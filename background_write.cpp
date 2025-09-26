@@ -248,11 +248,11 @@ KvError BackgroundWrite::CreateArchive()
     // Update the cached max file id.
     FileId max_file_id =
         static_cast<FileId>(max_fp_id >> Options()->pages_per_file_shift);
-    IoMgr()->least_not_archived_file_ids_[tbl_ident_] = max_file_id;
+    IoMgr()->least_not_archived_file_ids_[tbl_ident_] = max_file_id + 1;
 
     LOG(INFO) << "created archive for partition " << tbl_ident_ << " at "
               << current_ts << ", updated cached max file id to "
-              << max_file_id;
+              << max_file_id + 1;
     return KvError::NoError;
 }
 
