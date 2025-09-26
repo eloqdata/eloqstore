@@ -13,7 +13,7 @@
 #include "eloq_store.h"
 
 constexpr char test_path[] = "/tmp/eloqstore";
-static const eloqstore::TablePartitionIdent test_tbl_id = {"t0", 0};
+static const eloqstore::TableIdent test_tbl_id = {"t0", 0};
 const eloqstore::KvOptions mem_store_opts = {};
 const eloqstore::KvOptions default_opts = {
     .store_path = {test_path},

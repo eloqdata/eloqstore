@@ -43,11 +43,11 @@ public:
      */
     void EnqueueIndexPage(MemIndexPage *page);
 
-    std::pair<RootMeta *, KvError> FindRoot(const TablePartitionIdent &tbl_ident);
+    std::pair<RootMeta *, KvError> FindRoot(const TableIdent &tbl_ident);
 
-    KvError MakeCowRoot(const TablePartitionIdent &tbl_ident, CowRootMeta &cow_meta);
+    KvError MakeCowRoot(const TableIdent &tbl_ident, CowRootMeta &cow_meta);
 
-    void UpdateRoot(const TablePartitionIdent &tbl_ident, CowRootMeta new_meta);
+    void UpdateRoot(const TableIdent &tbl_ident, CowRootMeta new_meta);
 
     std::pair<MemIndexPage *, KvError> FindPage(MappingSnapshot *mapping,
                                                 PageId page_id);
@@ -68,7 +68,7 @@ public:
     const KvOptions *Options() const;
     AsyncIoManager *IoMgr() const;
 
-    void EvictRootIfEmpty(const TablePartitionIdent &tbl_id);
+    void EvictRootIfEmpty(const TableIdent &tbl_id);
 
 private:
     /**
@@ -90,7 +90,7 @@ private:
      * @param root_it
      */
     void EvictRootIfEmpty(
-        std::unordered_map<TablePartitionIdent, RootMeta>::iterator root_it);
+        std::unordered_map<TableIdent, RootMeta>::iterator root_it);
 
     bool RecyclePage(MemIndexPage *page);
 
@@ -115,8 +115,9 @@ private:
      * page.
      *
      */
-    std::unordered_map<TablePartitionIdent, RootMeta> tbl_partiton_roots_;
+    std::unordered_map<TableIdent, RootMeta> tbl_roots_;
 
     AsyncIoManager *io_manager_;
+    bool is_destructing_ = false;
 };
 }  // namespace eloqstore

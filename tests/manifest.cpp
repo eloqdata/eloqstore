@@ -319,3 +319,111 @@ TEST_CASE("enhanced rollback with mix operations", "[archive]")
     tester.SwitchDataSet(phase2_dataset);
     tester.Validate();
 }
+
+TEST_CASE("manifest deletion on rootmeta eviction", "[manifest][eviction]")
+{
+    eloqstore::KvOptions opts = {
+        .index_buffer_pool_size = 15,  // small value
+        .file_amplify_factor = 2,
+        .store_path = {test_path},
+        .data_append_mode = true,
+    };
+
+    eloqstore::EloqStore *store = InitStore(opts);
+
+    eloqstore::TableIdent partition_a{"test_table", 1};
+    eloqstore::TableIdent partition_b{"test_table", 2};
+
+    MapVerifier verifier_a(partition_a, store, false);
+    MapVerifier verifier_b(partition_b, store, false);
+
+    const fs::path partition_a_path =
+        fs::path(test_path) / partition_a.ToString();
+    const std::string manifest_path = (partition_a_path / "manifest").string();
+
+    LOG(INFO) << "Testing manifest deletion for partition: "
+              << partition_a.ToString();
+    LOG(INFO) << "Manifest path: " << manifest_path;
+
+    // first write data and create manifest
+    LOG(INFO) << "Phase 1: Writing data to partition A";
+    verifier_a.Upsert(0, 100);
+    verifier_a.Validate();
+
+    REQUIRE(fs::exists(manifest_path));
+    LOG(INFO) << "Manifest file created successfully";
+
+    LOG(INFO) << "Phase 2: Truncating partition A";
+    verifier_a.Truncate(0, true);  // delete_all = true
+
+    REQUIRE(fs::exists(manifest_path));
+    LOG(INFO) << "Manifest still exists after truncate (expected)";
+
+    // third ,write a batch data and trigger the recycle index page
+    LOG(INFO) << "Phase 3: Writing data to partition B to trigger eviction";
+
+    bool manifest_deleted = false;
+    int iteration = 0;
+    const int max_iterations = 100;
+
+    for (iteration = 0; iteration < max_iterations; iteration++)
+    {
+        // each time a batch of data is written
+        int start = iteration * 50;
+        int end = start + 50;
+
+        LOG(INFO) << "Iteration " << iteration << ": Writing range [" << start
+                  << ", " << end << ")";
+        verifier_b.Upsert(start, end);
+
+        // check whether the manifest has been deleted
+        if (!fs::exists(manifest_path))
+        {
+            manifest_deleted = true;
+            LOG(INFO) << "Manifest deleted after " << iteration
+                      << " iterations";
+            break;
+        }
+
+        if (iteration % 20 == 19)
+        {
+            LOG(INFO) << "Completed " << (iteration + 1)
+                      << " iterations, manifest still exists";
+        }
+    }
+
+    // manifest should be deleted
+    REQUIRE(manifest_deleted);
+    REQUIRE(!fs::exists(manifest_path));
+
+    // check that the partition directory exists but is empty
+    LOG(INFO) << "Checking partition directory state after manifest deletion";
+    REQUIRE(fs::exists(partition_a_path));
+    REQUIRE(fs::is_directory(partition_a_path));
+
+    // verify directory is empty
+    bool directory_empty = true;
+    int file_count = 0;
+    for (const auto &entry : fs::directory_iterator(partition_a_path))
+    {
+        file_count++;
+        directory_empty = false;
+        LOG(INFO) << "Found unexpected file in partition directory: "
+                  << entry.path().filename().string();
+    }
+
+    REQUIRE(directory_empty);
+    LOG(INFO)
+        << "SUCCESS: Partition directory exists but is empty (file count: "
+        << file_count << ")";
+
+    LOG(INFO) << "SUCCESS: Manifest file successfully deleted after "
+              << iteration << " iterations";
+
+    LOG(INFO) << "Validating partition B data integrity";
+    verifier_b.Validate();
+
+    // test remove manifest and then batch write
+    verifier_a.Upsert(0, 100);
+    verifier_a.Validate();
+}

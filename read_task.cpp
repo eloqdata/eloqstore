@@ -8,7 +8,7 @@
 namespace eloqstore
 {
 
-KvError ReadTask::Read(const TablePartitionIdent &tbl_id,
+KvError ReadTask::Read(const TableIdent &tbl_id,
                        std::string_view search_key,
                        std::string &value,
                        uint64_t &timestamp,
@@ -52,7 +52,7 @@ KvError ReadTask::Read(const TablePartitionIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError ReadTask::Floor(const TablePartitionIdent &tbl_id,
+KvError ReadTask::Floor(const TableIdent &tbl_id,
                         std::string_view search_key,
                         std::string &floor_key,
                         std::string &value,

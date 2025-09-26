@@ -88,7 +88,7 @@ std::string FormatEntries(tcb::span<eloqstore::KvEntry> entries)
 
 std::pair<std::string, eloqstore::KvError> Scan(
     eloqstore::EloqStore *store,
-    const eloqstore::TablePartitionIdent &tbl_id,
+    const eloqstore::TableIdent &tbl_id,
     uint32_t begin,
     uint32_t end)
 {
@@ -110,7 +110,7 @@ std::pair<std::string, eloqstore::KvError> Scan(
     return {test_util::FormatEntries(entries), eloqstore::KvError::NoError};
 }
 
-MapVerifier::MapVerifier(eloqstore::TablePartitionIdent tid,
+MapVerifier::MapVerifier(eloqstore::TableIdent tid,
                          eloqstore::EloqStore *store,
                          bool validate,
                          uint16_t key_len)
@@ -170,13 +170,17 @@ void MapVerifier::Delete(uint64_t begin, uint64_t end)
 
 void MapVerifier::Truncate(uint64_t position, bool delete_all)
 {
-    LOG(INFO) << "Truncate(" << position << ", delete_all=" << delete_all << ')';
+    LOG(INFO) << "Truncate(" << position << ", delete_all=" << delete_all
+              << ')';
 
     eloqstore::TruncateRequest req;
-    if (delete_all) {
+    if (delete_all)
+    {
         // Empty position means delete all data
         req.SetTableId(tid_);
-    } else {
+    }
+    else
+    {
         std::string key = Key(position, key_len_);
         req.SetArgs(tid_, key);
     }
@@ -427,10 +431,13 @@ void MapVerifier::ExecWrite(eloqstore::KvRequest *req)
     case eloqstore::RequestType::Truncate:
     {
         const auto treq = static_cast<eloqstore::TruncateRequest *>(req);
-        if (treq->position_.empty()) {
+        if (treq->position_.empty())
+        {
             // Delete all data when position is empty
             answer_.clear();
-        } else {
+        }
+        else
+        {
             auto it = answer_.lower_bound(std::string(treq->position_));
             answer_.erase(it, answer_.end());
         }
@@ -748,7 +755,7 @@ void ConcurrencyTester::Init()
     const uint32_t kvs_num = seg_size_ * seg_count_;
     for (Partition &partition : partitions_)
     {
-        eloqstore::TablePartitionIdent tbl_id(tbl_name_, partition.id_);
+        eloqstore::TableIdent tbl_id(tbl_name_, partition.id_);
 
         // Try to load partition KVs from EloqStore
         eloqstore::ScanRequest scan_req;

@@ -26,23 +26,19 @@ IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
 
 IndexPageManager::~IndexPageManager()
 {
-    // Destructs page mapper first, because destructing the mapping snapshot
-    // needs to access the root table in the index page manager.
-    std::vector<PageMapper *> mappers;
-    mappers.reserve(tbl_partiton_roots_.size());
-    for (auto &[tbl, meta] : tbl_partiton_roots_)
+    is_destructing_ = true;
+
+    for (auto &[tbl_id, meta] : tbl_roots_)
     {
-        // We can not call FreeMappingSnapshot directly in this loop, because it
-        // may delete elements from the root table we are currently iterating.
-        if (meta.mapper_ != nullptr)
+        if (meta.mapper_)
         {
-            mappers.push_back(meta.mapper_.get());
+            // i thinks we can set mapper = nullptr directly
+            // meta.mapper_ = nullptr;
+            meta.mapper_->FreeMappingSnapshot();
         }
     }
-    for (PageMapper *mapper : mappers)
-    {
-        mapper->FreeMappingSnapshot();
-    }
+
+    tbl_roots_.clear();
 }
 
 const Comparator *IndexPageManager::GetComparator() const
@@ -53,6 +49,7 @@ const Comparator *IndexPageManager::GetComparator() const
 MemIndexPage *IndexPageManager::AllocIndexPage()
 {
     MemIndexPage *next_free = free_head_.DequeNext();
+
     while (next_free == nullptr)
     {
         if (!IsFull())
@@ -103,9 +100,9 @@ bool IndexPageManager::IsFull() const
 }
 
 std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
-    const TablePartitionIdent &tbl_id)
+    const TableIdent &tbl_id)
 {
-    auto load_meta = [this](const TablePartitionIdent &tbl_id, RootMeta *meta)
+    auto load_meta = [this](const TableIdent &tbl_id, RootMeta *meta)
     {
         // load manifest file
         auto [manifest, err] = IoMgr()->GetManifest(tbl_id);
@@ -140,7 +137,7 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
 
     while (true)
     {
-        auto [it, inserted] = tbl_partiton_roots_.try_emplace(tbl_id);
+        auto [it, inserted] = tbl_roots_.try_emplace(tbl_id);
         RootMeta *meta = &it->second;
 
         if (inserted)
@@ -151,7 +148,7 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
             meta->waiting_.WakeAll();
             if (err != KvError::NoError)
             {
-                tbl_partiton_roots_.erase(tbl_id);
+                tbl_roots_.erase(tbl_id);
                 return {nullptr, err};
             }
             meta->locked_ = false;
@@ -171,14 +168,13 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
             // 2. A MemIndexPage referencing this stub RootMeta is created.
             // 3. WriteTask aborts, but the stub RootMeta cannot be cleared
             //    because it is still referenced by the MemIndexPage.
-            LOG(INFO) << "Find Root NotFound";
             return {meta, KvError::NotFound};
         }
         return {meta, KvError::NoError};
     }
 }
 
-KvError IndexPageManager::MakeCowRoot(const TablePartitionIdent &tbl_ident,
+KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
                                       CowRootMeta &cow_meta)
 {
     auto [meta, err] = FindRoot(tbl_ident);
@@ -197,8 +193,8 @@ KvError IndexPageManager::MakeCowRoot(const TablePartitionIdent &tbl_ident,
     {
         // It is the WriteTask's responsibility to clean up this stub RootMeta
         // if it aborted.
-        auto [tbl_it, _] = tbl_partiton_roots_.try_emplace(tbl_ident);
-        const TablePartitionIdent *tbl_id = &tbl_it->first;
+        auto [tbl_it, _] = tbl_roots_.try_emplace(tbl_ident);
+        const TableIdent *tbl_id = &tbl_it->first;
         auto mapper = std::make_unique<PageMapper>(this, tbl_id);
         std::shared_ptr<MappingSnapshot> mapping = mapper->GetMappingSnapshot();
         cow_meta.root_id_ = MaxPageId;
@@ -219,11 +215,11 @@ KvError IndexPageManager::MakeCowRoot(const TablePartitionIdent &tbl_ident,
     return KvError::NoError;
 }
 
-void IndexPageManager::UpdateRoot(const TablePartitionIdent &tbl_ident,
+void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
                                   CowRootMeta new_meta)
 {
-    auto tbl_it = tbl_partiton_roots_.find(tbl_ident);
-    assert(tbl_it != tbl_partiton_roots_.end());
+    auto tbl_it = tbl_roots_.find(tbl_ident);
+    assert(tbl_it != tbl_roots_.end());
     RootMeta &meta = tbl_it->second;
     meta.root_id_ = new_meta.root_id_;
     meta.ttl_root_id_ = new_meta.ttl_root_id_;
@@ -288,9 +284,9 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
 
 void IndexPageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
 {
-    const TablePartitionIdent &tbl = *mapping->tbl_ident_;
-    auto tbl_it = tbl_partiton_roots_.find(tbl);
-    if (tbl_it == tbl_partiton_roots_.end())
+    const TableIdent &tbl = *mapping->tbl_ident_;
+    auto tbl_it = tbl_roots_.find(tbl);
+    if (tbl_it == tbl_roots_.end())
     {
         return;
     }
@@ -312,8 +308,8 @@ void IndexPageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
 
 void IndexPageManager::Unswizzling(MemIndexPage *page)
 {
-    auto tbl_it = tbl_partiton_roots_.find(*page->tbl_partition_ident_);
-    assert(tbl_it != tbl_partiton_roots_.end());
+    auto tbl_it = tbl_roots_.find(*page->tbl_ident_);
+    assert(tbl_it != tbl_roots_.end());
 
     auto &mappings = tbl_it->second.mapping_snapshots_;
     for (auto &mapping : mappings)
@@ -346,36 +342,83 @@ bool IndexPageManager::Evict()
     return true;
 }
 
-void IndexPageManager::EvictRootIfEmpty(const TablePartitionIdent &tbl_id)
+void IndexPageManager::EvictRootIfEmpty(const TableIdent &tbl_id)
 {
-    auto it = tbl_partiton_roots_.find(tbl_id);
-    if (it != tbl_partiton_roots_.end())
+    if (is_destructing_)
+    {
+        return;
+    }
+
+    auto it = tbl_roots_.find(tbl_id);
+    if (it != tbl_roots_.end())
     {
         EvictRootIfEmpty(it);
     }
 }
 
 void IndexPageManager::EvictRootIfEmpty(
-    std::unordered_map<TablePartitionIdent, RootMeta>::iterator root_it)
+    std::unordered_map<TableIdent, RootMeta>::iterator root_it)
 {
-    RootMeta &meta = root_it->second;
-    if (meta.ref_cnt_ == 0)
+    if (is_destructing_)
     {
-        // TODO check mapping cnt, lock and delete directory and unlock
-        DLOG(INFO) << "metadata of " << root_it->first << " is evicted";
-        tbl_partiton_roots_.erase(root_it);
+        return;
     }
-    else if (meta.mapper_ != nullptr && meta.ref_cnt_ == 1)
+
+    RootMeta &meta = root_it->second;
+
+    CHECK(meta.mapper_ != nullptr || meta.ref_cnt_ == 0);
+
+    if (meta.mapper_ != nullptr && meta.ref_cnt_ == 1)
     {
         if (meta.mapper_->UseCount() <= 1)
         {
-            meta.mapper_ = nullptr;
-            // Call ~MappingSnapshot and decrease ref_cnt_
-            // Call EvictRootIfEmpty again
+            // Check if mapping table is empty (no data pages)
+            if (meta.mapper_->MappingCount() == 0)
+            {
+                // Lock the rootmeta to prevent other FindRoot operations
+                meta.locked_ = true;
+
+                const TableIdent &tbl_id = root_it->first;
+
+                // Clean up the table from io manager first
+
+                // Note: it will also clean manifest when data_append = false
+                // although it is not remove datafile
+                KvError err = IoMgr()->CleanManifest(tbl_id);
+                if (err != KvError::NoError)
+                {
+                    LOG(FATAL) << "Failed to clean manifest for table "
+                               << tbl_id << ", error: " << ErrorString(err);
+                }
+
+                // Wake up any waiting threads before erasing
+                meta.waiting_.WakeAll();
+
+                // Erase from memory - this will automatically destroy
+                // meta.mapper_ and trigger MappingSnapshot destructor, but
+                // FreeMappingSnapshot will return early since the table is
+                // already erased
+                tbl_roots_.erase(root_it);
+
+                // Note: No need to unlock since we've erased the entry
+                return;
+            }
+
+            // If mapping is not empty, we can directly erase the root since
+            // ref_cnt == 1 means only the mapper itself holds the reference
+
+            // meta.waiting_.WakeAll();
+
+            DLOG(INFO) << "metadata of " << root_it->first
+                       << " is evicted (ref_cnt == 1)";
+            tbl_roots_.erase(root_it);
         }
         else
         {
             // This is rare.
+            LOG(INFO) << "ref_cnt == 1 but mapper use count :"
+                      << meta.mapper_->UseCount();
+            CHECK(false) << "ref_cnt == 1 but mapper use count > 1";
         }
     }
 }
@@ -383,8 +426,8 @@ void IndexPageManager::EvictRootIfEmpty(
 bool IndexPageManager::RecyclePage(MemIndexPage *page)
 {
     assert(!page->IsPinned());
-    auto tbl_it = tbl_partiton_roots_.find(*page->tbl_partition_ident_);
-    assert(tbl_it != tbl_partiton_roots_.end());
+    auto tbl_it = tbl_roots_.find(*page->tbl_ident_);
+    assert(tbl_it != tbl_roots_.end());
     RootMeta &meta = tbl_it->second;
     // Unswizzling the page pointer in all mapping snapshots.
     auto &mappings = meta.mapping_snapshots_;
@@ -401,7 +444,7 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
     assert(page->file_page_id_ != MaxFilePageId);
     page->page_id_ = MaxPageId;
     page->file_page_id_ = MaxFilePageId;
-    page->tbl_partition_ident_ = nullptr;
+    page->tbl_ident_ = nullptr;
 
     FreeIndexPage(page);
     return true;
@@ -410,13 +453,13 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
 void IndexPageManager::FinishIo(MappingSnapshot *mapping,
                                 MemIndexPage *idx_page)
 {
-    idx_page->tbl_partition_ident_ = mapping->tbl_ident_;
+    idx_page->tbl_ident_ = mapping->tbl_ident_;
     mapping->AddSwizzling(idx_page->GetPageId(), idx_page);
 
     if (idx_page->IsDetached())
     {
-        auto tbl_it = tbl_partiton_roots_.find(*mapping->tbl_ident_);
-        assert(tbl_it != tbl_partiton_roots_.end());
+        auto tbl_it = tbl_roots_.find(*mapping->tbl_ident_);
+        assert(tbl_it != tbl_roots_.end());
         tbl_it->second.Pin();
     }
     else

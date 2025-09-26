@@ -26,14 +26,14 @@ std::string FormatEntries(tcb::span<eloqstore::KvEntry> entries);
 
 std::pair<std::string, eloqstore::KvError> Scan(
     eloqstore::EloqStore *store,
-    const eloqstore::TablePartitionIdent &tbl_id,
+    const eloqstore::TableIdent &tbl_id,
     uint32_t begin,
     uint32_t end);
 
 class MapVerifier
 {
 public:
-    MapVerifier(eloqstore::TablePartitionIdent tid,
+    MapVerifier(eloqstore::TableIdent tid,
                 eloqstore::EloqStore *store,
                 bool validate = true,
                 uint16_t key_len = 7);
@@ -74,7 +74,7 @@ public:
         const std::map<std::string, eloqstore::KvEntry> &new_dataset);
 
 private:
-    const eloqstore::TablePartitionIdent tid_;
+    const eloqstore::TableIdent tid_;
     uint64_t ts_{0};
     std::map<std::string, eloqstore::KvEntry> answer_;
     bool auto_validate_{true};
@@ -171,7 +171,7 @@ private:
     eloqstore::KvOptions options_;
     eloqstore::MemStoreMgr io_mgr_;
     eloqstore::IndexPageManager idx_mgr_;
-    eloqstore::TablePartitionIdent tbl_id_;
+    eloqstore::TableIdent tbl_id_;
 
     uint32_t root_id_;
     eloqstore::PageMapper answer_;

@@ -1,5 +1,7 @@
 #include "page_mapper.h"
 
+#include <glog/logging.h>
+
 #include <cassert>
 #include <cstdint>
 
@@ -9,7 +11,7 @@
 namespace eloqstore
 {
 
-PageMapper::PageMapper(IndexPageManager *idx_mgr, const TablePartitionIdent *tbl_ident)
+PageMapper::PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident)
     : mapping_(std::make_shared<MappingSnapshot>(idx_mgr, tbl_ident)),
       file_page_allocator_(FilePageAllocator::Instance(Options()))
 {
@@ -66,6 +68,8 @@ FilePageAllocator *PageMapper::FilePgAllocator() const
 
 uint32_t PageMapper::MappingCount() const
 {
+    CHECK(mapping_ != nullptr);
+
     return mapping_->mapping_tbl_.size() - free_page_cnt_;
 }
 
@@ -147,7 +151,7 @@ uint64_t MappingSnapshot::DecodeId(uint64_t val)
 }
 
 MappingSnapshot::MappingSnapshot(IndexPageManager *idx_mgr,
-                                 const TablePartitionIdent *tbl_id)
+                                 const TableIdent *tbl_id)
     : idx_mgr_(idx_mgr), tbl_ident_(tbl_id)
 {
 }
@@ -340,15 +344,6 @@ void AppendAllocator::UpdateStat(FileId min_file_id, uint32_t hole_cnt)
 FileId AppendAllocator::MinFileId() const
 {
     return min_file_id_;
-}
-
-FileId AppendAllocator::AdvanceCurrentFileId()
-{
-    FileId cur_file_id = CurrentFileId();
-
-    const FilePageId next_fp_id = (cur_file_id + 1) << pages_per_file_shift_;
-    max_fp_id_ = next_fp_id;
-    return CurrentFileId();
 }
 
 size_t AppendAllocator::SpaceSize() const

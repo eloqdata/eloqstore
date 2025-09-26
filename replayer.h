@@ -16,7 +16,7 @@ public:
     Replayer(const KvOptions *opts);
     KvError Replay(ManifestFile *file);
     std::unique_ptr<PageMapper> GetMapper(IndexPageManager *idx_mgr,
-                                          const TablePartitionIdent *tbl_ident);
+                                          const TableIdent *tbl_ident);
 
     PageId root_;
     PageId ttl_root_;

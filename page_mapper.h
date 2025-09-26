@@ -17,13 +17,11 @@ struct KvOptions;
 
 struct MappingSnapshot
 {
-    MappingSnapshot(IndexPageManager *idx_mgr, const TablePartitionIdent *tbl_id);
+    MappingSnapshot(IndexPageManager *idx_mgr, const TableIdent *tbl_id);
     MappingSnapshot(IndexPageManager *idx_mgr,
-                    const TablePartitionIdent *tbl_id,
+                    const TableIdent *tbl_id,
                     std::vector<uint64_t> tbl)
-        : idx_mgr_(idx_mgr),
-          tbl_ident_(tbl_id),
-          mapping_tbl_(std::move(tbl)) {};
+        : idx_mgr_(idx_mgr), tbl_ident_(tbl_id), mapping_tbl_(std::move(tbl)){};
     ~MappingSnapshot();
 
     static constexpr uint8_t TypeBits = 3;
@@ -64,7 +62,7 @@ struct MappingSnapshot
     void Serialize(std::string &dst) const;
 
     IndexPageManager *idx_mgr_;
-    const TablePartitionIdent *tbl_ident_;
+    const TableIdent *tbl_ident_;
 
     std::vector<uint64_t> mapping_tbl_;
 
@@ -120,26 +118,20 @@ class AppendAllocator : public FilePageAllocator
 {
 public:
     AppendAllocator(const KvOptions *opts)
-        : FilePageAllocator(opts, 0), min_file_id_(0), empty_file_cnt_(0) {};
+        : FilePageAllocator(opts, 0), min_file_id_(0), empty_file_cnt_(0){};
     AppendAllocator(const KvOptions *opts,
                     FileId min_file_id,
                     FilePageId max_fp_id,
                     uint32_t empty_cnt)
         : FilePageAllocator(opts, max_fp_id),
           min_file_id_(min_file_id),
-          empty_file_cnt_(empty_cnt) {};
+          empty_file_cnt_(empty_cnt){};
     AppendAllocator(const AppendAllocator &rhs) = default;
     std::unique_ptr<FilePageAllocator> Clone() override;
 
     void UpdateStat(FileId min_file_id, uint32_t hole_cnt);
     FileId MinFileId() const;
-    /**
-     * @brief Advances allocation to the next data file boundary so that
-     * future writes land in a new file. This allows GC to reclaim the
-     * previous file safely once no mapping references remain.
-     * @return File id that subsequent allocations will use.
-     */
-    FileId AdvanceCurrentFileId();
+
     /**
      * @brief Calculates number of pages this allocator occupied.
      * This result includes pages that is not actually used by mapping but
@@ -167,12 +159,11 @@ private:
 class PooledFilePages : public FilePageAllocator
 {
 public:
-    explicit PooledFilePages(const KvOptions *opts)
-        : FilePageAllocator(opts) {};
+    explicit PooledFilePages(const KvOptions *opts) : FilePageAllocator(opts){};
     PooledFilePages(const KvOptions *opts,
                     FilePageId next_id,
                     std::vector<uint32_t> free_ids)
-        : FilePageAllocator(opts, next_id), free_ids_(std::move(free_ids)) {};
+        : FilePageAllocator(opts, next_id), free_ids_(std::move(free_ids)){};
     PooledFilePages(const PooledFilePages &rhs) = default;
     std::unique_ptr<FilePageAllocator> Clone() override;
 
@@ -191,8 +182,8 @@ class PageMapper
 {
 public:
     explicit PageMapper(std::shared_ptr<MappingSnapshot> mapping)
-        : mapping_(std::move(mapping)) {};
-    PageMapper(IndexPageManager *idx_mgr, const TablePartitionIdent *tbl_ident);
+        : mapping_(std::move(mapping)){};
+    PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident);
     PageMapper(const PageMapper &rhs);
 
     PageId GetPage();

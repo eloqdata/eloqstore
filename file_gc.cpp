@@ -4,10 +4,10 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <filesystem>
-#include <fstream>
 #include <unordered_set>
 #include <vector>
 
+#include "async_io_manager.h"
 #include "common.h"
 #include "eloq_store.h"
 #include "error.h"
@@ -32,18 +32,25 @@ void GetRetainedFiles(std::unordered_set<FileId> &result,
     }
 };
 
-KvError FileGarbageCollector::ExecuteLocalGC(
-    const TablePartitionIdent &tbl_id,
+namespace FileGarbageCollector
+{
+
+KvError ExecuteLocalGC(
+    const TableIdent &tbl_id,
     const std::unordered_set<FileId> &retained_files,
     IouringMgr *io_mgr)
 {
-    LOG(INFO) << "ExecuteLocalGC";
+    LOG(INFO) << "ExecuteLocalGC: starting for table " << tbl_id.tbl_name_
+              << ", partition " << tbl_id.partition_id_
+              << ", retained_files count=" << retained_files.size();
+
     // 1. list all files in local directory.
     std::vector<std::string> local_files;
     KvError err = ListLocalFiles(tbl_id, local_files, io_mgr);
-    LOG(INFO) << "ListLocalFiles got " << local_files.size() << " files";
     if (err != KvError::NoError)
     {
+        LOG(ERROR) << "ExecuteLocalGC: ListLocalFiles failed, error="
+                   << static_cast<int>(err);
         return err;
     }
 
@@ -60,29 +67,32 @@ KvError FileGarbageCollector::ExecuteLocalGC(
                                        archive_timestamps,
                                        least_not_archived_file_id,
                                        io_mgr);
-    LOG(INFO) << "GetOrUpdateArchivedMaxFileId, least_not_archived_file_id: "
-              << least_not_archived_file_id;
+
     if (err != KvError::NoError)
     {
+        LOG(ERROR)
+            << "ExecuteLocalGC: GetOrUpdateArchivedMaxFileId failed, error="
+            << static_cast<int>(err);
         return err;
     }
 
-    LOG(INFO) << "Delete " << data_files.size() << " data files, "
-              << retained_files.size() << " retained files";
     // 4. delete unreferenced data files.
     err = DeleteUnreferencedLocalFiles(
         tbl_id, data_files, retained_files, least_not_archived_file_id, io_mgr);
 
     if (err != KvError::NoError)
     {
+        LOG(ERROR)
+            << "ExecuteLocalGC: DeleteUnreferencedLocalFiles failed, error="
+            << static_cast<int>(err);
         return err;
     }
 
     return KvError::NoError;
 }
 
-KvError FileGarbageCollector::ListLocalFiles(
-    const TablePartitionIdent &tbl_id,
+KvError ListLocalFiles(
+    const TableIdent &tbl_id,
     std::vector<std::string> &local_files,
     IouringMgr *io_mgr)
 {
@@ -114,8 +124,8 @@ KvError FileGarbageCollector::ListLocalFiles(
 }
 
 // Helper functions for cloud GC optimization
-KvError FileGarbageCollector::ListCloudFiles(
-    const TablePartitionIdent &tbl_id,
+KvError ListCloudFiles(
+    const TableIdent &tbl_id,
     std::vector<std::string> &cloud_files,
     CloudStoreMgr *cloud_mgr)
 {
@@ -159,7 +169,7 @@ KvError FileGarbageCollector::ListCloudFiles(
     return KvError::NoError;
 }
 
-void FileGarbageCollector::ClassifyFiles(
+void ClassifyFiles(
     const std::vector<std::string> &files,
     std::vector<std::string> &archive_files,
     std::vector<uint64_t> &archive_timestamps,
@@ -203,8 +213,8 @@ void FileGarbageCollector::ClassifyFiles(
     }
 }
 
-KvError FileGarbageCollector::DownloadArchiveFile(
-    const TablePartitionIdent &tbl_id,
+KvError DownloadArchiveFile(
+    const TableIdent &tbl_id,
     const std::string &archive_file,
     std::string &content,
     CloudStoreMgr *cloud_mgr,
@@ -245,7 +255,7 @@ KvError FileGarbageCollector::DownloadArchiveFile(
     return KvError::NoError;
 }
 
-FileId FileGarbageCollector::ParseArchiveForMaxFileId(
+FileId ParseArchiveForMaxFileId(
     const std::string &archive_content, IouringMgr *io_mgr)
 {
     MemStoreMgr::Manifest manifest(archive_content);
@@ -283,8 +293,8 @@ FileId FileGarbageCollector::ParseArchiveForMaxFileId(
     return max_file_id;
 }
 
-KvError FileGarbageCollector::GetOrUpdateArchivedMaxFileId(
-    const TablePartitionIdent &tbl_id,
+KvError GetOrUpdateArchivedMaxFileId(
+    const TableIdent &tbl_id,
     const std::vector<std::string> &archive_files,
     const std::vector<uint64_t> &archive_timestamps,
     FileId &least_not_archived_file_id,
@@ -365,8 +375,8 @@ KvError FileGarbageCollector::GetOrUpdateArchivedMaxFileId(
     return KvError::NoError;
 }
 
-KvError FileGarbageCollector::DeleteUnreferencedCloudFiles(
-    const TablePartitionIdent &tbl_id,
+KvError DeleteUnreferencedCloudFiles(
+    const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
     const std::unordered_set<FileId> &retained_files,
     FileId least_not_archived_file_id,
@@ -385,7 +395,7 @@ KvError FileGarbageCollector::DeleteUnreferencedCloudFiles(
         FileId file_id = std::stoull(std::string(ret.second));
 
         // Only delete files that meet the following conditions:
-        // 1. File ID > least_not_archived_file_id (greater than the archived
+        // 1. File ID >= least_not_archived_file_id (greater than the archived
         // max file ID)
         // 2. Not in retained_files (files not needed in the current version)
         if (file_id >= least_not_archived_file_id &&
@@ -401,7 +411,6 @@ KvError FileGarbageCollector::DeleteUnreferencedCloudFiles(
                       << least_not_archived_file_id;
         }
     }
-    LOG(INFO) << "delete unreference " << files_to_delete.size() << " files";
 
     // Check if we should delete the entire directory instead of individual
     // files If files_to_delete.size() == data_files.size() - 1, it means we're
@@ -476,8 +485,8 @@ KvError FileGarbageCollector::DeleteUnreferencedCloudFiles(
     return KvError::NoError;
 }
 
-KvError FileGarbageCollector::DeleteUnreferencedLocalFiles(
-    const TablePartitionIdent &tbl_id,
+KvError DeleteUnreferencedLocalFiles(
+    const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
     const std::unordered_set<FileId> &retained_files,
     FileId least_not_archived_file_id,
@@ -493,6 +502,8 @@ KvError FileGarbageCollector::DeleteUnreferencedLocalFiles(
         auto ret = ParseFileName(file_name);
         if (ret.first != FileNameData)
         {
+            LOG(INFO) << "ExecuteLocalGC: skipping non-data file: "
+                      << file_name;
             continue;
         }
 
@@ -507,27 +518,37 @@ KvError FileGarbageCollector::DeleteUnreferencedLocalFiles(
         {
             fs::path file_path = dir_path / file_name;
             files_to_delete.push_back(file_path.string());
+            LOG(INFO) << "ExecuteLocalGC: marking file for deletion: "
+                      << file_name << " (file_id=" << file_id << ")";
         }
         else
         {
-            LOG(INFO) << "skip file since file_id=" << file_id
+            LOG(INFO) << "ExecuteLocalGC: skip file " << file_name
+                      << " since file_id=" << file_id
                       << ", least_not_archived_file_id="
-                      << least_not_archived_file_id;
+                      << least_not_archived_file_id << ", in_retained="
+                      << (retained_files.contains(file_id) ? "true" : "false");
         }
     }
 
+    LOG(INFO) << "ExecuteLocalGC: total files to delete: "
+              << files_to_delete.size();
     if (!files_to_delete.empty())
     {
         // Delete files using batch operation
         KvError delete_err = io_mgr->DeleteFiles(files_to_delete);
         if (delete_err != KvError::NoError)
         {
-            LOG(ERROR) << "Failed to delete files, error: "
+            LOG(ERROR) << "ExecuteLocalGC: Failed to delete files, error: "
                        << static_cast<int>(delete_err);
             return delete_err;
         }
-        LOG(INFO) << "Successfully deleted " << files_to_delete.size()
-                  << " unreferenced files";
+        LOG(INFO) << "ExecuteLocalGC: Successfully deleted "
+                  << files_to_delete.size() << " unreferenced files";
+    }
+    else
+    {
+        LOG(INFO) << "ExecuteLocalGC: No files to delete";
     }
     // Check if we should delete the entire directory instead of individual
     // files
@@ -543,8 +564,8 @@ KvError FileGarbageCollector::DeleteUnreferencedLocalFiles(
     return KvError::NoError;
 }
 
-KvError FileGarbageCollector::ExecuteCloudGC(
-    const TablePartitionIdent &tbl_id,
+KvError ExecuteCloudGC(
+    const TableIdent &tbl_id,
     const std::unordered_set<FileId> &retained_files,
     CloudStoreMgr *cloud_mgr)
 {
@@ -593,4 +614,7 @@ KvError FileGarbageCollector::ExecuteCloudGC(
 
     return KvError::NoError;
 }
+
+}  // namespace FileGarbageCollector
+
 }  // namespace eloqstore

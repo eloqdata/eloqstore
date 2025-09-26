@@ -115,7 +115,7 @@ bool Shard::AddKvRequest(KvRequest *req)
     return ret;
 }
 
-void Shard::AddPendingCompact(const TablePartitionIdent &tbl_id)
+void Shard::AddPendingCompact(const TableIdent &tbl_id)
 {
     // Send CompactRequest from internal.
     assert(!HasPendingCompact(tbl_id));
@@ -128,7 +128,7 @@ void Shard::AddPendingCompact(const TablePartitionIdent &tbl_id)
     pending_q.PushBack(&req);
 }
 
-bool Shard::HasPendingCompact(const TablePartitionIdent &tbl_id)
+bool Shard::HasPendingCompact(const TableIdent &tbl_id)
 {
     auto it = pending_queues_.find(tbl_id);
     assert(it != pending_queues_.end());
@@ -136,7 +136,7 @@ bool Shard::HasPendingCompact(const TablePartitionIdent &tbl_id)
     return !pending_q.compact_req_.done_.load(std::memory_order_relaxed);
 }
 
-void Shard::AddPendingTTL(const TablePartitionIdent &tbl_id)
+void Shard::AddPendingTTL(const TableIdent &tbl_id)
 {
     // Send CleanExpiredRequest from internal.
     assert(!HasPendingTTL(tbl_id));
@@ -149,7 +149,7 @@ void Shard::AddPendingTTL(const TablePartitionIdent &tbl_id)
     pending_q.PushBack(&req);
 }
 
-bool Shard::HasPendingTTL(const TablePartitionIdent &tbl_id)
+bool Shard::HasPendingTTL(const TableIdent &tbl_id)
 {
     auto it = pending_queues_.find(tbl_id);
     assert(it != pending_queues_.end());
@@ -268,8 +268,12 @@ void Shard::ProcessReq(KvRequest *req)
                 return list_task.error_;
             }
 
-            utils::ParseRCloneListObjectsResponse(
-                list_task.response_data_, *list_object_req->GetObjects());
+            if (!utils::ParseRCloneListObjectsResponse(
+                    list_task.response_data_, *list_object_req->GetObjects()))
+            {
+                LOG(ERROR) << "Failed to parse ListObjects response";
+                return KvError::IoFail;
+            }
             return KvError::NoError;
         };
         StartTask(task, req, lbd);
@@ -277,7 +281,6 @@ void Shard::ProcessReq(KvRequest *req)
     }
     case RequestType::BatchWrite:
     {
-        DLOG(INFO) << "ProcessReq BatchWrite";
         BatchWriteTask *task = task_mgr_.GetBatchWriteTask(req->TableId());
         auto lbd = [task, req]() -> KvError
         {
@@ -304,11 +307,6 @@ void Shard::ProcessReq(KvRequest *req)
             return task->Truncate(trunc_req->position_);
         };
         StartTask(task, req, lbd);
-        break;
-    }
-    case RequestType::DropTable:
-    {
-        req->SetDone(KvError::InvalidArgs);
         break;
     }
     case RequestType::Archive:

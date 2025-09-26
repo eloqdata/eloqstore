@@ -157,7 +157,7 @@ KvError IouringMgr::Init(Shard *shard)
     return KvError::NoError;
 }
 
-std::pair<Page, KvError> IouringMgr::ReadPage(const TablePartitionIdent &tbl_id,
+std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
                                               FilePageId fp_id,
                                               Page page)
 {
@@ -214,7 +214,7 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TablePartitionIdent &tbl_id,
     return {std::move(page), KvError::NoError};
 }
 
-KvError IouringMgr::ReadPages(const TablePartitionIdent &tbl_id,
+KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
                               std::span<FilePageId> page_ids,
                               std::vector<Page> &pages)
 {
@@ -227,7 +227,7 @@ KvError IouringMgr::ReadPages(const TablePartitionIdent &tbl_id,
             : BaseReq(task),
               fd_ref_(std::move(fd)),
               offset_(offset),
-              page_(true) {};
+              page_(true){};
 
         LruFD::Ref fd_ref_;
         uint32_t offset_;
@@ -339,7 +339,7 @@ KvError IouringMgr::ReadPages(const TablePartitionIdent &tbl_id,
 }
 
 std::pair<ManifestFilePtr, KvError> IouringMgr::GetManifest(
-    const TablePartitionIdent &tbl_id)
+    const TableIdent &tbl_id)
 {
     LruFD::Ref old_fd = GetOpenedFD(tbl_id, LruFD::kManifest);
     if (old_fd != nullptr)
@@ -365,7 +365,7 @@ std::pair<ManifestFilePtr, KvError> IouringMgr::GetManifest(
     return {std::move(manifest), KvError::NoError};
 }
 
-KvError IouringMgr::WritePage(const TablePartitionIdent &tbl_id,
+KvError IouringMgr::WritePage(const TableIdent &tbl_id,
                               VarPage page,
                               FilePageId file_page_id)
 {
@@ -388,7 +388,7 @@ KvError IouringMgr::WritePage(const TablePartitionIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError IouringMgr::WritePages(const TablePartitionIdent &tbl_id,
+KvError IouringMgr::WritePages(const TableIdent &tbl_id,
                                std::span<VarPage> pages,
                                FilePageId first_fp_id)
 {
@@ -445,7 +445,7 @@ KvError IouringMgr::WritePages(const TablePartitionIdent &tbl_id,
     }
 }
 
-KvError IouringMgr::SyncData(const TablePartitionIdent &tbl_id)
+KvError IouringMgr::SyncData(const TableIdent &tbl_id)
 {
     auto it_tbl = tables_.find(tbl_id);
     if (it_tbl == tables_.end())
@@ -477,7 +477,7 @@ KvError IouringMgr::SyncData(const TablePartitionIdent &tbl_id)
     return SyncFiles(tbl_id, fds);
 }
 
-KvError IouringMgr::AbortWrite(const TablePartitionIdent &tbl_id)
+KvError IouringMgr::AbortWrite(const TableIdent &tbl_id)
 {
     // Wait all WriteReq finished to avoid PollComplete access this WriteTask
     // from WriteReq.task_ after aborted.
@@ -496,174 +496,67 @@ KvError IouringMgr::AbortWrite(const TablePartitionIdent &tbl_id)
     return KvError::NoError;
 }
 
-void IouringMgr::CleanTable(const TablePartitionIdent &tbl_id)
+KvError IouringMgr::CleanManifest(const TableIdent &tbl_id)
 {
-    // TODO: io_uring_prep_unlinkat
-    assert(false);
-}
-
-KvError IouringMgr::RemovePartitionDirIfOnlyManifest(
-    const TablePartitionIdent &tbl_id)
-{
-    if (options_->store_path.empty())
     {
-        return KvError::NoError;
-    }
-
-    auto close_all_fds = [this, &tbl_id]() -> KvError
-    {
-        DLOG(INFO) << "close all fids " << tbl_id.tbl_name_ << ":"
-                   << tbl_id.partition_id_;
-        while (true)
+        // Close manifest file if it's open
+        LruFD::Ref manifest_fd = GetOpenedFD(tbl_id, LruFD::kManifest);
+        if (manifest_fd.Get() != nullptr)
         {
-            auto it_tbl = tables_.find(tbl_id);
-            if (it_tbl == tables_.end())
+            KvError err = CloseFile(std::move(manifest_fd));
+            if (err != KvError::NoError)
             {
-                return KvError::NoError;
-            }
-
-            bool closed_one = false;
-            for (auto it = it_tbl->second.fds_.begin();
-                 it != it_tbl->second.fds_.end();
-                 ++it)
-            {
-                LruFD &lru_fd = it->second;
-                if (lru_fd.fd_ == LruFD::FdEmpty)
-                {
-                    continue;
-                }
-                KvError err = CloseFile(LruFD::Ref(&lru_fd, this));
-                if (err != KvError::NoError)
-                {
-                    return err;
-                }
-                closed_one = true;
-                break;
-            }
-
-            if (!closed_one)
-            {
-                break;
+                LOG(WARNING) << "Failed to close manifest file for table";
+                return err;
             }
         }
-        return KvError::NoError;
-    };
 
-    KvError err = close_all_fds();
-    if (err != KvError::NoError)
-    {
-        return err;
-    }
-
-    fs::path dir_path = tbl_id.StorePath(options_->store_path);
-    std::error_code ec;
-    if (!fs::exists(dir_path, ec))
-    {
-        if (ec)
+        // Get directory fd and delete manifest file
+        auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory);
+        if (err == KvError::NoError)
         {
-            LOG(ERROR)
-                << "RemovePartitionDirIfOnlyManifest: exists check failed "
-                << dir_path << ": " << ec.message();
-            return ToKvError(-ec.value());
-        }
-        return KvError::NoError;
-    }
-
-    fs::directory_iterator it(dir_path, ec);
-    if (ec)
-    {
-        if (ec == std::errc::no_such_file_or_directory)
-        {
-            return KvError::NoError;
-        }
-        LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: iterate failed "
-                   << dir_path << ": " << ec.message();
-        return ToKvError(-ec.value());
-    }
-
-    fs::directory_iterator end;
-    std::vector<fs::path> manifest_paths;
-    for (; it != end; it.increment(ec))
-    {
-        if (ec)
-        {
-            if (ec == std::errc::no_such_file_or_directory)
+            int res = UnlinkAt(dir_fd.FdPair(), "manifest", false);
+            if (res < 0 && res != -ENOENT)
             {
-                return KvError::NoError;
+                LOG(WARNING) << "Failed to delete manifest file for table "
+                             << tbl_id << ": " << strerror(-res);
+                return ToKvError(res);
             }
-            LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: iteration failed "
-                       << dir_path << ": " << ec.message();
-            return ToKvError(-ec.value());
-        }
-        const fs::directory_entry &ent = *it;
-        if (!ent.is_regular_file(ec))
-        {
-            if (ec)
+            else
             {
-                if (ec == std::errc::no_such_file_or_directory)
-                {
-                    return KvError::NoError;
-                }
-                LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: "
-                              "is_regular_file failed "
-                           << ent.path() << ": " << ec.message();
-                return ToKvError(-ec.value());
+                DLOG(INFO) << "Successfully deleted manifest file for table "
+                           << tbl_id;
             }
-            return KvError::NoError;
         }
-
-        const std::string name = ent.path().filename().string();
-        if (boost::algorithm::ends_with(name, TmpSuffix))
+        else
         {
-            return KvError::NoError;
+            LOG(WARNING) << "Failed to open directory for table " << tbl_id
+                         << " during cleanup";
         }
-
-        const auto [file_type, file_suffix] = ParseFileName(name);
-        if (file_type == FileNameManifest)
-        {
-            manifest_paths.push_back(ent.path());
-            continue;
-        }
-
-        if (file_type == FileNameData)
-        {
-            return KvError::NoError;
-        }
-
-        return KvError::NoError;
     }
-
-    for (const fs::path &path : manifest_paths)
+    // Get directory fd and delete manifest file
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory);
+    if (err == KvError::NoError)
     {
-        fs::remove(path, ec);
-        if (ec)
+        int res = UnlinkAt(dir_fd.FdPair(), "manifest", false);
+        if (res < 0 && res != -ENOENT)
         {
-            LOG(ERROR)
-                << "RemovePartitionDirIfOnlyManifest: remove manifest failed "
-                << path << ": " << ec.message();
-            return ToKvError(-ec.value());
+            LOG(WARNING) << "Failed to delete manifest file for table "
+                         << tbl_id << ": " << strerror(-res);
+            return ToKvError(res);
+        }
+        else
+        {
+            DLOG(INFO) << "Successfully deleted manifest file for table "
+                       << tbl_id;
         }
     }
-
-    fs::remove(dir_path, ec);
-    if (ec)
+    else
     {
-        LOG(ERROR) << "RemovePartitionDirIfOnlyManifest: remove dir failed "
-                   << dir_path << ": " << ec.message();
-        return ToKvError(-ec.value());
+        LOG(WARNING) << "Failed to open directory for table " << tbl_id
+                     << " during cleanup";
     }
 
-    tables_.erase(tbl_id);
-    least_not_archived_file_ids_.erase(tbl_id);
-
-    // Force evict cached root metadata for this table
-
-    if (shard != nullptr)
-    {
-        shard->IndexManager()->EvictRootIfEmpty(tbl_id);
-    }
-
-    LOG(INFO) << "Removed empty partition directory " << dir_path;
     return KvError::NoError;
 }
 
@@ -713,7 +606,7 @@ void IouringMgr::EncodeUserData(io_uring_sqe *sqe,
     io_uring_sqe_set_data(sqe, user_data);
 }
 
-IouringMgr::FdIdx IouringMgr::GetRootFD(const TablePartitionIdent &tbl_id)
+IouringMgr::FdIdx IouringMgr::GetRootFD(const TableIdent &tbl_id)
 {
     assert(!eloq_store->root_fds_.empty());
     const uint16_t n_disks = eloq_store->root_fds_.size();
@@ -721,8 +614,8 @@ IouringMgr::FdIdx IouringMgr::GetRootFD(const TablePartitionIdent &tbl_id)
     return {root_fd, false};
 }
 
-IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(
-    const TablePartitionIdent &tbl_id, FileId file_id)
+IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(const TableIdent &tbl_id,
+                                               FileId file_id)
 {
     auto it_tbl = tables_.find(tbl_id);
     if (it_tbl == tables_.end())
@@ -743,13 +636,13 @@ IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(
 }
 
 std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenFD(
-    const TablePartitionIdent &tbl_id, FileId file_id, bool direct)
+    const TableIdent &tbl_id, FileId file_id, bool direct)
 {
     return OpenOrCreateFD(tbl_id, file_id, direct, false);
 }
 
 std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
-    const TablePartitionIdent &tbl_id, FileId file_id, bool direct, bool create)
+    const TableIdent &tbl_id, FileId file_id, bool direct, bool create)
 {
     auto it_tbl = tables_.find(tbl_id);
     if (it_tbl == tables_.end())
@@ -762,9 +655,6 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     auto it_fd = tbl->fds_.find(file_id);
     if (it_fd == tbl->fds_.end())
     {
-        DLOG(INFO) << "fds emplace " << file_id
-                   << ", tbl_id=" << tbl_id.tbl_name_ << ":"
-                   << tbl_id.partition_id_;
         auto [it, _] = tbl->fds_.try_emplace(file_id, tbl, file_id);
         it_fd = it;
     }
@@ -974,9 +864,7 @@ int IouringMgr::CreateFile(LruFD::Ref dir_fd, FileId file_id)
     return fd;
 }
 
-int IouringMgr::OpenFile(const TablePartitionIdent &tbl_id,
-                         FileId file_id,
-                         bool direct)
+int IouringMgr::OpenFile(const TableIdent &tbl_id, FileId file_id, bool direct)
 {
     uint64_t flags = O_RDWR;
     fs::path path = tbl_id.ToString();
@@ -1068,13 +956,13 @@ KvError IouringMgr::SyncFile(LruFD::Ref fd)
     return ToKvError(res);
 }
 
-KvError IouringMgr::SyncFiles(const TablePartitionIdent &tbl_id,
+KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
                               std::span<LruFD::Ref> fds)
 {
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
     };
 
@@ -1312,7 +1200,7 @@ int IouringMgr::UnlinkAt(FdIdx dir_fd, const char *path, bool rmdir)
     return res;
 }
 
-KvError IouringMgr::AppendManifest(const TablePartitionIdent &tbl_id,
+KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
                                    std::string_view log,
                                    uint64_t manifest_size)
 {
@@ -1336,7 +1224,6 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
                               std::string_view name,
                               std::string_view content)
 {
-    DLOG(INFO) << "WriteSnapshot: " << name << " size: " << content.size();
     std::string tmpfile = std::string(name) + TmpSuffix;
     uint64_t tmp_oflags = O_CREAT | O_TRUNC | O_RDWR;
     int tmp_fd = OpenAt(dir_fd.FdPair(), tmpfile.c_str(), tmp_oflags, 0644);
@@ -1383,7 +1270,7 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
     return tmp_fd;
 }
 
-KvError IouringMgr::SwitchManifest(const TablePartitionIdent &tbl_id,
+KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
                                    std::string_view snapshot)
 {
     LruFD::Ref fd_ref = GetOpenedFD(tbl_id, LruFD::kManifest);
@@ -1405,11 +1292,10 @@ KvError IouringMgr::SwitchManifest(const TablePartitionIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError IouringMgr::CreateArchive(const TablePartitionIdent &tbl_id,
+KvError IouringMgr::CreateArchive(const TableIdent &tbl_id,
                                   std::string_view snapshot,
                                   uint64_t ts)
 {
-    LOG(INFO) << "CreateArchive: " << tbl_id << " ts: " << ts;
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory);
     CHECK_KV_ERR(err);
     const std::string name = ArchiveName(ts);
@@ -1697,17 +1583,17 @@ void IouringMgr::LruFD::Ref::Clear()
 {
     if (--fd_->ref_count_ == 0)
     {
-        PartitionFiles *tbl = fd_->tbl_;
+        PartitionFiles *partition_files = fd_->tbl_;
         if (fd_->fd_ >= 0)
         {
             io_mgr_->lru_fd_head_.EnqueNext(fd_);
         }
         else
         {
-            tbl->fds_.erase(fd_->file_id_);
-            if (tbl->fds_.empty())
+            partition_files->fds_.erase(fd_->file_id_);
+            if (partition_files->fds_.empty())
             {
-                io_mgr_->tables_.erase(*tbl->tbl_id_);
+                io_mgr_->tables_.erase(*partition_files->tbl_id_);
             }
         }
     }
@@ -1798,6 +1684,10 @@ KvError IouringMgr::ReadArchiveFile(const std::string &file_path,
         {
             LOG(ERROR) << "Unexpected EOF: expected " << file_size << ", got "
                        << off;
+            // Close before returning
+            io_uring_sqe *csqe = GetSQE(UserDataType::KvTask, current_task);
+            io_uring_prep_close(csqe, fd);
+            (void) current_task->WaitIoResult();
             return KvError::EndOfFile;
         }
         off += static_cast<size_t>(rres);
@@ -1824,23 +1714,37 @@ KvError IouringMgr::DeleteFiles(const std::vector<std::string> &file_paths)
     }
 
     KvTask *current_task = ThdTask();
+    struct UnlinkReq : BaseReq
+    {
+        std::string path;
+    };
+    std::vector<UnlinkReq> reqs;
+    reqs.reserve(file_paths.size());
 
     // Submit all unlink operations
     for (const std::string &file_path : file_paths)
     {
-        io_uring_sqe *unlink_sqe = GetSQE(UserDataType::KvTask, current_task);
+        reqs.emplace_back();
+        reqs.back().task_ = current_task;
+        reqs.back().path = file_path;
+        io_uring_sqe *unlink_sqe = GetSQE(UserDataType::BaseReq, &reqs.back());
         io_uring_prep_unlinkat(unlink_sqe, AT_FDCWD, file_path.c_str(), 0);
     }
 
-    int unlink_res = current_task->WaitIoResult();
+    current_task->WaitIo();
 
-    if (unlink_res < 0)
+    KvError first_error = KvError::NoError;
+    for (const auto &req : reqs)
     {
-        LOG(ERROR) << "Failed to unlink file";
-        return ToKvError(unlink_res);
+        if (req.res_ < 0 && first_error == KvError::NoError)
+        {
+            LOG(ERROR) << "Failed to unlink file: " << req.path
+                       << ", error: " << req.res_;
+            first_error = ToKvError(req.res_);
+        }
     }
 
-    return KvError::NoError;
+    return first_error;
 }
 
 CloudStoreMgr::CloudStoreMgr(const KvOptions *opts, uint32_t fd_limit)
@@ -1886,7 +1790,7 @@ void CloudStoreMgr::PollComplete()
     IouringMgr::PollComplete();
 }
 
-KvError CloudStoreMgr::SwitchManifest(const TablePartitionIdent &tbl_id,
+KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
                                       std::string_view snapshot)
 {
     LruFD::Ref fd_ref = GetOpenedFD(tbl_id, LruFD::kManifest);
@@ -1940,7 +1844,7 @@ KvError CloudStoreMgr::SwitchManifest(const TablePartitionIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError CloudStoreMgr::CreateArchive(const TablePartitionIdent &tbl_id,
+KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
                                      std::string_view snapshot,
                                      uint64_t ts)
 {
@@ -1980,7 +1884,7 @@ int CloudStoreMgr::CreateFile(LruFD::Ref dir_fd, FileId file_id)
     return res;
 }
 
-int CloudStoreMgr::OpenFile(const TablePartitionIdent &tbl_id,
+int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
                             FileId file_id,
                             bool direct)
 {
@@ -2038,7 +1942,7 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
     FileId file_id = fd.Get()->file_id_;
     if (file_id != LruFD::kDirectory)
     {
-        const TablePartitionIdent &tbl_id = *fd.Get()->tbl_->tbl_id_;
+        const TableIdent &tbl_id = *fd.Get()->tbl_->tbl_id_;
         KvError err = UploadFiles(tbl_id, {ToFilename(file_id)});
         if (err != KvError::NoError)
         {
@@ -2054,7 +1958,7 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
     return KvError::NoError;
 }
 
-KvError CloudStoreMgr::SyncFiles(const TablePartitionIdent &tbl_id,
+KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
                                  std::span<LruFD::Ref> fds)
 {
     KvError err = IouringMgr::SyncFiles(tbl_id, fds);
@@ -2078,7 +1982,7 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
     FileId file_id = fd.Get()->file_id_;
     if (file_id != LruFD::kDirectory)
     {
-        const TablePartitionIdent *tbl_id = fd.Get()->tbl_->tbl_id_;
+        const TableIdent *tbl_id = fd.Get()->tbl_->tbl_id_;
         EnqueClosedFile(FileKey(*tbl_id, ToFilename(file_id)));
     }
     return KvError::NoError;
@@ -2176,8 +2080,7 @@ int CloudStoreMgr::ReserveCacheSpace(size_t size)
     return 0;
 }
 
-KvError CloudStoreMgr::DownloadFile(const TablePartitionIdent &tbl_id,
-                                    FileId file_id)
+KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id, FileId file_id)
 {
     KvTask *current_task = ThdTask();
     std::string filename = ToFilename(file_id);
@@ -2194,7 +2097,7 @@ KvError CloudStoreMgr::DownloadFile(const TablePartitionIdent &tbl_id,
     return download_task.error_;
 }
 
-KvError CloudStoreMgr::UploadFiles(const TablePartitionIdent &tbl_id,
+KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
                                    std::vector<std::string> filenames)
 {
     if (filenames.empty())
@@ -2356,8 +2259,9 @@ KvError MemStoreMgr::Init(Shard *shard)
     return KvError::NoError;
 }
 
-std::pair<Page, KvError> MemStoreMgr::ReadPage(
-    const TablePartitionIdent &tbl_id, FilePageId fp_id, Page page)
+std::pair<Page, KvError> MemStoreMgr::ReadPage(const TableIdent &tbl_id,
+                                               FilePageId fp_id,
+                                               Page page)
 {
     auto it = store_.find(tbl_id);
     if (it == store_.end())
@@ -2374,7 +2278,7 @@ std::pair<Page, KvError> MemStoreMgr::ReadPage(
     return {std::move(page), KvError::NoError};
 }
 
-KvError MemStoreMgr::ReadPages(const TablePartitionIdent &tbl_id,
+KvError MemStoreMgr::ReadPages(const TableIdent &tbl_id,
                                std::span<FilePageId> page_ids,
                                std::vector<Page> &pages)
 {
@@ -2390,7 +2294,7 @@ KvError MemStoreMgr::ReadPages(const TablePartitionIdent &tbl_id,
 }
 
 std::pair<ManifestFilePtr, KvError> MemStoreMgr::GetManifest(
-    const TablePartitionIdent &tbl_ident)
+    const TableIdent &tbl_ident)
 {
     auto it = store_.find(tbl_ident);
     if (it == store_.end())
@@ -2400,7 +2304,7 @@ std::pair<ManifestFilePtr, KvError> MemStoreMgr::GetManifest(
     return {std::make_unique<Manifest>(it->second.wal), KvError::NoError};
 }
 
-KvError MemStoreMgr::WritePage(const TablePartitionIdent &tbl_id,
+KvError MemStoreMgr::WritePage(const TableIdent &tbl_id,
                                VarPage page,
                                FilePageId file_page_id)
 {
@@ -2432,35 +2336,29 @@ KvError MemStoreMgr::WritePage(const TablePartitionIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError MemStoreMgr::WritePages(const TablePartitionIdent &tbl_id,
+KvError MemStoreMgr::WritePages(const TableIdent &tbl_id,
                                 std::span<VarPage> pages,
                                 FilePageId first_fp_id)
 {
     LOG(FATAL) << "not implemented";
 }
 
-KvError MemStoreMgr::SyncData(const TablePartitionIdent &tbl_id)
+KvError MemStoreMgr::SyncData(const TableIdent &tbl_id)
 {
     return KvError::NoError;
 }
 
-KvError MemStoreMgr::AbortWrite(const TablePartitionIdent &tbl_id)
+KvError MemStoreMgr::AbortWrite(const TableIdent &tbl_id)
 {
     return KvError::NoError;
 }
 
-void MemStoreMgr::CleanTable(const TablePartitionIdent &tbl_id)
-{
-    store_.erase(tbl_id);
-}
-
-KvError MemStoreMgr::RemovePartitionDirIfOnlyManifest(
-    const TablePartitionIdent &)
+KvError MemStoreMgr::CleanManifest(const TableIdent &tbl_id)
 {
     return KvError::NoError;
 }
 
-KvError MemStoreMgr::AppendManifest(const TablePartitionIdent &tbl_id,
+KvError MemStoreMgr::AppendManifest(const TableIdent &tbl_id,
                                     std::string_view log,
                                     uint64_t manifest_size)
 {
@@ -2475,7 +2373,7 @@ KvError MemStoreMgr::AppendManifest(const TablePartitionIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError MemStoreMgr::SwitchManifest(const TablePartitionIdent &tbl_id,
+KvError MemStoreMgr::SwitchManifest(const TableIdent &tbl_id,
                                     std::string_view snapshot)
 {
     auto it = store_.find(tbl_id);
@@ -2489,7 +2387,7 @@ KvError MemStoreMgr::SwitchManifest(const TablePartitionIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError MemStoreMgr::CreateArchive(const TablePartitionIdent &tbl_id,
+KvError MemStoreMgr::CreateArchive(const TableIdent &tbl_id,
                                    std::string_view snapshot,
                                    uint64_t ts)
 {

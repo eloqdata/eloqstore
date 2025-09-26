@@ -19,7 +19,7 @@ int main()
     eloqstore::KvOptions opts;
     opts.store_path = {"/tmp/eloq_store"};
     opts.num_threads = 1;
-    eloqstore::TablePartitionIdent tbl_id("t1", 1);
+    eloqstore::TableIdent tbl_id("t1", 1);
 
     eloqstore::EloqStore store(opts);
     eloqstore::KvError err = store.Start();

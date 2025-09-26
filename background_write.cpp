@@ -59,6 +59,7 @@ KvError BackgroundWrite::CompactDataFile()
     auto allocator =
         static_cast<AppendAllocator *>(meta->mapper_->FilePgAllocator());
     uint32_t mapping_cnt = meta->mapper_->MappingCount();
+
     if (mapping_cnt == 0)
     {
         // Update statistic.
@@ -71,9 +72,11 @@ KvError BackgroundWrite::CompactDataFile()
     const double file_saf_limit = opts->file_amplify_factor;
     size_t space_size = allocator->SpaceSize();
     assert(space_size >= mapping_cnt);
+
     if (space_size < pages_per_file ||
         double(space_size) / double(mapping_cnt) <= file_saf_limit)
     {
+        LOG(INFO) << "CompactDataFile: no compaction required";
         // No compaction required.
         return KvError::NoError;
     }

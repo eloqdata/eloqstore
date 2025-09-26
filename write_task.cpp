@@ -19,12 +19,12 @@
 
 namespace eloqstore
 {
-const TablePartitionIdent &WriteTask::TableId() const
+const TableIdent &WriteTask::TableId() const
 {
     return tbl_ident_;
 }
 
-void WriteTask::Reset(const TablePartitionIdent &tbl_id)
+void WriteTask::Reset(const TableIdent &tbl_id)
 {
     tbl_ident_ = tbl_id;
     write_err_ = KvError::NoError;
@@ -307,7 +307,7 @@ void WriteTask::CompactIfNeeded(PageMapper *mapper) const
             double(space_size) / double(mapping_cnt) >
                 double(opts->file_amplify_factor))
         {
-            shard->AddPendingCompact(tbl_partition_ident_);
+            shard->AddPendingCompact(tbl_ident_);
         }
     }
     */
@@ -338,11 +338,6 @@ void WriteTask::TriggerTTL()
 
 void WriteTask::TriggerFileGC() const
 {
-    if (eloq_store->file_gc_ == nullptr)
-    {
-        // File garbage collector is not enabled.
-        return;
-    }
     assert(Options()->data_append_mode);
 
     auto [meta, err] = shard->IndexManager()->FindRoot(tbl_ident_);
@@ -372,7 +367,7 @@ void WriteTask::TriggerFileGC() const
             return;
         }
 
-        KvError gc_err = eloq_store->file_gc_->ExecuteCloudGC(
+        KvError gc_err = FileGarbageCollector::ExecuteCloudGC(
             tbl_ident_, retained_files, cloud_mgr);
 
         if (gc_err != KvError::NoError)
@@ -383,9 +378,9 @@ void WriteTask::TriggerFileGC() const
     else
     {
         // Local mode: execute GC directly
-        LOG(INFO) << "Begin GC in Local mode";
+        DLOG(INFO) << "Begin GC in Local mode";
         IouringMgr *io_mgr = static_cast<IouringMgr *>(shard->IoManager());
-        KvError gc_err = eloq_store->file_gc_->ExecuteLocalGC(
+        KvError gc_err = FileGarbageCollector::ExecuteLocalGC(
             tbl_ident_, retained_files, io_mgr);
 
         if (gc_err != KvError::NoError)
