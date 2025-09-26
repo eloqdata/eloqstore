@@ -66,39 +66,39 @@ public:
     virtual void PollComplete() = 0;
 
     /** These methods are provided for kv task. */
-    virtual std::pair<Page, KvError> ReadPage(const TableIdent &tbl_id,
+    virtual std::pair<Page, KvError> ReadPage(const TablePartitionIdent &tbl_id,
                                               FilePageId fp_id,
                                               Page page) = 0;
-    virtual KvError ReadPages(const TableIdent &tbl_id,
+    virtual KvError ReadPages(const TablePartitionIdent &tbl_id,
                               std::span<FilePageId> page_ids,
                               std::vector<Page> &pages) = 0;
 
-    virtual KvError WritePage(const TableIdent &tbl_id,
+    virtual KvError WritePage(const TablePartitionIdent &tbl_id,
                               VarPage page,
                               FilePageId file_page_id) = 0;
-    virtual KvError WritePages(const TableIdent &tbl_id,
+    virtual KvError WritePages(const TablePartitionIdent &tbl_id,
                                std::span<VarPage> pages,
                                FilePageId first_fp_id) = 0;
-    virtual KvError SyncData(const TableIdent &tbl_id) = 0;
-    virtual KvError AbortWrite(const TableIdent &tbl_id) = 0;
+    virtual KvError SyncData(const TablePartitionIdent &tbl_id) = 0;
+    virtual KvError AbortWrite(const TablePartitionIdent &tbl_id) = 0;
 
-    virtual KvError AppendManifest(const TableIdent &tbl_id,
+    virtual KvError AppendManifest(const TablePartitionIdent &tbl_id,
                                    std::string_view log,
                                    uint64_t manifest_size) = 0;
-    virtual KvError SwitchManifest(const TableIdent &tbl_id,
+    virtual KvError SwitchManifest(const TablePartitionIdent &tbl_id,
                                    std::string_view snapshot) = 0;
-    virtual KvError CreateArchive(const TableIdent &tbl_id,
+    virtual KvError CreateArchive(const TablePartitionIdent &tbl_id,
                                   std::string_view snapshot,
                                   uint64_t ts) = 0;
     virtual std::pair<ManifestFilePtr, KvError> GetManifest(
-        const TableIdent &tbl_id) = 0;
-    virtual void CleanTable(const TableIdent &tbl_id) = 0;
+        const TablePartitionIdent &tbl_id) = 0;
+    virtual void CleanTable(const TablePartitionIdent &tbl_id) = 0;
     virtual KvError RemovePartitionDirIfOnlyManifest(
-        const TableIdent &tbl_id) = 0;
+        const TablePartitionIdent &tbl_id) = 0;
 
     const KvOptions *options_;
 
-    std::unordered_map<TableIdent, FileId> least_not_archived_file_ids_;
+    std::unordered_map<TablePartitionIdent, FileId> least_not_archived_file_ids_;
 };
 
 KvError ToKvError(int err_no);
@@ -112,34 +112,34 @@ public:
     void Submit() override;
     void PollComplete() override;
 
-    std::pair<Page, KvError> ReadPage(const TableIdent &tbl_id,
+    std::pair<Page, KvError> ReadPage(const TablePartitionIdent &tbl_id,
                                       FilePageId fp_id,
                                       Page page) override;
-    KvError ReadPages(const TableIdent &tbl_id,
+    KvError ReadPages(const TablePartitionIdent &tbl_id,
                       std::span<FilePageId> page_ids,
                       std::vector<Page> &pages) override;
 
-    KvError WritePage(const TableIdent &tbl_id,
+    KvError WritePage(const TablePartitionIdent &tbl_id,
                       VarPage page,
                       FilePageId file_page_id) override;
-    KvError WritePages(const TableIdent &tbl_id,
+    KvError WritePages(const TablePartitionIdent &tbl_id,
                        std::span<VarPage> pages,
                        FilePageId first_fp_id) override;
-    KvError SyncData(const TableIdent &tbl_id) override;
-    KvError AbortWrite(const TableIdent &tbl_id) override;
+    KvError SyncData(const TablePartitionIdent &tbl_id) override;
+    KvError AbortWrite(const TablePartitionIdent &tbl_id) override;
 
-    KvError AppendManifest(const TableIdent &tbl_id,
+    KvError AppendManifest(const TablePartitionIdent &tbl_id,
                            std::string_view log,
                            uint64_t manifest_size) override;
-    KvError SwitchManifest(const TableIdent &tbl_id,
+    KvError SwitchManifest(const TablePartitionIdent &tbl_id,
                            std::string_view snapshot) override;
-    KvError CreateArchive(const TableIdent &tbl_id,
+    KvError CreateArchive(const TablePartitionIdent &tbl_id,
                           std::string_view snapshot,
                           uint64_t ts) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
-        const TableIdent &tbl_id) override;
-    void CleanTable(const TableIdent &tbl_id) override;
-    KvError RemovePartitionDirIfOnlyManifest(const TableIdent &tbl_id) override;
+        const TablePartitionIdent &tbl_id) override;
+    void CleanTable(const TablePartitionIdent &tbl_id) override;
+    KvError RemovePartitionDirIfOnlyManifest(const TablePartitionIdent &tbl_id) override;
 
     KvError ReadArchiveFile(const std::string &file_path, std::string &content);
     KvError DeleteFiles(const std::vector<std::string> &file_paths);
@@ -227,7 +227,7 @@ protected:
     class PartitionFiles
     {
     public:
-        const TableIdent *tbl_id_ = nullptr;
+        const TablePartitionIdent *tbl_id_ = nullptr;
         std::unordered_map<FileId, LruFD> fds_;
     };
 
@@ -288,22 +288,22 @@ protected:
                               std::string_view name,
                               std::string_view content);
     virtual int CreateFile(LruFD::Ref dir_fd, FileId file_id);
-    virtual int OpenFile(const TableIdent &tbl_id, FileId file_id, bool direct);
+    virtual int OpenFile(const TablePartitionIdent &tbl_id, FileId file_id, bool direct);
     virtual KvError SyncFile(LruFD::Ref fd);
-    virtual KvError SyncFiles(const TableIdent &tbl_id,
+    virtual KvError SyncFiles(const TablePartitionIdent &tbl_id,
                               std::span<LruFD::Ref> fds);
     virtual KvError CloseFile(LruFD::Ref fd_ref);
 
-    static FdIdx GetRootFD(const TableIdent &tbl_id);
+    static FdIdx GetRootFD(const TablePartitionIdent &tbl_id);
     /**
      * @brief Get file descripter if it is already opened.
      */
-    LruFD::Ref GetOpenedFD(const TableIdent &tbl_id, FileId file_id);
+    LruFD::Ref GetOpenedFD(const TablePartitionIdent &tbl_id, FileId file_id);
     /**
      * @brief Open file if already exists. Only data file is opened with
      * O_DIRECT by default. Set `direct` to true to open manifest with O_DIRECT.
      */
-    std::pair<LruFD::Ref, KvError> OpenFD(const TableIdent &tbl_id,
+    std::pair<LruFD::Ref, KvError> OpenFD(const TablePartitionIdent &tbl_id,
                                           FileId file_id,
                                           bool direct = false);
     /**
@@ -312,7 +312,7 @@ protected:
      * Only data file is opened with O_DIRECT by default. Set `direct` to true
      * to open manifest with O_DIRECT.
      */
-    std::pair<LruFD::Ref, KvError> OpenOrCreateFD(const TableIdent &tbl_id,
+    std::pair<LruFD::Ref, KvError> OpenOrCreateFD(const TablePartitionIdent &tbl_id,
                                                   FileId file_id,
                                                   bool direct = false,
                                                   bool create = true);
@@ -336,7 +336,7 @@ protected:
      */
     std::unique_ptr<WriteReqPool> write_req_pool_{nullptr};
 
-    std::unordered_map<TableIdent, PartitionFiles> tables_;
+    std::unordered_map<TablePartitionIdent, PartitionFiles> tables_;
     LruFD lru_fd_head_{nullptr, MaxFileId};
     LruFD lru_fd_tail_{nullptr, MaxFileId};
     uint32_t lru_fd_count_{0};
@@ -363,9 +363,9 @@ public:
     void Stop() override;
     void Submit() override;
     void PollComplete() override;
-    KvError SwitchManifest(const TableIdent &tbl_id,
+    KvError SwitchManifest(const TablePartitionIdent &tbl_id,
                            std::string_view snapshot) override;
-    KvError CreateArchive(const TableIdent &tbl_id,
+    KvError CreateArchive(const TablePartitionIdent &tbl_id,
                           std::string_view snapshot,
                           uint64_t ts) override;
 
@@ -379,16 +379,16 @@ public:
 
 private:
     int CreateFile(LruFD::Ref dir_fd, FileId file_id) override;
-    int OpenFile(const TableIdent &tbl_id,
+    int OpenFile(const TablePartitionIdent &tbl_id,
                  FileId file_id,
                  bool direct) override;
     KvError SyncFile(LruFD::Ref fd) override;
-    KvError SyncFiles(const TableIdent &tbl_id,
+    KvError SyncFiles(const TablePartitionIdent &tbl_id,
                       std::span<LruFD::Ref> fds) override;
     KvError CloseFile(LruFD::Ref fd) override;
 
-    KvError DownloadFile(const TableIdent &tbl_id, FileId file_id);
-    KvError UploadFiles(const TableIdent &tbl_id,
+    KvError DownloadFile(const TablePartitionIdent &tbl_id, FileId file_id);
+    KvError UploadFiles(const TablePartitionIdent &tbl_id,
                         std::vector<std::string> filenames);
 
     bool DequeClosedFile(const FileKey &key);
@@ -465,34 +465,34 @@ public:
     void Submit() override {};
     void PollComplete() override {};
 
-    std::pair<Page, KvError> ReadPage(const TableIdent &tbl_id,
+    std::pair<Page, KvError> ReadPage(const TablePartitionIdent &tbl_id,
                                       FilePageId file_page_id,
                                       Page page) override;
-    KvError ReadPages(const TableIdent &tbl_id,
+    KvError ReadPages(const TablePartitionIdent &tbl_id,
                       std::span<FilePageId> page_ids,
                       std::vector<Page> &pages) override;
 
-    KvError WritePage(const TableIdent &tbl_id,
+    KvError WritePage(const TablePartitionIdent &tbl_id,
                       VarPage page,
                       FilePageId file_page_id) override;
-    KvError WritePages(const TableIdent &tbl_id,
+    KvError WritePages(const TablePartitionIdent &tbl_id,
                        std::span<VarPage> pages,
                        FilePageId first_fp_id) override;
-    KvError SyncData(const TableIdent &tbl_id) override;
-    KvError AbortWrite(const TableIdent &tbl_id) override;
+    KvError SyncData(const TablePartitionIdent &tbl_id) override;
+    KvError AbortWrite(const TablePartitionIdent &tbl_id) override;
 
-    KvError AppendManifest(const TableIdent &tbl_id,
+    KvError AppendManifest(const TablePartitionIdent &tbl_id,
                            std::string_view log,
                            uint64_t manifest_size) override;
-    KvError SwitchManifest(const TableIdent &tbl_id,
+    KvError SwitchManifest(const TablePartitionIdent &tbl_id,
                            std::string_view snapshot) override;
-    KvError CreateArchive(const TableIdent &tbl_id,
+    KvError CreateArchive(const TablePartitionIdent &tbl_id,
                           std::string_view snapshot,
                           uint64_t ts) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
-        const TableIdent &tbl_id) override;
-    void CleanTable(const TableIdent &tbl_id) override;
-    KvError RemovePartitionDirIfOnlyManifest(const TableIdent &tbl_id) override;
+        const TablePartitionIdent &tbl_id) override;
+    void CleanTable(const TablePartitionIdent &tbl_id) override;
+    KvError RemovePartitionDirIfOnlyManifest(const TablePartitionIdent &tbl_id) override;
 
     class Manifest : public ManifestFile
     {
@@ -511,7 +511,7 @@ private:
         std::vector<std::unique_ptr<char[]>> pages;
         std::string wal;
     };
-    std::unordered_map<TableIdent, Partition> store_;
+    std::unordered_map<TablePartitionIdent, Partition> store_;
 };
 
 }  // namespace eloqstore

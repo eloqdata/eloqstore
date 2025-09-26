@@ -159,7 +159,7 @@ size_t get_num_from_value(const std::string &value)
 
 // Populate database with N key-value pairs in random order
 void populate_db(eloqstore::EloqStore &store,
-                 const eloqstore::TableIdent &tbl_id,
+                 const eloqstore::TablePartitionIdent &tbl_id,
                  size_t N,
                  size_t key_len_min = 16,
                  size_t key_len_max = 16,
@@ -219,7 +219,7 @@ void populate_db(eloqstore::EloqStore &store,
 }
 
 void perform_random_lookups_sync(eloqstore::EloqStore &store,
-                                 const eloqstore::TableIdent &tbl_id,
+                                 const eloqstore::TablePartitionIdent &tbl_id,
                                  size_t N,
                                  size_t num_lookups)
 {
@@ -256,7 +256,7 @@ void perform_random_lookups_sync(eloqstore::EloqStore &store,
 
 // Perform random lookups
 void perform_random_lookups(eloqstore::EloqStore &store,
-                            const eloqstore::TableIdent &tbl_id,
+                            const eloqstore::TablePartitionIdent &tbl_id,
                             size_t N,
                             size_t num_lookups,
                             size_t batch_size_max = 50,
@@ -312,7 +312,7 @@ void perform_random_lookups(eloqstore::EloqStore &store,
 
 // Perform range scans
 void perform_range_scans(eloqstore::EloqStore &store,
-                         const eloqstore::TableIdent &tbl_id,
+                         const eloqstore::TablePartitionIdent &tbl_id,
                          size_t N,
                          size_t num_scans,
                          size_t range_size,
@@ -377,7 +377,7 @@ void perform_range_scans(eloqstore::EloqStore &store,
 }
 
 void do_random_lookups(eloqstore::EloqStore &store,
-                       const eloqstore::TableIdent &tbl_id,
+                       const eloqstore::TablePartitionIdent &tbl_id,
                        size_t N,
                        int num_read_threads)
 {
@@ -406,7 +406,7 @@ void do_random_lookups(eloqstore::EloqStore &store,
 }
 
 void do_range_scans(eloqstore::EloqStore &store,
-                    const eloqstore::TableIdent &tbl_id,
+                    const eloqstore::TablePartitionIdent &tbl_id,
                     size_t N,
                     int num_read_threads)
 {
@@ -447,7 +447,7 @@ int main(int argc, char *argv[])
     eloqstore::KvOptions opts;
     opts.skip_verify_checksum = true;
     opts.store_path = {"/mnt/ramdisk/eloq_store_perf"};
-    eloqstore::TableIdent tbl_id("perf_test", 1);
+    eloqstore::TablePartitionIdent tbl_id("perf_test", 1);
 
     eloqstore::EloqStore store(opts);
     eloqstore::KvError err = store.Start();

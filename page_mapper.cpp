@@ -9,7 +9,7 @@
 namespace eloqstore
 {
 
-PageMapper::PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident)
+PageMapper::PageMapper(IndexPageManager *idx_mgr, const TablePartitionIdent *tbl_ident)
     : mapping_(std::make_shared<MappingSnapshot>(idx_mgr, tbl_ident)),
       file_page_allocator_(FilePageAllocator::Instance(Options()))
 {
@@ -147,7 +147,7 @@ uint64_t MappingSnapshot::DecodeId(uint64_t val)
 }
 
 MappingSnapshot::MappingSnapshot(IndexPageManager *idx_mgr,
-                                 const TableIdent *tbl_id)
+                                 const TablePartitionIdent *tbl_id)
     : idx_mgr_(idx_mgr), tbl_ident_(tbl_id)
 {
 }

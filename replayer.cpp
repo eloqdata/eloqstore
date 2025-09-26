@@ -121,7 +121,7 @@ void Replayer::ReplayLog()
 }
 
 std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
-                                                const TableIdent *tbl_ident)
+                                                const TablePartitionIdent *tbl_ident)
 {
     auto mapping = std::make_shared<MappingSnapshot>(
         idx_mgr, tbl_ident, std::move(mapping_tbl_));

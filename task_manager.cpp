@@ -11,7 +11,7 @@ using namespace boost::context;
 
 namespace eloqstore
 {
-BatchWriteTask *TaskManager::GetBatchWriteTask(const TableIdent &tbl_id)
+BatchWriteTask *TaskManager::GetBatchWriteTask(const TablePartitionIdent &tbl_id)
 {
     num_active_++;
     BatchWriteTask *task = batch_write_pool_.GetTask();
@@ -19,18 +19,10 @@ BatchWriteTask *TaskManager::GetBatchWriteTask(const TableIdent &tbl_id)
     return task;
 }
 
-BackgroundWrite *TaskManager::GetBackgroundWrite(const TableIdent &tbl_id)
+BackgroundWrite *TaskManager::GetBackgroundWrite(const TablePartitionIdent &tbl_id)
 {
     num_active_++;
     BackgroundWrite *task = bg_write_pool_.GetTask();
-    task->Reset(tbl_id);
-    return task;
-}
-
-GcCleanupTask *TaskManager::GetGcCleanupTask(const TableIdent &tbl_id)
-{
-    num_active_++;
-    GcCleanupTask *task = gc_cleanup_pool_.GetTask();
     task->Reset(tbl_id);
     return task;
 }
@@ -74,9 +66,6 @@ void TaskManager::FreeTask(KvTask *task)
         break;
     case TaskType::ListObject:
         list_object_poll.FreeTask(static_cast<ListObjectTask *>(task));
-        break;
-    case TaskType::GcCleanup:
-        gc_cleanup_pool_.FreeTask(static_cast<GcCleanupTask *>(task));
         break;
     case TaskType::EvictFile:
         assert(false && "EvictFile task should not be freed here");

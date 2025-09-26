@@ -2,18 +2,18 @@
 
 namespace eloqstore
 {
-std::ostream &operator<<(std::ostream &out, const TableIdent &tid)
+std::ostream &operator<<(std::ostream &out, const TablePartitionIdent &tid)
 {
-    out << tid.tbl_name_ << TableIdent::separator << tid.partition_id_;
+    out << tid.tbl_name_ << TablePartitionIdent::separator << tid.partition_id_;
     return out;
 }
 
-std::string TableIdent::ToString() const
+std::string TablePartitionIdent::ToString() const
 {
     return tbl_name_ + separator + std::to_string(partition_id_);
 }
 
-TableIdent TableIdent::FromString(const std::string &str)
+TablePartitionIdent TablePartitionIdent::FromString(const std::string &str)
 {
     size_t p = str.find_last_of(separator);
     if (p == std::string::npos)
@@ -32,26 +32,26 @@ TableIdent TableIdent::FromString(const std::string &str)
     }
 }
 
-uint8_t TableIdent::DiskIndex(uint8_t num_disks) const
+uint8_t TablePartitionIdent::DiskIndex(uint8_t num_disks) const
 {
     assert(num_disks > 0);
     return partition_id_ % num_disks;
 }
 
-fs::path TableIdent::StorePath(tcb::span<const std::string> disks) const
+fs::path TablePartitionIdent::StorePath(tcb::span<const std::string> disks) const
 {
     fs::path partition_path = disks[DiskIndex(disks.size())];
     partition_path.append(ToString());
     return partition_path;
 }
 
-uint16_t TableIdent::ShardIndex(uint16_t num_shards) const
+uint16_t TablePartitionIdent::ShardIndex(uint16_t num_shards) const
 {
     assert(num_shards > 0);
     return partition_id_ % num_shards;
 }
 
-bool TableIdent::IsValid() const
+bool TablePartitionIdent::IsValid() const
 {
     return !tbl_name_.empty();
 }

@@ -325,7 +325,7 @@ void Benchmark::OnBatchWrite(::eloqstore::KvRequest *req)
     load_op->loaded_data_cnt_ += load_op->batch_cnt_;
 
     // Send next request.
-    const ::eloqstore::TableIdent &eloq_store_table_id = req->TableId();
+    const ::eloqstore::TablePartitionIdent &eloq_store_table_id = req->TableId();
 
     // Check the benckmark test status
     if (load_op->loaded_data_cnt_ >= load_op->target_data_cnt_)
@@ -371,7 +371,7 @@ void Benchmark::OnBatchWrite(::eloqstore::KvRequest *req)
 
             // load data into next partition
             uint32_t part_id = load_op->part_ids_[load_op->part_idx_];
-            ::eloqstore::TableIdent table_id(table_name_str, part_id);
+            ::eloqstore::TablePartitionIdent table_id(table_name_str, part_id);
             // Construct a batch value
 
             bool last_batch = (load_op->target_data_cnt_ -
@@ -616,7 +616,7 @@ void Benchmark::OnRead(::eloqstore::KvRequest *req)
 
     // get next partition id randomly
     uint32_t next_part_id = key_index % read_op->bm_->partition_count_;
-    ::eloqstore::TableIdent table_id(table_name_str, next_part_id);
+    ::eloqstore::TablePartitionIdent table_id(table_name_str, next_part_id);
 #ifndef NDEBUG
     {
         std::ostringstream oss;
@@ -670,7 +670,7 @@ void Benchmark::LoadWorker(size_t id, const Benchmark &bm)
     // object generator.
     object_generator &obj_gen = bm.load_obj_gens_[part_id];
     // table name
-    ::eloqstore::TableIdent eloq_store_table_id(table_name_str, part_id);
+    ::eloqstore::TablePartitionIdent eloq_store_table_id(table_name_str, part_id);
     // construct a batch value
     batch_records entries;
     // The first batch
@@ -825,7 +825,7 @@ void Benchmark::RunBenchmark()
                                    ? (req_id % partition_count_)
                                    : req_id;
             // table name
-            ::eloqstore::TableIdent eloq_store_table_id(table_name_str,
+            ::eloqstore::TablePartitionIdent eloq_store_table_id(table_name_str,
                                                         part_id);
 
             auto &read_op = read_ops_.emplace_back(this);

@@ -17,9 +17,9 @@ struct KvOptions;
 
 struct MappingSnapshot
 {
-    MappingSnapshot(IndexPageManager *idx_mgr, const TableIdent *tbl_id);
+    MappingSnapshot(IndexPageManager *idx_mgr, const TablePartitionIdent *tbl_id);
     MappingSnapshot(IndexPageManager *idx_mgr,
-                    const TableIdent *tbl_id,
+                    const TablePartitionIdent *tbl_id,
                     std::vector<uint64_t> tbl)
         : idx_mgr_(idx_mgr),
           tbl_ident_(tbl_id),
@@ -64,7 +64,7 @@ struct MappingSnapshot
     void Serialize(std::string &dst) const;
 
     IndexPageManager *idx_mgr_;
-    const TableIdent *tbl_ident_;
+    const TablePartitionIdent *tbl_ident_;
 
     std::vector<uint64_t> mapping_tbl_;
 
@@ -192,7 +192,7 @@ class PageMapper
 public:
     explicit PageMapper(std::shared_ptr<MappingSnapshot> mapping)
         : mapping_(std::move(mapping)) {};
-    PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident);
+    PageMapper(IndexPageManager *idx_mgr, const TablePartitionIdent *tbl_ident);
     PageMapper(const PageMapper &rhs);
 
     PageId GetPage();

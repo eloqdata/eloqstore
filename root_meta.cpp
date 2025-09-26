@@ -75,7 +75,6 @@ std::string_view ManifestBuilder::BuffView() const
 
 void RootMeta::Pin()
 {
-    LOG(INFO) << "RootMeta::Pin, ref_cnt_: " << ref_cnt_;
     ref_cnt_++;
 }
 

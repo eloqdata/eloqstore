@@ -53,7 +53,7 @@ private:
 Writer::Writer(eloqstore::EloqStore *store, uint32_t id)
     : store_(store), id_(id), requests_(FLAGS_inflight_batchs)
 {
-    eloqstore::TableIdent tbl_id(table, id);
+    eloqstore::TablePartitionIdent tbl_id(table, id);
     for (uint32_t batch_idx = 0; auto &req : requests_)
     {
         std::vector<eloqstore::WriteDataEntry> entries;

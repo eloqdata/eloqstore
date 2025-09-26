@@ -47,7 +47,7 @@ const eloqstore::KvOptions archive_gc_opts = {
 
 // Helper function to check if local partition directory exists
 bool CheckLocalPartitionExists(const eloqstore::KvOptions &opts,
-                               const eloqstore::TableIdent &tbl_id)
+                               const eloqstore::TablePartitionIdent &tbl_id)
 {
     for (const std::string &store_path : opts.store_path)
     {
@@ -62,7 +62,7 @@ bool CheckLocalPartitionExists(const eloqstore::KvOptions &opts,
 
 // Helper function to check if cloud partition directory exists
 bool CheckCloudPartitionExists(const eloqstore::KvOptions &opts,
-                               const eloqstore::TableIdent &tbl_id)
+                               const eloqstore::TablePartitionIdent &tbl_id)
 {
     if (opts.cloud_store_path.empty())
     {
@@ -90,7 +90,7 @@ void WaitForGC(int seconds = 1)
 // TEST_CASE("local mode truncate directory cleanup", "[gc][local]")
 // {
 //     eloqstore::EloqStore *store = InitStore(local_gc_opts);
-//     eloqstore::TableIdent tbl_id = {"gc_test", 1};
+//     eloqstore::TablePartitionIdent tbl_id = {"gc_test", 1};
 //     MapVerifier tester(tbl_id, store, false);
 //     tester.SetValueSize(1000);
 
@@ -116,7 +116,7 @@ void WaitForGC(int seconds = 1)
 //     CleanupStore(local_gc_opts);
 
 //     eloqstore::EloqStore *store = InitStore(local_gc_opts);
-//     eloqstore::TableIdent tbl_id = {"gc_repeat", 1};
+//     eloqstore::TablePartitionIdent tbl_id = {"gc_repeat", 1};
 //     MapVerifier tester(tbl_id, store, false);
 //     tester.SetValueSize(1000);
 
@@ -144,7 +144,7 @@ void WaitForGC(int seconds = 1)
 // TEST_CASE("local mode delete all data cleanup", "[gc][local]")
 // {
 //     eloqstore::EloqStore *store = InitStore(local_gc_opts);
-//     eloqstore::TableIdent tbl_id = {"gc_delete_all", 1};
+//     eloqstore::TablePartitionIdent tbl_id = {"gc_delete_all", 1};
 //     MapVerifier tester(tbl_id, store, false);
 //     tester.SetValueSize(1000);
 
@@ -169,7 +169,7 @@ void WaitForGC(int seconds = 1)
 TEST_CASE("cloud mode truncate remote directory cleanup", "[gc][cloud]")
 {
     eloqstore::EloqStore *store = InitStore(cloud_gc_opts);
-    eloqstore::TableIdent tbl_id = {"gc_cloud_truncate", 1};
+    eloqstore::TablePartitionIdent tbl_id = {"gc_cloud_truncate", 1};
     MapVerifier tester(tbl_id, store, false);
     tester.SetValueSize(1000);
 
@@ -195,7 +195,7 @@ TEST_CASE("cloud mode delete all data remote cleanup", "[gc][cloud]")
     CleanupStore(cloud_gc_opts);
 
     eloqstore::EloqStore *store = InitStore(cloud_gc_opts);
-    eloqstore::TableIdent tbl_id = {"gc_cloud_delete", 1};
+    eloqstore::TablePartitionIdent tbl_id = {"gc_cloud_delete", 1};
     MapVerifier tester(tbl_id, store, false);
     tester.SetValueSize(1000);
 
@@ -224,7 +224,7 @@ TEST_CASE("archive prevents data deletion after truncate", "[gc][archive]")
     CleanupStore(archive_gc_opts);
 
     eloqstore::EloqStore *store = InitStore(archive_gc_opts);
-    eloqstore::TableIdent tbl_id = {"gc_archive_test", 1};
+    eloqstore::TablePartitionIdent tbl_id = {"gc_archive_test", 1};
     MapVerifier tester(tbl_id, store, false);
     tester.SetValueSize(1000);
 
@@ -311,7 +311,7 @@ TEST_CASE("cloud mode repeated truncate with directory purge", "[gc][cloud]")
     CleanupStore(cloud_gc_opts);
 
     eloqstore::EloqStore *store = InitStore(cloud_gc_opts);
-    eloqstore::TableIdent tbl_id = {"gc_cloud_repeat", 1};
+    eloqstore::TablePartitionIdent tbl_id = {"gc_cloud_repeat", 1};
     MapVerifier tester(tbl_id, store, false);
     tester.SetValueSize(1000);
 

@@ -29,8 +29,8 @@ IndexPageManager::~IndexPageManager()
     // Destructs page mapper first, because destructing the mapping snapshot
     // needs to access the root table in the index page manager.
     std::vector<PageMapper *> mappers;
-    mappers.reserve(tbl_roots_.size());
-    for (auto &[tbl, meta] : tbl_roots_)
+    mappers.reserve(tbl_partiton_roots_.size());
+    for (auto &[tbl, meta] : tbl_partiton_roots_)
     {
         // We can not call FreeMappingSnapshot directly in this loop, because it
         // may delete elements from the root table we are currently iterating.
@@ -103,9 +103,9 @@ bool IndexPageManager::IsFull() const
 }
 
 std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
-    const TableIdent &tbl_id)
+    const TablePartitionIdent &tbl_id)
 {
-    auto load_meta = [this](const TableIdent &tbl_id, RootMeta *meta)
+    auto load_meta = [this](const TablePartitionIdent &tbl_id, RootMeta *meta)
     {
         // load manifest file
         auto [manifest, err] = IoMgr()->GetManifest(tbl_id);
@@ -140,7 +140,7 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
 
     while (true)
     {
-        auto [it, inserted] = tbl_roots_.try_emplace(tbl_id);
+        auto [it, inserted] = tbl_partiton_roots_.try_emplace(tbl_id);
         RootMeta *meta = &it->second;
 
         if (inserted)
@@ -151,7 +151,7 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
             meta->waiting_.WakeAll();
             if (err != KvError::NoError)
             {
-                tbl_roots_.erase(tbl_id);
+                tbl_partiton_roots_.erase(tbl_id);
                 return {nullptr, err};
             }
             meta->locked_ = false;
@@ -178,7 +178,7 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
     }
 }
 
-KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
+KvError IndexPageManager::MakeCowRoot(const TablePartitionIdent &tbl_ident,
                                       CowRootMeta &cow_meta)
 {
     auto [meta, err] = FindRoot(tbl_ident);
@@ -197,8 +197,8 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
     {
         // It is the WriteTask's responsibility to clean up this stub RootMeta
         // if it aborted.
-        auto [tbl_it, _] = tbl_roots_.try_emplace(tbl_ident);
-        const TableIdent *tbl_id = &tbl_it->first;
+        auto [tbl_it, _] = tbl_partiton_roots_.try_emplace(tbl_ident);
+        const TablePartitionIdent *tbl_id = &tbl_it->first;
         auto mapper = std::make_unique<PageMapper>(this, tbl_id);
         std::shared_ptr<MappingSnapshot> mapping = mapper->GetMappingSnapshot();
         cow_meta.root_id_ = MaxPageId;
@@ -219,11 +219,11 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
     return KvError::NoError;
 }
 
-void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
+void IndexPageManager::UpdateRoot(const TablePartitionIdent &tbl_ident,
                                   CowRootMeta new_meta)
 {
-    auto tbl_it = tbl_roots_.find(tbl_ident);
-    assert(tbl_it != tbl_roots_.end());
+    auto tbl_it = tbl_partiton_roots_.find(tbl_ident);
+    assert(tbl_it != tbl_partiton_roots_.end());
     RootMeta &meta = tbl_it->second;
     meta.root_id_ = new_meta.root_id_;
     meta.ttl_root_id_ = new_meta.ttl_root_id_;
@@ -280,7 +280,7 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
         }
         else
         {
-            EnqueuIndexPage(idx_page);
+            EnqueueIndexPage(idx_page);
             return {idx_page, KvError::NoError};
         }
     }
@@ -288,9 +288,9 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
 
 void IndexPageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
 {
-    const TableIdent &tbl = *mapping->tbl_ident_;
-    auto tbl_it = tbl_roots_.find(tbl);
-    if (tbl_it == tbl_roots_.end())
+    const TablePartitionIdent &tbl = *mapping->tbl_ident_;
+    auto tbl_it = tbl_partiton_roots_.find(tbl);
+    if (tbl_it == tbl_partiton_roots_.end())
     {
         return;
     }
@@ -312,8 +312,8 @@ void IndexPageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
 
 void IndexPageManager::Unswizzling(MemIndexPage *page)
 {
-    auto tbl_it = tbl_roots_.find(*page->tbl_ident_);
-    assert(tbl_it != tbl_roots_.end());
+    auto tbl_it = tbl_partiton_roots_.find(*page->tbl_partition_ident_);
+    assert(tbl_it != tbl_partiton_roots_.end());
 
     auto &mappings = tbl_it->second.mapping_snapshots_;
     for (auto &mapping : mappings)
@@ -346,23 +346,24 @@ bool IndexPageManager::Evict()
     return true;
 }
 
-void IndexPageManager::EvictRootIfEmpty(const TableIdent &tbl_id)
+void IndexPageManager::EvictRootIfEmpty(const TablePartitionIdent &tbl_id)
 {
-    auto it = tbl_roots_.find(tbl_id);
-    if (it != tbl_roots_.end())
+    auto it = tbl_partiton_roots_.find(tbl_id);
+    if (it != tbl_partiton_roots_.end())
     {
         EvictRootIfEmpty(it);
     }
 }
 
 void IndexPageManager::EvictRootIfEmpty(
-    std::unordered_map<TableIdent, RootMeta>::iterator root_it)
+    std::unordered_map<TablePartitionIdent, RootMeta>::iterator root_it)
 {
     RootMeta &meta = root_it->second;
     if (meta.ref_cnt_ == 0)
     {
+        // TODO check mapping cnt, lock and delete directory and unlock
         DLOG(INFO) << "metadata of " << root_it->first << " is evicted";
-        tbl_roots_.erase(root_it);
+        tbl_partiton_roots_.erase(root_it);
     }
     else if (meta.mapper_ != nullptr && meta.ref_cnt_ == 1)
     {
@@ -382,8 +383,8 @@ void IndexPageManager::EvictRootIfEmpty(
 bool IndexPageManager::RecyclePage(MemIndexPage *page)
 {
     assert(!page->IsPinned());
-    auto tbl_it = tbl_roots_.find(*page->tbl_ident_);
-    assert(tbl_it != tbl_roots_.end());
+    auto tbl_it = tbl_partiton_roots_.find(*page->tbl_partition_ident_);
+    assert(tbl_it != tbl_partiton_roots_.end());
     RootMeta &meta = tbl_it->second;
     // Unswizzling the page pointer in all mapping snapshots.
     auto &mappings = meta.mapping_snapshots_;
@@ -400,7 +401,7 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
     assert(page->file_page_id_ != MaxFilePageId);
     page->page_id_ = MaxPageId;
     page->file_page_id_ = MaxFilePageId;
-    page->tbl_ident_ = nullptr;
+    page->tbl_partition_ident_ = nullptr;
 
     FreeIndexPage(page);
     return true;
@@ -409,20 +410,20 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
 void IndexPageManager::FinishIo(MappingSnapshot *mapping,
                                 MemIndexPage *idx_page)
 {
-    idx_page->tbl_ident_ = mapping->tbl_ident_;
+    idx_page->tbl_partition_ident_ = mapping->tbl_ident_;
     mapping->AddSwizzling(idx_page->GetPageId(), idx_page);
 
     if (idx_page->IsDetached())
     {
-        auto tbl_it = tbl_roots_.find(*mapping->tbl_ident_);
-        assert(tbl_it != tbl_roots_.end());
+        auto tbl_it = tbl_partiton_roots_.find(*mapping->tbl_ident_);
+        assert(tbl_it != tbl_partiton_roots_.end());
         tbl_it->second.Pin();
     }
     else
     {
         // index page is moved on physical position.
     }
-    EnqueuIndexPage(idx_page);
+    EnqueueIndexPage(idx_page);
 }
 
 KvError IndexPageManager::SeekIndex(MappingSnapshot *mapping,

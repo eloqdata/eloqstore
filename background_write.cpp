@@ -44,7 +44,6 @@ private:
 
 KvError BackgroundWrite::CompactDataFile()
 {
-    LOG(INFO) << "CompactDataFile";
     const KvOptions *opts = Options();
     assert(opts->data_append_mode);
     assert(opts->file_amplify_factor != 0);
@@ -53,7 +52,6 @@ KvError BackgroundWrite::CompactDataFile()
     CHECK_KV_ERR(err);
     if (meta->root_id_ == MaxPageId)
     {
-        LOG(INFO) << "CompactDataFile TriggerFileGC";
         TriggerFileGC();
         return KvError::NoError;
     }
@@ -65,8 +63,8 @@ KvError BackgroundWrite::CompactDataFile()
     {
         // Update statistic.
         allocator->UpdateStat(MaxFileId, 0);
-        LOG(INFO) << "CompactDataFile TriggerFileGC 2";
         TriggerFileGC();
+        CHECK(meta->root_id_ == MaxPageId);
         return KvError::NoError;
     }
     const uint32_t pages_per_file = allocator->PagesPerFile();
@@ -77,7 +75,6 @@ KvError BackgroundWrite::CompactDataFile()
         double(space_size) / double(mapping_cnt) <= file_saf_limit)
     {
         // No compaction required.
-        LOG(INFO) << "no need";
         return KvError::NoError;
     }
 
@@ -215,7 +212,6 @@ KvError BackgroundWrite::CompactDataFile()
     CHECK_KV_ERR(err);
     moving_cached.Finish();
     TriggerFileGC();
-    LOG(INFO) << "TriggerFileGC at the end";
     return KvError::NoError;
 }
 

@@ -19,12 +19,12 @@
 
 namespace eloqstore
 {
-const TableIdent &WriteTask::TableId() const
+const TablePartitionIdent &WriteTask::TableId() const
 {
     return tbl_ident_;
 }
 
-void WriteTask::Reset(const TableIdent &tbl_id)
+void WriteTask::Reset(const TablePartitionIdent &tbl_id)
 {
     tbl_ident_ = tbl_id;
     write_err_ = KvError::NoError;
@@ -307,7 +307,7 @@ void WriteTask::CompactIfNeeded(PageMapper *mapper) const
             double(space_size) / double(mapping_cnt) >
                 double(opts->file_amplify_factor))
         {
-            shard->AddPendingCompact(tbl_ident_);
+            shard->AddPendingCompact(tbl_partition_ident_);
         }
     }
     */
@@ -341,7 +341,6 @@ void WriteTask::TriggerFileGC() const
     if (eloq_store->file_gc_ == nullptr)
     {
         // File garbage collector is not enabled.
-        LOG(INFO) << "TriggerFileGC not enabled";
         return;
     }
     assert(Options()->data_append_mode);

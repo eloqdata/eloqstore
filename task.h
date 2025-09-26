@@ -44,17 +44,16 @@ enum struct TaskType
     Scan,
     BatchWrite,
     BackgroundWrite,
-    GcCleanup,
     EvictFile,
     ListObject
 };
 
-std::pair<Page, KvError> LoadPage(const TableIdent &tbl_id,
+std::pair<Page, KvError> LoadPage(const TablePartitionIdent &tbl_id,
                                   FilePageId file_page_id);
-std::pair<DataPage, KvError> LoadDataPage(const TableIdent &tbl_id,
+std::pair<DataPage, KvError> LoadDataPage(const TablePartitionIdent &tbl_id,
                                           PageId page_id,
                                           FilePageId file_page_id);
-std::pair<OverflowPage, KvError> LoadOverflowPage(const TableIdent &tbl_id,
+std::pair<OverflowPage, KvError> LoadOverflowPage(const TablePartitionIdent &tbl_id,
                                                   PageId page_id,
                                                   FilePageId file_page_id);
 
@@ -64,7 +63,7 @@ std::pair<OverflowPage, KvError> LoadOverflowPage(const TableIdent &tbl_id,
  * @param mapping The mapping snapshot of this table partition.
  * @param encoded_ptrs The encoded overflow pointers.
  */
-std::pair<std::string, KvError> GetOverflowValue(const TableIdent &tbl_id,
+std::pair<std::string, KvError> GetOverflowValue(const TablePartitionIdent &tbl_id,
                                                  const MappingSnapshot *mapping,
                                                  std::string_view encoded_ptrs);
 /**

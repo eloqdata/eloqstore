@@ -15,7 +15,7 @@ class MappingSnapshot;
 class ReadTask : public KvTask
 {
 public:
-    KvError Read(const TableIdent &tbl_ident,
+    KvError Read(const TablePartitionIdent &tbl_ident,
                  std::string_view search_key,
                  std::string &value,
                  uint64_t &timestamp,
@@ -24,7 +24,7 @@ public:
     /**
      * @brief Read the biggest key not greater than the search key.
      */
-    KvError Floor(const TableIdent &tbl_id,
+    KvError Floor(const TablePartitionIdent &tbl_id,
                   std::string_view search_key,
                   std::string &floor_key,
                   std::string &value,

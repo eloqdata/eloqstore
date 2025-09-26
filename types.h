@@ -30,31 +30,33 @@ static constexpr char TmpSuffix[] = ".tmp";
 
 namespace fs = std::filesystem;
 
-struct TableIdent
+struct TablePartitionIdent
 {
     static constexpr char separator = '.';
-    friend bool operator==(const TableIdent &lhs, const TableIdent &rhs)
+    friend bool operator==(const TablePartitionIdent &lhs,
+                           const TablePartitionIdent &rhs)
     {
         return lhs.tbl_name_ == rhs.tbl_name_ &&
                lhs.partition_id_ == rhs.partition_id_;
     }
-    friend std::ostream &operator<<(std::ostream &os, const TableIdent &point);
+    friend std::ostream &operator<<(std::ostream &os,
+                                    const TablePartitionIdent &point);
 
-    TableIdent() = default;
-    TableIdent(std::string tbl_name, uint32_t id)
+    TablePartitionIdent() = default;
+    TablePartitionIdent(std::string tbl_name, uint32_t id)
         : tbl_name_(std::move(tbl_name)), partition_id_(id) {};
     std::string ToString() const;
-    static TableIdent FromString(const std::string &str);
+    static TablePartitionIdent FromString(const std::string &str);
     uint8_t DiskIndex(uint8_t num_disks) const;
     fs::path StorePath(tcb::span<const std::string> disks) const;
     uint16_t ShardIndex(uint16_t num_shards) const;
     bool IsValid() const;
 
     std::string tbl_name_;
-    uint32_t partition_id_;
+    uint32_t partition_id_{};
 };
 
-std::ostream &operator<<(std::ostream &out, const TableIdent &tid);
+std::ostream &operator<<(std::ostream &out, const TablePartitionIdent &tid);
 
 struct FileKey
 {
@@ -62,7 +64,7 @@ struct FileKey
     {
         return tbl_id_ == other.tbl_id_ && filename_ == other.filename_;
     }
-    TableIdent tbl_id_;
+    TablePartitionIdent tbl_id_;
     std::string filename_;
 };
 
@@ -105,9 +107,10 @@ struct WriteDataEntry
 }  // namespace eloqstore
 
 template <>
-struct std::hash<eloqstore::TableIdent>
+struct std::hash<eloqstore::TablePartitionIdent>
 {
-    std::size_t operator()(const eloqstore::TableIdent &tbl_ident) const
+    std::size_t operator()(
+        const eloqstore::TablePartitionIdent &tbl_ident) const
     {
         size_t seed = 0;
         boost::hash_combine(seed, tbl_ident.tbl_name_);
@@ -121,7 +124,8 @@ struct std::hash<eloqstore::FileKey>
 {
     std::size_t operator()(const eloqstore::FileKey &file_key) const
     {
-        size_t seed = std::hash<eloqstore::TableIdent>()(file_key.tbl_id_);
+        size_t seed =
+            std::hash<eloqstore::TablePartitionIdent>()(file_key.tbl_id_);
         boost::hash_combine(seed, file_key.filename_);
         return seed;
     }

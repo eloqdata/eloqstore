@@ -13,7 +13,7 @@ using namespace test_util;
 TEST_CASE("concurrently write to partition", "[concurrency]")
 {
     eloqstore::EloqStore *store = InitStore(mem_store_opts);
-    eloqstore::TableIdent tbl_id("concurrent-write", 1);
+    eloqstore::TablePartitionIdent tbl_id("concurrent-write", 1);
     eloqstore::BatchWriteRequest requests[128];
     const uint32_t batch = 100;
     for (int i = 0; i < std::size(requests); i++)

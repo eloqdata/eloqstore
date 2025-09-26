@@ -58,7 +58,7 @@ TEST_CASE("cloud store with restart", "[cloud]")
     std::vector<std::unique_ptr<MapVerifier>> partitions;
     for (uint32_t i = 0; i < 3; i++)
     {
-        eloqstore::TableIdent tbl_id{"t0", i};
+        eloqstore::TablePartitionIdent tbl_id{"t0", i};
         auto part = std::make_unique<MapVerifier>(tbl_id, store, false);
         part->SetValueSize(10000);
         partitions.push_back(std::move(part));
@@ -94,7 +94,7 @@ TEST_CASE("cloud store cached file LRU", "[cloud]")
     std::vector<std::unique_ptr<MapVerifier>> partitions;
     for (uint32_t i = 0; i < 3; i++)
     {
-        eloqstore::TableIdent tbl_id{"t0", i};
+        eloqstore::TablePartitionIdent tbl_id{"t0", i};
         auto part = std::make_unique<MapVerifier>(tbl_id, store, false, 6);
         part->SetValueSize(10000);
         partitions.push_back(std::move(part));
