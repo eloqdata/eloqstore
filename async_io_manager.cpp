@@ -157,7 +157,7 @@ KvError IouringMgr::Init(Shard *shard)
     return KvError::NoError;
 }
 
-std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
+std::pair<Page, KvError> IouringMgr::ReadPage(const TablePartitionIdent &tbl_id,
                                               FilePageId fp_id,
                                               Page page)
 {
@@ -214,7 +214,7 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
     return {std::move(page), KvError::NoError};
 }
 
-KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
+KvError IouringMgr::ReadPages(const TablePartitionIdent &tbl_id,
                               std::span<FilePageId> page_ids,
                               std::vector<Page> &pages)
 {
@@ -227,7 +227,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               fd_ref_(std::move(fd)),
               offset_(offset),
-              page_(true){};
+              page_(true) {};
 
         LruFD::Ref fd_ref_;
         uint32_t offset_;
@@ -339,7 +339,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
 }
 
 std::pair<ManifestFilePtr, KvError> IouringMgr::GetManifest(
-    const TableIdent &tbl_id)
+    const TablePartitionIdent &tbl_id)
 {
     LruFD::Ref old_fd = GetOpenedFD(tbl_id, LruFD::kManifest);
     if (old_fd != nullptr)
@@ -365,7 +365,7 @@ std::pair<ManifestFilePtr, KvError> IouringMgr::GetManifest(
     return {std::move(manifest), KvError::NoError};
 }
 
-KvError IouringMgr::WritePage(const TableIdent &tbl_id,
+KvError IouringMgr::WritePage(const TablePartitionIdent &tbl_id,
                               VarPage page,
                               FilePageId file_page_id)
 {
@@ -388,7 +388,7 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError IouringMgr::WritePages(const TableIdent &tbl_id,
+KvError IouringMgr::WritePages(const TablePartitionIdent &tbl_id,
                                std::span<VarPage> pages,
                                FilePageId first_fp_id)
 {
@@ -445,7 +445,7 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
     }
 }
 
-KvError IouringMgr::SyncData(const TableIdent &tbl_id)
+KvError IouringMgr::SyncData(const TablePartitionIdent &tbl_id)
 {
     auto it_tbl = tables_.find(tbl_id);
     if (it_tbl == tables_.end())
@@ -477,7 +477,7 @@ KvError IouringMgr::SyncData(const TableIdent &tbl_id)
     return SyncFiles(tbl_id, fds);
 }
 
-KvError IouringMgr::AbortWrite(const TableIdent &tbl_id)
+KvError IouringMgr::AbortWrite(const TablePartitionIdent &tbl_id)
 {
     // Wait all WriteReq finished to avoid PollComplete access this WriteTask
     // from WriteReq.task_ after aborted.
@@ -496,13 +496,14 @@ KvError IouringMgr::AbortWrite(const TableIdent &tbl_id)
     return KvError::NoError;
 }
 
-void IouringMgr::CleanTable(const TableIdent &tbl_id)
+void IouringMgr::CleanTable(const TablePartitionIdent &tbl_id)
 {
     // TODO: io_uring_prep_unlinkat
     assert(false);
 }
 
-KvError IouringMgr::RemovePartitionDirIfOnlyManifest(const TableIdent &tbl_id)
+KvError IouringMgr::RemovePartitionDirIfOnlyManifest(
+    const TablePartitionIdent &tbl_id)
 {
     if (options_->store_path.empty())
     {
@@ -712,7 +713,7 @@ void IouringMgr::EncodeUserData(io_uring_sqe *sqe,
     io_uring_sqe_set_data(sqe, user_data);
 }
 
-IouringMgr::FdIdx IouringMgr::GetRootFD(const TableIdent &tbl_id)
+IouringMgr::FdIdx IouringMgr::GetRootFD(const TablePartitionIdent &tbl_id)
 {
     assert(!eloq_store->root_fds_.empty());
     const uint16_t n_disks = eloq_store->root_fds_.size();
@@ -720,8 +721,8 @@ IouringMgr::FdIdx IouringMgr::GetRootFD(const TableIdent &tbl_id)
     return {root_fd, false};
 }
 
-IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(const TableIdent &tbl_id,
-                                               FileId file_id)
+IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(
+    const TablePartitionIdent &tbl_id, FileId file_id)
 {
     auto it_tbl = tables_.find(tbl_id);
     if (it_tbl == tables_.end())
@@ -742,13 +743,13 @@ IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(const TableIdent &tbl_id,
 }
 
 std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenFD(
-    const TableIdent &tbl_id, FileId file_id, bool direct)
+    const TablePartitionIdent &tbl_id, FileId file_id, bool direct)
 {
     return OpenOrCreateFD(tbl_id, file_id, direct, false);
 }
 
 std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
-    const TableIdent &tbl_id, FileId file_id, bool direct, bool create)
+    const TablePartitionIdent &tbl_id, FileId file_id, bool direct, bool create)
 {
     auto it_tbl = tables_.find(tbl_id);
     if (it_tbl == tables_.end())
@@ -973,7 +974,9 @@ int IouringMgr::CreateFile(LruFD::Ref dir_fd, FileId file_id)
     return fd;
 }
 
-int IouringMgr::OpenFile(const TableIdent &tbl_id, FileId file_id, bool direct)
+int IouringMgr::OpenFile(const TablePartitionIdent &tbl_id,
+                         FileId file_id,
+                         bool direct)
 {
     uint64_t flags = O_RDWR;
     fs::path path = tbl_id.ToString();
@@ -1065,13 +1068,13 @@ KvError IouringMgr::SyncFile(LruFD::Ref fd)
     return ToKvError(res);
 }
 
-KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
+KvError IouringMgr::SyncFiles(const TablePartitionIdent &tbl_id,
                               std::span<LruFD::Ref> fds)
 {
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)){};
+            : BaseReq(task), fd_ref_(std::move(fd)) {};
         LruFD::Ref fd_ref_;
     };
 
@@ -1309,7 +1312,7 @@ int IouringMgr::UnlinkAt(FdIdx dir_fd, const char *path, bool rmdir)
     return res;
 }
 
-KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
+KvError IouringMgr::AppendManifest(const TablePartitionIdent &tbl_id,
                                    std::string_view log,
                                    uint64_t manifest_size)
 {
@@ -1333,7 +1336,7 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
                               std::string_view name,
                               std::string_view content)
 {
-    LOG(INFO) << "WriteSnapshot: " << name << " size: " << content.size();
+    DLOG(INFO) << "WriteSnapshot: " << name << " size: " << content.size();
     std::string tmpfile = std::string(name) + TmpSuffix;
     uint64_t tmp_oflags = O_CREAT | O_TRUNC | O_RDWR;
     int tmp_fd = OpenAt(dir_fd.FdPair(), tmpfile.c_str(), tmp_oflags, 0644);
@@ -1380,7 +1383,7 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
     return tmp_fd;
 }
 
-KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
+KvError IouringMgr::SwitchManifest(const TablePartitionIdent &tbl_id,
                                    std::string_view snapshot)
 {
     LruFD::Ref fd_ref = GetOpenedFD(tbl_id, LruFD::kManifest);
@@ -1402,7 +1405,7 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError IouringMgr::CreateArchive(const TableIdent &tbl_id,
+KvError IouringMgr::CreateArchive(const TablePartitionIdent &tbl_id,
                                   std::string_view snapshot,
                                   uint64_t ts)
 {
@@ -1883,7 +1886,7 @@ void CloudStoreMgr::PollComplete()
     IouringMgr::PollComplete();
 }
 
-KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
+KvError CloudStoreMgr::SwitchManifest(const TablePartitionIdent &tbl_id,
                                       std::string_view snapshot)
 {
     LruFD::Ref fd_ref = GetOpenedFD(tbl_id, LruFD::kManifest);
@@ -1937,7 +1940,7 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
+KvError CloudStoreMgr::CreateArchive(const TablePartitionIdent &tbl_id,
                                      std::string_view snapshot,
                                      uint64_t ts)
 {
@@ -1977,7 +1980,7 @@ int CloudStoreMgr::CreateFile(LruFD::Ref dir_fd, FileId file_id)
     return res;
 }
 
-int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
+int CloudStoreMgr::OpenFile(const TablePartitionIdent &tbl_id,
                             FileId file_id,
                             bool direct)
 {
@@ -2035,7 +2038,7 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
     FileId file_id = fd.Get()->file_id_;
     if (file_id != LruFD::kDirectory)
     {
-        const TableIdent &tbl_id = *fd.Get()->tbl_->tbl_id_;
+        const TablePartitionIdent &tbl_id = *fd.Get()->tbl_->tbl_id_;
         KvError err = UploadFiles(tbl_id, {ToFilename(file_id)});
         if (err != KvError::NoError)
         {
@@ -2051,7 +2054,7 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
     return KvError::NoError;
 }
 
-KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
+KvError CloudStoreMgr::SyncFiles(const TablePartitionIdent &tbl_id,
                                  std::span<LruFD::Ref> fds)
 {
     KvError err = IouringMgr::SyncFiles(tbl_id, fds);
@@ -2075,7 +2078,7 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
     FileId file_id = fd.Get()->file_id_;
     if (file_id != LruFD::kDirectory)
     {
-        const TableIdent *tbl_id = fd.Get()->tbl_->tbl_id_;
+        const TablePartitionIdent *tbl_id = fd.Get()->tbl_->tbl_id_;
         EnqueClosedFile(FileKey(*tbl_id, ToFilename(file_id)));
     }
     return KvError::NoError;
@@ -2173,7 +2176,8 @@ int CloudStoreMgr::ReserveCacheSpace(size_t size)
     return 0;
 }
 
-KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id, FileId file_id)
+KvError CloudStoreMgr::DownloadFile(const TablePartitionIdent &tbl_id,
+                                    FileId file_id)
 {
     KvTask *current_task = ThdTask();
     std::string filename = ToFilename(file_id);
@@ -2190,7 +2194,7 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id, FileId file_id)
     return download_task.error_;
 }
 
-KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
+KvError CloudStoreMgr::UploadFiles(const TablePartitionIdent &tbl_id,
                                    std::vector<std::string> filenames)
 {
     if (filenames.empty())
@@ -2352,9 +2356,8 @@ KvError MemStoreMgr::Init(Shard *shard)
     return KvError::NoError;
 }
 
-std::pair<Page, KvError> MemStoreMgr::ReadPage(const TableIdent &tbl_id,
-                                               FilePageId fp_id,
-                                               Page page)
+std::pair<Page, KvError> MemStoreMgr::ReadPage(
+    const TablePartitionIdent &tbl_id, FilePageId fp_id, Page page)
 {
     auto it = store_.find(tbl_id);
     if (it == store_.end())
@@ -2371,7 +2374,7 @@ std::pair<Page, KvError> MemStoreMgr::ReadPage(const TableIdent &tbl_id,
     return {std::move(page), KvError::NoError};
 }
 
-KvError MemStoreMgr::ReadPages(const TableIdent &tbl_id,
+KvError MemStoreMgr::ReadPages(const TablePartitionIdent &tbl_id,
                                std::span<FilePageId> page_ids,
                                std::vector<Page> &pages)
 {
@@ -2387,7 +2390,7 @@ KvError MemStoreMgr::ReadPages(const TableIdent &tbl_id,
 }
 
 std::pair<ManifestFilePtr, KvError> MemStoreMgr::GetManifest(
-    const TableIdent &tbl_ident)
+    const TablePartitionIdent &tbl_ident)
 {
     auto it = store_.find(tbl_ident);
     if (it == store_.end())
@@ -2397,7 +2400,7 @@ std::pair<ManifestFilePtr, KvError> MemStoreMgr::GetManifest(
     return {std::make_unique<Manifest>(it->second.wal), KvError::NoError};
 }
 
-KvError MemStoreMgr::WritePage(const TableIdent &tbl_id,
+KvError MemStoreMgr::WritePage(const TablePartitionIdent &tbl_id,
                                VarPage page,
                                FilePageId file_page_id)
 {
@@ -2429,34 +2432,35 @@ KvError MemStoreMgr::WritePage(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError MemStoreMgr::WritePages(const TableIdent &tbl_id,
+KvError MemStoreMgr::WritePages(const TablePartitionIdent &tbl_id,
                                 std::span<VarPage> pages,
                                 FilePageId first_fp_id)
 {
     LOG(FATAL) << "not implemented";
 }
 
-KvError MemStoreMgr::SyncData(const TableIdent &tbl_id)
+KvError MemStoreMgr::SyncData(const TablePartitionIdent &tbl_id)
 {
     return KvError::NoError;
 }
 
-KvError MemStoreMgr::AbortWrite(const TableIdent &tbl_id)
+KvError MemStoreMgr::AbortWrite(const TablePartitionIdent &tbl_id)
 {
     return KvError::NoError;
 }
 
-void MemStoreMgr::CleanTable(const TableIdent &tbl_id)
+void MemStoreMgr::CleanTable(const TablePartitionIdent &tbl_id)
 {
     store_.erase(tbl_id);
 }
 
-KvError MemStoreMgr::RemovePartitionDirIfOnlyManifest(const TableIdent &)
+KvError MemStoreMgr::RemovePartitionDirIfOnlyManifest(
+    const TablePartitionIdent &)
 {
     return KvError::NoError;
 }
 
-KvError MemStoreMgr::AppendManifest(const TableIdent &tbl_id,
+KvError MemStoreMgr::AppendManifest(const TablePartitionIdent &tbl_id,
                                     std::string_view log,
                                     uint64_t manifest_size)
 {
@@ -2471,7 +2475,7 @@ KvError MemStoreMgr::AppendManifest(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError MemStoreMgr::SwitchManifest(const TableIdent &tbl_id,
+KvError MemStoreMgr::SwitchManifest(const TablePartitionIdent &tbl_id,
                                     std::string_view snapshot)
 {
     auto it = store_.find(tbl_id);
@@ -2485,7 +2489,7 @@ KvError MemStoreMgr::SwitchManifest(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError MemStoreMgr::CreateArchive(const TableIdent &tbl_id,
+KvError MemStoreMgr::CreateArchive(const TablePartitionIdent &tbl_id,
                                    std::string_view snapshot,
                                    uint64_t ts)
 {

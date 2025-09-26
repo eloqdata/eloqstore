@@ -14,7 +14,7 @@ class MappingSnapshot;
 class ScanIterator
 {
 public:
-    ScanIterator(const TableIdent &tbl_id);
+    ScanIterator(const TablePartitionIdent &tbl_id);
     KvError Seek(std::string_view key, bool ttl = false);
     KvError Next();
 
@@ -28,7 +28,7 @@ public:
     MappingSnapshot *Mapping() const;
 
 private:
-    const TableIdent tbl_id_;
+    const TablePartitionIdent tbl_id_;
     std::shared_ptr<MappingSnapshot> mapping_;
     DataPage data_page_;
     DataPageIter iter_;

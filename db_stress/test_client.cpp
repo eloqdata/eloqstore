@@ -13,7 +13,7 @@ DEFINE_string(end_key, "", "scan end key");
 DEFINE_uint32(value_len, 100, "value length");
 
 void BatchWrite(eloqstore::EloqStore &store,
-                const eloqstore::TableIdent &tbl_id,
+                const eloqstore::TablePartitionIdent &tbl_id,
                 uint64_t begin_id,
                 uint64_t end_id)
 {
@@ -48,7 +48,7 @@ int main(int argc, char **argv)
         }
     }
 
-    auto tbl_id = eloqstore::TableIdent::FromString(FLAGS_partition);
+    auto tbl_id = eloqstore::TablePartitionIdent::FromString(FLAGS_partition);
     if (!tbl_id.IsValid())
     {
         LOG(FATAL) << "Invalid argument: " << FLAGS_partition << std::endl;

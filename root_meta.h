@@ -47,9 +47,9 @@ struct CowRootMeta
     PageId root_id_{MaxPageId};
     PageId ttl_root_id_{MaxPageId};
     std::unique_ptr<PageMapper> mapper_{nullptr};
-    uint64_t manifest_size_;
+    uint64_t manifest_size_{};
     std::shared_ptr<MappingSnapshot> old_mapping_{nullptr};
-    uint64_t next_expire_ts_;
+    uint64_t next_expire_ts_{};
 };
 
 struct RootMeta

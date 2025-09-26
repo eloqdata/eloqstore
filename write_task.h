@@ -20,8 +20,8 @@ public:
     WriteTask(const WriteTask &) = delete;
 
     void Abort() override;
-    void Reset(const TableIdent &tbl_id);
-    const TableIdent &TableId() const;
+    void Reset(const TablePartitionIdent &tbl_id);
+    const TablePartitionIdent &TableId() const;
 
     /**
      * @brief The index/data page has been flushed.
@@ -55,7 +55,7 @@ protected:
 
     FilePageId ToFilePage(PageId page_id);
 
-    TableIdent tbl_ident_;
+    TablePartitionIdent tbl_ident_;
 
     CowRootMeta cow_meta_;
     ManifestBuilder wal_builder_;

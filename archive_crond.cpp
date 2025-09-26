@@ -76,7 +76,7 @@ void ArchiveCrond::StartArchiving()
     const uint32_t archive_batch = store_->Options().max_archive_tasks;
     std::vector<ArchiveRequest> requests(archive_batch);
     size_t fail_cnt = 0;
-    auto do_archiving = [&](std::span<TableIdent> tbl_ids)
+    auto do_archiving = [&](std::span<TablePartitionIdent> tbl_ids)
     {
         const size_t batch_size = tbl_ids.size();
         for (size_t i = 0; i < batch_size; i++)
@@ -96,7 +96,7 @@ void ArchiveCrond::StartArchiving()
         }
     };
 
-    std::vector<TableIdent> table_ids;
+    std::vector<TablePartitionIdent> table_ids;
     table_ids.reserve(archive_batch);
     size_t total_partitions = 0;
     for (const fs::path &db_path : store_->Options().store_path)
@@ -109,7 +109,7 @@ void ArchiveCrond::StartArchiving()
                 continue;
             }
 
-            TableIdent tbl_id = TableIdent::FromString(ent.path().filename());
+            TablePartitionIdent tbl_id = TablePartitionIdent::FromString(ent.path().filename());
             if (tbl_id.tbl_name_.empty())
             {
                 LOG(WARNING) << "unexpected partition " << ent.path();

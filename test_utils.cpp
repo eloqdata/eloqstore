@@ -88,7 +88,7 @@ std::string FormatEntries(tcb::span<eloqstore::KvEntry> entries)
 
 std::pair<std::string, eloqstore::KvError> Scan(
     eloqstore::EloqStore *store,
-    const eloqstore::TableIdent &tbl_id,
+    const eloqstore::TablePartitionIdent &tbl_id,
     uint32_t begin,
     uint32_t end)
 {
@@ -110,7 +110,7 @@ std::pair<std::string, eloqstore::KvError> Scan(
     return {test_util::FormatEntries(entries), eloqstore::KvError::NoError};
 }
 
-MapVerifier::MapVerifier(eloqstore::TableIdent tid,
+MapVerifier::MapVerifier(eloqstore::TablePartitionIdent tid,
                          eloqstore::EloqStore *store,
                          bool validate,
                          uint16_t key_len)
@@ -748,7 +748,7 @@ void ConcurrencyTester::Init()
     const uint32_t kvs_num = seg_size_ * seg_count_;
     for (Partition &partition : partitions_)
     {
-        eloqstore::TableIdent tbl_id(tbl_name_, partition.id_);
+        eloqstore::TablePartitionIdent tbl_id(tbl_name_, partition.id_);
 
         // Try to load partition KVs from EloqStore
         eloqstore::ScanRequest scan_req;

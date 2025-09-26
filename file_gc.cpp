@@ -17,22 +17,6 @@
 
 namespace eloqstore
 {
-namespace
-{
-KvError SubmitGcCleanup(const TableIdent &tbl_id)
-{
-    if (eloq_store == nullptr)
-    {
-        return KvError::NotRunning;
-    }
-
-    GcCleanupRequest req;
-    req.SetTableId(tbl_id);
-    eloq_store->ExecSync(&req);
-    return req.Error();
-}
-}  // namespace
-
 void GetRetainedFiles(std::unordered_set<FileId> &result,
                       const std::vector<uint64_t> &tbl,
                       uint8_t pages_per_file_shift)
@@ -49,7 +33,7 @@ void GetRetainedFiles(std::unordered_set<FileId> &result,
 };
 
 KvError FileGarbageCollector::ExecuteLocalGC(
-    const TableIdent &tbl_id,
+    const TablePartitionIdent &tbl_id,
     const std::unordered_set<FileId> &retained_files,
     IouringMgr *io_mgr)
 {
@@ -98,7 +82,7 @@ KvError FileGarbageCollector::ExecuteLocalGC(
 }
 
 KvError FileGarbageCollector::ListLocalFiles(
-    const TableIdent &tbl_id,
+    const TablePartitionIdent &tbl_id,
     std::vector<std::string> &local_files,
     IouringMgr *io_mgr)
 {
@@ -131,7 +115,7 @@ KvError FileGarbageCollector::ListLocalFiles(
 
 // Helper functions for cloud GC optimization
 KvError FileGarbageCollector::ListCloudFiles(
-    const TableIdent &tbl_id,
+    const TablePartitionIdent &tbl_id,
     std::vector<std::string> &cloud_files,
     CloudStoreMgr *cloud_mgr)
 {
@@ -220,7 +204,7 @@ void FileGarbageCollector::ClassifyFiles(
 }
 
 KvError FileGarbageCollector::DownloadArchiveFile(
-    const TableIdent &tbl_id,
+    const TablePartitionIdent &tbl_id,
     const std::string &archive_file,
     std::string &content,
     CloudStoreMgr *cloud_mgr,
@@ -300,7 +284,7 @@ FileId FileGarbageCollector::ParseArchiveForMaxFileId(
 }
 
 KvError FileGarbageCollector::GetOrUpdateArchivedMaxFileId(
-    const TableIdent &tbl_id,
+    const TablePartitionIdent &tbl_id,
     const std::vector<std::string> &archive_files,
     const std::vector<uint64_t> &archive_timestamps,
     FileId &least_not_archived_file_id,
@@ -382,7 +366,7 @@ KvError FileGarbageCollector::GetOrUpdateArchivedMaxFileId(
 }
 
 KvError FileGarbageCollector::DeleteUnreferencedCloudFiles(
-    const TableIdent &tbl_id,
+    const TablePartitionIdent &tbl_id,
     const std::vector<std::string> &data_files,
     const std::unordered_set<FileId> &retained_files,
     FileId least_not_archived_file_id,
@@ -493,7 +477,7 @@ KvError FileGarbageCollector::DeleteUnreferencedCloudFiles(
 }
 
 KvError FileGarbageCollector::DeleteUnreferencedLocalFiles(
-    const TableIdent &tbl_id,
+    const TablePartitionIdent &tbl_id,
     const std::vector<std::string> &data_files,
     const std::unordered_set<FileId> &retained_files,
     FileId least_not_archived_file_id,
@@ -560,7 +544,7 @@ KvError FileGarbageCollector::DeleteUnreferencedLocalFiles(
 }
 
 KvError FileGarbageCollector::ExecuteCloudGC(
-    const TableIdent &tbl_id,
+    const TablePartitionIdent &tbl_id,
     const std::unordered_set<FileId> &retained_files,
     CloudStoreMgr *cloud_mgr)
 {

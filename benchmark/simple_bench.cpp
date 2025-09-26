@@ -58,7 +58,7 @@ public:
 
 Writer::Writer(uint32_t id) : id_(id)
 {
-    eloqstore::TableIdent tbl_id(table, id);
+    eloqstore::TablePartitionIdent tbl_id(table, id);
     std::vector<eloqstore::WriteDataEntry> entries;
     entries.reserve(FLAGS_batch_size);
     uint64_t ts = utils::UnixTs<milliseconds>();
@@ -178,7 +178,7 @@ class Reader
 public:
     Reader(size_t id) : id_(id)
     {
-        eloqstore::TableIdent tbl_id(table, id % FLAGS_partitions);
+        eloqstore::TablePartitionIdent tbl_id(table, id % FLAGS_partitions);
         EncodeKey(key_, 0);
         std::string_view key(key_, sizeof(uint64_t));
         request_.SetArgs(std::move(tbl_id), key);
@@ -278,7 +278,7 @@ class Scanner
 public:
     Scanner(size_t id) : id_(id)
     {
-        eloqstore::TableIdent tbl_id(table, id % FLAGS_partitions);
+        eloqstore::TablePartitionIdent tbl_id(table, id % FLAGS_partitions);
         request_.SetPagination(page_size, 0);
         EncodeKey(begin_key_, 0);
         std::string_view key(begin_key_, sizeof(uint64_t));

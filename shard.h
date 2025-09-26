@@ -27,10 +27,10 @@ public:
     void Stop();
     bool AddKvRequest(KvRequest *req);
 
-    void AddPendingCompact(const TableIdent &tbl_id);
-    bool HasPendingCompact(const TableIdent &tbl_id);
-    void AddPendingTTL(const TableIdent &tbl_id);
-    bool HasPendingTTL(const TableIdent &tbl_id);
+    void AddPendingCompact(const TablePartitionIdent &tbl_id);
+    bool HasPendingCompact(const TablePartitionIdent &tbl_id);
+    void AddPendingTTL(const TablePartitionIdent &tbl_id);
+    bool HasPendingTTL(const TablePartitionIdent &tbl_id);
 
     const KvOptions *Options() const;
     AsyncIoManager *IoManager();
@@ -124,7 +124,7 @@ private:
         WriteRequest *head_{nullptr};
         WriteRequest *tail_{nullptr};
     };
-    std::unordered_map<TableIdent, PendingWriteQueue> pending_queues_;
+    std::unordered_map<TablePartitionIdent, PendingWriteQueue> pending_queues_;
 
 #ifdef ELOQ_MODULE_ENABLED
     std::atomic<size_t> req_queue_size_{0};
