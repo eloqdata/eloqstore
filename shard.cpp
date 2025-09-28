@@ -115,7 +115,7 @@ bool Shard::AddKvRequest(KvRequest *req)
     return ret;
 }
 
-void Shard::AddPendingCompact(const TablePartitionIdent &tbl_id)
+void Shard::AddPendingCompact(const TableIdent &tbl_id)
 {
     // Send CompactRequest from internal.
     assert(!HasPendingCompact(tbl_id));
@@ -128,7 +128,7 @@ void Shard::AddPendingCompact(const TablePartitionIdent &tbl_id)
     pending_q.PushBack(&req);
 }
 
-bool Shard::HasPendingCompact(const TablePartitionIdent &tbl_id)
+bool Shard::HasPendingCompact(const TableIdent &tbl_id)
 {
     auto it = pending_queues_.find(tbl_id);
     assert(it != pending_queues_.end());
@@ -136,7 +136,7 @@ bool Shard::HasPendingCompact(const TablePartitionIdent &tbl_id)
     return !pending_q.compact_req_.done_.load(std::memory_order_relaxed);
 }
 
-void Shard::AddPendingTTL(const TablePartitionIdent &tbl_id)
+void Shard::AddPendingTTL(const TableIdent &tbl_id)
 {
     // Send CleanExpiredRequest from internal.
     assert(!HasPendingTTL(tbl_id));
@@ -149,7 +149,7 @@ void Shard::AddPendingTTL(const TablePartitionIdent &tbl_id)
     pending_q.PushBack(&req);
 }
 
-bool Shard::HasPendingTTL(const TablePartitionIdent &tbl_id)
+bool Shard::HasPendingTTL(const TableIdent &tbl_id)
 {
     auto it = pending_queues_.find(tbl_id);
     assert(it != pending_queues_.end());

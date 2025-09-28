@@ -19,12 +19,12 @@
 
 namespace eloqstore
 {
-const TablePartitionIdent &WriteTask::TableId() const
+const TableIdent &WriteTask::TableId() const
 {
     return tbl_ident_;
 }
 
-void WriteTask::Reset(const TablePartitionIdent &tbl_id)
+void WriteTask::Reset(const TableIdent &tbl_id)
 {
     tbl_ident_ = tbl_id;
     write_err_ = KvError::NoError;

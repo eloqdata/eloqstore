@@ -33,7 +33,7 @@ void GetRetainedFiles(std::unordered_set<FileId> &result,
 };
 
 KvError FileGarbageCollector::ExecuteLocalGC(
-    const TablePartitionIdent &tbl_id,
+    const TableIdent &tbl_id,
     const std::unordered_set<FileId> &retained_files,
     IouringMgr *io_mgr)
 {
@@ -82,7 +82,7 @@ KvError FileGarbageCollector::ExecuteLocalGC(
 }
 
 KvError FileGarbageCollector::ListLocalFiles(
-    const TablePartitionIdent &tbl_id,
+    const TableIdent &tbl_id,
     std::vector<std::string> &local_files,
     IouringMgr *io_mgr)
 {
@@ -115,7 +115,7 @@ KvError FileGarbageCollector::ListLocalFiles(
 
 // Helper functions for cloud GC optimization
 KvError FileGarbageCollector::ListCloudFiles(
-    const TablePartitionIdent &tbl_id,
+    const TableIdent &tbl_id,
     std::vector<std::string> &cloud_files,
     CloudStoreMgr *cloud_mgr)
 {
@@ -204,7 +204,7 @@ void FileGarbageCollector::ClassifyFiles(
 }
 
 KvError FileGarbageCollector::DownloadArchiveFile(
-    const TablePartitionIdent &tbl_id,
+    const TableIdent &tbl_id,
     const std::string &archive_file,
     std::string &content,
     CloudStoreMgr *cloud_mgr,
@@ -284,7 +284,7 @@ FileId FileGarbageCollector::ParseArchiveForMaxFileId(
 }
 
 KvError FileGarbageCollector::GetOrUpdateArchivedMaxFileId(
-    const TablePartitionIdent &tbl_id,
+    const TableIdent &tbl_id,
     const std::vector<std::string> &archive_files,
     const std::vector<uint64_t> &archive_timestamps,
     FileId &least_not_archived_file_id,
@@ -366,7 +366,7 @@ KvError FileGarbageCollector::GetOrUpdateArchivedMaxFileId(
 }
 
 KvError FileGarbageCollector::DeleteUnreferencedCloudFiles(
-    const TablePartitionIdent &tbl_id,
+    const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
     const std::unordered_set<FileId> &retained_files,
     FileId least_not_archived_file_id,
@@ -477,7 +477,7 @@ KvError FileGarbageCollector::DeleteUnreferencedCloudFiles(
 }
 
 KvError FileGarbageCollector::DeleteUnreferencedLocalFiles(
-    const TablePartitionIdent &tbl_id,
+    const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
     const std::unordered_set<FileId> &retained_files,
     FileId least_not_archived_file_id,
@@ -544,7 +544,7 @@ KvError FileGarbageCollector::DeleteUnreferencedLocalFiles(
 }
 
 KvError FileGarbageCollector::ExecuteCloudGC(
-    const TablePartitionIdent &tbl_id,
+    const TableIdent &tbl_id,
     const std::unordered_set<FileId> &retained_files,
     CloudStoreMgr *cloud_mgr)
 {

@@ -11,7 +11,7 @@ using namespace boost::context;
 
 namespace eloqstore
 {
-BatchWriteTask *TaskManager::GetBatchWriteTask(const TablePartitionIdent &tbl_id)
+BatchWriteTask *TaskManager::GetBatchWriteTask(const TableIdent &tbl_id)
 {
     num_active_++;
     BatchWriteTask *task = batch_write_pool_.GetTask();
@@ -19,7 +19,7 @@ BatchWriteTask *TaskManager::GetBatchWriteTask(const TablePartitionIdent &tbl_id
     return task;
 }
 
-BackgroundWrite *TaskManager::GetBackgroundWrite(const TablePartitionIdent &tbl_id)
+BackgroundWrite *TaskManager::GetBackgroundWrite(const TableIdent &tbl_id)
 {
     num_active_++;
     BackgroundWrite *task = bg_write_pool_.GetTask();

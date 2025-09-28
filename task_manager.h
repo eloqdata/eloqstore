@@ -16,8 +16,8 @@ namespace eloqstore
 class TaskManager
 {
 public:
-    BatchWriteTask *GetBatchWriteTask(const TablePartitionIdent &tbl_id);
-    BackgroundWrite *GetBackgroundWrite(const TablePartitionIdent &tbl_id);
+    BatchWriteTask *GetBatchWriteTask(const TableIdent &tbl_id);
+    BackgroundWrite *GetBackgroundWrite(const TableIdent &tbl_id);
     ReadTask *GetReadTask();
     ScanTask *GetScanTask();
     ListObjectTask *GetListObjectTask();

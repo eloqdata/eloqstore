@@ -280,14 +280,14 @@ void EloqStore::ExecSync(KvRequest *req)
 }
 
 KvError EloqStore::CollectTablePartitions(
-    const std::string &table_name, std::vector<TablePartitionIdent> &partitions) const
+    const std::string &table_name, std::vector<TableIdent> &partitions) const
 {
     partitions.clear();
     std::error_code ec;
     if (options_.cloud_store_path.empty())
     {
 #ifndef NDEBUG
-        std::unordered_set<TablePartitionIdent> seen;
+        std::unordered_set<TableIdent> seen;
 #endif
         for (const fs::path root : options_.store_path)
         {
@@ -315,7 +315,7 @@ KvError EloqStore::CollectTablePartitions(
                 }
                 std::string name = entry.path().filename().string();
                 DLOG(INFO) << "CollectTablePartitions: " << name;
-                TablePartitionIdent ident = TablePartitionIdent::FromString(name);
+                TableIdent ident = TableIdent::FromString(name);
                 if (!ident.IsValid() || ident.tbl_name_ != table_name)
                 {
                     continue;
@@ -353,7 +353,7 @@ KvError EloqStore::CollectTablePartitions(
         LOG(INFO) << "Get " << objects.size() << " objects";
         for (auto &object_name : objects)
         {
-            TablePartitionIdent ident = TablePartitionIdent::FromString(object_name);
+            TableIdent ident = TableIdent::FromString(object_name);
             if (!ident.IsValid() || ident.tbl_name_ != table_name)
             {
                 LOG(INFO) << "ident.tbl_name:" << ident.tbl_name_
@@ -373,7 +373,7 @@ void EloqStore::HandleDropTableRequest(DropTableRequest *req)
     req->pending_.store(0, std::memory_order_relaxed);
     req->truncate_reqs_.clear();
 
-    std::vector<TablePartitionIdent> partitions;
+    std::vector<TableIdent> partitions;
     KvError err = CollectTablePartitions(req->TableName(), partitions);
     if (err != KvError::NoError)
     {
@@ -414,7 +414,7 @@ void EloqStore::HandleDropTableRequest(DropTableRequest *req)
     };
 
     req->truncate_reqs_.reserve(partitions.size());
-    for (const TablePartitionIdent &partition : partitions)
+    for (const TableIdent &partition : partitions)
     {
         LOG(INFO) << "truncate partiiton " << partition.tbl_name_ << ":"
                   << partition.partition_id_;
@@ -491,7 +491,7 @@ bool EloqStore::IsStopped() const
     return stopped_.load(std::memory_order_relaxed);
 }
 
-void KvRequest::SetTableId(TablePartitionIdent tbl_id)
+void KvRequest::SetTableId(TableIdent tbl_id)
 {
     tbl_id_ = std::move(tbl_id);
 }
@@ -522,19 +522,19 @@ void KvRequest::Wait() const
     done_.wait(false, std::memory_order_acquire);
 }
 
-void ReadRequest::SetArgs(TablePartitionIdent tbl_id, const char *key)
+void ReadRequest::SetArgs(TableIdent tbl_id, const char *key)
 {
     assert(key != nullptr);
     SetArgs(std::move(tbl_id), std::string_view(key));
 }
 
-void ReadRequest::SetArgs(TablePartitionIdent tbl_id, std::string_view key)
+void ReadRequest::SetArgs(TableIdent tbl_id, std::string_view key)
 {
     SetTableId(std::move(tbl_id));
     key_.emplace<std::string_view>(key);
 }
 
-void ReadRequest::SetArgs(TablePartitionIdent tbl_id, std::string key)
+void ReadRequest::SetArgs(TableIdent tbl_id, std::string key)
 {
     SetTableId(std::move(tbl_id));
     key_.emplace<std::string>(std::move(key));
@@ -546,19 +546,19 @@ std::string_view ReadRequest::Key() const
                              : std::get<std::string>(key_);
 }
 
-void FloorRequest::SetArgs(TablePartitionIdent tbl_id, const char *key)
+void FloorRequest::SetArgs(TableIdent tbl_id, const char *key)
 {
     assert(key != nullptr);
     SetArgs(std::move(tbl_id), std::string_view(key));
 }
 
-void FloorRequest::SetArgs(TablePartitionIdent tbl_id, std::string_view key)
+void FloorRequest::SetArgs(TableIdent tbl_id, std::string_view key)
 {
     SetTableId(std::move(tbl_id));
     key_.emplace<std::string_view>(key);
 }
 
-void FloorRequest::SetArgs(TablePartitionIdent tbl_id, std::string key)
+void FloorRequest::SetArgs(TableIdent tbl_id, std::string key)
 {
     SetTableId(std::move(tbl_id));
     key_.emplace<std::string>(std::move(key));
@@ -570,7 +570,7 @@ std::string_view FloorRequest::Key() const
                              : std::get<std::string>(key_);
 }
 
-void ScanRequest::SetArgs(TablePartitionIdent tbl_id,
+void ScanRequest::SetArgs(TableIdent tbl_id,
                           std::string_view begin,
                           std::string_view end,
                           bool begin_inclusive)
@@ -581,7 +581,7 @@ void ScanRequest::SetArgs(TablePartitionIdent tbl_id,
     begin_inclusive_ = begin_inclusive;
 }
 
-void ScanRequest::SetArgs(TablePartitionIdent tbl_id,
+void ScanRequest::SetArgs(TableIdent tbl_id,
                           std::string begin,
                           std::string end,
                           bool begin_inclusive)
@@ -592,7 +592,7 @@ void ScanRequest::SetArgs(TablePartitionIdent tbl_id,
     begin_inclusive_ = begin_inclusive;
 }
 
-void ScanRequest::SetArgs(TablePartitionIdent tbl_id,
+void ScanRequest::SetArgs(TableIdent tbl_id,
                           const char *begin,
                           const char *end,
                           bool begin_inclusive)
@@ -647,7 +647,7 @@ bool ScanRequest::HasRemaining() const
     return has_remaining_;
 }
 
-void BatchWriteRequest::SetArgs(TablePartitionIdent tbl_id,
+void BatchWriteRequest::SetArgs(TableIdent tbl_id,
                                 std::vector<WriteDataEntry> &&batch)
 {
     SetTableId(std::move(tbl_id));
@@ -662,7 +662,7 @@ void BatchWriteRequest::AddWrite(std::string key,
     batch_.push_back({std::move(key), std::move(value), ts, op});
 }
 
-void TruncateRequest::SetArgs(TablePartitionIdent tbl_id, std::string_view position)
+void TruncateRequest::SetArgs(TableIdent tbl_id, std::string_view position)
 {
     SetTableId(std::move(tbl_id));
     position_ = position;
@@ -690,7 +690,7 @@ const std::string &DropTableRequest::TableName() const
     return table_name_;
 }
 
-const TablePartitionIdent &KvRequest::TableId() const
+const TableIdent &KvRequest::TableId() const
 {
     return tbl_id_;
 }

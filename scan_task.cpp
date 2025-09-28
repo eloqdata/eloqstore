@@ -10,7 +10,7 @@
 
 namespace eloqstore
 {
-ScanIterator::ScanIterator(const TablePartitionIdent &tbl_id)
+ScanIterator::ScanIterator(const TableIdent &tbl_id)
     : tbl_id_(tbl_id), iter_(nullptr, Options())
 {
 }
@@ -105,7 +105,7 @@ MappingSnapshot *ScanIterator::Mapping() const
 
 KvError ScanTask::Scan()
 {
-    const TablePartitionIdent &tbl_id = req_->TableId();
+    const TableIdent &tbl_id = req_->TableId();
     auto req = static_cast<ScanRequest *>(req_);
     assert(req->page_entries_ > 0 && req->page_size_ > 0);
     req->num_entries_ = 0;

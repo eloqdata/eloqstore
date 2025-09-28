@@ -19,7 +19,7 @@ namespace eloqstore
 {
 class IndexPageManager;
 class MappingSnapshot;
-struct TablePartitionIdent;
+struct TableIdent;
 
 class MemIndexPage
 {
@@ -122,7 +122,7 @@ private:
      */
     MemIndexPage *next_{nullptr};
     MemIndexPage *prev_{nullptr};
-    const TablePartitionIdent *tbl_partition_ident_{nullptr};
+    const TableIdent *tbl_partition_ident_{nullptr};
     friend class IndexPageManager;
 };
 

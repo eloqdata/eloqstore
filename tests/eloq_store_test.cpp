@@ -206,7 +206,7 @@ TEST_CASE("EloqStore handles requests when stopped", "[eloq_store]")
     REQUIRE(store.IsStopped());
 
     eloqstore::ReadRequest request;
-    eloqstore::TablePartitionIdent tbl_id("test_table", 0);
+    eloqstore::TableIdent tbl_id("test_table", 0);
     request.SetArgs(tbl_id, "test_key");
 
     store.ExecSync(&request);

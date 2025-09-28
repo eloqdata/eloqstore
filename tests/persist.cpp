@@ -50,7 +50,7 @@ TEST_CASE("persist with restart", "[persist]")
     std::vector<std::unique_ptr<MapVerifier>> tbls;
     for (uint32_t i = 0; i < 3; i++)
     {
-        eloqstore::TablePartitionIdent tbl_id{"t1", i};
+        eloqstore::TableIdent tbl_id{"t1", i};
         tbls.push_back(std::make_unique<MapVerifier>(tbl_id, store));
     }
 
@@ -73,7 +73,7 @@ TEST_CASE("drop table clears all partitions", "[persist][droptable]")
     constexpr size_t kNumKeysPerPartition = 16;
 
     auto table_ident = [&tbl_name](uint32_t partition)
-    { return eloqstore::TablePartitionIdent{tbl_name, partition}; };
+    { return eloqstore::TableIdent{tbl_name, partition}; };
 
     std::vector<std::vector<std::string>> expected_keys(partitions.size());
 
@@ -193,7 +193,7 @@ TEST_CASE("complex LRU for opened fd", "[persist]")
     std::vector<std::unique_ptr<MapVerifier>> tbls;
     for (uint32_t i = 0; i < 10; i++)
     {
-        eloqstore::TablePartitionIdent tbl_id{"t1", i};
+        eloqstore::TableIdent tbl_id{"t1", i};
         tbls.push_back(std::make_unique<MapVerifier>(tbl_id, store));
     }
 
@@ -209,7 +209,7 @@ TEST_CASE("complex LRU for opened fd", "[persist]")
 TEST_CASE("detect corrupted page", "[persist][checksum]")
 {
     eloqstore::EloqStore *store = InitStore(default_opts);
-    eloqstore::TablePartitionIdent tbl_id = {"detect-corrupted", 1};
+    eloqstore::TableIdent tbl_id = {"detect-corrupted", 1};
     {
         std::vector<eloqstore::WriteDataEntry> entries;
         for (size_t idx = 0; idx < 10; ++idx)
@@ -260,7 +260,7 @@ TEST_CASE("overflow kv", "[persist][overflow_kv]")
 {
     eloqstore::EloqStore *store = InitStore(default_opts);
 
-    const eloqstore::TablePartitionIdent tbl_id("overflow", 0);
+    const eloqstore::TableIdent tbl_id("overflow", 0);
     const uint32_t biggest = (128 << 20);
     MapVerifier verifier(tbl_id, store);
 
@@ -397,7 +397,7 @@ TEST_CASE("append mode with restart", "[persist]")
     std::vector<std::unique_ptr<MapVerifier>> tbls;
     for (uint32_t i = 0; i < 3; i++)
     {
-        eloqstore::TablePartitionIdent tbl_id{"t1", i};
+        eloqstore::TableIdent tbl_id{"t1", i};
         auto tester = std::make_unique<MapVerifier>(tbl_id, store, false);
         tester->SetValueSize(10000);
         tbls.push_back(std::move(tester));

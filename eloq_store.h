@@ -34,8 +34,8 @@ public:
     KvError Error() const;
     bool RetryableErr() const;
     const char *ErrMessage() const;
-    void SetTableId(TablePartitionIdent tbl_id);
-    const TablePartitionIdent &TableId() const;
+    void SetTableId(TableIdent tbl_id);
+    const TableIdent &TableId() const;
     uint64_t UserData() const;
 
     /**
@@ -47,7 +47,7 @@ public:
 protected:
     void SetDone(KvError err);
 
-    TablePartitionIdent tbl_id_;
+    TableIdent tbl_id_;
     uint64_t user_data_{0};
     std::function<void(KvRequest *)> callback_{nullptr};
     std::atomic<bool> done_{true};
@@ -64,9 +64,9 @@ public:
     {
         return RequestType::Read;
     }
-    void SetArgs(TablePartitionIdent tbl_id, const char *key);
-    void SetArgs(TablePartitionIdent tbl_id, std::string_view key);
-    void SetArgs(TablePartitionIdent tbl_id, std::string key);
+    void SetArgs(TableIdent tbl_id, const char *key);
+    void SetArgs(TableIdent tbl_id, std::string_view key);
+    void SetArgs(TableIdent tbl_id, std::string key);
     std::string_view Key() const;
 
     // output
@@ -90,9 +90,9 @@ public:
     {
         return RequestType::Floor;
     }
-    void SetArgs(TablePartitionIdent tbl_id, const char *key);
-    void SetArgs(TablePartitionIdent tid, std::string_view key);
-    void SetArgs(TablePartitionIdent tid, std::string key);
+    void SetArgs(TableIdent tbl_id, const char *key);
+    void SetArgs(TableIdent tid, std::string_view key);
+    void SetArgs(TableIdent tid, std::string key);
     std::string_view Key() const;
 
     // output
@@ -120,15 +120,15 @@ public:
      * @param end The end key of the scan range (not inclusive).
      * @param begin_inclusive Whether the begin key is inclusive.
      */
-    void SetArgs(TablePartitionIdent tbl_id,
+    void SetArgs(TableIdent tbl_id,
                  std::string_view begin,
                  std::string_view end,
                  bool begin_inclusive = true);
-    void SetArgs(TablePartitionIdent tbl_id,
+    void SetArgs(TableIdent tbl_id,
                  std::string begin,
                  std::string end,
                  bool begin_inclusive = true);
-    void SetArgs(TablePartitionIdent tbl_id,
+    void SetArgs(TableIdent tbl_id,
                  const char *begin,
                  const char *end,
                  bool begin_inclusive = true);
@@ -218,7 +218,7 @@ public:
     {
         return RequestType::BatchWrite;
     }
-    void SetArgs(TablePartitionIdent tid, std::vector<WriteDataEntry> &&batch);
+    void SetArgs(TableIdent tid, std::vector<WriteDataEntry> &&batch);
     void AddWrite(std::string key, std::string value, uint64_t ts, WriteOp op);
 
     // input
@@ -232,7 +232,7 @@ public:
     {
         return RequestType::Truncate;
     }
-    void SetArgs(TablePartitionIdent tid, std::string_view position);
+    void SetArgs(TableIdent tid, std::string_view position);
 
     // input
     std::string_view position_;
@@ -322,7 +322,7 @@ private:
     bool SendRequest(KvRequest *req);
     void HandleDropTableRequest(DropTableRequest *req);
     KvError CollectTablePartitions(const std::string &table_name,
-                                   std::vector<TablePartitionIdent> &partitions) const;
+                                   std::vector<TableIdent> &partitions) const;
     KvError InitStoreSpace();
 
     const KvOptions options_;

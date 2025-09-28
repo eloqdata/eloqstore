@@ -72,13 +72,13 @@ public:
     class DownloadTask : public Task
     {
     public:
-        DownloadTask(const TablePartitionIdent *tbl_id, std::string_view filename)
+        DownloadTask(const TableIdent *tbl_id, std::string_view filename)
             : tbl_id_(tbl_id), filename_(filename) {};
         Type TaskType() override
         {
             return Type::AsyncDownload;
         };
-        const TablePartitionIdent *tbl_id_;
+        const TableIdent *tbl_id_;
         std::string_view filename_;
         curl_slist *headers_{nullptr};
         std::string json_data_;
@@ -87,14 +87,14 @@ public:
     class UploadTask : public Task
     {
     public:
-        UploadTask(const TablePartitionIdent *tbl_id, std::vector<std::string> filenames)
+        UploadTask(const TableIdent *tbl_id, std::vector<std::string> filenames)
             : tbl_id_(tbl_id), filenames_(std::move(filenames)) {};
         Type TaskType() override
         {
             return Type::AsyncUpload;
         }
 
-        const TablePartitionIdent *tbl_id_;
+        const TableIdent *tbl_id_;
         std::vector<std::string> filenames_;
 
         // cURL related members
