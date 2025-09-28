@@ -37,11 +37,11 @@ KvError FileGarbageCollector::ExecuteLocalGC(
     const std::unordered_set<FileId> &retained_files,
     IouringMgr *io_mgr)
 {
-    LOG(INFO) << "ExecuteLocalGC";
+    DLOG(INFO) << "ExecuteLocalGC";
     // 1. list all files in local directory.
     std::vector<std::string> local_files;
     KvError err = ListLocalFiles(tbl_id, local_files, io_mgr);
-    LOG(INFO) << "ListLocalFiles got " << local_files.size() << " files";
+    DLOG(INFO) << "ListLocalFiles got " << local_files.size() << " files";
     if (err != KvError::NoError)
     {
         return err;
@@ -60,15 +60,15 @@ KvError FileGarbageCollector::ExecuteLocalGC(
                                        archive_timestamps,
                                        least_not_archived_file_id,
                                        io_mgr);
-    LOG(INFO) << "GetOrUpdateArchivedMaxFileId, least_not_archived_file_id: "
-              << least_not_archived_file_id;
+    DLOG(INFO) << "GetOrUpdateArchivedMaxFileId, least_not_archived_file_id: "
+               << least_not_archived_file_id;
     if (err != KvError::NoError)
     {
         return err;
     }
 
-    LOG(INFO) << "Delete " << data_files.size() << " data files, "
-              << retained_files.size() << " retained files";
+    DLOG(INFO) << "Delete " << data_files.size() << " data files, "
+               << retained_files.size() << " retained files";
     // 4. delete unreferenced data files.
     err = DeleteUnreferencedLocalFiles(
         tbl_id, data_files, retained_files, least_not_archived_file_id, io_mgr);
@@ -510,9 +510,9 @@ KvError FileGarbageCollector::DeleteUnreferencedLocalFiles(
         }
         else
         {
-            LOG(INFO) << "skip file since file_id=" << file_id
-                      << ", least_not_archived_file_id="
-                      << least_not_archived_file_id;
+            DLOG(INFO) << "skip file since file_id=" << file_id
+                       << ", least_not_archived_file_id="
+                       << least_not_archived_file_id;
         }
     }
 
@@ -526,8 +526,8 @@ KvError FileGarbageCollector::DeleteUnreferencedLocalFiles(
                        << static_cast<int>(delete_err);
             return delete_err;
         }
-        LOG(INFO) << "Successfully deleted " << files_to_delete.size()
-                  << " unreferenced files";
+        DLOG(INFO) << "Successfully deleted " << files_to_delete.size()
+                   << " unreferenced files";
     }
     // Check if we should delete the entire directory instead of individual
     // files

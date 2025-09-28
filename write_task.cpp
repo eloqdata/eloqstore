@@ -383,7 +383,7 @@ void WriteTask::TriggerFileGC() const
     else
     {
         // Local mode: execute GC directly
-        LOG(INFO) << "Begin GC in Local mode";
+        DLOG(INFO) << "Begin GC in Local mode";
         IouringMgr *io_mgr = static_cast<IouringMgr *>(shard->IoManager());
         KvError gc_err = eloq_store->file_gc_->ExecuteLocalGC(
             tbl_ident_, retained_files, io_mgr);
