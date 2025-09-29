@@ -309,7 +309,7 @@ void IndexPageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
 
 void IndexPageManager::Unswizzling(MemIndexPage *page)
 {
-    auto tbl_it = tbl_roots_.find(*page->tbl_partition_ident_);
+    auto tbl_it = tbl_roots_.find(*page->tbl_ident_);
     assert(tbl_it != tbl_roots_.end());
 
     auto &mappings = tbl_it->second.mapping_snapshots_;
@@ -423,7 +423,7 @@ void IndexPageManager::EvictRootIfEmpty(
 bool IndexPageManager::RecyclePage(MemIndexPage *page)
 {
     assert(!page->IsPinned());
-    auto tbl_it = tbl_roots_.find(*page->tbl_partition_ident_);
+    auto tbl_it = tbl_roots_.find(*page->tbl_ident_);
     assert(tbl_it != tbl_roots_.end());
     RootMeta &meta = tbl_it->second;
     // Unswizzling the page pointer in all mapping snapshots.
@@ -441,7 +441,7 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
     assert(page->file_page_id_ != MaxFilePageId);
     page->page_id_ = MaxPageId;
     page->file_page_id_ = MaxFilePageId;
-    page->tbl_partition_ident_ = nullptr;
+    page->tbl_ident_ = nullptr;
 
     FreeIndexPage(page);
     return true;
@@ -450,7 +450,7 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
 void IndexPageManager::FinishIo(MappingSnapshot *mapping,
                                 MemIndexPage *idx_page)
 {
-    idx_page->tbl_partition_ident_ = mapping->tbl_ident_;
+    idx_page->tbl_ident_ = mapping->tbl_ident_;
     mapping->AddSwizzling(idx_page->GetPageId(), idx_page);
 
     if (idx_page->IsDetached())

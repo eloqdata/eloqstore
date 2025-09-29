@@ -122,7 +122,7 @@ private:
      */
     MemIndexPage *next_{nullptr};
     MemIndexPage *prev_{nullptr};
-    const TableIdent *tbl_partition_ident_{nullptr};
+    const TableIdent *tbl_ident_{nullptr};
     friend class IndexPageManager;
 };
 

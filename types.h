@@ -33,14 +33,12 @@ namespace fs = std::filesystem;
 struct TableIdent
 {
     static constexpr char separator = '.';
-    friend bool operator==(const TableIdent &lhs,
-                           const TableIdent &rhs)
+    friend bool operator==(const TableIdent &lhs, const TableIdent &rhs)
     {
         return lhs.tbl_name_ == rhs.tbl_name_ &&
                lhs.partition_id_ == rhs.partition_id_;
     }
-    friend std::ostream &operator<<(std::ostream &os,
-                                    const TableIdent &point);
+    friend std::ostream &operator<<(std::ostream &os, const TableIdent &point);
 
     TableIdent() = default;
     TableIdent(std::string tbl_name, uint32_t id)
@@ -109,8 +107,7 @@ struct WriteDataEntry
 template <>
 struct std::hash<eloqstore::TableIdent>
 {
-    std::size_t operator()(
-        const eloqstore::TableIdent &tbl_ident) const
+    std::size_t operator()(const eloqstore::TableIdent &tbl_ident) const
     {
         size_t seed = 0;
         boost::hash_combine(seed, tbl_ident.tbl_name_);
@@ -124,8 +121,7 @@ struct std::hash<eloqstore::FileKey>
 {
     std::size_t operator()(const eloqstore::FileKey &file_key) const
     {
-        size_t seed =
-            std::hash<eloqstore::TableIdent>()(file_key.tbl_id_);
+        size_t seed = std::hash<eloqstore::TableIdent>()(file_key.tbl_id_);
         boost::hash_combine(seed, file_key.filename_);
         return seed;
     }

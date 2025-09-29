@@ -307,7 +307,7 @@ void WriteTask::CompactIfNeeded(PageMapper *mapper) const
             double(space_size) / double(mapping_cnt) >
                 double(opts->file_amplify_factor))
         {
-            shard->AddPendingCompact(tbl_partition_ident_);
+            shard->AddPendingCompact(tbl_ident_);
         }
     }
     */
