@@ -1,6 +1,8 @@
 #pragma once
-#include "task.h"
+#include <string>
+#include <vector>
 
+#include "task.h"
 namespace eloqstore
 {
 class ListObjectTask : public KvTask
@@ -16,6 +18,6 @@ public:
         objects_ = objects;
     }
 
-    std::vector<std::string> *objects_;
+    std::vector<std::string> *objects_{nullptr};
 };
-}
+}  // namespace eloqstore

@@ -227,7 +227,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               fd_ref_(std::move(fd)),
               offset_(offset),
-              page_(true) {};
+              page_(true){};
 
         LruFD::Ref fd_ref_;
         uint32_t offset_;
@@ -539,11 +539,36 @@ KvError IouringMgr::CleanManifest(const TableIdent &tbl_id)
                          << " during cleanup";
         }
     }
-    // Remove table from internal structures
-    // CHECK(tables_.find(tbl_id) != tables_.end());
-    // it may only exit the fd of dirctory and manifest in this partitin
-    // CHECK(tables_.at(tbl_id).fds_.size() == 1);
-    return KvError::NoError;
+    // Get directory fd and delete manifest file
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory);
+    if (err == KvError::NoError)
+    {
+        int res = UnlinkAt(dir_fd.FdPair(), "manifest", false);
+        if (res < 0 && res != -ENOENT)
+        {
+            LOG(WARNING) << "Failed to delete manifest file for table "
+                         << tbl_id << ": " << strerror(-res);
+            return ToKvError(res);
+        }
+        else
+        {
+            DLOG(INFO) << "Successfully deleted manifest file for table "
+                       << tbl_id;
+        }
+    }
+    else
+    {
+        LOG(WARNING) << "Failed to open directory for table " << tbl_id
+                     << " during cleanup";
+    }
+}
+// Remove table from internal structures
+// CHECK(tables_.find(tbl_id) != tables_.end());
+// CHECK(tables_.find(tbl_id) != tables_.end());
+// it may only exit the fd of dirctory and manifest in this partitin
+// CHECK(tables_.at(tbl_id).fds_.size() == 1);
+// CHECK(tables_.at(tbl_id).fds_.size() == 1);
+return KvError::NoError;
 }
 
 KvError ToKvError(int err_no)
@@ -951,7 +976,7 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
     };
 
@@ -1675,6 +1700,10 @@ KvError IouringMgr::ReadArchiveFile(const std::string &file_path,
         {
             LOG(ERROR) << "Unexpected EOF: expected " << file_size << ", got "
                        << off;
+            // Close before returning
+            io_uring_sqe *csqe = GetSQE(UserDataType::KvTask, current_task);
+            io_uring_prep_close(csqe, fd);
+            (void) current_task->WaitIoResult();
             return KvError::EndOfFile;
         }
         off += static_cast<size_t>(rres);
@@ -1701,23 +1730,37 @@ KvError IouringMgr::DeleteFiles(const std::vector<std::string> &file_paths)
     }
 
     KvTask *current_task = ThdTask();
+    struct UnlinkReq : BaseReq
+    {
+        std::string path;
+    };
+    std::vector<UnlinkReq> reqs;
+    reqs.reserve(file_paths.size());
 
     // Submit all unlink operations
     for (const std::string &file_path : file_paths)
     {
-        io_uring_sqe *unlink_sqe = GetSQE(UserDataType::KvTask, current_task);
+        reqs.emplace_back();
+        reqs.back().task_ = current_task;
+        reqs.back().path = file_path;
+        io_uring_sqe *unlink_sqe = GetSQE(UserDataType::BaseReq, &reqs.back());
         io_uring_prep_unlinkat(unlink_sqe, AT_FDCWD, file_path.c_str(), 0);
     }
 
-    int unlink_res = current_task->WaitIoResult();
+    current_task->WaitIo();
 
-    if (unlink_res < 0)
+    KvError first_error = KvError::NoError;
+    for (const auto &req : reqs)
     {
-        LOG(ERROR) << "Failed to unlink file";
-        return ToKvError(unlink_res);
+        if (req.res_ < 0 && first_error == KvError::NoError)
+        {
+            LOG(ERROR) << "Failed to unlink file: " << req.path
+                       << ", error: " << req.res_;
+            first_error = ToKvError(req.res_);
+        }
     }
 
-    return KvError::NoError;
+    return first_error;
 }
 
 CloudStoreMgr::CloudStoreMgr(const KvOptions *opts, uint32_t fd_limit)

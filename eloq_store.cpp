@@ -334,8 +334,7 @@ KvError EloqStore::CollectTablePartitions(
     else
     {
         std::vector<std::string> objects;
-        ListObjectRequest list_object_request(options_.cloud_store_path,
-                                              &objects);
+        ListObjectRequest list_object_request(&objects);
         std::mutex mu;
         std::condition_variable cv;
         bool finish = false;

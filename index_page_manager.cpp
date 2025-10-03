@@ -382,10 +382,14 @@ void IndexPageManager::EvictRootIfEmpty(
                 const TableIdent &tbl_id = root_it->first;
 
                 // Clean up the table from io manager first
+
+                // Note: it will also clean manifest when data_append = false
+                // although it is not remove datafile
                 KvError err = IoMgr()->CleanManifest(tbl_id);
                 if (err != KvError::NoError)
                 {
-                    LOG(FATAL) << "Failed to clean manifest for table ";
+                    LOG(FATAL) << "Failed to clean manifest for table "
+                               << tbl_id << ", error: " << ErrorString(err);
                 }
 
                 // Wake up any waiting threads before erasing

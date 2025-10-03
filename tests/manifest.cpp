@@ -324,7 +324,9 @@ TEST_CASE("manifest deletion on rootmeta eviction", "[manifest][eviction]")
 {
     eloqstore::KvOptions opts = {
         .index_buffer_pool_size = 15,  // small value
+        .file_amplify_factor = 2,
         .store_path = {test_path},
+        .data_append_mode = true,
     };
 
     eloqstore::EloqStore *store = InitStore(opts);
@@ -393,6 +395,27 @@ TEST_CASE("manifest deletion on rootmeta eviction", "[manifest][eviction]")
     // manifest should be deleted
     REQUIRE(manifest_deleted);
     REQUIRE(!fs::exists(manifest_path));
+
+    // check that the partition directory exists but is empty
+    LOG(INFO) << "Checking partition directory state after manifest deletion";
+    REQUIRE(fs::exists(partition_a_path));
+    REQUIRE(fs::is_directory(partition_a_path));
+
+    // verify directory is empty
+    bool directory_empty = true;
+    int file_count = 0;
+    for (const auto &entry : fs::directory_iterator(partition_a_path))
+    {
+        file_count++;
+        directory_empty = false;
+        LOG(INFO) << "Found unexpected file in partition directory: "
+                  << entry.path().filename().string();
+    }
+
+    REQUIRE(directory_empty);
+    LOG(INFO)
+        << "SUCCESS: Partition directory exists but is empty (file count: "
+        << file_count << ")";
 
     LOG(INFO) << "SUCCESS: Manifest file successfully deleted after "
               << iteration << " iterations";

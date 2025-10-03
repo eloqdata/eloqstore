@@ -183,8 +183,7 @@ public:
         return RequestType::ListObject;
     }
 
-    ListObjectRequest(const std::string &cloud_storage_path, std::vector<std::string> *objects)
-        : objects_(objects)
+    ListObjectRequest(std::vector<std::string> *objects) : objects_(objects)
     {
     }
 

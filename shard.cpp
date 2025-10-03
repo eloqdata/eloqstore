@@ -268,8 +268,12 @@ void Shard::ProcessReq(KvRequest *req)
                 return list_task.error_;
             }
 
-            utils::ParseRCloneListObjectsResponse(
-                list_task.response_data_, *list_object_req->GetObjects());
+            if (!utils::ParseRCloneListObjectsResponse(
+                    list_task.response_data_, *list_object_req->GetObjects()))
+            {
+                LOG(ERROR) << "Failed to parse ListObjects response";
+                return KvError::IoFail;
+            }
             return KvError::NoError;
         };
         StartTask(task, req, lbd);

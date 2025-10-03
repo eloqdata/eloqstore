@@ -37,13 +37,19 @@ KvError FileGarbageCollector::ExecuteLocalGC(
     const std::unordered_set<FileId> &retained_files,
     IouringMgr *io_mgr)
 {
-    DLOG(INFO) << "ExecuteLocalGC";
+    LOG(INFO) << "ExecuteLocalGC: starting for table " << tbl_id.tbl_name_
+              << ", partition " << tbl_id.partition_id_
+              << ", retained_files count=" << retained_files.size();
+
     // 1. list all files in local directory.
     std::vector<std::string> local_files;
     KvError err = ListLocalFiles(tbl_id, local_files, io_mgr);
-    DLOG(INFO) << "ListLocalFiles got " << local_files.size() << " files";
+    LOG(INFO) << "ExecuteLocalGC: ListLocalFiles got " << local_files.size()
+              << " files";
     if (err != KvError::NoError)
     {
+        LOG(ERROR) << "ExecuteLocalGC: ListLocalFiles failed, error="
+                   << static_cast<int>(err);
         return err;
     }
 
@@ -53,6 +59,9 @@ KvError FileGarbageCollector::ExecuteLocalGC(
     std::vector<std::string> data_files;
     ClassifyFiles(local_files, archive_files, archive_timestamps, data_files);
 
+    LOG(INFO) << "ExecuteLocalGC: classified files - archive_files="
+              << archive_files.size() << ", data_files=" << data_files.size();
+
     // 3. get archived max file id.
     FileId least_not_archived_file_id = 0;
     err = GetOrUpdateArchivedMaxFileId(tbl_id,
@@ -60,21 +69,28 @@ KvError FileGarbageCollector::ExecuteLocalGC(
                                        archive_timestamps,
                                        least_not_archived_file_id,
                                        io_mgr);
-    DLOG(INFO) << "GetOrUpdateArchivedMaxFileId, least_not_archived_file_id: "
-               << least_not_archived_file_id;
+    LOG(INFO) << "ExecuteLocalGC: GetOrUpdateArchivedMaxFileId, "
+                 "least_not_archived_file_id="
+              << least_not_archived_file_id;
     if (err != KvError::NoError)
     {
+        LOG(ERROR)
+            << "ExecuteLocalGC: GetOrUpdateArchivedMaxFileId failed, error="
+            << static_cast<int>(err);
         return err;
     }
 
-    DLOG(INFO) << "Delete " << data_files.size() << " data files, "
-               << retained_files.size() << " retained files";
+    LOG(INFO) << "ExecuteLocalGC: about to delete " << data_files.size()
+              << " data files, " << retained_files.size() << " retained files";
     // 4. delete unreferenced data files.
     err = DeleteUnreferencedLocalFiles(
         tbl_id, data_files, retained_files, least_not_archived_file_id, io_mgr);
 
     if (err != KvError::NoError)
     {
+        LOG(ERROR)
+            << "ExecuteLocalGC: DeleteUnreferencedLocalFiles failed, error="
+            << static_cast<int>(err);
         return err;
     }
 
@@ -385,7 +401,7 @@ KvError FileGarbageCollector::DeleteUnreferencedCloudFiles(
         FileId file_id = std::stoull(std::string(ret.second));
 
         // Only delete files that meet the following conditions:
-        // 1. File ID > least_not_archived_file_id (greater than the archived
+        // 1. File ID >= least_not_archived_file_id (greater than the archived
         // max file ID)
         // 2. Not in retained_files (files not needed in the current version)
         if (file_id >= least_not_archived_file_id &&
@@ -493,6 +509,8 @@ KvError FileGarbageCollector::DeleteUnreferencedLocalFiles(
         auto ret = ParseFileName(file_name);
         if (ret.first != FileNameData)
         {
+            LOG(INFO) << "ExecuteLocalGC: skipping non-data file: "
+                      << file_name;
             continue;
         }
 
@@ -507,27 +525,37 @@ KvError FileGarbageCollector::DeleteUnreferencedLocalFiles(
         {
             fs::path file_path = dir_path / file_name;
             files_to_delete.push_back(file_path.string());
+            LOG(INFO) << "ExecuteLocalGC: marking file for deletion: "
+                      << file_name << " (file_id=" << file_id << ")";
         }
         else
         {
-            DLOG(INFO) << "skip file since file_id=" << file_id
-                       << ", least_not_archived_file_id="
-                       << least_not_archived_file_id;
+            LOG(INFO) << "ExecuteLocalGC: skip file " << file_name
+                      << " since file_id=" << file_id
+                      << ", least_not_archived_file_id="
+                      << least_not_archived_file_id << ", in_retained="
+                      << (retained_files.contains(file_id) ? "true" : "false");
         }
     }
 
+    LOG(INFO) << "ExecuteLocalGC: total files to delete: "
+              << files_to_delete.size();
     if (!files_to_delete.empty())
     {
         // Delete files using batch operation
         KvError delete_err = io_mgr->DeleteFiles(files_to_delete);
         if (delete_err != KvError::NoError)
         {
-            LOG(ERROR) << "Failed to delete files, error: "
+            LOG(ERROR) << "ExecuteLocalGC: Failed to delete files, error: "
                        << static_cast<int>(delete_err);
             return delete_err;
         }
-        DLOG(INFO) << "Successfully deleted " << files_to_delete.size()
-                   << " unreferenced files";
+        LOG(INFO) << "ExecuteLocalGC: Successfully deleted "
+                  << files_to_delete.size() << " unreferenced files";
+    }
+    else
+    {
+        LOG(INFO) << "ExecuteLocalGC: No files to delete";
     }
     // Check if we should delete the entire directory instead of individual
     // files
