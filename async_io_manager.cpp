@@ -561,14 +561,13 @@ KvError IouringMgr::CleanManifest(const TableIdent &tbl_id)
         LOG(WARNING) << "Failed to open directory for table " << tbl_id
                      << " during cleanup";
     }
-}
-// Remove table from internal structures
-// CHECK(tables_.find(tbl_id) != tables_.end());
-// CHECK(tables_.find(tbl_id) != tables_.end());
-// it may only exit the fd of dirctory and manifest in this partitin
-// CHECK(tables_.at(tbl_id).fds_.size() == 1);
-// CHECK(tables_.at(tbl_id).fds_.size() == 1);
-return KvError::NoError;
+    // Remove table from internal structures
+    // CHECK(tables_.find(tbl_id) != tables_.end());
+    // CHECK(tables_.find(tbl_id) != tables_.end());
+    // it may only exit the fd of dirctory and manifest in this partitin
+    // CHECK(tables_.at(tbl_id).fds_.size() == 1);
+    // CHECK(tables_.at(tbl_id).fds_.size() == 1);
+    return KvError::NoError;
 }
 
 KvError ToKvError(int err_no)
