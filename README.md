@@ -120,9 +120,7 @@ make install
    eloq_store_data_path_list={your_eloqstore_data_path1, your_eloqstore_data_path2,...}
    # Max number of open files used by eloqstore(default: 1024)
    eloq_store_open_files_limit=1024
-   eloq_eloqstore_cloud_store_path=eloqstore_cloud:dss-eloqstore-dev
-   # Number of threads used by rclone to upload/download files.
-   eloq_eloqstore_cloud_worker_count=8
+   eloq_store_cloud_store_path=eloqstore_cloud:dss-eloqstore-dev
    # Max amount of cached index pages
    eloq_store_index_buffer_pool_size=131072
    ```
