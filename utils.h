@@ -7,6 +7,8 @@
 #include <cstdint>
 #include <filesystem>
 #include <random>
+#include <string>
+#include <vector>
 
 namespace chrono = std::chrono;
 
