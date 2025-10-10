@@ -62,7 +62,7 @@ inline int RandomInt(int n)
 }
 
 inline bool ParseRCloneListObjectsResponse(std::string &response_data,
-                                    std::vector<std::string> &objects)
+                                           std::vector<std::string> &objects)
 {
     Json::Value response;
     Json::Reader reader;

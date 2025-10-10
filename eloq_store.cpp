@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <unordered_set>
@@ -19,7 +20,6 @@
 #include "async_io_manager.h"
 #include "common.h"
 #include "file_gc.h"
-#include "object_store.h"
 #include "shard.h"
 #include "utils.h"
 
@@ -154,8 +154,7 @@ KvError EloqStore::Start()
     // Start threads.
     stopped_.store(false, std::memory_order_relaxed);
 
-    if (options_.data_append_mode &&
-        options_.num_retained_archives > 0 &&
+    if (options_.data_append_mode && options_.num_retained_archives > 0 &&
         options_.archive_interval_secs > 0)
     {
         if (archive_crond_ == nullptr)

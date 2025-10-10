@@ -129,8 +129,8 @@ public:
         Type TaskType() override
         {
             return Type::AsyncDelete;
-        };
-        
+        }
+
         // Set whether the current file is a directory
         void SetIsDir(size_t index, bool is_dir)
         {
@@ -139,13 +139,13 @@ public:
                 is_dir_list_[index] = is_dir;
             }
         }
-        
+
         // Check if the current file is a directory
         bool IsDir(size_t index) const
         {
             return index < is_dir_list_.size() ? is_dir_list_[index] : false;
         }
-        
+
         std::vector<std::string> file_paths_;  // Support batch delete
         size_t current_index_;  // Current index being processed in file_paths_
 

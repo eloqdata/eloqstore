@@ -86,8 +86,8 @@ TEST_CASE("drop table clears all partitions", "[persist][droptable]")
             expected_keys[idx].clear();
             std::vector<eloqstore::WriteDataEntry> entries;
             entries.reserve(kNumKeysPerPartition);
-            uint32_t base_key = static_cast<uint32_t>(round * 1000 +
-                                                     partition * 100);
+            uint32_t base_key =
+                static_cast<uint32_t>(round * 1000 + partition * 100);
             for (size_t i = 0; i < kNumKeysPerPartition; ++i)
             {
                 uint32_t key_id = base_key + static_cast<uint32_t>(i);
@@ -110,12 +110,11 @@ TEST_CASE("drop table clears all partitions", "[persist][droptable]")
         {
             uint32_t partition = partitions[idx];
             eloqstore::ScanRequest scan_req;
-            uint32_t base_key = static_cast<uint32_t>(round * 1000 +
-                                                     partition * 100);
+            uint32_t base_key =
+                static_cast<uint32_t>(round * 1000 + partition * 100);
             std::string begin_key = test_util::Key(base_key);
-            std::string end_key = test_util::Key(base_key +
-                                                 static_cast<uint32_t>(
-                                                     kNumKeysPerPartition));
+            std::string end_key = test_util::Key(
+                base_key + static_cast<uint32_t>(kNumKeysPerPartition));
             scan_req.SetArgs(table_ident(partition), begin_key, end_key);
             store->ExecSync(&scan_req);
             REQUIRE(scan_req.Error() == eloqstore::KvError::NoError);
@@ -142,12 +141,11 @@ TEST_CASE("drop table clears all partitions", "[persist][droptable]")
         {
             uint32_t partition = partitions[idx];
             eloqstore::ScanRequest scan_req;
-            uint32_t base_key = static_cast<uint32_t>(round * 1000 +
-                                                      partition * 100);
+            uint32_t base_key =
+                static_cast<uint32_t>(round * 1000 + partition * 100);
             std::string begin_key = test_util::Key(base_key);
-            std::string end_key = test_util::Key(base_key +
-                                                 static_cast<uint32_t>(
-                                                     kNumKeysPerPartition));
+            std::string end_key = test_util::Key(
+                base_key + static_cast<uint32_t>(kNumKeysPerPartition));
             scan_req.SetArgs(table_ident(partition), begin_key, end_key);
             store->ExecSync(&scan_req);
             REQUIRE(scan_req.Error() == eloqstore::KvError::NoError);

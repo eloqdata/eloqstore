@@ -35,10 +35,9 @@ void GetRetainedFiles(std::unordered_set<FileId> &result,
 namespace FileGarbageCollector
 {
 
-KvError ExecuteLocalGC(
-    const TableIdent &tbl_id,
-    const std::unordered_set<FileId> &retained_files,
-    IouringMgr *io_mgr)
+KvError ExecuteLocalGC(const TableIdent &tbl_id,
+                       const std::unordered_set<FileId> &retained_files,
+                       IouringMgr *io_mgr)
 {
     LOG(INFO) << "ExecuteLocalGC: starting for table " << tbl_id.tbl_name_
               << ", partition " << tbl_id.partition_id_
@@ -91,10 +90,9 @@ KvError ExecuteLocalGC(
     return KvError::NoError;
 }
 
-KvError ListLocalFiles(
-    const TableIdent &tbl_id,
-    std::vector<std::string> &local_files,
-    IouringMgr *io_mgr)
+KvError ListLocalFiles(const TableIdent &tbl_id,
+                       std::vector<std::string> &local_files,
+                       IouringMgr *io_mgr)
 {
     namespace fs = std::filesystem;
 
@@ -124,10 +122,9 @@ KvError ListLocalFiles(
 }
 
 // Helper functions for cloud GC optimization
-KvError ListCloudFiles(
-    const TableIdent &tbl_id,
-    std::vector<std::string> &cloud_files,
-    CloudStoreMgr *cloud_mgr)
+KvError ListCloudFiles(const TableIdent &tbl_id,
+                       std::vector<std::string> &cloud_files,
+                       CloudStoreMgr *cloud_mgr)
 {
     std::string table_path = tbl_id.ToString();
     KvTask *current_task = ThdTask();
@@ -169,11 +166,10 @@ KvError ListCloudFiles(
     return KvError::NoError;
 }
 
-void ClassifyFiles(
-    const std::vector<std::string> &files,
-    std::vector<std::string> &archive_files,
-    std::vector<uint64_t> &archive_timestamps,
-    std::vector<std::string> &data_files)
+void ClassifyFiles(const std::vector<std::string> &files,
+                   std::vector<std::string> &archive_files,
+                   std::vector<uint64_t> &archive_timestamps,
+                   std::vector<std::string> &data_files)
 {
     archive_files.clear();
     archive_timestamps.clear();
@@ -213,12 +209,11 @@ void ClassifyFiles(
     }
 }
 
-KvError DownloadArchiveFile(
-    const TableIdent &tbl_id,
-    const std::string &archive_file,
-    std::string &content,
-    CloudStoreMgr *cloud_mgr,
-    const KvOptions *options)
+KvError DownloadArchiveFile(const TableIdent &tbl_id,
+                            const std::string &archive_file,
+                            std::string &content,
+                            CloudStoreMgr *cloud_mgr,
+                            const KvOptions *options)
 {
     KvTask *current_task = ThdTask();
 
@@ -255,8 +250,8 @@ KvError DownloadArchiveFile(
     return KvError::NoError;
 }
 
-FileId ParseArchiveForMaxFileId(
-    const std::string &archive_content, IouringMgr *io_mgr)
+FileId ParseArchiveForMaxFileId(const std::string &archive_content,
+                                IouringMgr *io_mgr)
 {
     MemStoreMgr::Manifest manifest(archive_content);
     Replayer replayer(io_mgr->options_);
@@ -448,7 +443,7 @@ KvError DeleteUnreferencedCloudFiles(
         return KvError::NoError;
     }
 
-    // TODO also delete cloud objects and local directory.
+    // TODO(sunjunhao): also delete cloud objects and local directory.
     if (files_to_delete.empty())
     {
         return KvError::NoError;
@@ -564,10 +559,9 @@ KvError DeleteUnreferencedLocalFiles(
     return KvError::NoError;
 }
 
-KvError ExecuteCloudGC(
-    const TableIdent &tbl_id,
-    const std::unordered_set<FileId> &retained_files,
-    CloudStoreMgr *cloud_mgr)
+KvError ExecuteCloudGC(const TableIdent &tbl_id,
+                       const std::unordered_set<FileId> &retained_files,
+                       CloudStoreMgr *cloud_mgr)
 {
     LOG(INFO) << "ExecuteCloudGC";
     // 1. list all files in cloud.

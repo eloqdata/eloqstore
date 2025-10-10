@@ -251,7 +251,6 @@ void Shard::ProcessReq(KvRequest *req)
         {
             KvTask *current_task = ThdTask();
             auto list_object_req = static_cast<ListObjectRequest *>(req);
-            task->SetResults(list_object_req->GetObjects());
             ObjectStore::ListTask list_task("");
 
             list_task.SetKvTask(task);

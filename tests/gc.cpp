@@ -1,7 +1,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
+#include <string>
 #include <thread>
+#include <vector>
 
 #include "common.h"
 #include "kv_options.h"

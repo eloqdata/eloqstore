@@ -3,6 +3,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "error.h"
@@ -183,7 +184,8 @@ public:
         return RequestType::ListObject;
     }
 
-    ListObjectRequest(std::vector<std::string> *objects) : objects_(objects)
+    explicit ListObjectRequest(std::vector<std::string> *objects)
+        : objects_(objects)
     {
     }
 

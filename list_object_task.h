@@ -1,7 +1,4 @@
 #pragma once
-#include <string>
-#include <vector>
-
 #include "task.h"
 namespace eloqstore
 {
@@ -12,12 +9,5 @@ public:
     {
         return TaskType::ListObject;
     }
-
-    void SetResults(std::vector<std::string> *objects)
-    {
-        objects_ = objects;
-    }
-
-    std::vector<std::string> *objects_{nullptr};
 };
 }  // namespace eloqstore
