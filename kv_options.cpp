@@ -194,6 +194,6 @@ size_t KvOptions::FilePageOffsetMask() const
 
 size_t KvOptions::DataFileSize() const
 {
-    return data_page_size << pages_per_file_shift;
+    return static_cast<size_t>(data_page_size) << pages_per_file_shift;
 }
 }  // namespace eloqstore

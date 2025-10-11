@@ -62,6 +62,9 @@ TEST_CASE("easy concurrency test", "[persist][concurrency]")
     ConcurrencyTester tester(store, "t1", 1, 32);
     tester.Init();
     tester.Run(20, 5, 32);
+
+    REQUIRE(ValidateFileSizes(default_opts));
+
     tester.Clear();
 }
 
@@ -78,6 +81,9 @@ TEST_CASE("hard concurrency test", "[persist][concurrency]")
     ConcurrencyTester tester(store, "t1", 10, 1000);
     tester.Init();
     tester.Run(5000, 10, 600);
+
+    REQUIRE(ValidateFileSizes(options));
+
     tester.Clear();
 }
 
@@ -92,5 +98,8 @@ TEST_CASE("stress append only mode", "[persist][append]")
     ConcurrencyTester tester(store, "t1", 4, 1024);
     tester.Init();
     tester.Run(1000, 10, 10);
+
+    REQUIRE(ValidateFileSizes(options));
+
     tester.Clear();
 }

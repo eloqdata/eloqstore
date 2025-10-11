@@ -29,6 +29,8 @@ const eloqstore::KvOptions archive_opts = {
 
 eloqstore::EloqStore *InitStore(const eloqstore::KvOptions &opts);
 
+bool ValidateFileSizes(const eloqstore::KvOptions &opts);
+
 inline std::string_view ConvertIntKey(char *ptr, uint64_t key)
 {
     uint64_t big_endian = eloqstore::ToBigEndian(key);

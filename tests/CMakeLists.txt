@@ -15,6 +15,7 @@ set(UTEST_SOURCES
     concurrency.cpp
     cloud.cpp
     gc.cpp
+    chore.cpp
     eloq_store_test.cpp
 )
 
