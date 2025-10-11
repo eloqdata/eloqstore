@@ -419,7 +419,8 @@ KvError DeleteUnreferencedCloudFiles(
 
         // Create delete task for directory
         KvTask *current_task = ThdTask();
-        ObjectStore::DeleteTask delete_task(files_to_delete, true);  // true for directory
+        ObjectStore::DeleteTask delete_task(files_to_delete,
+                                            true);  // true for directory
         delete_task.SetKvTask(current_task);
 
         // Submit the directory delete request
