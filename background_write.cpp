@@ -65,6 +65,7 @@ KvError BackgroundWrite::CompactDataFile()
         // Update statistic.
         allocator->UpdateStat(MaxFileId, 0);
         TriggerFileGC();
+        // is it possible that mapping_cnt == 0 but meta->root_id_ != MaxPageId?
         CHECK(meta->root_id_ == MaxPageId);
         return KvError::NoError;
     }
@@ -76,7 +77,7 @@ KvError BackgroundWrite::CompactDataFile()
     if (space_size < pages_per_file ||
         double(space_size) / double(mapping_cnt) <= file_saf_limit)
     {
-        LOG(INFO) << "CompactDataFile: no compaction required";
+        DLOG(INFO) << "CompactDataFile: no compaction required";
         // No compaction required.
         return KvError::NoError;
     }

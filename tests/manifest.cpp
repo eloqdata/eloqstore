@@ -345,7 +345,6 @@ TEST_CASE("manifest deletion on rootmeta eviction", "[manifest][eviction]")
               << partition_a.ToString();
     LOG(INFO) << "Manifest path: " << manifest_path;
 
-    // first write data and create manifest
     LOG(INFO) << "Phase 1: Writing data to partition A";
     verifier_a.Upsert(0, 100);
     verifier_a.Validate();
@@ -359,7 +358,6 @@ TEST_CASE("manifest deletion on rootmeta eviction", "[manifest][eviction]")
     REQUIRE(fs::exists(manifest_path));
     LOG(INFO) << "Manifest still exists after truncate (expected)";
 
-    // third ,write a batch data and trigger the recycle index page
     LOG(INFO) << "Phase 3: Writing data to partition B to trigger eviction";
 
     bool manifest_deleted = false;

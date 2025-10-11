@@ -93,7 +93,7 @@ public:
     virtual std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) = 0;
 
-    virtual KvError CleanManifest(const TableIdent &tbl_id) = 0;
+    virtual void CleanManifest(const TableIdent &tbl_id) = 0;
 
     const KvOptions *options_;
 
@@ -141,7 +141,7 @@ public:
     KvError ReadArchiveFile(const std::string &file_path, std::string &content);
     KvError DeleteFiles(const std::vector<std::string> &file_paths);
 
-    KvError CleanManifest(const TableIdent &tbl_id) override;
+    void CleanManifest(const TableIdent &tbl_id) override;
 
     static constexpr uint64_t oflags_dir = O_DIRECTORY | O_RDONLY;
 
@@ -491,7 +491,7 @@ public:
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
 
-    KvError CleanManifest(const TableIdent &tbl_id) override;
+    void CleanManifest(const TableIdent &tbl_id) override;
 
     class Manifest : public ManifestFile
     {

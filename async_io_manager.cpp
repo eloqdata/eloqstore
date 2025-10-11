@@ -22,7 +22,6 @@
 
 #include "common.h"
 #include "eloq_store.h"
-#include "error.h"
 #include "kill_point.h"
 #include "kv_options.h"
 #include "object_store.h"
@@ -496,7 +495,7 @@ KvError IouringMgr::AbortWrite(const TableIdent &tbl_id)
     return KvError::NoError;
 }
 
-KvError IouringMgr::CleanManifest(const TableIdent &tbl_id)
+void IouringMgr::CleanManifest(const TableIdent &tbl_id)
 {
     {
         // Close manifest file if it's open
@@ -507,7 +506,6 @@ KvError IouringMgr::CleanManifest(const TableIdent &tbl_id)
             if (err != KvError::NoError)
             {
                 LOG(WARNING) << "Failed to close manifest file for table";
-                return err;
             }
         }
 
@@ -518,9 +516,8 @@ KvError IouringMgr::CleanManifest(const TableIdent &tbl_id)
             int res = UnlinkAt(dir_fd.FdPair(), "manifest", false);
             if (res < 0 && res != -ENOENT)
             {
-                LOG(WARNING) << "Failed to delete manifest file for table "
-                             << tbl_id << ": " << strerror(-res);
-                return ToKvError(res);
+                LOG(ERROR) << "Failed to delete manifest file for table "
+                           << tbl_id << ": " << strerror(-res);
             }
             else
             {
@@ -530,8 +527,8 @@ KvError IouringMgr::CleanManifest(const TableIdent &tbl_id)
         }
         else
         {
-            LOG(WARNING) << "Failed to open directory for table " << tbl_id
-                         << " during cleanup";
+            LOG(ERROR) << "Failed to open directory for table " << tbl_id
+                       << " during cleanup";
         }
     }
     // Get directory fd and delete manifest file
@@ -541,9 +538,8 @@ KvError IouringMgr::CleanManifest(const TableIdent &tbl_id)
         int res = UnlinkAt(dir_fd.FdPair(), "manifest", false);
         if (res < 0 && res != -ENOENT)
         {
-            LOG(WARNING) << "Failed to delete manifest file for table "
-                         << tbl_id << ": " << strerror(-res);
-            return ToKvError(res);
+            LOG(ERROR) << "Failed to delete manifest file for table " << tbl_id
+                       << ": " << strerror(-res);
         }
         else
         {
@@ -553,11 +549,9 @@ KvError IouringMgr::CleanManifest(const TableIdent &tbl_id)
     }
     else
     {
-        LOG(WARNING) << "Failed to open directory for table " << tbl_id
-                     << " during cleanup";
+        LOG(ERROR) << "Failed to open directory for table " << tbl_id
+                   << " during cleanup";
     }
-
-    return KvError::NoError;
 }
 
 KvError ToKvError(int err_no)
@@ -690,8 +684,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
             // This must be data file because manifest should always be
             // created by call WriteSnapshot.
             assert(file_id <= LruFD::kMaxDataFile);
-            auto [dfd_ref, err] =
-                OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true);
+            auto [dfd_ref, err] = OpenOrCreateFD(tbl_id, LruFD::kDirectory);
             error = err;
             if (dfd_ref != nullptr)
             {
@@ -2353,9 +2346,8 @@ KvError MemStoreMgr::AbortWrite(const TableIdent &tbl_id)
     return KvError::NoError;
 }
 
-KvError MemStoreMgr::CleanManifest(const TableIdent &tbl_id)
+void MemStoreMgr::CleanManifest(const TableIdent &tbl_id)
 {
-    return KvError::NoError;
 }
 
 KvError MemStoreMgr::AppendManifest(const TableIdent &tbl_id,

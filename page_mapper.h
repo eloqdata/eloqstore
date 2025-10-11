@@ -203,7 +203,6 @@ public:
     MappingSnapshot *GetMapping() const;
     void UpdateMapping(PageId page_id, FilePageId file_page_id);
     uint32_t UseCount();
-    void FreeMappingSnapshot();
 #ifndef NDEBUG
     bool DebugStat() const;
 #endif

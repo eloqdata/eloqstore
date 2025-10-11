@@ -40,7 +40,7 @@ public:
 
     void Deque();
     MemIndexPage *DequeNext();
-    // MemIndexPage *DequePrev();
+    MemIndexPage *DequePrev();
     void EnqueNext(MemIndexPage *new_page);
 
     bool IsPointingToLeaf() const;

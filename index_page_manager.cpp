@@ -32,9 +32,7 @@ IndexPageManager::~IndexPageManager()
     {
         if (meta.mapper_)
         {
-            // i thinks we can set mapper = nullptr directly
-            // meta.mapper_ = nullptr;
-            meta.mapper_->FreeMappingSnapshot();
+            meta.mapper_ = nullptr;
         }
     }
 
@@ -384,12 +382,7 @@ void IndexPageManager::EvictRootIfEmpty(
 
                 // Note: it will also clean manifest when data_append = false
                 // although it is not remove datafile
-                KvError err = IoMgr()->CleanManifest(tbl_id);
-                if (err != KvError::NoError)
-                {
-                    LOG(FATAL) << "Failed to clean manifest for table "
-                               << tbl_id << ", error: " << ErrorString(err);
-                }
+                IoMgr()->CleanManifest(tbl_id);
 
                 // Wake up any waiting threads before erasing
                 meta.waiting_.WakeAll();
@@ -414,9 +407,8 @@ void IndexPageManager::EvictRootIfEmpty(
         else
         {
             // This is rare.
-            LOG(INFO) << "ref_cnt == 1 but mapper use count :"
-                      << meta.mapper_->UseCount();
-            CHECK(false) << "ref_cnt == 1 but mapper use count > 1";
+            LOG(ERROR) << "ref_cnt == 1 but mapper use count :"
+                       << meta.mapper_->UseCount();
         }
     }
 }

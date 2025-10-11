@@ -419,11 +419,8 @@ KvError DeleteUnreferencedCloudFiles(
 
         // Create delete task for directory
         KvTask *current_task = ThdTask();
-        ObjectStore::DeleteTask delete_task(files_to_delete);
+        ObjectStore::DeleteTask delete_task(files_to_delete, true);  // true for directory
         delete_task.SetKvTask(current_task);
-
-        // Set the first (and only) entry as a directory
-        delete_task.SetIsDir(0, true);
 
         // Submit the directory delete request
         delete_task.current_index_ = 0;
@@ -497,8 +494,8 @@ KvError DeleteUnreferencedLocalFiles(
         auto ret = ParseFileName(file_name);
         if (ret.first != FileNameData)
         {
-            LOG(INFO) << "ExecuteLocalGC: skipping non-data file: "
-                      << file_name;
+            DLOG(INFO) << "ExecuteLocalGC: skipping non-data file: "
+                       << file_name;
             continue;
         }
 
@@ -513,21 +510,21 @@ KvError DeleteUnreferencedLocalFiles(
         {
             fs::path file_path = dir_path / file_name;
             files_to_delete.push_back(file_path.string());
-            LOG(INFO) << "ExecuteLocalGC: marking file for deletion: "
-                      << file_name << " (file_id=" << file_id << ")";
+            DLOG(INFO) << "ExecuteLocalGC: marking file for deletion: "
+                       << file_name << " (file_id=" << file_id << ")";
         }
         else
         {
-            LOG(INFO) << "ExecuteLocalGC: skip file " << file_name
-                      << " since file_id=" << file_id
-                      << ", least_not_archived_file_id="
-                      << least_not_archived_file_id << ", in_retained="
-                      << (retained_files.contains(file_id) ? "true" : "false");
+            DLOG(INFO) << "ExecuteLocalGC: skip file " << file_name
+                       << " since file_id=" << file_id
+                       << ", least_not_archived_file_id="
+                       << least_not_archived_file_id << ", in_retained="
+                       << (retained_files.contains(file_id) ? "true" : "false");
         }
     }
 
-    LOG(INFO) << "ExecuteLocalGC: total files to delete: "
-              << files_to_delete.size();
+    DLOG(INFO) << "ExecuteLocalGC: total files to delete: "
+               << files_to_delete.size();
     if (!files_to_delete.empty())
     {
         // Delete files using batch operation
@@ -538,23 +535,13 @@ KvError DeleteUnreferencedLocalFiles(
                        << static_cast<int>(delete_err);
             return delete_err;
         }
-        LOG(INFO) << "ExecuteLocalGC: Successfully deleted "
-                  << files_to_delete.size() << " unreferenced files";
+        DLOG(INFO) << "ExecuteLocalGC: Successfully deleted "
+                   << files_to_delete.size() << " unreferenced files";
     }
     else
     {
-        LOG(INFO) << "ExecuteLocalGC: No files to delete";
+        DLOG(INFO) << "ExecuteLocalGC: No files to delete";
     }
-    // Check if we should delete the entire directory instead of individual
-    // files
-    // if (files_to_delete.size() == data_files.size() &&
-    // !files_to_delete.empty())
-    // {
-    //     LOG(INFO) << "Deleting entire directory instead of individual files";
-    //     // Call RemovePartitionDirIfOnlyManifest to delete directory if only
-    //     // manifest files remain
-    //     return io_mgr->RemovePartitionDirIfOnlyManifest(tbl_id);
-    // }
 
     return KvError::NoError;
 }
@@ -563,11 +550,10 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
                        const std::unordered_set<FileId> &retained_files,
                        CloudStoreMgr *cloud_mgr)
 {
-    LOG(INFO) << "ExecuteCloudGC";
     // 1. list all files in cloud.
     std::vector<std::string> cloud_files;
     KvError err = ListCloudFiles(tbl_id, cloud_files, cloud_mgr);
-    LOG(INFO) << "ListCloudFiles got " << cloud_files.size() << " files";
+    DLOG(INFO) << "ListCloudFiles got " << cloud_files.size() << " files";
     if (err != KvError::NoError)
     {
         return err;
@@ -586,15 +572,11 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
                                        archive_timestamps,
                                        least_not_archived_file_id,
                                        static_cast<IouringMgr *>(cloud_mgr));
-    LOG(INFO) << "GetOrUpdateArchivedMaxFileId, least_not_archived_file_id: "
-              << least_not_archived_file_id;
     if (err != KvError::NoError)
     {
         return err;
     }
 
-    LOG(INFO) << "Delete " << data_files.size() << " data files, "
-              << retained_files.size() << " retained files";
     // 4. delete unreferenced data files.
     err = DeleteUnreferencedCloudFiles(tbl_id,
                                        data_files,

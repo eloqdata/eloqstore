@@ -343,14 +343,11 @@ KvError EloqStore::CollectTablePartitions(
             ->AddKvRequest(&list_object_request);
         std::unique_lock<std::mutex> lk(mu);
         cv.wait(lk, [&finish] { return finish; });
-        LOG(INFO) << "Get " << objects.size() << " objects";
         for (auto &object_name : objects)
         {
             TableIdent ident = TableIdent::FromString(object_name);
             if (!ident.IsValid() || ident.tbl_name_ != table_name)
             {
-                LOG(INFO) << "ident.tbl_name:" << ident.tbl_name_
-                          << ", table_name:" << table_name;
                 continue;
             }
             partitions.push_back(std::move(ident));

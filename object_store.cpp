@@ -223,8 +223,8 @@ void AsyncHttpManager::SetupDeleteRequest(ObjectStore::DeleteTask *task,
     task->headers_list_[index] = headers;
 
     // Choose URL based on whether it's a directory or file
-    const char *url = task->IsDir(index) ? daemon_purge_url_.c_str()
-                                         : daemon_delete_url_.c_str();
+    const char *url = task->IsDir() ? daemon_purge_url_.c_str()
+                                    : daemon_delete_url_.c_str();
 
     curl_easy_setopt(easy, CURLOPT_URL, url);
     curl_easy_setopt(

@@ -119,31 +119,30 @@ public:
     class DeleteTask : public Task
     {
     public:
-        explicit DeleteTask(std::vector<std::string> file_paths)
-            : file_paths_(std::move(file_paths)), current_index_(0)
+        explicit DeleteTask(std::vector<std::string> file_paths,
+                            bool is_dir = false)
+            : file_paths_(std::move(file_paths)),
+              current_index_(0),
+              is_dir_(is_dir)
         {
             headers_list_.resize(file_paths_.size(), nullptr);
             json_data_list_.resize(file_paths_.size());
-            is_dir_list_.resize(file_paths_.size(), false);
         }
         Type TaskType() override
         {
             return Type::AsyncDelete;
         }
 
-        // Set whether the current file is a directory
-        void SetIsDir(size_t index, bool is_dir)
+        // Check if this batch is for directories
+        bool IsDir() const
         {
-            if (index < is_dir_list_.size())
-            {
-                is_dir_list_[index] = is_dir;
-            }
+            return is_dir_;
         }
 
-        // Check if the current file is a directory
-        bool IsDir(size_t index) const
+        // Set whether this batch is for directories
+        void SetIsDir(bool is_dir)
         {
-            return index < is_dir_list_.size() ? is_dir_list_[index] : false;
+            is_dir_ = is_dir;
         }
 
         std::vector<std::string> file_paths_;  // Support batch delete
@@ -151,7 +150,8 @@ public:
 
         std::vector<struct curl_slist *> headers_list_;
         std::vector<std::string> json_data_list_;
-        std::vector<bool> is_dir_list_;  // Track which paths are directories
+        bool is_dir_;  // Track whether this batch is for directories (default:
+                       // false for files)
 
         bool has_error_{false};
         KvError first_error_{KvError::NoError};

@@ -88,11 +88,6 @@ uint32_t PageMapper::UseCount()
     return mapping_.use_count();
 }
 
-void PageMapper::FreeMappingSnapshot()
-{
-    mapping_ = nullptr;
-}
-
 const KvOptions *PageMapper::Options() const
 {
     return mapping_->idx_mgr_->Options();

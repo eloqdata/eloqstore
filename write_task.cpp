@@ -293,24 +293,6 @@ void WriteTask::CompactIfNeeded(PageMapper *mapper) const
     {
         shard->AddPendingCompact(tbl_ident_);
     }
-    /*
-    if (mapping_cnt == 0)
-    {
-        // Update statistic.
-        allocator->UpdateStat(MaxFileId, 0);
-    }
-    else
-    {
-        size_t space_size = allocator->SpaceSize();
-        assert(space_size >= mapping_cnt);
-        if (space_size >= allocator->PagesPerFile() &&
-            double(space_size) / double(mapping_cnt) >
-                double(opts->file_amplify_factor))
-        {
-            shard->AddPendingCompact(tbl_ident_);
-        }
-    }
-    */
 }
 
 void WriteTask::TriggerTTL()
@@ -343,7 +325,6 @@ void WriteTask::TriggerFileGC() const
     auto [meta, err] = shard->IndexManager()->FindRoot(tbl_ident_);
     if (err != KvError::NoError)
     {
-        LOG(INFO) << "TriggerFileGC meta not found";
         return;
     }
 
@@ -357,7 +338,6 @@ void WriteTask::TriggerFileGC() const
     // Check if we're in cloud mode or local mode
     if (!Options()->cloud_store_path.empty())
     {
-        LOG(INFO) << "Begin GC in Cloud mode";
         // Cloud mode: execute GC directly
         CloudStoreMgr *cloud_mgr =
             static_cast<CloudStoreMgr *>(shard->IoManager());
