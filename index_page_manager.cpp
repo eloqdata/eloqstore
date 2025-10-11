@@ -407,10 +407,8 @@ void IndexPageManager::EvictRootIfEmpty(
             // If mapping is not empty, we can directly erase the root since
             // ref_cnt == 1 means only the mapper itself holds the reference
 
-            // meta.waiting_.WakeAll();
-
-            DLOG(INFO) << "metadata of " << root_it->first
-                       << " is evicted (ref_cnt == 1)";
+            LOG(INFO) << "metadata of " << root_it->first
+                      << " is evicted (ref_cnt == 1)";
             tbl_roots_.erase(root_it);
         }
         else
