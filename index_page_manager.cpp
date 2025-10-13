@@ -30,7 +30,7 @@ IndexPageManager::~IndexPageManager()
 
     for (auto &[tbl_id, meta] : tbl_roots_)
     {
-        if (meta.mapper_)
+        if (meta.mapper_ != nullptr)
         {
             meta.mapper_ = nullptr;
         }
