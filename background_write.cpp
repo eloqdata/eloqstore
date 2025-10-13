@@ -65,7 +65,6 @@ KvError BackgroundWrite::CompactDataFile()
         // Update statistic.
         allocator->UpdateStat(MaxFileId, 0);
         TriggerFileGC();
-        // is it possible that mapping_cnt == 0 but meta->root_id_ != MaxPageId?
         CHECK(meta->root_id_ == MaxPageId);
         return KvError::NoError;
     }
