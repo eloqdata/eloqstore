@@ -412,7 +412,6 @@ KvError DeleteUnreferencedCloudFiles(
     // deleting all data files except manifest
     if (files_to_delete.size() == data_files.size() && !files_to_delete.empty())
     {
-        LOG(INFO) << "Deleting entire directory instead of individual files";
         // Clear files_to_delete and add the directory path
         files_to_delete.clear();
         files_to_delete.push_back(tbl_id.ToString());

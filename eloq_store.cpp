@@ -373,7 +373,6 @@ void EloqStore::HandleDropTableRequest(DropTableRequest *req)
 
     if (partitions.empty())
     {
-        LOG(INFO) << "No partition found.";
         req->SetDone(KvError::NoError);
         return;
     }
@@ -406,8 +405,6 @@ void EloqStore::HandleDropTableRequest(DropTableRequest *req)
     req->truncate_reqs_.reserve(partitions.size());
     for (const TableIdent &partition : partitions)
     {
-        LOG(INFO) << "truncate partiiton " << partition.tbl_name_ << ":"
-                  << partition.partition_id_;
         auto trunc_req = std::make_unique<TruncateRequest>();
         trunc_req->SetArgs(partition, std::string_view{});
         TruncateRequest *ptr = trunc_req.get();
