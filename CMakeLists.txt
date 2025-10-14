@@ -60,7 +60,8 @@ set(INI_SOURCES ${PROJECT_SOURCE_DIR}/inih/ini.c ${PROJECT_SOURCE_DIR}/inih/cpp/
 
 SET(ELOQ_STORE_INCLUDE
         ${URING_INCLUDE_PATH}
-        ${Boost_INCLUDE_DIRS})
+        ${Boost_INCLUDE_DIRS}
+        ${CMAKE_CURRENT_SOURCE_DIR}/abseil)
 
 set(ELOQ_STORE_SOURCES
         coding.cpp
@@ -101,7 +102,8 @@ target_link_libraries(eloqstore PRIVATE ${URING_LIB} Boost::context glog::glog a
 
 
 add_library(test_util STATIC test_utils.cpp)
-target_link_libraries(test_util PUBLIC eloqstore)
+target_include_directories(test_util PUBLIC ${ELOQ_STORE_INCLUDE})
+target_link_libraries(test_util PUBLIC eloqstore absl::flat_hash_map)
 
 option(WITH_UNIT_TESTS "build with unit tests" ON)
 if (WITH_UNIT_TESTS)

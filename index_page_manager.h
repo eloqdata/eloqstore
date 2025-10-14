@@ -5,6 +5,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "async_io_manager.h"
 #include "comparator.h"
 #include "error.h"
@@ -90,7 +91,7 @@ private:
      * @param root_it
      */
     void EvictRootIfEmpty(
-        std::unordered_map<TableIdent, RootMeta>::iterator root_it);
+        absl::flat_hash_map<TableIdent, RootMeta>::iterator root_it);
 
     bool RecyclePage(MemIndexPage *page);
 
@@ -115,7 +116,7 @@ private:
      * page.
      *
      */
-    std::unordered_map<TableIdent, RootMeta> tbl_roots_;
+    absl::flat_hash_map<TableIdent, RootMeta> tbl_roots_;
 
     AsyncIoManager *io_manager_;
 };

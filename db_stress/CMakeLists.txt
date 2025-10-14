@@ -25,6 +25,7 @@ target_include_directories(db_stress PUBLIC ${PROJECT_SOURCE_DIR}
                                             ${PROJECT_SOURCE_DIR}/..
                                             ${ELOQ_STORE_SOURCE_DIR}
                                             ${GFLAGS_INCLUDE_DIRS}
-                                            ${GLOG_INCLUDE_DIRS})
+                                            ${GLOG_INCLUDE_DIRS}
+                                            ${CMAKE_CURRENT_SOURCE_DIR}/../abseil)
 
-target_link_libraries(db_stress PRIVATE gflags glog eloqstore)
+target_link_libraries(db_stress PRIVATE gflags glog eloqstore absl::flat_hash_map)

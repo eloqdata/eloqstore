@@ -355,7 +355,7 @@ void IndexPageManager::EvictRootIfEmpty(const TableIdent &tbl_id)
 }
 
 void IndexPageManager::EvictRootIfEmpty(
-    std::unordered_map<TableIdent, RootMeta>::iterator root_it)
+    absl::flat_hash_map<TableIdent, RootMeta>::iterator root_it)
 {
     RootMeta &meta = root_it->second;
     if (meta.ref_cnt_ == 0)
