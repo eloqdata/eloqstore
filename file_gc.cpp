@@ -11,6 +11,7 @@
 #include "common.h"
 #include "eloq_store.h"
 #include "error.h"
+#include "kv_options.h"
 #include "replayer.h"
 #include "task.h"
 #include "utils.h"
@@ -98,24 +99,15 @@ KvError ListLocalFiles(const TableIdent &tbl_id,
 
     fs::path dir_path = tbl_id.StorePath(io_mgr->options_->store_path);
 
-    try
+    for (auto &ent : fs::directory_iterator{dir_path})
     {
-        for (auto &ent : fs::directory_iterator{dir_path})
+        const std::string name = ent.path().filename();
+        if (boost::algorithm::ends_with(name, TmpSuffix))
         {
-            const std::string name = ent.path().filename();
-            if (boost::algorithm::ends_with(name, TmpSuffix))
-            {
-                // Skip temporary files.
-                continue;
-            }
-            local_files.emplace_back(name);
+            // Skip temporary files.
+            continue;
         }
-    }
-    catch (const std::exception &e)
-    {
-        LOG(ERROR) << "Failed to list local files in " << dir_path
-                   << ", error: " << e.what();
-        return KvError::IoFail;
+        local_files.emplace_back(name);
     }
 
     return KvError::NoError;
@@ -250,11 +242,10 @@ KvError DownloadArchiveFile(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-FileId ParseArchiveForMaxFileId(const std::string &archive_content,
-                                IouringMgr *io_mgr)
+FileId ParseArchiveForMaxFileId(const std::string &archive_content)
 {
     MemStoreMgr::Manifest manifest(archive_content);
-    Replayer replayer(io_mgr->options_);
+    Replayer replayer(Options());
 
     KvError err = replayer.Replay(&manifest);
     if (err != KvError::NoError)
@@ -270,7 +261,7 @@ FileId ParseArchiveForMaxFileId(const std::string &archive_content,
 
     // Find the maximum file ID from the mapping table.
     FileId max_file_id = 0;
-    const uint8_t pages_per_file_shift = io_mgr->options_->pages_per_file_shift;
+    const uint8_t pages_per_file_shift = Options()->pages_per_file_shift;
 
     for (uint64_t val : replayer.mapping_tbl_)
     {
@@ -361,8 +352,7 @@ KvError GetOrUpdateArchivedMaxFileId(
     }
 
     // 4. parse the archive file to get the maximum file ID.
-    least_not_archived_file_id =
-        ParseArchiveForMaxFileId(archive_content, io_mgr) + 1;
+    least_not_archived_file_id = ParseArchiveForMaxFileId(archive_content) + 1;
 
     // 5. cache the result.
     cached_max_ids[tbl_id] = least_not_archived_file_id;
