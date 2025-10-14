@@ -73,7 +73,7 @@ public:
     {
     public:
         DownloadTask(const TableIdent *tbl_id, std::string_view filename)
-            : tbl_id_(tbl_id), filename_(filename) {};
+            : tbl_id_(tbl_id), filename_(filename){};
         Type TaskType() override
         {
             return Type::AsyncDownload;
@@ -88,7 +88,7 @@ public:
     {
     public:
         UploadTask(const TableIdent *tbl_id, std::vector<std::string> filenames)
-            : tbl_id_(tbl_id), filenames_(std::move(filenames)) {};
+            : tbl_id_(tbl_id), filenames_(std::move(filenames)){};
         Type TaskType() override
         {
             return Type::AsyncUpload;
@@ -106,7 +106,7 @@ public:
     {
     public:
         explicit ListTask(std::string_view remote_path)
-            : remote_path_(remote_path) {};
+            : remote_path_(remote_path){};
         Type TaskType() override
         {
             return Type::AsyncList;
@@ -150,8 +150,8 @@ public:
 
         std::vector<struct curl_slist *> headers_list_;
         std::vector<std::string> json_data_list_;
-        bool is_dir_;  // Track whether this batch is for directories (default:
-                       // false for files)
+        bool is_dir_{false};  // Track whether this batch is for directories
+                              // (default: false for files)
 
         bool has_error_{false};
         KvError first_error_{KvError::NoError};
