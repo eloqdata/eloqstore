@@ -23,8 +23,9 @@ fi
 echo "✓ lcov 和 genhtml 已安装"
 echo
 
-# 设置目录
-PROJECT_ROOT="/root/eloqstore"
+# 设置目录 - 使用相对路径
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_ROOT/build"
 COVERAGE_DIR="$BUILD_DIR/unit_test_coverage_report"
 
