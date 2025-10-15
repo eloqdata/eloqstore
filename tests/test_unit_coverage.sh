@@ -1,29 +1,29 @@
 #!/bin/bash
 
-# EloqStore 单元测试覆盖率分析脚本
-# 用于分析实际项目代码的测试覆盖率
+# EloqStore Unit Test Coverage Analysis Script
+# Used to analyze test coverage of actual project code
 
 set -e
 
-echo "=== EloqStore 单元测试覆盖率分析 ==="
+echo "=== EloqStore Unit Test Coverage Analysis ==="
 echo
 
-# 检查必要工具
-echo "1. 检查必要工具..."
+# Check necessary tools
+echo "1. Checking necessary tools..."
 if ! command -v lcov &> /dev/null; then
-    echo "❌ lcov 未安装，请运行: sudo apt-get install lcov"
+    echo "❌ lcov is not installed, please run: sudo apt-get install lcov"
     exit 1
 fi
 
 if ! command -v genhtml &> /dev/null; then
-    echo "❌ genhtml 未安装，请运行: sudo apt-get install lcov"
+    echo "❌ genhtml is not installed, please run: sudo apt-get install lcov"
     exit 1
 fi
 
-echo "✓ lcov 和 genhtml 已安装"
+echo "✓ lcov and genhtml are installed"
 echo
 
-# 设置目录 - 使用相对路径
+# Set directories - using relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 BUILD_DIR="$PROJECT_ROOT/build"
@@ -31,67 +31,67 @@ COVERAGE_DIR="$BUILD_DIR/unit_test_coverage_report"
 
 cd "$PROJECT_ROOT"
 
-echo "2. 配置项目为 Coverage 构建模式..."
+echo "2. Configuring project for Coverage build mode..."
 cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Coverage -DWITH_UNIT_TESTS=ON
-echo "✓ 项目配置完成"
+echo "✓ Project configuration completed"
 echo
 
-echo "3. 编译项目和单元测试..."
+echo "3. Building project and unit tests..."
 cmake --build "$BUILD_DIR" --parallel $(nproc)
-echo "✓ 编译完成"
+echo "✓ Build completed"
 echo
 
-echo "4. 清理之前的覆盖率数据..."
+echo "4. Cleaning previous coverage data..."
 find "$BUILD_DIR" -name "*.gcda" -delete 2>/dev/null || true
 rm -f "$BUILD_DIR/unit_coverage.info" "$BUILD_DIR/unit_coverage_filtered.info"
 rm -rf "$COVERAGE_DIR"
-echo "✓ 清理完成"
+echo "✓ Cleanup completed"
 echo
 
-echo "5. 运行单元测试..."
+echo "5. Running unit tests..."
 cd "$BUILD_DIR"
 
-# 首先尝试使用 ctest 运行 tests 目录下的所有测试
-echo "使用 ctest 运行 tests 目录下的单元测试..."
+# First try to run all tests in the tests directory using ctest
+echo "Running unit tests in tests directory using ctest..."
 if [ -d "tests" ]; then
-    echo "找到 tests 目录，运行所有 CTest 测试..."
-    # 设置超时并运行所有测试
-    timeout 300s ctest --test-dir tests/ || echo "⚠️  部分测试可能失败或超时，继续执行..."
+    echo "Found tests directory, running all CTest tests..."
+    # Set timeout and run all tests
+    timeout 300s ctest --test-dir tests/ || echo "⚠️  Some tests may have failed or timed out, continuing execution..."
 else
-    echo "未找到 tests 目录，尝试查找其他测试可执行文件..."
+    echo "Tests directory not found, trying to find other test executables..."
     
-    # 备用方案：查找所有测试可执行文件
+    # Fallback: find all test executables
     TEST_EXECUTABLES=$(find . -name "*test*" -type f -executable | head -20)
     
     if [ -z "$TEST_EXECUTABLES" ]; then
-        echo "❌ 未找到任何测试可执行文件"
-        echo "可用的可执行文件："
+        echo "❌ No test executables found"
+        echo "Available executables:"
         find . -type f -executable | head -10
         exit 1
     fi
     
-    echo "找到的测试文件："
+    echo "Found test files:"
     echo "$TEST_EXECUTABLES"
     echo
     
-    # 运行每个测试
+    # Run each test
     for test_exe in $TEST_EXECUTABLES; do
-        echo "运行测试: $test_exe"
+        echo "Running test: $test_exe"
         if [ -f "$test_exe" ]; then
-            timeout 30s "$test_exe" || echo "⚠️  测试 $test_exe 可能失败或超时，继续执行..."
+            timeout 30s "$test_exe" || echo "⚠️  Test $test_exe may have failed or timed out, continuing execution..."
         fi
     done
 fi
 
-echo "✓ 单元测试执行完成"
+echo "✓ Unit test execution completed"
 echo
 
-echo "6. 生成覆盖率数据..."
+echo "6. Generating coverage data..."
 lcov --capture --directory . --output-file unit_coverage.info --ignore-errors negative,gcov
-echo "✓ 覆盖率数据收集完成"
+echo "✓ Coverage data collection completed"
 echo
 
-echo "7. 过滤覆盖率数据（排除系统文件和第三方库）..."
+echo "7. Filtering coverage data (excluding system files and third-party libraries)..."
 lcov --remove unit_coverage.info \
     '/usr/*' \
     '*/abseil/*' \
@@ -99,39 +99,38 @@ lcov --remove unit_coverage.info \
     '*/inih/*' \
     '*/external/*' \
     '*/tests/*' \
-    '*/coverage/*' \
     '*/benchmark/*' \
     '*/db_stress/*' \
     '*/examples/*' \
     --output-file unit_coverage_filtered.info \
     --ignore-errors unused
 
-echo "✓ 数据过滤完成"
+echo "✓ Data filtering completed"
 echo
 
-echo "8. 生成 HTML 覆盖率报告..."
+echo "8. Generating HTML coverage report..."
 mkdir -p "$COVERAGE_DIR"
 genhtml unit_coverage_filtered.info --output-directory "$COVERAGE_DIR"
-echo "✓ HTML 报告生成完成"
+echo "✓ HTML report generation completed"
 echo
 
-echo "9. 显示覆盖率摘要..."
+echo "9. Displaying coverage summary..."
 lcov --summary unit_coverage_filtered.info
 echo
 
-echo "=== 单元测试覆盖率分析完成 ==="
+echo "=== Unit Test Coverage Analysis Completed ==="
 echo
-echo "报告位置: $COVERAGE_DIR/index.html"
+echo "Report location: $COVERAGE_DIR/index.html"
 echo
-echo "查看报告的方法："
-echo "1. 在浏览器中打开: file://$COVERAGE_DIR/index.html"
-echo "2. 或者运行: firefox $COVERAGE_DIR/index.html"
-echo "3. 或者启动 HTTP 服务器:"
+echo "How to view the report:"
+echo "1. Open in browser: file://$COVERAGE_DIR/index.html"
+echo "2. Or run: firefox $COVERAGE_DIR/index.html"
+echo "3. Or start HTTP server:"
 echo "   cd $COVERAGE_DIR && python3 -m http.server 8081"
-echo "   然后访问: http://localhost:8081"
+echo "   Then visit: http://localhost:8081"
 echo
-echo "提示："
-echo "- 要清理覆盖率数据，运行: rm -rf $BUILD_DIR/*coverage* && find $BUILD_DIR -name '*.gcda' -delete"
-echo "- 要重新生成报告，重新运行此脚本即可"
-echo "- 绿色表示代码已被测试覆盖，红色表示未覆盖"
+echo "Tips:"
+echo "- To clean coverage data, run: rm -rf $BUILD_DIR/*coverage* && find $BUILD_DIR -name '*.gcda' -delete"
+echo "- To regenerate report, simply re-run this script"
+echo "- Green indicates code covered by tests, red indicates uncovered code"
 echo
