@@ -364,11 +364,11 @@ void IndexPageManager::EvictRootIfEmpty(
 
     RootMeta &meta = root_it->second;
 
-    CHECK(meta.mapper_ != nullptr || meta.ref_cnt_ == 0);
+    CHECK(meta.mapper_ != nullptr && meta.ref_cnt_ != 0);
 
-    if (meta.mapper_ != nullptr && meta.ref_cnt_ == 1)
+    if (meta.ref_cnt_ == 1)
     {
-        if (meta.mapper_->UseCount() <= 1)
+        if (meta.mapper_->UseCount() == 1)
         {
             // Check if mapping table is empty (no data pages)
             if (meta.mapper_->MappingCount() == 0)
@@ -400,8 +400,8 @@ void IndexPageManager::EvictRootIfEmpty(
             // If mapping is not empty, we can directly erase the root since
             // ref_cnt == 1 means only the mapper itself holds the reference
 
-            LOG(INFO) << "metadata of " << root_it->first
-                      << " is evicted (ref_cnt == 1)";
+            DLOG(INFO) << "metadata of " << root_it->first
+                       << " is evicted (ref_cnt == 1)";
             tbl_roots_.erase(root_it);
         }
         else
