@@ -124,8 +124,7 @@ echo "Report location: $COVERAGE_DIR/index.html"
 echo
 echo "How to view the report:"
 echo "1. Open in browser: file://$COVERAGE_DIR/index.html"
-echo "2. Or run: firefox $COVERAGE_DIR/index.html"
-echo "3. Or start HTTP server:"
+echo "2. Or start HTTP server:"
 echo "   cd $COVERAGE_DIR && python3 -m http.server 8081"
 echo "   Then visit: http://localhost:8081"
 echo
