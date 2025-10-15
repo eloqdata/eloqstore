@@ -26,14 +26,9 @@ IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
 
 IndexPageManager::~IndexPageManager()
 {
-    is_destructing_ = true;
-
     for (auto &[tbl_id, meta] : tbl_roots_)
     {
-        if (meta.mapper_ != nullptr)
-        {
-            meta.mapper_ = nullptr;
-        }
+        meta.mapper_ = nullptr;
     }
 
     tbl_roots_.clear();
@@ -342,11 +337,6 @@ bool IndexPageManager::Evict()
 
 void IndexPageManager::EvictRootIfEmpty(const TableIdent &tbl_id)
 {
-    if (is_destructing_)
-    {
-        return;
-    }
-
     auto it = tbl_roots_.find(tbl_id);
     if (it != tbl_roots_.end())
     {
@@ -357,14 +347,13 @@ void IndexPageManager::EvictRootIfEmpty(const TableIdent &tbl_id)
 void IndexPageManager::EvictRootIfEmpty(
     std::unordered_map<TableIdent, RootMeta>::iterator root_it)
 {
-    if (is_destructing_)
+    RootMeta &meta = root_it->second;
+
+    if (meta.mapper_ == nullptr)
     {
         return;
     }
-
-    RootMeta &meta = root_it->second;
-
-    CHECK(meta.mapper_ != nullptr && meta.ref_cnt_ != 0);
+    CHECK(meta.ref_cnt_ != 0);
 
     if (meta.ref_cnt_ == 1)
     {
