@@ -30,8 +30,6 @@ IndexPageManager::~IndexPageManager()
     {
         meta.mapper_ = nullptr;
     }
-
-    tbl_roots_.clear();
 }
 
 const Comparator *IndexPageManager::GetComparator() const
