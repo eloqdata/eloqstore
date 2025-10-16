@@ -99,8 +99,9 @@ void ArchiveCrond::StartArchiving()
     std::vector<TableIdent> table_ids;
     table_ids.reserve(archive_batch);
     size_t total_partitions = 0;
-    for (const fs::path &db_path : store_->Options().store_path)
+    for (const auto &db_path_entry : store_->Options().store_path)
     {
+        const fs::path db_path(db_path_entry);
         table_ids.clear();
         for (auto &ent : fs::directory_iterator{db_path})
         {

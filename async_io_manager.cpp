@@ -420,7 +420,8 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
         {
             return ToKvError(ret);
         }
-        if (ret < (num_pages * options_->data_page_size))
+        const size_t expected_bytes = num_pages * options_->data_page_size;
+        if (static_cast<size_t>(ret) < expected_bytes)
         {
             return KvError::TryAgain;
         }
@@ -763,7 +764,7 @@ void IouringMgr::PollComplete()
         cnt++;
 
         auto [ptr, type] = DecodeUserData(cqe->user_data);
-        KvTask *task;
+        KvTask *task = nullptr;
         switch (type)
         {
         case UserDataType::KvTask:
@@ -803,7 +804,9 @@ void IouringMgr::PollComplete()
         }
         default:
             assert(false);
+            continue;
         }
+        assert(task != nullptr);
         task->FinishIo();
     }
 
@@ -1405,7 +1408,7 @@ KvError IouringMgr::Manifest::Read(char *dst, size_t n)
             {
                 return KvError::EndOfFile;
             }
-            else if (res < expected)
+            else if (static_cast<size_t>(res) < expected)
             {
                 // Read less than expected, we need to ensure file_offset_ is
                 // aligned for the next retry operation.

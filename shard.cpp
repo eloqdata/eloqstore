@@ -308,6 +308,12 @@ void Shard::ProcessReq(KvRequest *req)
         StartTask(task, req, lbd);
         break;
     }
+    case RequestType::DropTable:
+    {
+        LOG(ERROR) << "DropTable request routed to shard unexpectedly";
+        req->SetDone(KvError::InvalidArgs);
+        break;
+    }
     case RequestType::Archive:
     {
         BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());
