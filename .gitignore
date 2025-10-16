@@ -36,6 +36,7 @@
 
 Release
 build
+build_coverage
 install
 .cache
 .vscode

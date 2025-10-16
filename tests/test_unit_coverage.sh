@@ -26,7 +26,7 @@ echo
 # Set directories - using relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
-BUILD_DIR="$PROJECT_ROOT/build"
+BUILD_DIR="$PROJECT_ROOT/build_coverage"
 COVERAGE_DIR="$BUILD_DIR/unit_test_coverage_report"
 
 cd "$PROJECT_ROOT"
@@ -106,9 +106,3 @@ echo "1. Open in browser: file://$COVERAGE_DIR/index.html"
 echo "2. Or start HTTP server:"
 echo "   cd $COVERAGE_DIR && python3 -m http.server 8081"
 echo "   Then visit: http://localhost:8081"
-echo
-echo "Tips:"
-echo "- To clean coverage data, run: rm -rf $BUILD_DIR/*coverage* && find $BUILD_DIR -name '*.gcda' -delete"
-echo "- To regenerate report, simply re-run this script"
-echo "- Green indicates code covered by tests, red indicates uncovered code"
-echo
