@@ -32,14 +32,6 @@ const eloqstore::KvOptions cloud_archive_opts = {
     .data_append_mode = true,
 };
 
-void SetStorePathS3(eloqstore::KvOptions &opts)
-{
-    // Add username to cloud path to avoid conflicts between users.
-    opts.cloud_store_path = "eloq-s3:eloqstore-test";
-    opts.cloud_store_path.push_back('/');
-    opts.cloud_store_path.append(getlogin());
-}
-
 TEST_CASE("simple cloud store", "[cloud]")
 {
     eloqstore::EloqStore *store = InitStore(cloud_options);
