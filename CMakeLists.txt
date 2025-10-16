@@ -6,8 +6,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Coverage build type
-if(CMAKE_BUILD_TYPE STREQUAL "Coverage")
+# Coverage option
+option(WITH_COVERAGE "Enable code coverage" OFF)
+if(WITH_COVERAGE)
     message(STATUS "Building with coverage flags")
     add_compile_options(-O0 -g --coverage)
     add_link_options(--coverage)
@@ -129,42 +130,3 @@ option(WITH_BENCHMARK "build with benchmark tool" ON)
 if (WITH_BENCHMARK)
     add_subdirectory(benchmark)
 endif ()
-
-
-# Coverage target for generating coverage reports
-find_program(LCOV_EXECUTABLE lcov)
-find_program(GENHTML_EXECUTABLE genhtml)
-
-if(LCOV_EXECUTABLE AND GENHTML_EXECUTABLE)
-    # Unit test coverage target (for actual project code)
-    add_custom_target(unit-test-coverage
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_BINARY_DIR}/unit_test_coverage_report
-        COMMAND ${LCOV_EXECUTABLE} --capture --directory ${CMAKE_BINARY_DIR} --output-file ${CMAKE_BINARY_DIR}/unit_coverage.info
-        COMMAND ${LCOV_EXECUTABLE} --remove ${CMAKE_BINARY_DIR}/unit_coverage.info 
-            '/usr/*' 
-            '*/abseil/*' 
-            '*/concurrentqueue/*' 
-            '*/inih/*' 
-            '*/external/*' 
-            '*/tests/*' 
-            '*/benchmark/*' 
-            '*/db_stress/*' 
-            '*/examples/*'
-            --output-file ${CMAKE_BINARY_DIR}/unit_coverage_filtered.info --ignore-errors unused
-        COMMAND ${GENHTML_EXECUTABLE} ${CMAKE_BINARY_DIR}/unit_coverage_filtered.info --output-directory ${CMAKE_BINARY_DIR}/unit_test_coverage_report
-        COMMAND ${CMAKE_COMMAND} -E echo "Unit test coverage report generated in ${CMAKE_BINARY_DIR}/unit_test_coverage_report/index.html"
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-        COMMENT "Generating unit test coverage report for project code"
-    )
-    
-    add_custom_target(coverage-clean
-        COMMAND ${CMAKE_COMMAND} -E remove_directory ${CMAKE_BINARY_DIR}/unit_test_coverage_report
-        COMMAND ${CMAKE_COMMAND} -E remove -f ${CMAKE_BINARY_DIR}/unit_coverage.info
-        COMMAND ${CMAKE_COMMAND} -E remove -f ${CMAKE_BINARY_DIR}/unit_coverage_filtered.info
-        COMMAND find ${CMAKE_BINARY_DIR} -name "*.gcda" -delete
-        WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
-        COMMENT "Cleaning coverage data"
-    )
-else()
-    message(WARNING "lcov and/or genhtml not found. Coverage target will not be available.")
-endif()

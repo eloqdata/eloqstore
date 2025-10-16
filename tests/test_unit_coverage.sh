@@ -31,8 +31,8 @@ COVERAGE_DIR="$BUILD_DIR/unit_test_coverage_report"
 
 cd "$PROJECT_ROOT"
 
-echo "2. Configuring project for Coverage build mode..."
-cmake -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Coverage -DWITH_UNIT_TESTS=ON
+echo "2. Configuring project with coverage enabled..."
+cmake -B "$BUILD_DIR" -DWITH_COVERAGE=ON -DWITH_UNIT_TESTS=ON
 echo "✓ Project configuration completed"
 echo
 
@@ -53,35 +53,14 @@ cd "$BUILD_DIR"
 
 # First try to run all tests in the tests directory using ctest
 echo "Running unit tests in tests directory using ctest..."
-if [ -d "tests" ]; then
-    echo "Found tests directory, running all CTest tests..."
-    # Set timeout and run all tests
-    timeout 300s ctest --test-dir tests/ || echo "⚠️  Some tests may have failed or timed out, continuing execution..."
-else
-    echo "Tests directory not found, trying to find other test executables..."
-    
-    # Fallback: find all test executables
-    TEST_EXECUTABLES=$(find . -name "*test*" -type f -executable | head -20)
-    
-    if [ -z "$TEST_EXECUTABLES" ]; then
-        echo "❌ No test executables found"
-        echo "Available executables:"
-        find . -type f -executable | head -10
-        exit 1
-    fi
-    
-    echo "Found test files:"
-    echo "$TEST_EXECUTABLES"
-    echo
-    
-    # Run each test
-    for test_exe in $TEST_EXECUTABLES; do
-        echo "Running test: $test_exe"
-        if [ -f "$test_exe" ]; then
-            timeout 30s "$test_exe" || echo "⚠️  Test $test_exe may have failed or timed out, continuing execution..."
-        fi
-    done
+if [ ! -d "tests" ]; then
+    echo "❌ Tests directory not found"
+    exit 1
 fi
+
+echo "Found tests directory, running all CTest tests..."
+# Set timeout and run all tests
+timeout 300s ctest --test-dir tests/ || echo "⚠️  Some tests may have failed or timed out, continuing execution..."
 
 echo "✓ Unit test execution completed"
 echo
