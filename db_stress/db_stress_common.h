@@ -54,7 +54,6 @@ DECLARE_uint32(num_retained_archives);
 DECLARE_uint32(archive_interval_secs);
 DECLARE_uint32(max_archive_tasks);
 DECLARE_uint32(file_amplify_factor);
-DECLARE_uint32(num_gc_threads);
 DECLARE_uint64(local_space_limit);
 DECLARE_uint32(reserve_space_ratio);
 DECLARE_uint32(overflow_pointers);

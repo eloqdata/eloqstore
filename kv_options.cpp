@@ -101,10 +101,6 @@ int KvOptions::LoadFromIni(const char *path)
         file_amplify_factor =
             reader.GetUnsigned(sec_run, "file_amplify_factor", 2);
     }
-    if (reader.HasValue(sec_run, "num_gc_threads"))
-    {
-        num_gc_threads = reader.GetUnsigned(sec_run, "num_gc_threads", 1);
-    }
     if (reader.HasValue(sec_run, "local_space_limit"))
     {
         local_space_limit = reader.GetUnsigned(sec_run, "local_space_limit", 0);
@@ -176,7 +172,6 @@ bool KvOptions::operator==(const KvOptions &other) const
            archive_interval_secs == other.archive_interval_secs &&
            max_archive_tasks == other.max_archive_tasks &&
            file_amplify_factor == other.file_amplify_factor &&
-           num_gc_threads == other.num_gc_threads &&
            local_space_limit == other.local_space_limit &&
            reserve_space_ratio == other.reserve_space_ratio &&
            store_path == other.store_path &&

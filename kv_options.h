@@ -92,12 +92,6 @@ struct KvOptions
      */
     uint8_t file_amplify_factor = 2;
     /**
-     * @brief Number of background local file GC threads.
-     * Only take effect when data_append_mode is enabled and cloud_store_path is
-     * set.
-     */
-    uint16_t num_gc_threads = 1;
-    /**
      * @brief Limit total size of local files.
      * Only take effect when cloud store is enabled.
      */

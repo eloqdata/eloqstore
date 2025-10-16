@@ -29,8 +29,7 @@ void print_test_params()
 {
     // std::vector<std::string> v_sz_mode = {
     //     "32B-160B", "1KB-4KB", "100KB-1001KB", "50MB-301MB"};
-    LOG(INFO) << "test_params-------"
-              << "\nn_tables:" << FLAGS_n_tables
+    LOG(INFO) << "test_params-------" << "\nn_tables:" << FLAGS_n_tables
               << "\nn_partitions:" << FLAGS_n_partitions
               << "\nmax_key:" << FLAGS_max_key
               << "\nops_per_partition:" << FLAGS_ops_per_partition
@@ -142,7 +141,6 @@ void RunStressTest(int argc, char **argv)
         opts.archive_interval_secs = FLAGS_archive_interval_secs;
         opts.max_archive_tasks = FLAGS_max_archive_tasks;
         opts.file_amplify_factor = FLAGS_file_amplify_factor;
-        opts.num_gc_threads = FLAGS_num_gc_threads;
         opts.local_space_limit = FLAGS_local_space_limit;
         opts.reserve_space_ratio = FLAGS_reserve_space_ratio;
         opts.overflow_pointers = FLAGS_overflow_pointers;

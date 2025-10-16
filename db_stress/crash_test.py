@@ -148,7 +148,6 @@ def randomize_dynamic_params():
         "buf_ring_size": lambda: random.choice([1<<9, 1<<10, 1<<11, 1<<12]),
         # "coroutine_stack_size": lambda: random.choice([1<<13, 1<<14, 1<<15]),
         "file_amplify_factor": random.choice([2]),
-        #"num_gc_threads": random.choice([1, 2, 4]),
         "reserve_space_ratio": random.choice([50, 100, 150, 200]),
     }
 
@@ -239,7 +238,6 @@ default_params = {
 #    "coroutine_stack_size" :lambda:1<<14,#default 8*1024
     "max_inflight_write":4096,#default 4096
     "file_amplify_factor":4,#default 4
-    "num_gc_threads":1,#default 1
     "local_space_limit":20*1024*1024*1024,#2G
     "reserve_space_ratio":100,#default 100
     "overflow_pointers":16,#default 16

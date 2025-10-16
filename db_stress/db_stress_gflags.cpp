@@ -100,7 +100,6 @@ DEFINE_uint32(max_archive_tasks, 256, "max running archive tasks");
 DEFINE_uint32(file_amplify_factor,
               2,
               "move pages in data file that space amplification factor");
-DEFINE_uint32(num_gc_threads, 1, "num of bg file GC threads");
 DEFINE_uint64(local_space_limit,
               size_t(1) << 40,
               "limit total size of local files per shard");
