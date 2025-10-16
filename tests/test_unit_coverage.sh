@@ -22,6 +22,30 @@ fi
 
 echo "✓ lcov and genhtml are installed"
 echo
+echo "✓ lcov and genhtml are installed"
+echo
+
+echo "2. Checking GCC and GCOV version compatibility..."
+if command -v gcc &> /dev/null && command -v gcov &> /dev/null; then
+    GCC_VERSION=$(gcc --version | head -n1 | awk '{print $NF}')
+    GCOV_VERSION=$(gcov --version | head -n1 | awk '{print $NF}')
+    
+    echo "   GCC version: $GCC_VERSION"
+    echo "   GCOV version: $GCOV_VERSION"
+    
+    if [ "$GCC_VERSION" != "$GCOV_VERSION" ]; then
+        echo "⚠️  Warning: GCC version ($GCC_VERSION) and GCOV version ($GCOV_VERSION) differ"
+        echo "   This may cause coverage data compatibility issues"
+        echo "   Consider using matching versions or ignore with --ignore-errors version"
+    else
+        echo "✓ GCC and GCOV versions match"
+    fi
+else
+    echo "⚠️  Cannot check GCC/GCOV versions: one or both tools not found"
+fi
+echo
+
+
 
 # Set directories - using relative paths
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
