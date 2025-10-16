@@ -69,6 +69,8 @@ struct KvOptions
      */
     uint32_t coroutine_stack_size = 32 * 1024;
 
+    // TODO(SJH):Design a large-scale cleanup that runs once a day and
+    // delete the archives that are exceeded the limit.
     /**
      * @brief Limit number of retained archives.
      * Only take effect when data_append_mode is enabled.
