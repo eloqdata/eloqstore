@@ -33,7 +33,18 @@ std::string Value(uint64_t val, uint32_t len)
     std::string s = std::to_string(val);
     if (s.size() < len)
     {
-        s.resize(len, '#');
+        thread_local std::mt19937 rng{std::random_device{}()};
+        static const char charset[] =
+            "0123456789"
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            "abcdefghijklmnopqrstuvwxyz";
+        std::uniform_int_distribution<size_t> dist(0, sizeof(charset) - 2);
+
+        s.reserve(len);
+        while (s.size() < len)
+        {
+            s.push_back(charset[dist(rng)]);
+        }
     }
     return s;
 }
