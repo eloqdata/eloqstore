@@ -1,11 +1,70 @@
 #include "kv_options.h"
 
+#include <glog/logging.h>
+
 #include <boost/algorithm/string.hpp>
+#include <catch2/catch_test_macros.hpp>
 
 #include "inih/cpp/INIReader.h"
 
 namespace eloqstore
 {
+// Helper function to parse size with units (KB, MB, GB)
+static uint64_t ParseSizeWithUnit(const std::string &value_str)
+{
+    if (value_str.empty())
+    {
+        return 0;
+    }
+
+    std::string str = value_str;
+    boost::algorithm::trim(str);
+
+    // Convert to uppercase for case-insensitive comparison
+    std::string upper_str = str;
+    boost::algorithm::to_upper(upper_str);
+
+    uint64_t multiplier = 1;
+    size_t unit_pos = std::string::npos;
+
+    if (upper_str.length() >= 2)
+    {
+        std::string suffix = upper_str.substr(upper_str.length() - 2);
+        if (suffix == "KB")
+        {
+            multiplier = KB;
+            unit_pos = str.length() - 2;
+        }
+        else if (suffix == "MB")
+        {
+            multiplier = MB;
+            unit_pos = str.length() - 2;
+        }
+        else if (suffix == "GB")
+        {
+            multiplier = GB;
+            unit_pos = str.length() - 2;
+        }
+    }
+
+    // Extract the numeric part
+    std::string numeric_part =
+        (unit_pos != std::string::npos) ? str.substr(0, unit_pos) : str;
+    boost::algorithm::trim(numeric_part);
+
+    // Parse the numeric value
+    char *end;
+    uint64_t value = strtoull(numeric_part.c_str(), &end, 0);
+
+    // Check if parsing was successful
+    if (end == numeric_part.c_str() || *end != '\0')
+    {
+        return 0;  // Invalid format
+    }
+
+    uint64_t result = value * multiplier;
+    return result;
+}
 int KvOptions::LoadFromIni(const char *path)
 {
     INIReader reader(path);
@@ -50,8 +109,7 @@ int KvOptions::LoadFromIni(const char *path)
     }
     if (reader.HasValue(sec_run, "manifest_limit"))
     {
-        manifest_limit =
-            reader.GetUnsigned(sec_run, "manifest_limit", 16 << 20);
+        manifest_limit = reader.GetUnsigned(sec_run, "manifest_limit", 8 * MB);
     }
     if (reader.HasValue(sec_run, "fd_limit"))
     {
@@ -78,7 +136,7 @@ int KvOptions::LoadFromIni(const char *path)
     if (reader.HasValue(sec_run, "coroutine_stack_size"))
     {
         coroutine_stack_size =
-            reader.GetUnsigned(sec_run, "coroutine_stack_size", 16 * 1024);
+            reader.GetUnsigned(sec_run, "coroutine_stack_size", 16 * KB);
     }
 
     if (reader.HasValue(sec_run, "num_retained_archives"))
@@ -133,13 +191,31 @@ int KvOptions::LoadFromIni(const char *path)
     }
     if (reader.HasValue(sec_permanent, "data_page_size"))
     {
-        data_page_size =
-            reader.GetUnsigned(sec_permanent, "data_page_size", 1 << 12);
+        std::string value_str =
+            reader.Get(sec_permanent, "data_page_size", "4KB");
+        uint64_t parsed_size = ParseSizeWithUnit(value_str);
+        data_page_size = (parsed_size > 0) ? parsed_size : (1 << 12);
     }
-    if (reader.HasValue(sec_permanent, "pages_per_file_shift"))
+    if (reader.HasValue(sec_permanent, "data_file_size"))
     {
-        pages_per_file_shift =
-            reader.GetUnsigned(sec_permanent, "pages_per_file_shift", 11);
+        std::string value_str =
+            reader.Get(sec_permanent, "data_file_size", "8MB");
+        uint64_t parsed_size = ParseSizeWithUnit(value_str);
+        uint32_t data_file_size = (parsed_size > 0) ? parsed_size : (8 * MB);
+        // Calculate pages_per_file_shift from data_file_size
+        // data_file_size = data_page_size * (1 << pages_per_file_shift)
+        // So pages_per_file_shift = log2(data_file_size / data_page_size)
+        uint32_t pages_per_file = data_file_size / data_page_size;
+        LOG(INFO) << "LoadFromIni: pages_per_file calculated as "
+                  << pages_per_file << " (data_file_size=" << data_file_size
+                  << " / data_page_size=" << data_page_size << ")";
+        pages_per_file_shift = 0;
+        while ((1U << pages_per_file_shift) < pages_per_file)
+        {
+            pages_per_file_shift++;
+        }
+        LOG(INFO) << "LoadFromIni: final pages_per_file_shift="
+                  << (int) pages_per_file_shift;
     }
     if (reader.HasValue(sec_permanent, "overflow_pointers"))
     {

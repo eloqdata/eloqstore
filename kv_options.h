@@ -9,6 +9,10 @@
 
 namespace eloqstore
 {
+constexpr int KB = 1024;
+constexpr int MB = KB * KB;
+constexpr int GB = MB * KB;
+
 constexpr uint8_t max_overflow_pointers = 128;
 constexpr uint16_t max_read_pages_batch = max_overflow_pointers;
 
@@ -40,7 +44,7 @@ struct KvOptions
     /**
      * @brief Limit manifest file size.
      */
-    uint32_t manifest_limit = 8 << 20;  // 8MB
+    uint32_t manifest_limit = 8 * MB;
     /**
      * @brief Max number of open files.
      */
@@ -67,7 +71,7 @@ struct KvOptions
      * @brief Size of coroutine stack.
      * According to the latest test results, at least 16KB is required.
      */
-    uint32_t coroutine_stack_size = 32 * 1024;
+    uint32_t coroutine_stack_size = 32 * KB;
 
     // TODO(SJH):Design a large-scale cleanup that runs once a day and
     // delete the archives that are exceeded the limit.
@@ -97,7 +101,7 @@ struct KvOptions
      * @brief Limit total size of local files.
      * Only take effect when cloud store is enabled.
      */
-    size_t local_space_limit = size_t(1) << 40;  // 1TB
+    size_t local_space_limit = size_t(1) * GB;  // 1GB
     /**
      * @brief Reserved space ratio for new created/download files.
      * At most (local_space_limit / reserve_space_ratio) bytes is reserved.
@@ -134,7 +138,7 @@ struct KvOptions
      * @brief Size of B+Tree index/data node (page).
      * Ensure that it is aligned to the system's page size.
      */
-    uint16_t data_page_size = 1 << 12;  // 4KB
+    uint16_t data_page_size = 4 * KB;
 
     size_t FilePageOffsetMask() const;
     size_t DataFileSize() const;
