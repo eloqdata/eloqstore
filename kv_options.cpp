@@ -2,8 +2,11 @@
 
 #include <glog/logging.h>
 
+#include <bit>
 #include <boost/algorithm/string.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <limits>
+#include <string>
 
 #include "inih/cpp/INIReader.h"
 
@@ -104,8 +107,9 @@ int KvOptions::LoadFromIni(const char *path)
     }
     if (reader.HasValue(sec_run, "index_buffer_pool_size"))
     {
-        index_buffer_pool_size =
-            reader.GetUnsigned(sec_run, "index_buffer_pool_size", UINT32_MAX);
+        std::string index_buffer_pool_size_str =
+            reader.Get(sec_run, "index_buffer_pool_size", "");
+        index_buffer_pool_size = ParseSizeWithUnit(index_buffer_pool_size_str);
     }
     if (reader.HasValue(sec_run, "manifest_limit"))
     {
@@ -204,18 +208,31 @@ int KvOptions::LoadFromIni(const char *path)
         uint32_t data_file_size = (parsed_size > 0) ? parsed_size : (8 * MB);
         // Calculate pages_per_file_shift from data_file_size
         // data_file_size = data_page_size * (1 << pages_per_file_shift)
-        // So pages_per_file_shift = log2(data_file_size / data_page_size)
+        // So pages_per_file_shift = floor(log2(data_file_size / data_page_size))
         uint32_t pages_per_file = data_file_size / data_page_size;
-        LOG(INFO) << "LoadFromIni: pages_per_file calculated as "
-                  << pages_per_file << " (data_file_size=" << data_file_size
-                  << " / data_page_size=" << data_page_size << ")";
-        pages_per_file_shift = 0;
-        while ((1U << pages_per_file_shift) < pages_per_file)
+        if (pages_per_file == 0)
         {
-            pages_per_file_shift++;
+            LOG(WARNING) << "data_file_size " << data_file_size
+                         << " is smaller than data_page_size "
+                         << data_page_size << ", falling back to one page.";
+            pages_per_file_shift = 0;
         }
-        LOG(INFO) << "LoadFromIni: final pages_per_file_shift="
-                  << (int) pages_per_file_shift;
+        else
+        {
+            pages_per_file_shift =
+                std::numeric_limits<uint32_t>::digits -
+                std::countl_zero(pages_per_file) - 1;
+            if ((pages_per_file & (pages_per_file - 1)) != 0)
+            {
+                uint32_t adjusted_pages = 1U << pages_per_file_shift;
+                uint64_t adjusted_size =
+                    static_cast<uint64_t>(adjusted_pages) * data_page_size;
+                LOG(WARNING) << "data_file_size " << data_file_size
+                             << " is not a power-of-two multiple of page size "
+                             << data_page_size << ", rounded down to "
+                             << adjusted_size << " bytes.";
+            }
+        }
     }
     if (reader.HasValue(sec_permanent, "overflow_pointers"))
     {

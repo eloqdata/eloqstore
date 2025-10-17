@@ -88,7 +88,9 @@ void IndexPageManager::EnqueueIndexPage(MemIndexPage *page)
 
 bool IndexPageManager::IsFull() const
 {
-    return index_pages_.size() >= Options()->index_buffer_pool_size;
+    // Calculate current total memory usage
+    size_t current_size = index_pages_.size() * Options()->data_page_size;
+    return current_size >= Options()->index_buffer_pool_size;
 }
 
 std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(

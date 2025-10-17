@@ -85,8 +85,10 @@ char *Page::Ptr() const
 PagesPool::PagesPool(const KvOptions *options)
     : options_(options), free_head_(nullptr), free_cnt_(0)
 {
-    const size_t pool_size =
-        options->index_buffer_pool_size + options->buf_ring_size;
+    // Calculate the number of pages from the total pool size in bytes
+    const size_t index_buffer_pages =
+        options->index_buffer_pool_size / options->data_page_size;
+    const size_t pool_size = index_buffer_pages + options->buf_ring_size;
     Extend(pool_size);
 }
 

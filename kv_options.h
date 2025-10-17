@@ -10,8 +10,9 @@
 namespace eloqstore
 {
 constexpr int KB = 1024;
-constexpr int MB = KB * KB;
-constexpr int GB = MB * KB;
+constexpr int MB = KB * 1024;
+constexpr int GB = MB * 1024;
+constexpr int64_t TB = static_cast<int64_t>(GB) * 1024;
 
 constexpr uint8_t max_overflow_pointers = 128;
 constexpr uint16_t max_read_pages_batch = max_overflow_pointers;
@@ -38,9 +39,9 @@ struct KvOptions
      */
     bool skip_verify_checksum = false;
     /**
-     * @brief Max amount of cached index pages per shard.
+     * @brief Max size of cached index pages per shard (in bytes).
      */
-    uint32_t index_buffer_pool_size = 1 << 15;
+    uint32_t index_buffer_pool_size = 32 * MB;
     /**
      * @brief Limit manifest file size.
      */
@@ -72,9 +73,6 @@ struct KvOptions
      * According to the latest test results, at least 16KB is required.
      */
     uint32_t coroutine_stack_size = 32 * KB;
-
-    // TODO(SJH):Design a large-scale cleanup that runs once a day and
-    // delete the archives that are exceeded the limit.
     /**
      * @brief Limit number of retained archives.
      * Only take effect when data_append_mode is enabled.
@@ -101,7 +99,7 @@ struct KvOptions
      * @brief Limit total size of local files.
      * Only take effect when cloud store is enabled.
      */
-    size_t local_space_limit = size_t(1) * GB;  // 1GB
+    size_t local_space_limit = size_t(1) * TB;
     /**
      * @brief Reserved space ratio for new created/download files.
      * At most (local_space_limit / reserve_space_ratio) bytes is reserved.
