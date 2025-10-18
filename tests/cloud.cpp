@@ -295,7 +295,7 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
     std::string archive_name;
     for (const auto &filename : cloud_files)
     {
-        if (filename.find("manifest_") == 0)
+        if (filename.starts_with("manifest_") && filename != backup_name)
         {
             archive_name = filename;
             break;
