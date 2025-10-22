@@ -37,6 +37,7 @@ std::string_view ManifestBuilder::Snapshot(PageId root_id,
                                            std::string_view dict_bytes)
 {
     Reset();
+    buff_.reserve(4 + 8 * (mapping->mapping_tbl_.size() + 1));
     PutVarint64(&buff_, max_fp_id);
     PutVarint32(&buff_, dict_bytes.size());
     buff_.append(dict_bytes.data(), dict_bytes.size());

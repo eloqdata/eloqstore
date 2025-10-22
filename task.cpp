@@ -147,20 +147,17 @@ std::pair<std::string_view, KvError> ResolveValue(
     const compression::DictCompression *compression)
 {
     storage.clear();
-    bool is_overflow = false;
-    std::string overflow_value_holder;
     std::string_view raw_value;
 
     if (iter.IsOverflow())
     {
-        is_overflow = true;
         auto ret = GetOverflowValue(tbl_id, mapping, iter.Value());
         if (ret.second != KvError::NoError)
         {
             return {{}, ret.second};
         }
-        overflow_value_holder = std::move(ret.first);
-        raw_value = overflow_value_holder;
+        storage = std::move(ret.first);
+        raw_value = storage;
     }
     else
     {
@@ -169,21 +166,28 @@ std::pair<std::string_view, KvError> ResolveValue(
 
     if (iter.CompressionType() == compression::CompressionType::None)
     {
-        if (is_overflow)
-        {
-            storage = std::move(overflow_value_holder);
-            return {storage, KvError::NoError};
-        }
-        return {iter.Value(), KvError::NoError};
+        return {raw_value, KvError::NoError};
     }
-
-    if (!(iter.CompressionType() == compression::CompressionType::Dictionary
-              ? compression->Decompress(raw_value, storage)
-              : compression::DecompressRaw(raw_value, storage)))
+    else if (iter.CompressionType() == compression::CompressionType::Dictionary)
     {
-        return {{}, KvError::Corrupted};
+        std::string uncompressed_value;
+        if (!compression->Decompress(raw_value, uncompressed_value))
+        {
+            return {{}, KvError::Corrupted};
+        }
+        storage = std::move(uncompressed_value);
+        return {storage, KvError::NoError};
     }
-    return {storage, KvError::NoError};
+    else
+    {
+        std::string uncompressed_value;
+        if (!compression::DecompressRaw(raw_value, uncompressed_value))
+        {
+            return {{}, KvError::Corrupted};
+        }
+        storage = std::move(uncompressed_value);
+        return {storage, KvError::NoError};
+    }
 }
 
 uint8_t DecodeOverflowPointers(
