@@ -20,7 +20,6 @@ public:
 
     std::string_view Key() const;
     std::pair<std::string_view, KvError> ResolveValue(std::string &storage);
-    bool IsOverflow() const;
     uint64_t ExpireTs() const;
     uint64_t Timestamp() const;
 

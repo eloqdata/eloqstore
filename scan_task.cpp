@@ -83,11 +83,6 @@ std::pair<std::string_view, KvError> ScanIterator::ResolveValue(
         tbl_id_, mapping_.get(), iter_, storage, compression_);
 }
 
-bool ScanIterator::IsOverflow() const
-{
-    return iter_.IsOverflow();
-}
-
 uint64_t ScanIterator::ExpireTs() const
 {
     return iter_.ExpireTs();
