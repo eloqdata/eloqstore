@@ -4,6 +4,7 @@
 
 #include <cassert>
 #include <cstdint>
+#include <memory>
 #include <utility>
 
 #include "async_io_manager.h"
@@ -117,6 +118,7 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
         meta->Pin();
         meta->manifest_size_ = replayer.file_size_;
         meta->next_expire_ts_ = 0;
+        meta->compression_->LoadDictionary(std::move(replayer.dict_bytes_));
         if (meta->ttl_root_id_ != MaxPageId)
         {
             // For simplicity, we initialize next_expire_ts_ to 1,
@@ -179,6 +181,16 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
         cow_meta.old_mapping_ = meta->mapper_->GetMappingSnapshot();
         cow_meta.manifest_size_ = meta->manifest_size_;
         cow_meta.next_expire_ts_ = meta->next_expire_ts_;
+        if (meta->compression_->Dirty())
+        {
+            // This only happens when the dictionary is built from values with
+            // expired timestamps. If eloqstore stops before any new value
+            // arrives, this dictionary can be discarded since no value has been
+            // written. Otherwise, the dictionary can still be used to compress
+            // subsequent values.
+            assert(cow_meta.manifest_size_ == 0);
+        }
+        cow_meta.compression_ = meta->compression_;
     }
     else if (err == KvError::NotFound)
     {
@@ -194,6 +206,8 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
         cow_meta.old_mapping_ = std::move(mapping);
         cow_meta.manifest_size_ = 0;
         cow_meta.next_expire_ts_ = 0;
+        cow_meta.compression_ =
+            std::make_shared<compression::DictCompression>();
         meta = &tbl_it->second;
     }
     else
@@ -223,6 +237,7 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
     meta.mapper_ = std::move(new_meta.mapper_);
     meta.manifest_size_ = new_meta.manifest_size_;
     meta.next_expire_ts_ = new_meta.next_expire_ts_;
+    meta.compression_ = std::move(new_meta.compression_);
 }
 
 std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(

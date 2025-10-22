@@ -1,5 +1,8 @@
 #include "read_task.h"
 
+#include <string>
+#include <utility>
+
 #include "error.h"
 #include "mem_index_page.h"
 #include "page_mapper.h"
@@ -37,16 +40,11 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
         return KvError::NotFound;
     }
 
-    if (iter.IsOverflow())
-    {
-        auto ret = GetOverflowValue(tbl_id, mapping.get(), iter.Value());
-        CHECK_KV_ERR(ret.second);
-        value = std::move(ret.first);
-    }
-    else
-    {
-        value = iter.Value();
-    }
+    std::string value_storage;
+    auto [val_view, fetch_err] = ResolveValue(
+        tbl_id, mapping.get(), iter, value_storage, meta->compression_.get());
+    CHECK_KV_ERR(fetch_err);
+    value = value_storage.empty() ? val_view : std::move(value_storage);
     timestamp = iter.Timestamp();
     expire_ts = iter.ExpireTs();
     return KvError::NoError;
@@ -92,16 +90,11 @@ KvError ReadTask::Floor(const TableIdent &tbl_id,
         CHECK(found);
     }
     floor_key = iter.Key();
-    if (iter.IsOverflow())
-    {
-        auto ret = GetOverflowValue(tbl_id, mapping.get(), iter.Value());
-        CHECK_KV_ERR(ret.second);
-        value = std::move(ret.first);
-    }
-    else
-    {
-        value = iter.Value();
-    }
+    std::string value_storage;
+    auto [val_view, fetch_err] = ResolveValue(
+        tbl_id, mapping.get(), iter, value_storage, meta->compression_.get());
+    CHECK_KV_ERR(fetch_err);
+    value = value_storage.empty() ? val_view : std::move(value_storage);
     timestamp = iter.Timestamp();
     expire_ts = iter.ExpireTs();
     return KvError::NoError;

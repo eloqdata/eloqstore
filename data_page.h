@@ -6,18 +6,20 @@
 #include <utility>
 
 #include "comparator.h"
+#include "compression.h"
 #include "kv_options.h"
 #include "page.h"
 #include "types.h"
 
 namespace eloqstore
 {
+class DictCompression;
 enum class ValLenBit : uint8_t
 {
     Overflow = 0,
     Expire,
-    Reserved2,
-    Reserved3,
+    DictionaryCompressed,
+    StandaloneCompressed,
     BitsCount
 };
 
@@ -78,6 +80,7 @@ public:
     std::string_view Key() const;
     std::string_view Value() const;
     bool IsOverflow() const;
+    compression::CompressionType CompressionType() const;
     uint64_t ExpireTs() const;
     uint64_t Timestamp() const;
 
@@ -110,13 +113,15 @@ private:
     void SeekToRestart(uint16_t restart_idx);
     bool ParseNextKey();
     void Invalidate();
-    static const char *DecodeEntry(const char *p,
-                                   const char *limit,
-                                   uint32_t *shared,
-                                   uint32_t *non_shared,
-                                   uint32_t *value_length,
-                                   bool *overflow,
-                                   bool *expire);
+    static const char *DecodeEntry(
+        const char *p,
+        const char *limit,
+        uint32_t *shared,
+        uint32_t *non_shared,
+        uint32_t *value_length,
+        bool *overflow,
+        bool *expire,
+        compression::CompressionType *compression_kind);
 
     const Comparator *const cmp_;
     std::string_view page_;
@@ -129,6 +134,8 @@ private:
     std::string key_;
     std::string_view value_;
     bool overflow_;
+    compression::CompressionType compression_type_{
+        compression::CompressionType::None};
     uint64_t timestamp_;
     uint64_t expire_ts_;
 };

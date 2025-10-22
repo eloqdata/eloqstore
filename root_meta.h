@@ -1,10 +1,12 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <unordered_set>
 
+#include "compression.h"
 #include "mem_index_page.h"
 #include "page_mapper.h"
 #include "task.h"
@@ -20,7 +22,8 @@ public:
     std::string_view Snapshot(PageId root_id,
                               PageId ttl_root,
                               const MappingSnapshot *mapping,
-                              FilePageId max_fp_id);
+                              FilePageId max_fp_id,
+                              std::string_view dict_bytes);
 
     std::string_view Finalize(PageId new_root, PageId ttl_root);
     std::string_view BuffView() const;
@@ -50,11 +53,14 @@ struct CowRootMeta
     uint64_t manifest_size_{};
     std::shared_ptr<MappingSnapshot> old_mapping_{nullptr};
     uint64_t next_expire_ts_{};
+    std::shared_ptr<compression::DictCompression> compression_{nullptr};
 };
 
 struct RootMeta
 {
-    RootMeta() = default;
+    RootMeta() : compression_(std::make_shared<compression::DictCompression>())
+    {
+    }
     RootMeta(const RootMeta &rhs) = delete;
     RootMeta(RootMeta &&rhs) = default;
     void Pin();
@@ -66,6 +72,7 @@ struct RootMeta
     std::unordered_set<MappingSnapshot *> mapping_snapshots_;
     uint64_t manifest_size_{0};
     uint64_t next_expire_ts_{0};
+    std::shared_ptr<compression::DictCompression> compression_{nullptr};
 
     uint32_t ref_cnt_{0};
     bool locked_{false};

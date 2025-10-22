@@ -93,7 +93,7 @@ private:
      * @brief Batch of updates that need to be applied on the TTL tree.
      */
     std::vector<WriteDataEntry> ttl_batch_;
-    bool do_update_ttl_;
+    bool do_update_ttl_{};
     inline void UpdateTTL(uint64_t expire_ts, std::string_view key, WriteOp op);
 
     std::vector<std::unique_ptr<IndexStackEntry>> stack_;

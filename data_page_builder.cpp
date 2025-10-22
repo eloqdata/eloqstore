@@ -1,5 +1,7 @@
 #include "data_page_builder.h"
 
+#include <glog/logging.h>
+
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -144,7 +146,8 @@ bool DataPageBuilder::Add(std::string_view key,
                           std::string_view value,
                           bool overflow,
                           uint64_t ts,
-                          uint64_t expire_ts)
+                          uint64_t expire_ts,
+                          compression::CompressionType compression_kind)
 {
 #ifndef NDEBUG
     size_t buf_prev_size = buffer_.size();
@@ -158,6 +161,9 @@ bool DataPageBuilder::Add(std::string_view key,
 
     size_t stored_val_len = value.size() << uint8_t(ValLenBit::BitsCount);
     stored_val_len |= (overflow << uint8_t(ValLenBit::Overflow));
+    auto comp_bits = static_cast<uint8_t>(compression_kind);
+    assert(comp_bits < 0b11);
+    stored_val_len |= comp_bits << uint8_t(ValLenBit::DictionaryCompressed);
     if (expire_ts != 0)
     {
         stored_val_len |= (1 << uint8_t(ValLenBit::Expire));

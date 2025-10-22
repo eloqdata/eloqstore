@@ -3,6 +3,8 @@
 #include <cassert>
 #include <cstdint>
 #include <memory>
+#include <string>
+#include <utility>
 
 #include "error.h"
 #include "page_mapper.h"
@@ -24,6 +26,7 @@ KvError ScanIterator::Seek(std::string_view key, bool ttl)
     {
         return KvError::EndOfFile;
     }
+    compression_ = meta->compression_.get();
     mapping_ = meta->mapper_->GetMappingSnapshot();
 
     PageId page_id;
@@ -73,9 +76,11 @@ std::string_view ScanIterator::Key() const
     return iter_.Key();
 }
 
-std::string_view ScanIterator::Value() const
+std::pair<std::string_view, KvError> ScanIterator::ResolveValue(
+    std::string &storage)
 {
-    return iter_.Value();
+    return eloqstore::ResolveValue(
+        tbl_id_, mapping_.get(), iter_, storage, compression_);
 }
 
 bool ScanIterator::IsOverflow() const
@@ -129,6 +134,7 @@ KvError ScanTask::Scan()
         }
     }
 
+    std::string value_storage;
     while (req->EndKey().empty() ||
            Comp()->Compare(iter.Key(), req->EndKey()) < 0)
     {
@@ -140,21 +146,10 @@ KvError ScanTask::Scan()
         }
 
         // Fetch value
-        std::string overflow_value;
-        std::string_view value;
-        if (iter.IsOverflow())
-        {
-            auto ret = GetOverflowValue(tbl_id, iter.Mapping(), iter.Value());
-            err = ret.second;
-            assert(err != KvError::EndOfFile);
-            CHECK_KV_ERR(err);
-            overflow_value = std::move(ret.first);
-            value = overflow_value;
-        }
-        else
-        {
-            value = iter.Value();
-        }
+        auto [value, fetch_err] = iter.ResolveValue(value_storage);
+        err = fetch_err;
+        assert(err != KvError::EndOfFile);
+        CHECK_KV_ERR(err);
 
         // Check result size limit.
         const size_t entry_size = iter.Key().size() + value.size() +
@@ -172,14 +167,7 @@ KvError ScanTask::Scan()
                              : req->entries_.emplace_back();
         req->num_entries_++;
         entry.key_.assign(iter.Key());
-        if (iter.IsOverflow())
-        {
-            entry.value_ = std::move(overflow_value);
-        }
-        else
-        {
-            entry.value_.assign(value);
-        }
+        entry.value_ = value_storage.empty() ? value : std::move(value_storage);
         entry.timestamp_ = iter.Timestamp();
         entry.expire_ts_ = iter.ExpireTs();
 

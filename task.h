@@ -3,8 +3,12 @@
 #include <boost/context/continuation.hpp>
 #include <cassert>
 #include <cstdint>
+#include <string>
+#include <string_view>
+#include <utility>
 
 #include "comparator.h"
+#include "compression.h"
 #include "data_page.h"
 #include "error.h"
 #include "types.h"
@@ -15,7 +19,7 @@ class KvRequest;
 class KvTask;
 class IndexPageManager;
 class AsyncIoManager;
-class KvOptions;
+struct KvOptions;
 class TaskManager;
 class PagesPool;
 class MappingSnapshot;
@@ -66,6 +70,13 @@ std::pair<OverflowPage, KvError> LoadOverflowPage(const TableIdent &tbl_id,
 std::pair<std::string, KvError> GetOverflowValue(const TableIdent &tbl_id,
                                                  const MappingSnapshot *mapping,
                                                  std::string_view encoded_ptrs);
+
+std::pair<std::string_view, KvError> ResolveValue(
+    const TableIdent &tbl_id,
+    MappingSnapshot *mapping,
+    DataPageIter &iter,
+    std::string &storage,
+    const compression::DictCompression *compression);
 /**
  * @brief Decode overflow pointers.
  * @param encoded The encoded overflow pointers.

@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "async_io_manager.h"
 #include "error.h"
@@ -23,6 +24,7 @@ public:
     std::vector<uint64_t> mapping_tbl_;
     FilePageId max_fp_id_;
     uint64_t file_size_;
+    std::string dict_bytes_;
 
 private:
     KvError ParseNextRecord(ManifestFile *file);

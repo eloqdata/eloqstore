@@ -5,6 +5,7 @@
 #include <string_view>
 #include <vector>
 
+#include "data_page.h"
 #include "kv_options.h"
 #include "page.h"
 
@@ -28,7 +29,8 @@ public:
              std::string_view value,
              bool overflow,
              uint64_t ts,
-             uint64_t expire_ts);
+             uint64_t expire_ts,
+             compression::CompressionType compression_kind);
 
     // Finish building the block and return a view that refers to the page
     // contents. The returned view will remain valid for the lifetime of this

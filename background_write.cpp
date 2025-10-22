@@ -1,5 +1,7 @@
 #include "background_write.h"
 
+#include <string>
+
 #include "shard.h"
 #include "utils.h"
 
@@ -237,8 +239,13 @@ KvError BackgroundWrite::CreateArchive()
     PageId ttl_root = meta->ttl_root_id_;
     MappingSnapshot *mapping = meta->mapper_->GetMapping();
     FilePageId max_fp_id = meta->mapper_->FilePgAllocator()->MaxFilePageId();
+    std::string_view dict_bytes;
+    if (meta->compression_->HasDictionary())
+    {
+        dict_bytes = meta->compression_->DictionaryBytes();
+    }
     std::string_view snapshot =
-        wal_builder_.Snapshot(root, ttl_root, mapping, max_fp_id);
+        wal_builder_.Snapshot(root, ttl_root, mapping, max_fp_id, dict_bytes);
 
     uint64_t current_ts = utils::UnixTs<chrono::microseconds>();
     err = IoMgr()->CreateArchive(tbl_ident_, snapshot, current_ts);

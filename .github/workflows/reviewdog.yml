@@ -23,4 +23,5 @@ jobs:
           ,-whitespace/parens\
           ,-build/include_subdir\
           ,-runtime/references\
+          ,-build/include_order\
           " # Optional

@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <string_view>
 #include <utility>
 
@@ -216,8 +217,15 @@ KvError WriteTask::FlushManifest()
     const KvOptions *opts = Options();
     KvError err;
     uint64_t manifest_size = cow_meta_.manifest_size_;
-    std::string_view snapshot;
-    if (manifest_size > 0 &&
+    std::string_view dict_bytes;
+    CHECK(cow_meta_.compression_ != nullptr);
+    if (cow_meta_.compression_->HasDictionary())
+    {
+        const std::string &dict_vec = cow_meta_.compression_->DictionaryBytes();
+        dict_bytes = {dict_vec.data(), dict_vec.size()};
+    }
+    const bool dict_dirty = cow_meta_.compression_->Dirty();
+    if (!dict_dirty && manifest_size > 0 &&
         manifest_size + wal_builder_.CurrentSize() <= opts->manifest_limit)
     {
         std::string_view blob =
@@ -231,11 +239,16 @@ KvError WriteTask::FlushManifest()
         MappingSnapshot *mapping = cow_meta_.mapper_->GetMapping();
         FilePageId max_fp_id =
             cow_meta_.mapper_->FilePgAllocator()->MaxFilePageId();
-        snapshot = wal_builder_.Snapshot(
-            cow_meta_.root_id_, cow_meta_.ttl_root_id_, mapping, max_fp_id);
+        std::string_view snapshot =
+            wal_builder_.Snapshot(cow_meta_.root_id_,
+                                  cow_meta_.ttl_root_id_,
+                                  mapping,
+                                  max_fp_id,
+                                  dict_bytes);
         err = IoMgr()->SwitchManifest(tbl_ident_, snapshot);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
+        cow_meta_.compression_->ClearDirty();
     }
     return KvError::NoError;
 }

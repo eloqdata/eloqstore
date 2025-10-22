@@ -1,6 +1,14 @@
 #include "batch_write_task.h"
 
+#include <algorithm>
+#include <cassert>
+#include <limits>
+#include <memory>
+
+#include "coding.h"
+#include "compression.h"
 #include "shard.h"
+#include "task.h"
 #include "utils.h"
 #include "write_tree_stack.h"
 
@@ -232,6 +240,7 @@ void BatchWriteTask::Abort()
 KvError BatchWriteTask::Apply()
 {
     KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
+    cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     CHECK_KV_ERR(err);
     err = ApplyBatch(cow_meta_.root_id_, true);
     CHECK_KV_ERR(err);
@@ -379,6 +388,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     }
 
     const Comparator *cmp = shard->IndexManager()->GetComparator();
+    compression::DictCompression *compression = cow_meta_.compression_.get();
     DataPageIter base_page_iter{base_page, Options()};
     bool is_base_iter_valid = false;
     AdvanceDataPageIter(base_page_iter, is_base_iter_valid);
@@ -421,6 +431,10 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         assert(page_key <= base_page_iter.Key());
     }
 
+    std::string compression_scratch;
+    compression::CompressionType compression_type =
+        compression::CompressionType::None;
+
     auto add_to_page = utils::MakeYCombinator(
         [&](auto &&self,
             std::string_view key,
@@ -441,8 +455,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
                 return KvError::NoError;
             }
 
-            bool success =
-                data_page_builder_.Add(key, val, is_ptr, ts, expire_ts);
+            bool success = data_page_builder_.Add(
+                key, val, is_ptr, ts, expire_ts, compression_type);
             if (!success)
             {
                 if (!is_ptr && DataPageBuilder::IsOverflowKV(
@@ -463,8 +477,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
                     {prev_key.data(), prev_key.size()}, key);
                 assert(!prev_key.empty() && prev_key < curr_page_key);
                 data_page_builder_.Reset();
-                success =
-                    data_page_builder_.Add(key, val, is_ptr, ts, expire_ts);
+                success = data_page_builder_.Add(
+                    key, val, is_ptr, ts, expire_ts, compression_type);
                 assert(success);
                 page_id = MaxPageId;
             }
@@ -476,6 +490,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     while (is_base_iter_valid && change_it != change_end_it)
     {
         std::string_view base_key = base_page_iter.Key();
+        bool add_change_key = false;
         std::string_view base_val = base_page_iter.Value();
         uint64_t base_ts = base_page_iter.Timestamp();
         bool is_overflow_ptr = false;
@@ -540,6 +555,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
                     new_key = change_key;
                     new_val = change_val;
                     new_ts = change_ts;
+                    add_change_key = true;
                     // update expire timestamp only if it is changed.
                     if (base_expire != expire_ts)
                     {
@@ -572,6 +588,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
                 new_key = change_key;
                 new_val = change_val;
                 new_ts = change_ts;
+                add_change_key = true;
                 expire_ts = change_it->expire_ts_;
                 UpdateTTL(expire_ts, new_key, WriteOp::Upsert);
             }
@@ -579,6 +596,18 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
 
         if (!new_key.empty())
         {
+            if (add_change_key)
+            {
+                compression::PreparedValue prepared = compression::Prepare(
+                    new_val, compression, compression_scratch);
+                new_val = prepared.data;
+                compression_type = prepared.compression_kind;
+                assert(uint8_t(compression_type) <= 3);
+            }
+            else
+            {
+                compression_type = base_page_iter.CompressionType();
+            }
             err = add_to_page(
                 new_key, new_val, is_overflow_ptr, new_ts, expire_ts);
             CHECK_KV_ERR(err);
@@ -607,6 +636,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         bool overflow = base_page_iter.IsOverflow();
         uint64_t ts = base_page_iter.Timestamp();
         uint64_t expire_ts = base_page_iter.ExpireTs();
+        compression_type = base_page_iter.CompressionType();
         err = add_to_page(key, val, overflow, ts, expire_ts);
         CHECK_KV_ERR(err);
         AdvanceDataPageIter(base_page_iter, is_base_iter_valid);
@@ -624,6 +654,11 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             uint64_t ts = change_it->timestamp_;
             uint64_t expire_ts = change_it->expire_ts_;
             UpdateTTL(expire_ts, key, WriteOp::Upsert);
+
+            compression::PreparedValue prepared =
+                compression::Prepare(val, compression, compression_scratch);
+            val = prepared.data;
+            compression_type = prepared.compression_kind;
             err = add_to_page(key, val, false, ts, expire_ts);
             CHECK_KV_ERR(err);
         }
@@ -1559,7 +1594,8 @@ std::pair<bool, KvError> BatchWriteTask::TruncateDataPage(
                                iter.Value(),
                                iter.IsOverflow(),
                                iter.Timestamp(),
-                               iter.ExpireTs());
+                               iter.ExpireTs(),
+                               iter.CompressionType());
     }
     while (iter.Next())
     {

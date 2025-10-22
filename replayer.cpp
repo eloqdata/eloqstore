@@ -29,6 +29,7 @@ KvError Replayer::Replay(ManifestFile *file)
     mapping_tbl_.reserve(opts_->init_page_count);
     file_size_ = 0;
     max_fp_id_ = MaxFilePageId;
+    dict_bytes_.clear();
 
     KvError err = ParseNextRecord(file);
     CHECK_KV_ERR(err);
@@ -86,6 +87,20 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
 {
     [[maybe_unused]] bool ok = GetVarint64(&snapshot, &max_fp_id_);
     assert(ok);
+
+    uint32_t dict_len = 0;
+    ok = GetVarint32(&snapshot, &dict_len);
+    assert(ok);
+    if (dict_len > 0)
+    {
+        assert(snapshot.size() >= dict_len);
+        dict_bytes_.assign(snapshot.data(), snapshot.data() + dict_len);
+        snapshot = snapshot.substr(dict_len);
+    }
+    else
+    {
+        dict_bytes_.clear();
+    }
 
     mapping_tbl_.reserve(opts_->init_page_count);
     while (!snapshot.empty())

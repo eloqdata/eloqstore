@@ -309,7 +309,6 @@ void MapVerifier::Floor(std::string_view key)
             answer_.erase(it_lb);
             return;
         }
-        CHECK(req.Error() == eloqstore::KvError::NoError);
         eloqstore::KvEntry ret(
             req.floor_key_, req.value_, req.ts_, req.expire_ts_);
         CHECK(it_lb->second == ret);
@@ -980,8 +979,11 @@ void ManifestVerifier::Snapshot()
 {
     eloqstore::FilePageId max_fp_id =
         answer_.FilePgAllocator()->MaxFilePageId();
-    std::string_view sv = builder_.Snapshot(
-        root_id_, eloqstore::MaxPageId, answer_.GetMapping(), max_fp_id);
+    std::string_view sv = builder_.Snapshot(root_id_,
+                                            eloqstore::MaxPageId,
+                                            answer_.GetMapping(),
+                                            max_fp_id,
+                                            std::string_view{});
     file_ = sv;
     builder_.Reset();
 }

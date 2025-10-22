@@ -1,5 +1,7 @@
 #include "data_page.h"
 
+#include <glog/logging.h>
+
 #include <cassert>
 #include <cstdint>
 #include <cstdlib>
@@ -8,6 +10,7 @@
 #include <string_view>
 
 #include "coding.h"
+#include "compression.h"
 #include "kv_options.h"
 
 namespace eloqstore
@@ -140,6 +143,8 @@ void DataPageIter::Reset()
     key_.clear();
     value_ = std::string_view{};
     timestamp_ = 0;
+    overflow_ = false;
+    compression_type_ = compression::CompressionType::None;
 }
 
 std::string_view DataPageIter::Key() const
@@ -155,6 +160,11 @@ std::string_view DataPageIter::Value() const
 bool DataPageIter::IsOverflow() const
 {
     return overflow_;
+}
+
+compression::CompressionType DataPageIter::CompressionType() const
+{
+    return compression_type_;
 }
 
 uint64_t DataPageIter::ExpireTs() const
@@ -195,7 +205,9 @@ bool DataPageIter::SeekFloor(std::string_view search_key)
     uint16_t last_offset = restart_offset_;
     std::string key;
     std::string_view value = {};
-    bool overflow;
+    bool overflow = false;
+    compression::CompressionType compression_kind =
+        compression::CompressionType::None;
     uint64_t timestamp = 0;
 
     assert(ceil_point <= restart_num_);
@@ -215,12 +227,14 @@ bool DataPageIter::SeekFloor(std::string_view search_key)
         value = Value();
         overflow = IsOverflow();
         timestamp = Timestamp();
+        compression_kind = compression_type_;
     }
     curr_offset_ = last_offset;
     key_ = std::move(key);
     value_ = value;
     overflow_ = overflow;
     timestamp_ = timestamp;
+    compression_type_ = compression_kind;
     return true;
 }
 
@@ -277,13 +291,15 @@ std::pair<bool, uint16_t> DataPageIter::SearchRegion(std::string_view key) const
         uint16_t region_offset = RestartOffset(mid);
         uint32_t shared, non_shared, val_len;
         bool overflow, expire;
+        compression::CompressionType compression_kind;
         const char *key_ptr = DecodeEntry(page_.data() + region_offset,
                                           page_.data() + restart_offset_,
                                           &shared,
                                           &non_shared,
                                           &val_len,
                                           &overflow,
-                                          &expire);
+                                          &expire,
+                                          &compression_kind);
         assert(key_ptr != nullptr && shared == 0);
 
         std::string_view pivot{key_ptr, non_shared};
@@ -345,7 +361,8 @@ bool DataPageIter::ParseNextKey()
                      &non_shared,
                      &value_len,
                      &overflow_,
-                     &has_expire_ts);
+                     &has_expire_ts,
+                     &compression_type_);
 
     if (pt == nullptr || key_.size() < shared)
     {
@@ -402,15 +419,18 @@ void DataPageIter::Invalidate()
     value_ = std::string_view{};
     expire_ts_ = 0;
     timestamp_ = 0;
+    compression_type_ = compression::CompressionType::None;
 }
 
-const char *DataPageIter::DecodeEntry(const char *p,
-                                      const char *limit,
-                                      uint32_t *shared,
-                                      uint32_t *non_shared,
-                                      uint32_t *value_length,
-                                      bool *overflow,
-                                      bool *expire)
+const char *DataPageIter::DecodeEntry(
+    const char *p,
+    const char *limit,
+    uint32_t *shared,
+    uint32_t *non_shared,
+    uint32_t *value_length,
+    bool *overflow,
+    bool *expire,
+    compression::CompressionType *compression_type)
 {
     if (limit - p < 3)
         return nullptr;
@@ -434,6 +454,12 @@ const char *DataPageIter::DecodeEntry(const char *p,
 
     *overflow = *value_length & (1 << uint8_t(ValLenBit::Overflow));
     *expire = *value_length & (1 << uint8_t(ValLenBit::Expire));
+    uint8_t compressed =
+        *value_length >> uint8_t(ValLenBit::DictionaryCompressed) & 0b11;
+
+    CHECK(compressed != 0b11) << "Data is corrupted";
+    *compression_type = static_cast<compression::CompressionType>(compressed);
+
     *value_length >>= uint8_t(ValLenBit::BitsCount);
 
     if (static_cast<uint32_t>(limit - p) < (*non_shared + *value_length))

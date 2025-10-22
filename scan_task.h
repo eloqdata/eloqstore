@@ -1,6 +1,8 @@
 #pragma once
 
+#include <string>
 #include <string_view>
+#include <utility>
 
 #include "data_page.h"
 #include "error.h"
@@ -9,8 +11,6 @@
 
 namespace eloqstore
 {
-class MappingSnapshot;
-
 class ScanIterator
 {
 public:
@@ -19,7 +19,7 @@ public:
     KvError Next();
 
     std::string_view Key() const;
-    std::string_view Value() const;
+    std::pair<std::string_view, KvError> ResolveValue(std::string &storage);
     bool IsOverflow() const;
     uint64_t ExpireTs() const;
     uint64_t Timestamp() const;
@@ -32,6 +32,7 @@ private:
     std::shared_ptr<MappingSnapshot> mapping_;
     DataPage data_page_;
     DataPageIter iter_;
+    const compression::DictCompression *compression_{nullptr};
 };
 
 class ScanRequest;
