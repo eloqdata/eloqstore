@@ -55,6 +55,15 @@ bool EloqStore::ValidateOptions(const KvOptions &opts)
         return false;
     }
 
+    for (const std::string &path: opts.store_path)
+    {
+        if (path.empty() || !path.starts_with("/"))
+        {
+            LOG(ERROR) << "store path should be an absolute path";
+            return false;
+        }
+    }
+
     if (!opts.cloud_store_path.empty())
     {
         if (opts.local_space_limit == 0)
