@@ -55,7 +55,7 @@ bool EloqStore::ValidateOptions(const KvOptions &opts)
         return false;
     }
 
-    for (const std::string &path: opts.store_path)
+    for (const std::string &path : opts.store_path)
     {
         if (path.empty() || !path.starts_with("/"))
         {
