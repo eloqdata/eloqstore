@@ -286,10 +286,19 @@ void WriteTask::CompactIfNeeded(PageMapper *mapper) const
     uint32_t mapping_cnt = mapper->MappingCount();
     size_t space_size = allocator->SpaceSize();
     assert(space_size >= mapping_cnt);
-    if (mapping_cnt == 0 ||
-        (space_size >= allocator->PagesPerFile() &&
-         static_cast<double>(space_size) / static_cast<double>(mapping_cnt) >
-             static_cast<double>(opts->file_amplify_factor)))
+    if (mapping_cnt == 0)
+    {
+        if (space_size == 0)
+        {
+            return;
+        }
+        shard->AddPendingCompact(tbl_ident_);
+        return;
+    }
+
+    if (space_size >= allocator->PagesPerFile() &&
+        static_cast<double>(space_size) / static_cast<double>(mapping_cnt) >
+            static_cast<double>(opts->file_amplify_factor))
     {
         shard->AddPendingCompact(tbl_ident_);
     }

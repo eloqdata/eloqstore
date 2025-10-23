@@ -1,8 +1,10 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <map>
 #include <string>
+#include <vector>
 
 #include "eloq_store.h"
 #include "index_page_manager.h"
@@ -150,6 +152,32 @@ private:
     uint32_t verify_sum_{0};
     uint32_t verify_kv_{0};
     eloqstore::EloqStore *const store_;
+};
+
+class SimpleConcurrencyTest
+{
+public:
+    SimpleConcurrencyTest(eloqstore::EloqStore *store,
+                          std::chrono::milliseconds runtime,
+                          uint32_t partitions,
+                          uint32_t worker_threads = 0,
+                          uint32_t keys_per_partition = 256);
+    void Run();
+
+private:
+    void WorkerLoop(std::chrono::steady_clock::time_point deadline);
+    // void Drain(std::vector<std::unique_ptr<eloqstore::KvRequest>> &inflight);
+    void HandleResult(eloqstore::KvRequest *req) const;
+
+    eloqstore::EloqStore *store_;
+    uint32_t partitions_;
+    std::chrono::milliseconds runtime_;
+    uint32_t worker_threads_;
+    uint32_t keys_per_partition_;
+    std::string table_name_;
+    std::vector<eloqstore::TableIdent> tables_;
+    std::vector<std::vector<std::string>> key_pool_;
+    std::vector<uint32_t> next_insert_key_;
 };
 
 class ManifestVerifier

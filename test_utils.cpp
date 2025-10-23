@@ -1,10 +1,16 @@
 #include "test_utils.h"
 
+#include <glog/logging.h>
 #include <sys/types.h>
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
+#include <memory>
+#include <random>
 #include <string>
+#include <thread>
 #include <utility>
 
 #include "error.h"
@@ -889,6 +895,288 @@ void ConcurrencyTester::Clear()
 uint64_t ConcurrencyTester::CurrentTimestamp()
 {
     return utils::UnixTs<std::chrono::nanoseconds>();
+}
+
+SimpleConcurrencyTest::SimpleConcurrencyTest(eloqstore::EloqStore *store,
+                                             std::chrono::milliseconds runtime,
+                                             uint32_t partitions,
+                                             uint32_t worker_threads,
+                                             uint32_t keys_per_partition)
+    : store_(store),
+      partitions_(std::max<uint32_t>(1, partitions)),
+      runtime_(runtime),
+      worker_threads_(
+          worker_threads != 0
+              ? worker_threads
+              : (store_ != nullptr
+                     ? std::max<uint32_t>(1, store_->Options().num_threads)
+                     : 1)),
+      keys_per_partition_(std::max<uint32_t>(1, keys_per_partition)),
+      table_name_("simple-concurrency")
+{
+    tables_.reserve(partitions_);
+    key_pool_.resize(partitions_);
+    for (uint32_t partition = 0; partition < partitions_; ++partition)
+    {
+        tables_.emplace_back(table_name_, partition);
+        auto &keys = key_pool_[partition];
+        keys.reserve(keys_per_partition_);
+        uint64_t base = (static_cast<uint64_t>(partition) << 32);
+        for (uint32_t idx = 0; idx < keys_per_partition_; ++idx)
+        {
+            keys.push_back(Key(base + idx));
+        }
+    }
+}
+
+void SimpleConcurrencyTest::Run()
+{
+    if (store_ == nullptr)
+    {
+        return;
+    }
+
+    auto deadline = std::chrono::steady_clock::now() + runtime_;
+
+    std::vector<std::thread> workers;
+    worker_threads_ = 1;
+    workers.reserve(worker_threads_);
+    for (uint32_t i = 0; i < worker_threads_; ++i)
+    {
+        workers.emplace_back([this, deadline]() { WorkerLoop(deadline); });
+    }
+
+    for (std::thread &worker : workers)
+    {
+        worker.join();
+    }
+}
+
+void SimpleConcurrencyTest::WorkerLoop(
+    std::chrono::steady_clock::time_point deadline)
+{
+    if (store_ == nullptr)
+    {
+        return;
+    }
+
+    std::mt19937 rng(
+        std::random_device{}() ^
+        static_cast<uint64_t>(
+            std::chrono::steady_clock::now().time_since_epoch().count()) ^
+        reinterpret_cast<uintptr_t>(this));
+    std::uniform_int_distribution<uint32_t> partition_dist(0, partitions_ - 1);
+    std::uniform_int_distribution<int> op_dist(0, 4);
+    std::uniform_int_distribution<int> batch_dist(1, 4);
+    std::uniform_int_distribution<uint32_t> random_key_dist(
+        0, keys_per_partition_ - 1);
+    if (next_insert_key_.size() < partitions_)
+    {
+        next_insert_key_.assign(partitions_, 0);
+    }
+
+    constexpr size_t kMaxInflight = 100;
+    std::vector<std::unique_ptr<eloqstore::KvRequest>> inflight;
+    inflight.reserve(kMaxInflight);
+
+    auto reap = [&]()
+    {
+        for (size_t idx = 0; idx < inflight.size();)
+        {
+            eloqstore::KvRequest *req = inflight[idx].get();
+            if (req->IsDone())
+            {
+                HandleResult(req);
+                if (idx != inflight.size() - 1)
+                {
+                    std::swap(inflight[idx], inflight.back());
+                }
+                inflight.pop_back();
+            }
+            else
+            {
+                ++idx;
+            }
+        }
+    };
+
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        reap();
+        if (inflight.size() >= kMaxInflight)
+        {
+            eloqstore::KvRequest *req = inflight.front().get();
+            req->Wait();
+            HandleResult(req);
+            if (inflight.size() > 1)
+            {
+                std::swap(inflight.front(), inflight.back());
+            }
+            inflight.pop_back();
+            continue;
+        }
+
+        uint32_t partition = partition_dist(rng);
+        const eloqstore::TableIdent &table = tables_[partition];
+        const std::vector<std::string> &keys = key_pool_[partition];
+        uint32_t &next_key = next_insert_key_[partition];
+
+        int op = op_dist(rng);
+        switch (op)
+        {
+        case 0:
+        case 1:
+        {
+            if (keys_per_partition_ == 0)
+            {
+                LOG(WARNING)
+                    << "SimpleConcurrency skip batch write: no keys configured";
+                break;
+            }
+            uint32_t batch = static_cast<uint32_t>(batch_dist(rng));
+            auto req = std::make_unique<eloqstore::BatchWriteRequest>();
+            std::vector<eloqstore::WriteDataEntry> entries;
+            entries.reserve(batch);
+            uint64_t ts = utils::UnixTs<std::chrono::microseconds>();
+            for (uint32_t i = 0; i < batch; ++i)
+            {
+                uint32_t key_idx = (next_key + i) % keys_per_partition_;
+                const std::string &entry_key = keys[key_idx];
+                std::string value = Value(static_cast<uint64_t>(rng()), 64);
+                entries.emplace_back(entry_key,
+                                     std::move(value),
+                                     ts,
+                                     eloqstore::WriteOp::Upsert);
+            }
+            std::sort(entries.begin(), entries.end());
+            next_key = (next_key + batch) %
+                       std::max<uint32_t>(keys_per_partition_, 1u);
+            req->SetArgs(table, std::move(entries));
+            bool ok = store_->ExecAsyn(req.get());
+            if (!ok)
+            {
+                LOG(ERROR) << "ExecAsyn(batch write) failed for table " << table
+                           << " entries=" << batch;
+                continue;
+            }
+            DVLOG(1) << "SimpleConcurrency batch write enqueued table=" << table
+                     << " entries=" << batch;
+            inflight.emplace_back(std::move(req));
+            break;
+        }
+        case 2:
+        {
+            auto req = std::make_unique<eloqstore::BatchWriteRequest>();
+            std::vector<eloqstore::WriteDataEntry> entries;
+            uint32_t key_idx = random_key_dist(rng);
+            entries.emplace_back(keys[key_idx],
+                                 std::string(),
+                                 utils::UnixTs<std::chrono::microseconds>(),
+                                 eloqstore::WriteOp::Delete);
+            req->SetArgs(table, std::move(entries));
+            bool ok = store_->ExecAsyn(req.get());
+            if (!ok)
+            {
+                LOG(ERROR) << "ExecAsyn(delete) failed for table " << table;
+                continue;
+            }
+            DVLOG(1) << "SimpleConcurrency delete enqueued table=" << table;
+            inflight.emplace_back(std::move(req));
+            break;
+        }
+        case 3:
+        {
+            auto req = std::make_unique<eloqstore::ReadRequest>();
+            std::string key = keys[random_key_dist(rng)];
+            req->SetArgs(table, std::move(key));
+            bool ok = store_->ExecAsyn(req.get());
+            if (!ok)
+            {
+                LOG(ERROR) << "ExecAsyn(read) failed for table " << table;
+                continue;
+            }
+            DVLOG(1) << "SimpleConcurrency read enqueued table=" << table;
+            inflight.emplace_back(std::move(req));
+            break;
+        }
+        default:
+        {
+            uint32_t start_idx = random_key_dist(rng);
+            uint32_t span = static_cast<uint32_t>(batch_dist(rng));
+            uint32_t end_idx =
+                std::min(keys_per_partition_ - 1, start_idx + span);
+            std::string begin = keys[start_idx];
+            std::string end = keys[end_idx];
+            if (begin >= end)
+            {
+                end.push_back(static_cast<char>(0xFF));
+            }
+            auto req = std::make_unique<eloqstore::ScanRequest>();
+            req->SetArgs(table, std::move(begin), std::move(end));
+            bool ok = store_->ExecAsyn(req.get());
+            if (!ok)
+            {
+                LOG(ERROR) << "ExecAsyn(scan) failed for table " << table;
+                continue;
+            }
+            DVLOG(1) << "SimpleConcurrency scan enqueued table=" << table;
+            inflight.emplace_back(std::move(req));
+            break;
+        }
+        }
+    }
+    LOG(INFO) << "TIME TO LEAVE";
+
+    // Drain remaining inflight requests before exiting to avoid destroying
+    // async KvRequest objects still owned by the store.
+    reap();
+    while (!inflight.empty())
+    {
+        eloqstore::KvRequest *req = inflight.back().get();
+        if (req != nullptr && !req->IsDone())
+        {
+            req->Wait();
+        }
+        HandleResult(req);
+        inflight.pop_back();
+    }
+}
+
+void SimpleConcurrencyTest::HandleResult(eloqstore::KvRequest *req) const
+{
+    if (req == nullptr)
+    {
+        return;
+    }
+    eloqstore::KvError err = req->Error();
+    switch (req->Type())
+    {
+    case eloqstore::RequestType::Read:
+        if (err != eloqstore::KvError::NoError &&
+            err != eloqstore::KvError::NotFound)
+        {
+            LOG(ERROR) << "Read request failed for table " << req->TableId()
+                       << " err=" << static_cast<int>(err);
+        }
+        break;
+    case eloqstore::RequestType::Scan:
+        if (err != eloqstore::KvError::NoError &&
+            err != eloqstore::KvError::NotFound)
+        {
+            LOG(ERROR) << "Scan request failed for table " << req->TableId()
+                       << " err=" << static_cast<int>(err);
+        }
+        break;
+    case eloqstore::RequestType::BatchWrite:
+        if (err != eloqstore::KvError::NoError)
+        {
+            LOG(ERROR) << "BatchWrite request failed for table "
+                       << req->TableId() << " err=" << static_cast<int>(err);
+        }
+        break;
+    default:
+        break;
+    }
 }
 
 ManifestVerifier::ManifestVerifier(eloqstore::KvOptions opts)

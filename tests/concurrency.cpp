@@ -1,7 +1,9 @@
 #include <glog/logging.h>
 
+#include <algorithm>
 #include <cassert>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cstdlib>
 #include <thread>
 
@@ -102,4 +104,36 @@ TEST_CASE("stress append only mode", "[persist][append]")
     REQUIRE(ValidateFileSizes(options));
 
     tester.Clear();
+}
+
+TEST_CASE("simple concurrency soak", "[concurrency][simple]")
+{
+    using namespace std::chrono_literals;
+    const eloqstore::KvOptions cloud_options = {
+        .manifest_limit = 1 << 20,
+        .fd_limit = 30 + eloqstore::num_reserved_fd,
+        .local_space_limit = 200 << 20,  // 100MB
+        .store_path = {"/tmp/test-data"},
+        .cloud_store_path = "docker-minio:eloqstore/unit-test",
+        .pages_per_file_shift = 8,  // 1MB per datafile
+        .data_append_mode = true,
+    };
+    auto run_simple_concurrency =
+        [&](const eloqstore::KvOptions &base_opts, std::string_view mode)
+    {
+        eloqstore::KvOptions opts = base_opts;
+        opts.num_threads = std::max<uint16_t>(opts.num_threads, uint16_t(4));
+        opts.data_append_mode = true;
+        INFO("simple concurrency mode=" << mode);
+        LOG(INFO) << "simple concurrency mode=" << mode
+                  << ", num_threads=" << opts.num_threads;
+        eloqstore::EloqStore *store = InitStore(opts);
+        SimpleConcurrencyTest runner(store, 3s, 4, opts.num_threads, 512);
+        runner.Run();
+        store->Stop();
+        CleanupStore(opts);
+    };
+
+    run_simple_concurrency(default_opts, "local");
+    // run_simple_concurrency(cloud_options, "cloud");
 }
