@@ -1,5 +1,7 @@
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <map>
 
 #include "common.h"
 #include "kv_options.h"
@@ -18,6 +20,109 @@ TEST_CASE("simple cloud store", "[cloud]")
     tester.Upsert(0, 50);
     tester.WriteRnd(0, 200);
     tester.WriteRnd(0, 200);
+}
+
+TEST_CASE("cloud gc preserves archived data after truncate",
+          "[cloud][archive][gc]")
+{
+    eloqstore::EloqStore *store = InitStore(cloud_archive_opts);
+    MapVerifier tester(test_tbl_id, store, false);
+    tester.SetValueSize(1500);
+
+    tester.Upsert(0, 200);
+    tester.Validate();
+
+    auto baseline_dataset = tester.DataSet();
+    REQUIRE_FALSE(baseline_dataset.empty());
+
+    eloqstore::ArchiveRequest archive_req;
+    archive_req.SetTableId(test_tbl_id);
+    bool ok = store->ExecAsyn(&archive_req);
+    REQUIRE(ok);
+    archive_req.Wait();
+    REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
+
+    const std::string &daemon_url = cloud_archive_opts.cloud_store_daemon_url;
+    const std::string &cloud_root = cloud_archive_opts.cloud_store_path;
+    const std::string partition = test_tbl_id.ToString();
+    const std::string partition_remote = cloud_root + "/" + partition;
+
+    std::vector<std::string> cloud_files =
+        ListCloudFiles(daemon_url, cloud_root, partition);
+    REQUIRE_FALSE(cloud_files.empty());
+
+    std::string archive_name;
+    std::string protected_data_file;
+    for (const std::string &filename : cloud_files)
+    {
+        if (filename.rfind("manifest_", 0) == 0)
+        {
+            archive_name = filename;
+        }
+        else if (protected_data_file.empty() && filename.rfind("data_", 0) == 0)
+        {
+            protected_data_file = filename;
+        }
+    }
+    REQUIRE(!archive_name.empty());
+    REQUIRE(!protected_data_file.empty());
+
+    store->Stop();
+    CleanupLocalStore(cloud_archive_opts);
+
+    store->Start();
+    tester.Validate();
+
+    tester.Upsert(0, 200);
+    tester.Upsert(0, 200);
+    tester.Upsert(200, 260);
+    tester.Validate();
+
+    tester.Truncate(0, true);
+    tester.Validate();
+    REQUIRE(tester.DataSet().empty());
+
+    std::vector<std::string> files_after_gc =
+        ListCloudFiles(daemon_url, cloud_root, partition);
+    REQUIRE(std::find(files_after_gc.begin(),
+                      files_after_gc.end(),
+                      protected_data_file) != files_after_gc.end());
+
+    store->Stop();
+
+    uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
+    std::string backup_name = "manifest_" + std::to_string(backup_ts);
+
+    bool backup_ok =
+        MoveCloudFile(daemon_url, partition_remote, "manifest", backup_name);
+    REQUIRE(backup_ok);
+
+    bool rollback_ok =
+        MoveCloudFile(daemon_url, partition_remote, archive_name, "manifest");
+    REQUIRE(rollback_ok);
+
+    CleanupLocalStore(cloud_archive_opts);
+
+    tester.SwitchDataSet(baseline_dataset);
+    store->Start();
+    tester.Validate();
+    store->Stop();
+
+    bool restore_archive =
+        MoveCloudFile(daemon_url, partition_remote, "manifest", archive_name);
+    REQUIRE(restore_archive);
+
+    bool restore_manifest =
+        MoveCloudFile(daemon_url, partition_remote, backup_name, "manifest");
+    REQUIRE(restore_manifest);
+
+    CleanupLocalStore(cloud_archive_opts);
+
+    const std::map<std::string, eloqstore::KvEntry> empty_dataset;
+    tester.SwitchDataSet(empty_dataset);
+    store->Start();
+    tester.Validate();
+    store->Stop();
 }
 
 TEST_CASE("cloud store with restart", "[cloud]")
