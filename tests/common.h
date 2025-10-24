@@ -11,12 +11,19 @@
 #include "../common.h"
 #include "coding.h"
 #include "eloq_store.h"
+#include "kv_options.h"
 
 constexpr char test_path[] = "/tmp/eloqstore";
 static const eloqstore::TableIdent test_tbl_id = {"t0", 0};
 const eloqstore::KvOptions mem_store_opts = {};
 const eloqstore::KvOptions default_opts = {
     .store_path = {test_path},
+};
+
+const eloqstore::KvOptions append_opts = {
+    .store_path = {test_path},
+    .pages_per_file_shift = 8,
+    .data_append_mode = true,
 };
 const eloqstore::KvOptions archive_opts = {
     .num_retained_archives = 1,
