@@ -208,20 +208,20 @@ int KvOptions::LoadFromIni(const char *path)
         uint32_t data_file_size = (parsed_size > 0) ? parsed_size : (8 * MB);
         // Calculate pages_per_file_shift from data_file_size
         // data_file_size = data_page_size * (1 << pages_per_file_shift)
-        // So pages_per_file_shift = floor(log2(data_file_size / data_page_size))
+        // So pages_per_file_shift = floor(log2(data_file_size /
+        // data_page_size))
         uint32_t pages_per_file = data_file_size / data_page_size;
         if (pages_per_file == 0)
         {
             LOG(WARNING) << "data_file_size " << data_file_size
-                         << " is smaller than data_page_size "
-                         << data_page_size << ", falling back to one page.";
+                         << " is smaller than data_page_size " << data_page_size
+                         << ", falling back to one page.";
             pages_per_file_shift = 0;
         }
         else
         {
-            pages_per_file_shift =
-                std::numeric_limits<uint32_t>::digits -
-                std::countl_zero(pages_per_file) - 1;
+            pages_per_file_shift = std::numeric_limits<uint32_t>::digits -
+                                   std::countl_zero(pages_per_file) - 1;
             if ((pages_per_file & (pages_per_file - 1)) != 0)
             {
                 uint32_t adjusted_pages = 1U << pages_per_file_shift;
