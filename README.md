@@ -4,6 +4,7 @@
 
 ### Debug Mode
 ```shell
+sudo apt install libjsoncpp-dev
 mkdir build
 cd build
 cmake .. -DCMAKE_BUILD_TYPE=Debug -DWITH_ASAN=ON
@@ -13,6 +14,7 @@ cd ..
 
 ### Release Mode
 ```shell
+sudo apt install libjsoncpp-dev
 mkdir Release
 cd Release
 cmake .. -DCMAKE_BUILD_TYPE=Release
