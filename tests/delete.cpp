@@ -18,6 +18,16 @@ TEST_CASE("simple delete", "[delete]")
     verify.Delete(500, 1200);
 }
 
+TEST_CASE("delete from an empty table", "[delete]")
+{
+    eloqstore::EloqStore *store = InitStore(append_opts);
+    MapVerifier verify(test_tbl_id, store);
+    verify.Delete(150, 200);
+    verify.Delete(0, 100);
+    verify.Delete(100, 500);
+    verify.Delete(500, 1200);
+}
+
 TEST_CASE("clean data", "[delete]")
 {
     eloqstore::EloqStore *store = InitStore(mem_store_opts);

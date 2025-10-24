@@ -324,12 +324,6 @@ std::unique_ptr<FilePageAllocator> AppendAllocator::Clone()
 
 void AppendAllocator::UpdateStat(FileId min_file_id, uint32_t hole_cnt)
 {
-    if (min_file_id == MaxFileId)
-    {
-        min_file_id_ = max_fp_id_ >> pages_per_file_shift_;
-        empty_file_cnt_ = 0;
-        return;
-    }
     assert(min_file_id >= min_file_id_);
     assert((min_file_id << pages_per_file_shift_) <= max_fp_id_);
     min_file_id_ = min_file_id;

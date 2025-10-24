@@ -52,24 +52,23 @@ KvError BackgroundWrite::CompactDataFile()
 
     auto [meta, err] = shard->IndexManager()->FindRoot(tbl_ident_);
     CHECK_KV_ERR(err);
-    if (meta->root_id_ == MaxPageId)
-    {
-        TriggerFileGC();
-        return KvError::NoError;
-    }
 
     auto allocator =
         static_cast<AppendAllocator *>(meta->mapper_->FilePgAllocator());
     uint32_t mapping_cnt = meta->mapper_->MappingCount();
 
+    // Ensure consistency between root_id and mapping_cnt
+    // When root_id == MaxPageId, mapping_cnt must be 0, and vice versa
     if (mapping_cnt == 0)
     {
         // Update statistic.
-        allocator->UpdateStat(MaxFileId, 0);
+        FilePageId max_fp_id = allocator->MaxFilePageId();
+        allocator->UpdateStat(max_fp_id >> opts->pages_per_file_shift, 0);
         TriggerFileGC();
-        CHECK(meta->root_id_ == MaxPageId);
         return KvError::NoError;
     }
+    CHECK((meta->root_id_ != MaxPageId) && (mapping_cnt != 0));
+
     const uint32_t pages_per_file = allocator->PagesPerFile();
     const double file_saf_limit = opts->file_amplify_factor;
     size_t space_size = allocator->SpaceSize();

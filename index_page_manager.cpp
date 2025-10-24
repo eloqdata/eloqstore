@@ -373,7 +373,7 @@ void IndexPageManager::EvictRootIfEmpty(
         if (meta.mapper_->UseCount() == 1)
         {
             // Check if mapping table is empty (no data pages)
-            if (meta.mapper_->MappingCount() == 0)
+            if (meta.mapper_->MappingCount() == 0 && meta.manifest_size_ > 0)
             {
                 // Lock the rootmeta to prevent other FindRoot operations
                 meta.locked_ = true;
