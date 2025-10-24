@@ -301,7 +301,7 @@ void WriteTask::CompactIfNeeded(PageMapper *mapper) const
     assert(space_size >= mapping_cnt);
     // When mapping_cnt == 0 and space_size == 0, compaction should NOT be
     // triggered.
-    // This usually means the manifest does not exist yet or the table has not
+    // This means the manifest does not exist yet or the table has not
     // been initialized.
 
     // Two cases trigger compaction:
