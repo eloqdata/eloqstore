@@ -598,11 +598,17 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         {
             if (add_change_key)
             {
-                compression::PreparedValue prepared = compression::Prepare(
-                    new_val, compression, compression_scratch);
-                new_val = prepared.data;
-                compression_type = prepared.compression_kind;
-                assert(uint8_t(compression_type) <= 3);
+                if (Options()->enable_compression)
+                {
+                    compression::PreparedValue prepared = compression::Prepare(
+                        new_val, compression, compression_scratch);
+                    new_val = prepared.data;
+                    compression_type = prepared.compression_kind;
+                }
+                else
+                {
+                    compression_type = compression::CompressionType::None;
+                }
             }
             else
             {
@@ -655,10 +661,17 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             uint64_t expire_ts = change_it->expire_ts_;
             UpdateTTL(expire_ts, key, WriteOp::Upsert);
 
-            compression::PreparedValue prepared =
-                compression::Prepare(val, compression, compression_scratch);
-            val = prepared.data;
-            compression_type = prepared.compression_kind;
+            if (Options()->enable_compression)
+            {
+                compression::PreparedValue prepared =
+                    compression::Prepare(val, compression, compression_scratch);
+                val = prepared.data;
+                compression_type = prepared.compression_kind;
+            }
+            else
+            {
+                compression_type = compression::CompressionType::None;
+            }
             err = add_to_page(key, val, false, ts, expire_ts);
             CHECK_KV_ERR(err);
         }

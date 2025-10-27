@@ -163,5 +163,9 @@ struct KvOptions
      * @brief Write data file pages in append only mode.
      */
     bool data_append_mode = false;
+    /**
+     * @brief Compression is enabled;
+     */
+    bool enable_compression = false;
 };
 }  // namespace eloqstore
