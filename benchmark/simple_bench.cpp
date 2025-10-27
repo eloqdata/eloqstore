@@ -100,6 +100,8 @@ public:
     const uint32_t id_;
     eloqstore::BatchWriteRequest request_;
     size_t writing_key_{0};
+    uint64_t start_ts_{0};
+    uint64_t latency_{0};
 };
 
 Writer::Writer(uint32_t id) : id_(id)
@@ -173,12 +175,18 @@ void WriteLoop(eloqstore::EloqStore *store)
     auto callback = [&finished](eloqstore::KvRequest *req)
     {
         Writer *p = (Writer *) (req->UserData());
+        p->latency_ = utils::UnixTs<microseconds>() - p->start_ts_;
         finished.enqueue(p);
     };
 
-    auto start = high_resolution_clock::now();
+    uint64_t latency_sum_total = 0;
+    std::vector<uint64_t> latencies_total;
+    latencies_total.reserve(FLAGS_write_batchs + FLAGS_partitions);
+    auto total_start = high_resolution_clock::now();
+    auto window_start = total_start;
     for (auto &writer : writers)
     {
+        writer->start_ts_ = utils::UnixTs<microseconds>();
         store->ExecAsyn(&writer->request_, uint64_t(writer.get()), callback);
     }
     for (size_t i = 0; i < FLAGS_write_batchs;)
@@ -188,14 +196,22 @@ void WriteLoop(eloqstore::EloqStore *store)
 
         assert(writer->request_.IsDone());
         assert(writer->request_.Error() == eloqstore::KvError::NoError);
+        latency_sum_total += writer->latency_;
+        latencies_total.push_back(writer->latency_);
         writer->NextBatch();
+        writer->start_ts_ = utils::UnixTs<microseconds>();
         store->ExecAsyn(&writer->request_, uint64_t(writer), callback);
 
         i++;
         if (i % FLAGS_partitions == 0)
         {
             auto now = high_resolution_clock::now();
-            double cost_ms = duration_cast<milliseconds>(now - start).count();
+            double cost_ms =
+                duration_cast<milliseconds>(now - window_start).count();
+            if (cost_ms <= 0.0)
+            {
+                cost_ms = 1.0;
+            }
             const uint64_t num_kvs =
                 uint64_t(FLAGS_batch_size) * FLAGS_partitions;
             const uint64_t kvs_per_sec = num_kvs * 1000 / cost_ms;
@@ -209,8 +225,34 @@ void WriteLoop(eloqstore::EloqStore *store)
                 std::this_thread::sleep_for(
                     std::chrono::seconds(FLAGS_write_interval));
             }
-            start = high_resolution_clock::now();
+            window_start = high_resolution_clock::now();
         }
+    }
+    auto total_end = high_resolution_clock::now();
+    double total_cost_ms =
+        duration_cast<milliseconds>(total_end - total_start).count();
+    if (total_cost_ms <= 0.0)
+    {
+        total_cost_ms = 1.0;
+    }
+    if (!latencies_total.empty())
+    {
+        const uint64_t num_kvs =
+            uint64_t(FLAGS_batch_size) * FLAGS_write_batchs;
+        const uint64_t kvs_per_sec = num_kvs * 1000 / total_cost_ms;
+        const uint64_t mb_per_sec =
+            (uint64_t(kvs_per_sec * upsert_ratio) * FLAGS_kv_size) >> 20;
+        LatencyMetrics metrics =
+            CalculateLatencyMetrics(latencies_total, latency_sum_total);
+        LOG(INFO) << "write summary " << kvs_per_sec << " kvs/s | cost "
+                  << total_cost_ms << " ms | " << mb_per_sec
+                  << " MiB/s | average latency " << metrics.average
+                  << " microseconds | p50 " << metrics.p50
+                  << " microseconds | p90 " << metrics.p90
+                  << " microseconds | p99 " << metrics.p99
+                  << " microseconds | p99.9 " << metrics.p999
+                  << " microseconds | max latency " << metrics.max
+                  << " microseconds";
     }
     for (uint32_t i = 0; i < FLAGS_partitions; i++)
     {
