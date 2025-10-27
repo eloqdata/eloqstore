@@ -164,7 +164,7 @@ struct KvOptions
      */
     bool data_append_mode = false;
     /**
-     * @brief Compression is enabled;
+     * @brief Compression is enabled.
      */
     bool enable_compression = false;
 };
