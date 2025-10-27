@@ -1,8 +1,10 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
+#include <algorithm>
 #include <iostream>
 #include <random>
+#include <vector>
 
 #include "../coding.h"
 #include "../eloq_store.h"
@@ -28,6 +30,50 @@ using namespace std::chrono;
 
 constexpr char table[] = "bm";
 std::atomic<bool> stop_{false};
+
+struct LatencyMetrics
+{
+    uint64_t average{0};
+    uint64_t p50{0};
+    uint64_t p90{0};
+    uint64_t p99{0};
+    uint64_t p999{0};
+    uint64_t max{0};
+};
+
+LatencyMetrics CalculateLatencyMetrics(const std::vector<uint64_t> &samples,
+                                       uint64_t sum)
+{
+    LatencyMetrics metrics;
+    if (samples.empty())
+    {
+        return metrics;
+    }
+
+    std::vector<uint64_t> sorted(samples);
+    std::sort(sorted.begin(), sorted.end());
+    auto quantile_index = [&sorted](double quantile)
+    {
+        size_t idx = static_cast<size_t>(
+            quantile * static_cast<double>(sorted.size() - 1));
+        if (idx >= sorted.size())
+        {
+            idx = sorted.size() - 1;
+        }
+        return idx;
+    };
+
+    metrics.average = sum / sorted.size();
+    metrics.p50 = sorted[quantile_index(0.5)];
+    metrics.p90 = sorted[quantile_index(0.9)];
+    metrics.p99 = sorted[quantile_index(0.99)];
+    metrics.p999 = sorted[quantile_index(0.999)];
+    metrics.max = sorted.back();
+    return metrics;
+}
+
+static constexpr size_t kReadLatencyWindow = 500000;
+static constexpr size_t kScanLatencyWindow = 50000;
 
 void EncodeKey(char *dst, uint64_t key)
 {
@@ -219,8 +265,8 @@ void ReadLoop(eloqstore::EloqStore *store, uint32_t thd_id)
     };
 
     uint64_t latency_sum = 0;
-    uint64_t req_cnt = 0;
-    uint64_t max_latency = 0;
+    std::vector<uint64_t> latencies;
+    latencies.reserve(kReadLatencyWindow);
     const auto start = high_resolution_clock::now();
     auto last_time = high_resolution_clock::now();
     for (auto &reader : readers)
@@ -232,21 +278,25 @@ void ReadLoop(eloqstore::EloqStore *store, uint32_t thd_id)
         Reader *reader;
         finished.wait_dequeue(reader);
         latency_sum += reader->latency_;
-        req_cnt++;
-        max_latency = std::max(max_latency, reader->latency_);
+        latencies.push_back(reader->latency_);
 
         send_req(reader);
 
-        if (req_cnt == 500000)
+        if (latencies.size() == kReadLatencyWindow)
         {
             auto now = high_resolution_clock::now();
             double cost_ms =
                 duration_cast<milliseconds>(now - last_time).count();
-            uint64_t qps = req_cnt * 1000 / cost_ms;
-            uint64_t average_latency = latency_sum / req_cnt;
+            uint64_t qps = latencies.size() * 1000 / cost_ms;
+            LatencyMetrics metrics =
+                CalculateLatencyMetrics(latencies, latency_sum);
             LOG(INFO) << "[" << thd_id << "]read speed " << qps
-                      << " QPS | average latency " << average_latency
-                      << " microseconds | max latency " << max_latency
+                      << " QPS | average latency " << metrics.average
+                      << " microseconds | p50 " << metrics.p50
+                      << " microseconds | p90 " << metrics.p90
+                      << " microseconds | p99 " << metrics.p99
+                      << " microseconds | p99.9 " << metrics.p999
+                      << " microseconds | max latency " << metrics.max
                       << " microseconds";
 
             if (stop_.load(std::memory_order_relaxed))
@@ -255,9 +305,8 @@ void ReadLoop(eloqstore::EloqStore *store, uint32_t thd_id)
             }
 
             last_time = high_resolution_clock::now();
-            req_cnt = 0;
             latency_sum = 0;
-            max_latency = 0;
+            latencies.clear();
         }
     }
     size_t total_kvs = 0;
@@ -322,8 +371,8 @@ void ScanLoop(eloqstore::EloqStore *store, uint32_t thd_id)
     };
 
     uint64_t latency_sum = 0;
-    uint64_t req_cnt = 0;
-    uint64_t max_latency = 0;
+    std::vector<uint64_t> latencies;
+    latencies.reserve(kScanLatencyWindow);
     const auto start = high_resolution_clock::now();
     auto last_time = high_resolution_clock::now();
     for (auto &scanner : scanners)
@@ -335,24 +384,29 @@ void ScanLoop(eloqstore::EloqStore *store, uint32_t thd_id)
         Scanner *scanner;
         finished.wait_dequeue(scanner);
         latency_sum += scanner->latency_;
-        req_cnt++;
-        max_latency = std::max(max_latency, scanner->latency_);
+        latencies.push_back(scanner->latency_);
 
         send_req(scanner);
 
-        if (req_cnt == 50000)
+        if (latencies.size() == kScanLatencyWindow)
         {
             auto now = high_resolution_clock::now();
             double cost_ms =
                 duration_cast<milliseconds>(now - last_time).count();
-            uint64_t qps = req_cnt * 1000 / cost_ms;
-            uint64_t average_latency = latency_sum / req_cnt;
+            uint64_t qps = latencies.size() * 1000 / cost_ms;
+            LatencyMetrics metrics =
+                CalculateLatencyMetrics(latencies, latency_sum);
             uint64_t mb_per_sec =
                 (qps * Scanner::page_size * FLAGS_kv_size) >> 20;
             LOG(INFO) << "[" << thd_id << "]scan speed " << mb_per_sec
                       << " MB/s " << qps << " QPS | average latency "
-                      << average_latency << " microseconds | max latency "
-                      << max_latency << " microseconds";
+                      << metrics.average << " microseconds | p50 "
+                      << metrics.p50 << " microseconds | p90 "
+                      << metrics.p90 << " microseconds | p99 "
+                      << metrics.p99 << " microseconds | p99.9 "
+                      << metrics.p999
+                      << " microseconds | max latency " << metrics.max
+                      << " microseconds";
 
             if (stop_.load(std::memory_order_relaxed))
             {
@@ -360,9 +414,8 @@ void ScanLoop(eloqstore::EloqStore *store, uint32_t thd_id)
             }
 
             last_time = high_resolution_clock::now();
-            req_cnt = 0;
             latency_sum = 0;
-            max_latency = 0;
+            latencies.clear();
         }
     }
     size_t total_kvs = 0;
