@@ -443,10 +443,9 @@ void ScanLoop(eloqstore::EloqStore *store, uint32_t thd_id)
             LOG(INFO) << "[" << thd_id << "]scan speed " << mb_per_sec
                       << " MB/s " << qps << " QPS | average latency "
                       << metrics.average << " microseconds | p50 "
-                      << metrics.p50 << " microseconds | p90 "
-                      << metrics.p90 << " microseconds | p99 "
-                      << metrics.p99 << " microseconds | p99.9 "
-                      << metrics.p999
+                      << metrics.p50 << " microseconds | p90 " << metrics.p90
+                      << " microseconds | p99 " << metrics.p99
+                      << " microseconds | p99.9 " << metrics.p999
                       << " microseconds | max latency " << metrics.max
                       << " microseconds";
 
