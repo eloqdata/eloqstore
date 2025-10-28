@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <string_view>
 #include <thread>
+#include <tuple>
 
 #include "common.h"
 #include "kv_options.h"
