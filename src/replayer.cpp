@@ -33,6 +33,7 @@ KvError Replayer::Replay(ManifestFile *file)
     file_size_ = 0;
     max_fp_id_ = MaxFilePageId;
     dict_bytes_.clear();
+    payload_ = {};
 
     KvError err = ParseNextRecord(file);
     CHECK_KV_ERR(err);
@@ -46,6 +47,13 @@ KvError Replayer::Replay(ManifestFile *file)
         {
             if (err == KvError::EndOfFile)
             {
+                break;
+            }
+            if (err == KvError::Corrupted)
+            {
+                LOG(ERROR)
+                    << "Manifest replay stopped at offset " << file_size_
+                    << ", ignoring trailing corrupted records.";
                 break;
             }
             return err;
