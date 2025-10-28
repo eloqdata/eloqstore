@@ -324,7 +324,7 @@ TEST_CASE("enhanced rollback with mix operations", "[archive]")
 TEST_CASE("manifest deletion on rootmeta eviction", "[manifest][eviction]")
 {
     eloqstore::KvOptions opts = {
-        .index_buffer_pool_size = 15 * 4 * MB,
+        .index_buffer_pool_size = 15 * 4 * KB,
         .file_amplify_factor = 2,
         .store_path = {test_path},
         .data_append_mode = true,
