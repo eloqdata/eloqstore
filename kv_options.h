@@ -9,10 +9,10 @@
 
 namespace eloqstore
 {
-constexpr int64_t KB = 1024;
-constexpr int64_t MB = KB * 1024;
-constexpr int64_t GB = MB * 1024;
-constexpr int64_t TB = GB * 1024;
+constexpr int KB = 1 << 10;
+constexpr int MB = 1 << 20;
+constexpr int GB = 1 << 30;
+constexpr int64_t TB = 1LL << 40;
 
 constexpr uint8_t max_overflow_pointers = 128;
 constexpr uint16_t max_read_pages_batch = max_overflow_pointers;

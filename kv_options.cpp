@@ -3,70 +3,84 @@
 #include <glog/logging.h>
 
 #include <bit>
+#include <cctype>
+#include <charconv>
 #include <boost/algorithm/string.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
+#include <system_error>
 #include <string>
+#include <string_view>
 
 #include "inih/cpp/INIReader.h"
 
 namespace eloqstore
 {
-// Helper function to parse size with units (KB, MB, GB)
-static uint64_t ParseSizeWithUnit(const std::string &value_str)
+// Helper function to parse size with units (KB, MB, GB, TB)
+static uint64_t ParseSizeWithUnit(std::string_view s)
 {
-    if (value_str.empty())
+    auto is_space = [](unsigned char c) { return std::isspace(c); };
+
+    while (!s.empty() && is_space(static_cast<unsigned char>(s.front())))
+    {
+        s.remove_prefix(1);
+    }
+    while (!s.empty() && is_space(static_cast<unsigned char>(s.back())))
+    {
+        s.remove_suffix(1);
+    }
+    if (s.empty())
     {
         return 0;
     }
 
-    std::string str = value_str;
-    boost::algorithm::trim(str);
+    uint64_t mul = 1;
 
-    // Convert to uppercase for case-insensitive comparison
-    std::string upper_str = str;
-    boost::algorithm::to_upper(upper_str);
-
-    uint64_t multiplier = 1;
-    size_t unit_pos = std::string::npos;
-
-    if (upper_str.length() >= 2)
+    if (s.size() >= 2)
     {
-        std::string suffix = upper_str.substr(upper_str.length() - 2);
-        if (suffix == "KB")
+        const char c1 =
+            std::toupper(static_cast<unsigned char>(s[s.size() - 2]));
+        const char c2 =
+            std::toupper(static_cast<unsigned char>(s[s.size() - 1]));
+        if (c1 == 'K' && c2 == 'B')
         {
-            multiplier = KB;
-            unit_pos = str.length() - 2;
+            mul = 1ULL << 10;
+            s.remove_suffix(2);
         }
-        else if (suffix == "MB")
+        else if (c1 == 'M' && c2 == 'B')
         {
-            multiplier = MB;
-            unit_pos = str.length() - 2;
+            mul = 1ULL << 20;
+            s.remove_suffix(2);
         }
-        else if (suffix == "GB")
+        else if (c1 == 'G' && c2 == 'B')
         {
-            multiplier = GB;
-            unit_pos = str.length() - 2;
+            mul = 1ULL << 30;
+            s.remove_suffix(2);
+        }
+        else if (c1 == 'T' && c2 == 'B')
+        {
+            mul = 1ULL << 40;
+            s.remove_suffix(2);
         }
     }
 
-    // Extract the numeric part
-    std::string numeric_part =
-        (unit_pos != std::string::npos) ? str.substr(0, unit_pos) : str;
-    boost::algorithm::trim(numeric_part);
-
-    // Parse the numeric value
-    char *end;
-    uint64_t value = strtoull(numeric_part.c_str(), &end, 0);
-
-    // Check if parsing was successful
-    if (end == numeric_part.c_str() || *end != '\0')
+    while (!s.empty() && is_space(static_cast<unsigned char>(s.back())))
     {
-        return 0;  // Invalid format
+        s.remove_suffix(1);
+    }
+    if (s.empty())
+    {
+        return 0;
     }
 
-    uint64_t result = value * multiplier;
-    return result;
+    uint64_t v = 0;
+    auto [ptr, ec] = std::from_chars(s.data(), s.data() + s.size(), v);
+    if (ec != std::errc() || ptr != s.data() + s.size())
+    {
+        return 0;
+    }
+
+    return v * mul;
 }
 int KvOptions::LoadFromIni(const char *path)
 {
