@@ -67,7 +67,8 @@ KvError BackgroundWrite::CompactDataFile()
         TriggerFileGC();
         return KvError::NoError;
     }
-    CHECK(meta->root_id_ != MaxPageId || meta->ttl_root_id_ != MaxPageId);
+    CHECK(meta->root_id_ != MaxPageId || meta->ttl_root_id_ != MaxPageId)
+        << "mapping_cnt=" << mapping_cnt;
 
     const uint32_t pages_per_file = allocator->PagesPerFile();
     const double file_saf_limit = opts->file_amplify_factor;

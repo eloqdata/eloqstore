@@ -6,7 +6,11 @@
 #include <filesystem>
 #include <thread>
 
+#include "index_page_manager.h"
 #include "kv_options.h"
+#include "page_mapper.h"
+#include "replayer.h"
+#include "root_meta.h"
 #include "test_utils.h"
 #include "tests/common.h"
 #include "utils.h"
@@ -63,6 +67,51 @@ TEST_CASE("medium manifest recovery", "[manifest]")
 
         verifier.Verify();
     }
+}
+
+TEST_CASE("manifest with cleared root but dangling mappings", "[manifest]")
+{
+    eloqstore::KvOptions opts = append_opts;
+    eloqstore::MemStoreMgr io_mgr(&opts);
+    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    const eloqstore::TableIdent tbl_id{"dangling", 0};
+
+    // Build a mapper that still owns one page mapping.
+    eloqstore::PageMapper mapper(&idx_mgr, &tbl_id);
+    eloqstore::PageId page_id = mapper.GetPage();
+    eloqstore::FilePageId file_page_id = mapper.FilePgAllocator()->Allocate();
+    mapper.UpdateMapping(page_id, file_page_id);
+
+    eloqstore::ManifestBuilder builder;
+    std::string manifest;
+
+    // Persist a snapshot containing the mapping and a non-empty root.
+    std::string_view snapshot = builder.Snapshot(page_id,
+                                                 eloqstore::MaxPageId,
+                                                 mapper.GetMapping(),
+                                                 mapper.FilePgAllocator()
+                                                     ->MaxFilePageId(),
+                                                 std::string_view{});
+    manifest.append(snapshot);
+    builder.Reset();
+
+    // Simulate a crash after the root is cleared but before DeleteMapping logs
+    // are flushed: append a header setting the root to MaxPageId with an empty
+    // payload, so the mapping table remains populated.
+    std::string_view cleared_root =
+        builder.Finalize(eloqstore::MaxPageId, eloqstore::MaxPageId);
+    manifest.append(cleared_root);
+    builder.Reset();
+
+    eloqstore::MemStoreMgr::Manifest manifest_reader(manifest);
+    eloqstore::Replayer replayer(&opts);
+    eloqstore::KvError err = replayer.Replay(&manifest_reader);
+    REQUIRE(err == eloqstore::KvError::NoError);
+    REQUIRE(replayer.root_ == eloqstore::MaxPageId);
+    REQUIRE(replayer.ttl_root_ == eloqstore::MaxPageId);
+
+    auto recovered_mapper = replayer.GetMapper(&idx_mgr, &tbl_id);
+    REQUIRE(recovered_mapper->MappingCount() == 1);
 }
 
 TEST_CASE("detect manifest corruption", "[manifest]")
