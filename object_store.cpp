@@ -270,13 +270,9 @@ void AsyncHttpManager::ProcessCompletedRequests()
                 {
                     task->error_ = KvError::NoError;
                 }
-                else if (task->TaskType() ==
-                             ObjectStore::Task::Type::AsyncDelete &&
-                         response_code == 404)
+                else if (response_code == 404)
                 {
-                    task->error_ = KvError::NoError;
-                    auto *delete_task =
-                        static_cast<ObjectStore::DeleteTask *>(task);
+                    task->error_ = KvError::NotFound;
                 }
                 else if (IsHttpRetryable(response_code) &&
                          task->retry_count_ < task->max_retries_)
@@ -292,10 +288,7 @@ void AsyncHttpManager::ProcessCompletedRequests()
                 }
                 else
                 {
-                    if (response_code != 404)
-                    {
-                        LOG(ERROR) << "HTTP error: " << response_code;
-                    }
+                    LOG(ERROR) << "HTTP error: " << response_code;
                     task->error_ = ClassifyHttpError(response_code);
                 }
             }
