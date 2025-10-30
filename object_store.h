@@ -2,6 +2,9 @@
 
 #include <curl/curl.h>
 
+#include <chrono>
+#include <limits>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -52,7 +55,8 @@ public:
         std::string response_data_{};
 
         uint8_t retry_count_ = 0;
-        const uint8_t max_retries_ = 3;
+        uint8_t max_retries_ = 3;
+        bool waiting_retry_{false};
 
         // KvTask pointer for direct task resumption
         KvTask *kv_task_{nullptr};
@@ -73,7 +77,7 @@ public:
     {
     public:
         DownloadTask(const TableIdent *tbl_id, std::string_view filename)
-            : tbl_id_(tbl_id), filename_(filename) {};
+            : tbl_id_(tbl_id), filename_(filename){};
         Type TaskType() override
         {
             return Type::AsyncDownload;
@@ -88,7 +92,7 @@ public:
     {
     public:
         UploadTask(const TableIdent *tbl_id, std::vector<std::string> filenames)
-            : tbl_id_(tbl_id), filenames_(std::move(filenames)) {};
+            : tbl_id_(tbl_id), filenames_(std::move(filenames)){};
         Type TaskType() override
         {
             return Type::AsyncUpload;
@@ -106,7 +110,7 @@ public:
     {
     public:
         explicit ListTask(std::string_view remote_path)
-            : remote_path_(remote_path) {};
+            : remote_path_(remote_path){};
         Type TaskType() override
         {
             return Type::AsyncList;
@@ -187,6 +191,15 @@ private:
     void SetupDownloadRequest(ObjectStore::DownloadTask *task, CURL *easy);
     void SetupListRequest(ObjectStore::ListTask *task, CURL *easy);
     void SetupDeleteRequest(ObjectStore::DeleteTask *task, CURL *easy);
+    void ProcessPendingRetries();
+    void ScheduleRetry(ObjectStore::Task *task,
+                       std::chrono::steady_clock::duration delay,
+                       size_t delete_index);
+    uint32_t ComputeBackoffMs(uint8_t attempt) const;
+    bool IsCurlRetryable(CURLcode code) const;
+    bool IsHttpRetryable(int64_t response_code) const;
+    KvError ClassifyHttpError(int64_t response_code) const;
+    KvError ClassifyCurlError(CURLcode code) const;
 
     static size_t WriteCallback(void *contents,
                                 size_t size,
@@ -197,8 +210,22 @@ private:
                size * nmemb;
     }
 
+    struct PendingRetry
+    {
+        ObjectStore::Task *task;
+        size_t delete_index;
+    };
+
+    static constexpr size_t kInvalidDeleteIndex =
+        std::numeric_limits<size_t>::max();
+    static constexpr uint32_t kInitialRetryDelayMs = 200;
+    static constexpr uint32_t kMaxRetryDelayMs = 5000;
+
     CURLM *multi_handle_{nullptr};
     std::unordered_map<CURL *, ObjectStore::Task *> active_requests_;
+    std::unordered_map<CURL *, size_t> delete_request_indices_;
+    std::multimap<std::chrono::steady_clock::time_point, PendingRetry>
+        pending_retries_;
     const std::string daemon_url_;
     const std::string daemon_upload_url_;
     const std::string daemon_download_url_;
