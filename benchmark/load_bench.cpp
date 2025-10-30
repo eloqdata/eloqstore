@@ -167,7 +167,7 @@ int main(int argc, char *argv[])
             const uint64_t speed = write_bytes * 1000 / cost_ms;
             const uint64_t mb_per_sec = speed >> 20;
             const uint64_t num_kvs =
-                uint64_t(FLAGS_batch_size) * FLAGS_partitions;
+                static_cast<uint64_t>(FLAGS_batch_size) * FLAGS_partitions;
             const uint64_t kvs_per_sec = num_kvs * 1000 / cost_ms;
             LOG(INFO) << "write speed " << speed << " bytes/s | " << mb_per_sec
                       << " MiB/s | " << kvs_per_sec << " kvs/s";
@@ -183,7 +183,8 @@ int main(int argc, char *argv[])
     std::cout << "\rBenchmark result:" << std::endl;
     std::cout << "Time spent " << cost_ms << " ms" << std::endl;
     uint64_t write_bytes = batch_bytes * FLAGS_write_batchs;
-    uint64_t num_kvs = uint64_t(FLAGS_batch_size) * FLAGS_write_batchs;
+    uint64_t num_kvs =
+        static_cast<uint64_t>(FLAGS_batch_size) * FLAGS_write_batchs;
     std::cout << "Total write " << write_bytes << " bytes, " << num_kvs
               << " kvs" << std::endl;
     const uint64_t speed = write_bytes * 1000 / cost_ms;

@@ -2,6 +2,7 @@
 #include <glog/logging.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <iostream>
 #include <random>
 #include <vector>
@@ -216,7 +217,9 @@ void WriteLoop(eloqstore::EloqStore *store)
                 uint64_t(FLAGS_batch_size) * FLAGS_partitions;
             const uint64_t kvs_per_sec = num_kvs * 1000 / cost_ms;
             const uint64_t mb_per_sec =
-                (uint64_t(kvs_per_sec * upsert_ratio) * FLAGS_kv_size) >> 20;
+                (static_cast<uint64_t>(kvs_per_sec * upsert_ratio) *
+                 FLAGS_kv_size) >>
+                20;
             LOG(INFO) << "write speed " << kvs_per_sec << " kvs/s | cost "
                       << cost_ms << " ms | " << mb_per_sec << " MiB/s";
 
@@ -238,10 +241,12 @@ void WriteLoop(eloqstore::EloqStore *store)
     if (!latencies_total.empty())
     {
         const uint64_t num_kvs =
-            uint64_t(FLAGS_batch_size) * FLAGS_write_batchs;
+            static_cast<uint64_t>(FLAGS_batch_size) * FLAGS_write_batchs;
         const uint64_t kvs_per_sec = num_kvs * 1000 / total_cost_ms;
         const uint64_t mb_per_sec =
-            (uint64_t(kvs_per_sec * upsert_ratio) * FLAGS_kv_size) >> 20;
+            (static_cast<uint64_t>(kvs_per_sec * upsert_ratio) *
+             FLAGS_kv_size) >>
+            20;
         LatencyMetrics metrics =
             CalculateLatencyMetrics(latencies_total, latency_sum_total);
         LOG(INFO) << "write summary " << kvs_per_sec << " kvs/s | cost "
