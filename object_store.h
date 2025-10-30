@@ -110,7 +110,7 @@ public:
     {
     public:
         explicit ListTask(std::string_view remote_path)
-            : remote_path_(remote_path){};
+            : remote_path_(remote_path) {};
         Type TaskType() override
         {
             return Type::AsyncList;
