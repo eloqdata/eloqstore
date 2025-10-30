@@ -257,8 +257,7 @@ void Shard::ProcessReq(KvRequest *req)
             auto cloud_mgr = static_cast<CloudStoreMgr *>(shard->io_mgr_.get());
             cloud_mgr->GetObjectStore().GetHttpManager()->SubmitRequest(
                 &list_task);
-            current_task->status_ = TaskStatus::Blocked;
-            current_task->Yield();
+            current_task->WaitIo();
 
             if (list_task.error_ != KvError::NoError)
             {

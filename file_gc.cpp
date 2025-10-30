@@ -4,6 +4,7 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <filesystem>
+#include <memory>
 #include <unordered_set>
 #include <vector>
 
@@ -128,8 +129,7 @@ KvError ListCloudFiles(const TableIdent &tbl_id,
     list_task.SetKvTask(current_task);
 
     cloud_mgr->GetObjectStore().GetHttpManager()->SubmitRequest(&list_task);
-    current_task->status_ = TaskStatus::Blocked;
-    current_task->Yield();
+    current_task->WaitIo();
 
     if (list_task.error_ != KvError::NoError)
     {
@@ -216,8 +216,7 @@ KvError DownloadArchiveFile(const TableIdent &tbl_id,
     download_task.SetKvTask(current_task);
 
     cloud_mgr->GetObjectStore().GetHttpManager()->SubmitRequest(&download_task);
-    current_task->status_ = TaskStatus::Blocked;
-    current_task->Yield();
+    current_task->WaitIo();
 
     if (download_task.error_ != KvError::NoError)
     {
@@ -397,28 +396,22 @@ KvError DeleteUnreferencedCloudFiles(
         }
     }
 
-    // Check if we should delete the entire directory instead of individual
-    // files If files_to_delete.size() == data_files.size() - 1, it means we're
-    // deleting all data files except manifest
-    if (files_to_delete.size() == data_files.size() && !files_to_delete.empty())
+    if (files_to_delete.empty())
     {
-        // Clear files_to_delete and add the directory path
-        files_to_delete.clear();
-        files_to_delete.push_back(tbl_id.ToString());
+        return KvError::NoError;
+    }
 
-        // Create delete task for directory
-        KvTask *current_task = ThdTask();
-        ObjectStore::DeleteTask delete_task(files_to_delete,
-                                            true);  // true for directory
+    KvTask *current_task = ThdTask();
+    auto *http_mgr = cloud_mgr->GetObjectStore().GetHttpManager();
+
+    // If we're deleting every file in the directory, issue a single purge
+    // request for the table path.
+    if (files_to_delete.size() == data_files.size())
+    {
+        ObjectStore::DeleteTask delete_task(tbl_id.ToString(), true);
         delete_task.SetKvTask(current_task);
-
-        // Submit the directory delete request
-        delete_task.current_index_ = 0;
-        cloud_mgr->GetObjectStore().GetHttpManager()->SubmitRequest(
-            &delete_task);
-
-        current_task->status_ = TaskStatus::Blocked;
-        current_task->Yield();
+        http_mgr->SubmitRequest(&delete_task);
+        current_task->WaitIo();
 
         if (delete_task.error_ != KvError::NoError)
         {
@@ -430,38 +423,28 @@ KvError DeleteUnreferencedCloudFiles(
         return KvError::NoError;
     }
 
-    // TODO(sunjunhao): also delete cloud objects and local directory.
-    if (files_to_delete.empty())
+    std::vector<std::unique_ptr<ObjectStore::DeleteTask>> delete_tasks;
+    delete_tasks.reserve(files_to_delete.size());
+
+    for (const std::string &remote_path : files_to_delete)
     {
-        return KvError::NoError;
+        auto task =
+            std::make_unique<ObjectStore::DeleteTask>(remote_path, false);
+        task->SetKvTask(current_task);
+        http_mgr->SubmitRequest(task.get());
+        delete_tasks.emplace_back(std::move(task));
     }
 
-    // Delete cloud files directly
-    KvTask *current_task = ThdTask();
+    current_task->WaitIo();
 
-    // Create delete task for all files
-    ObjectStore::DeleteTask delete_task(files_to_delete);
-
-    // Set KvTask pointer
-    delete_task.SetKvTask(current_task);
-
-    // Submit each file separately by updating current_index_
-    for (size_t i = 0; i < delete_task.file_paths_.size(); ++i)
+    for (const auto &task : delete_tasks)
     {
-        delete_task.current_index_ = i;
-        cloud_mgr->GetObjectStore().GetHttpManager()->SubmitRequest(
-            &delete_task);
-    }
-
-    current_task->status_ = TaskStatus::Blocked;
-    current_task->Yield();
-
-    // Check for errors after all tasks complete
-    if (delete_task.error_ != KvError::NoError)
-    {
-        LOG(ERROR) << "Failed to delete files: "
-                   << ErrorString(delete_task.error_);
-        return delete_task.error_;
+        if (task->error_ != KvError::NoError)
+        {
+            LOG(ERROR) << "Failed to delete file " << task->remote_path_ << ": "
+                       << ErrorString(task->error_);
+            return task->error_;
+        }
     }
 
     return KvError::NoError;

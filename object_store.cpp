@@ -63,8 +63,10 @@ void AsyncHttpManager::PerformRequests()
 void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
 {
     task->error_ = KvError::NoError;
-    task->waiting_retry_ = false;
     task->response_data_.clear();
+
+    bool is_retry = task->waiting_retry_;
+    task->waiting_retry_ = false;
 
     CURL *easy = curl_easy_init();
     if (!easy)
@@ -86,8 +88,6 @@ void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
     curl_easy_setopt(easy, CURLOPT_PRIVATE, task);
     curl_easy_setopt(easy, CURLOPT_TIMEOUT, 300L);
 
-    size_t delete_index = kInvalidDeleteIndex;
-
     switch (task->TaskType())
     {
     case ObjectStore::Task::Type::AsyncDownload:
@@ -102,8 +102,6 @@ void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
         SetupListRequest(static_cast<ObjectStore::ListTask *>(task), easy);
         break;
     case ObjectStore::Task::Type::AsyncDelete:
-        delete_index =
-            static_cast<ObjectStore::DeleteTask *>(task)->current_index_;
         SetupDeleteRequest(static_cast<ObjectStore::DeleteTask *>(task), easy);
         break;
     default:
@@ -127,14 +125,11 @@ void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
         return;
     }
 
-    // increment inflight_io_ when request is successfully submitted
-    task->inflight_io_++;
-
     // record the active request using CURL handle as key
     active_requests_[easy] = task;
-    if (delete_index != kInvalidDeleteIndex)
+    if (task->kv_task_ && !is_retry)
     {
-        delete_request_indices_.emplace(easy, delete_index);
+        task->kv_task_->inflight_io_++;
     }
 }
 
@@ -217,33 +212,23 @@ void AsyncHttpManager::SetupListRequest(ObjectStore::ListTask *task, CURL *easy)
 void AsyncHttpManager::SetupDeleteRequest(ObjectStore::DeleteTask *task,
                                           CURL *easy)
 {
-    // Process single file based on current_index_
-    if (task->current_index_ >= task->file_paths_.size())
-    {
-        LOG(ERROR) << "DeleteTask current_index_ out of range";
-        return;
-    }
-
-    size_t index = task->current_index_;
-
     Json::Value request;
     request["fs"] = options_->cloud_store_path;
-    request["remote"] = task->file_paths_[index];
+    request["remote"] = task->remote_path_;
 
     Json::StreamWriterBuilder builder;
-    task->json_data_list_[index] = Json::writeString(builder, request);
+    task->json_data_ = Json::writeString(builder, request);
 
     curl_slist *headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
-    task->headers_list_[index] = headers;
+    task->headers_ = headers;
 
     // Choose URL based on whether it's a directory or file
     const char *url =
-        task->IsDir() ? daemon_purge_url_.c_str() : daemon_delete_url_.c_str();
+        task->is_dir_ ? daemon_purge_url_.c_str() : daemon_delete_url_.c_str();
 
     curl_easy_setopt(easy, CURLOPT_URL, url);
-    curl_easy_setopt(
-        easy, CURLOPT_POSTFIELDS, task->json_data_list_[index].c_str());
+    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->json_data_.c_str());
     curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
 }
 
@@ -278,16 +263,6 @@ void AsyncHttpManager::ProcessCompletedRequests()
 
             bool schedule_retry = false;
             uint32_t retry_delay_ms = 0;
-            size_t delete_index = kInvalidDeleteIndex;
-            if (task->TaskType() == ObjectStore::Task::Type::AsyncDelete)
-            {
-                auto it_index = delete_request_indices_.find(easy);
-                if (it_index != delete_request_indices_.end())
-                {
-                    delete_index = it_index->second;
-                    delete_request_indices_.erase(it_index);
-                }
-            }
 
             if (msg->data.result == CURLE_OK)
             {
@@ -295,25 +270,33 @@ void AsyncHttpManager::ProcessCompletedRequests()
                 {
                     task->error_ = KvError::NoError;
                 }
+                else if (task->TaskType() ==
+                             ObjectStore::Task::Type::AsyncDelete &&
+                         response_code == 404)
+                {
+                    task->error_ = KvError::NoError;
+                    auto *delete_task =
+                        static_cast<ObjectStore::DeleteTask *>(task);
+                }
+                else if (IsHttpRetryable(response_code) &&
+                         task->retry_count_ < task->max_retries_)
+                {
+                    task->retry_count_++;
+                    retry_delay_ms = ComputeBackoffMs(task->retry_count_);
+                    schedule_retry = true;
+                    LOG(WARNING) << "HTTP error " << response_code
+                                 << " from rclone, scheduling retry "
+                                 << unsigned(task->retry_count_) << "/"
+                                 << unsigned(task->max_retries_) << " in "
+                                 << retry_delay_ms << " ms";
+                }
                 else
                 {
-                    if (IsHttpRetryable(response_code) &&
-                        task->retry_count_ < task->max_retries_)
-                    {
-                        task->retry_count_++;
-                        retry_delay_ms = ComputeBackoffMs(task->retry_count_);
-                        schedule_retry = true;
-                        LOG(WARNING) << "HTTP error " << response_code
-                                     << " from rclone, scheduling retry "
-                                     << unsigned(task->retry_count_) << "/"
-                                     << unsigned(task->max_retries_) << " in "
-                                     << retry_delay_ms << " ms";
-                    }
-                    else
+                    if (response_code != 404)
                     {
                         LOG(ERROR) << "HTTP error: " << response_code;
-                        task->error_ = ClassifyHttpError(response_code);
                     }
+                    task->error_ = ClassifyHttpError(response_code);
                 }
             }
             else
@@ -343,53 +326,17 @@ void AsyncHttpManager::ProcessCompletedRequests()
             curl_multi_remove_handle(multi_handle_, easy);
             curl_easy_cleanup(easy);
             active_requests_.erase(easy);
-            task->inflight_io_--;
+            CleanupTaskResources(task);
 
-            if (!schedule_retry &&
-                task->TaskType() == ObjectStore::Task::Type::AsyncDelete)
+            if (schedule_retry)
             {
-                auto *delete_task =
-                    static_cast<ObjectStore::DeleteTask *>(task);
-                if (task->error_ != KvError::NoError &&
-                    !delete_task->has_error_)
-                {
-                    delete_task->has_error_ = true;
-                    delete_task->first_error_ = task->error_;
-                }
+                ScheduleRetry(task, std::chrono::milliseconds(retry_delay_ms));
+                continue;
             }
 
-            if (task->inflight_io_ == 0)
+            if (task->kv_task_)
             {
-                CleanupTaskResources(task);
-
-                if (schedule_retry)
-                {
-                    ScheduleRetry(task,
-                                  std::chrono::milliseconds(retry_delay_ms),
-                                  delete_index);
-                    continue;
-                }
-
-                if (task->kv_task_)
-                {
-                    if (task->TaskType() ==
-                        ObjectStore::Task::Type::AsyncDelete)
-                    {
-                        auto *delete_task =
-                            static_cast<ObjectStore::DeleteTask *>(task);
-                        if (delete_task->has_error_)
-                        {
-                            task->error_ = delete_task->first_error_;
-                        }
-                    }
-                    task->kv_task_->Resume();
-                }
-            }
-            else if (schedule_retry)
-            {
-                ScheduleRetry(task,
-                              std::chrono::milliseconds(retry_delay_ms),
-                              delete_index);
+                task->kv_task_->FinishIo();
             }
         }
     }
@@ -397,7 +344,7 @@ void AsyncHttpManager::ProcessCompletedRequests()
 
 void AsyncHttpManager::CleanupTaskResources(ObjectStore::Task *task)
 {
-    if (!task || task->inflight_io_ > 0)
+    if (!task)
     {
         return;
     }
@@ -438,15 +385,12 @@ void AsyncHttpManager::CleanupTaskResources(ObjectStore::Task *task)
     else if (task->TaskType() == ObjectStore::Task::Type::AsyncDelete)
     {
         auto delete_task = static_cast<ObjectStore::DeleteTask *>(task);
-        for (auto &headers : delete_task->headers_list_)
+        if (delete_task->headers_)
         {
-            if (headers)
-            {
-                curl_slist_free_all(headers);
-            }
+            curl_slist_free_all(delete_task->headers_);
+            delete_task->headers_ = nullptr;
         }
-        delete_task->headers_list_.clear();
-        delete_task->json_data_list_.clear();
+        delete_task->json_data_.clear();
     }
 }
 
@@ -463,10 +407,13 @@ void AsyncHttpManager::Cleanup()
         // clean cURL easy handle
         curl_easy_cleanup(easy);
 
-        task->inflight_io_--;
+        if (task->kv_task_ && task->kv_task_->inflight_io_ > 0)
+        {
+            task->error_ = KvError::CloudErr;
+            task->kv_task_->FinishIo();
+        }
     }
     active_requests_.clear();
-    delete_request_indices_.clear();
     pending_retries_.clear();
 }
 
@@ -480,23 +427,14 @@ void AsyncHttpManager::ProcessPendingRetries()
     auto it = pending_retries_.begin();
     while (it != pending_retries_.end() && it->first <= now)
     {
-        PendingRetry pending = it->second;
+        ObjectStore::Task *task = it->second;
         it = pending_retries_.erase(it);
-        pending.task->waiting_retry_ = false;
-        if (pending.delete_index != kInvalidDeleteIndex &&
-            pending.task->TaskType() == ObjectStore::Task::Type::AsyncDelete)
-        {
-            auto *delete_task =
-                static_cast<ObjectStore::DeleteTask *>(pending.task);
-            delete_task->current_index_ = pending.delete_index;
-        }
-        SubmitRequest(pending.task);
+        SubmitRequest(task);
     }
 }
 
 void AsyncHttpManager::ScheduleRetry(ObjectStore::Task *task,
-                                     std::chrono::steady_clock::duration delay,
-                                     size_t delete_index)
+                                     std::chrono::steady_clock::duration delay)
 {
     task->waiting_retry_ = true;
     task->error_ = KvError::NoError;
@@ -504,7 +442,7 @@ void AsyncHttpManager::ScheduleRetry(ObjectStore::Task *task,
 
     for (auto it = pending_retries_.begin(); it != pending_retries_.end();)
     {
-        if (it->second.task == task && it->second.delete_index == delete_index)
+        if (it->second == task)
         {
             it = pending_retries_.erase(it);
         }
@@ -515,7 +453,7 @@ void AsyncHttpManager::ScheduleRetry(ObjectStore::Task *task,
     }
 
     auto deadline = std::chrono::steady_clock::now() + delay;
-    pending_retries_.emplace(deadline, PendingRetry{task, delete_index});
+    pending_retries_.emplace(deadline, task);
 }
 
 uint32_t AsyncHttpManager::ComputeBackoffMs(uint8_t attempt) const
