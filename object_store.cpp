@@ -443,13 +443,10 @@ void AsyncHttpManager::CleanupTaskResources(ObjectStore::Task *task)
             if (headers)
             {
                 curl_slist_free_all(headers);
-                headers = nullptr;
             }
         }
-        for (auto &payload : delete_task->json_data_list_)
-        {
-            payload.clear();
-        }
+        delete_task->headers_list_.clear();
+        delete_task->json_data_list_.clear();
     }
 }
 
