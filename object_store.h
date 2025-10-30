@@ -119,7 +119,7 @@ public:
     {
     public:
         explicit DeleteTask(std::string remote_path, bool is_dir = false)
-            : remote_path_(std::move(remote_path)), is_dir_(is_dir){};
+            : remote_path_(std::move(remote_path)), is_dir_(is_dir) {};
         Type TaskType() override
         {
             return Type::AsyncDelete;
