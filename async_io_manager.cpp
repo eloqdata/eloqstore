@@ -226,7 +226,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               fd_ref_(std::move(fd)),
               offset_(offset),
-              page_(true) {};
+              page_(true){};
 
         LruFD::Ref fd_ref_;
         uint32_t offset_;
@@ -958,7 +958,7 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
     };
 
@@ -2113,6 +2113,17 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
     current_task->Yield();
 
     return upload_task.error_;
+}
+
+KvError CloudStoreMgr::EnsureCached(const TableIdent &tbl_id, FileId file_id)
+{
+    auto [fd_ref, err] = OpenFD(tbl_id, file_id);
+    if (err != KvError::NoError)
+    {
+        return err;
+    }
+    fd_ref = nullptr;
+    return KvError::NoError;
 }
 
 KvError CloudStoreMgr::ReadArchiveFileAndDelete(const std::string &file_path,

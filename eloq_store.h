@@ -10,6 +10,11 @@
 #include "kv_options.h"
 #include "types.h"
 
+namespace utils
+{
+struct CloudObjectInfo;
+}  // namespace utils
+
 namespace eloqstore
 {
 class Shard;
@@ -20,6 +25,7 @@ enum class RequestType : uint8_t
     Floor,
     Scan,
     ListObject,
+    Prewarm,
     BatchWrite,
     Truncate,
     DropTable,
@@ -189,13 +195,67 @@ public:
     {
     }
 
+    void SetRemotePath(std::string remote_path)
+    {
+        remote_path_ = std::move(remote_path);
+    }
+
+    const std::string &RemotePath() const
+    {
+        return remote_path_;
+    }
+
+    void SetDetailStorage(std::vector<utils::CloudObjectInfo> *details)
+    {
+        details_ = details;
+    }
+
     std::vector<std::string> *GetObjects()
     {
         return objects_;
     }
 
+    std::vector<utils::CloudObjectInfo> *GetDetails() const
+    {
+        return details_;
+    }
+
 private:
     std::vector<std::string> *objects_;
+    std::vector<utils::CloudObjectInfo> *details_{nullptr};
+    std::string remote_path_;
+};
+
+class PrewarmRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::Prewarm;
+    }
+
+    void SetArgs(TableIdent tbl_id,
+                 bool prewarm_manifest,
+                 std::vector<FileId> data_files)
+    {
+        SetTableId(std::move(tbl_id));
+        prewarm_manifest_ = prewarm_manifest;
+        data_files_ = std::move(data_files);
+    }
+
+    bool ShouldPrewarmManifest() const
+    {
+        return prewarm_manifest_;
+    }
+
+    const std::vector<FileId> &DataFiles() const
+    {
+        return data_files_;
+    }
+
+private:
+    bool prewarm_manifest_{false};
+    std::vector<FileId> data_files_;
 };
 
 class WriteRequest : public KvRequest
@@ -323,6 +383,10 @@ private:
     void HandleDropTableRequest(DropTableRequest *req);
     KvError CollectTablePartitions(const std::string &table_name,
                                    std::vector<TableIdent> &partitions) const;
+    bool ListCloudObjects(const std::string &remote_path,
+                          std::vector<std::string> *names,
+                          std::vector<utils::CloudObjectInfo> *details);
+    void PrewarmCloudCache();
     KvError InitStoreSpace();
 
     const KvOptions options_;

@@ -52,7 +52,7 @@ class EloqStore;
 class AsyncIoManager
 {
 public:
-    explicit AsyncIoManager(const KvOptions *opts) : options_(opts) {};
+    explicit AsyncIoManager(const KvOptions *opts) : options_(opts){};
     virtual ~AsyncIoManager() = default;
     static std::unique_ptr<AsyncIoManager> Instance(const EloqStore *store,
                                                     uint32_t fd_limit);
@@ -135,6 +135,7 @@ public:
     KvError CreateArchive(const TableIdent &tbl_id,
                           std::string_view snapshot,
                           uint64_t ts) override;
+    KvError EnsureCached(const TableIdent &tbl_id, FileId file_id);
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
 
@@ -207,7 +208,7 @@ protected:
 
     struct BaseReq
     {
-        explicit BaseReq(KvTask *task = nullptr) : task_(task) {};
+        explicit BaseReq(KvTask *task = nullptr) : task_(task){};
         KvTask *task_;
         int res_{0};
         uint32_t flags_{0};
@@ -357,6 +358,10 @@ class CloudStoreMgr : public IouringMgr
 {
 public:
     CloudStoreMgr(const KvOptions *opts, uint32_t fd_limit);
+    static constexpr FileId ManifestFileId()
+    {
+        return LruFD::kManifest;
+    }
     void Start() override;
     bool IsIdle() override;
     void Stop() override;
@@ -372,6 +377,8 @@ public:
     {
         return obj_store_;
     }
+
+    KvError EnsureCached(const TableIdent &tbl_id, FileId file_id);
 
     KvError ReadArchiveFileAndDelete(const std::string &file_path,
                                      std::string &content);
@@ -439,7 +446,7 @@ private:
     class FileCleaner : public KvTask
     {
     public:
-        FileCleaner(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr) {};
+        FileCleaner(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr){};
         TaskType Type() const override;
         void Run();
         void Shutdown();
@@ -496,7 +503,7 @@ public:
     class Manifest : public ManifestFile
     {
     public:
-        explicit Manifest(std::string_view content) : content_(content) {};
+        explicit Manifest(std::string_view content) : content_(content){};
         KvError Read(char *dst, size_t n) override;
         void Skip(size_t n);
 

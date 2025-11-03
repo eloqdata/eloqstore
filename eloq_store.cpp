@@ -3,7 +3,9 @@
 #include <glog/logging.h>
 #include <sys/resource.h>
 
+#include <algorithm>
 #include <atomic>
+#include <boost/algorithm/string/predicate.hpp>
 #include <cassert>
 #include <cstddef>
 #include <filesystem>
@@ -178,6 +180,8 @@ KvError EloqStore::Start()
     {
         shard->Start();
     }
+
+    PrewarmCloudCache();
 
 #ifdef ELOQ_MODULE_ENABLED
     module_ = std::make_unique<EloqStoreModule>(&shards_);
@@ -364,6 +368,228 @@ KvError EloqStore::CollectTablePartitions(
         }
     }
     return KvError::NoError;
+}
+
+bool EloqStore::ListCloudObjects(const std::string &remote_path,
+                                 std::vector<std::string> *names,
+                                 std::vector<utils::CloudObjectInfo> *details)
+{
+    if (shards_.empty())
+    {
+        return false;
+    }
+
+    ListObjectRequest request(names);
+    request.SetRemotePath(remote_path);
+    request.SetDetailStorage(details);
+    request.err_ = KvError::NoError;
+    request.done_.store(false, std::memory_order_relaxed);
+    request.callback_ = nullptr;
+
+    size_t shard_idx = utils::RandomInt(static_cast<int>(shards_.size()));
+    if (!shards_[shard_idx]->AddKvRequest(&request))
+    {
+        return false;
+    }
+    request.Wait();
+    return request.Error() == KvError::NoError;
+}
+
+void EloqStore::PrewarmCloudCache()
+{
+    if (options_.cloud_store_path.empty() || !options_.prewarm_cloud_cache)
+    {
+        return;
+    }
+    if (shards_.empty())
+    {
+        return;
+    }
+
+    const uint16_t num_threads =
+        std::max<uint16_t>(uint16_t{1}, options_.num_threads);
+    const size_t shard_limit =
+        options_.local_space_limit / static_cast<size_t>(num_threads);
+    if (shard_limit == 0)
+    {
+        LOG(INFO) << "Skip cloud prewarm: no local cache space per shard";
+        return;
+    }
+
+    size_t reserve_space = 0;
+    if (options_.reserve_space_ratio != 0)
+    {
+        reserve_space = static_cast<size_t>(
+            static_cast<double>(shard_limit) /
+            static_cast<double>(options_.reserve_space_ratio));
+        reserve_space = std::min(reserve_space, shard_limit);
+    }
+    size_t budget = shard_limit - reserve_space;
+    if (budget == 0)
+    {
+        LOG(INFO) << "Skip cloud prewarm: reserved space consumes shard cache";
+        return;
+    }
+
+    std::vector<std::string> root_names;
+    std::vector<utils::CloudObjectInfo> root_infos;
+    if (!ListCloudObjects("", &root_names, &root_infos))
+    {
+        LOG(WARNING) << "Skip cloud prewarm: failed to list cloud root";
+        return;
+    }
+
+    std::vector<TableIdent> partitions;
+    partitions.reserve(root_infos.size());
+    for (const auto &info : root_infos)
+    {
+        if (!info.is_dir)
+        {
+            continue;
+        }
+        TableIdent ident = TableIdent::FromString(info.name);
+        if (!ident.IsValid())
+        {
+            continue;
+        }
+        partitions.push_back(std::move(ident));
+    }
+
+    if (partitions.empty())
+    {
+        return;
+    }
+
+    std::sort(partitions.begin(),
+              partitions.end(),
+              [](const TableIdent &lhs, const TableIdent &rhs)
+              {
+                  if (lhs.tbl_name_ == rhs.tbl_name_)
+                  {
+                      return lhs.partition_id_ < rhs.partition_id_;
+                  }
+                  return lhs.tbl_name_ < rhs.tbl_name_;
+              });
+
+    std::vector<size_t> shard_remaining(shards_.size(), budget);
+
+    for (const TableIdent &partition : partitions)
+    {
+        size_t shard_idx = partition.ShardIndex(shards_.size());
+        if (shard_idx >= shard_remaining.size())
+        {
+            continue;
+        }
+        size_t &remaining = shard_remaining[shard_idx];
+        if (remaining == 0)
+        {
+            continue;
+        }
+
+        std::vector<std::string> file_names;
+        std::vector<utils::CloudObjectInfo> file_infos;
+        if (!ListCloudObjects(partition.ToString(), &file_names, &file_infos))
+        {
+            LOG(WARNING) << "Prewarm skip partition " << partition
+                         << ": list request failed";
+            continue;
+        }
+
+        bool has_manifest = false;
+        std::vector<FileId> data_ids;
+        data_ids.reserve(file_infos.size());
+        for (const auto &file : file_infos)
+        {
+            if (file.is_dir)
+            {
+                continue;
+            }
+            if (boost::algorithm::ends_with(file.name, TmpSuffix))
+            {
+                continue;
+            }
+            auto [type, suffix] = ParseFileName(file.name);
+            if (type == FileNameManifest)
+            {
+                if (suffix.empty())
+                {
+                    has_manifest = true;
+                }
+                continue;
+            }
+            if (type == FileNameData && !suffix.empty())
+            {
+                try
+                {
+                    FileId file_id = std::stoull(std::string(suffix));
+                    data_ids.push_back(file_id);
+                }
+                catch (const std::exception &)
+                {
+                    continue;
+                }
+            }
+        }
+
+        const size_t manifest_cost = options_.manifest_limit;
+        const size_t data_cost = options_.DataFileSize();
+
+        size_t projected_remaining = remaining;
+        bool include_manifest = false;
+        if (has_manifest)
+        {
+            if (manifest_cost > projected_remaining)
+            {
+                continue;
+            }
+            include_manifest = true;
+            projected_remaining -= manifest_cost;
+        }
+
+        std::sort(data_ids.begin(), data_ids.end(), std::greater<FileId>());
+        std::vector<FileId> selected_ids;
+        if (data_cost > 0)
+        {
+            for (FileId file_id : data_ids)
+            {
+                if (data_cost > projected_remaining)
+                {
+                    break;
+                }
+                selected_ids.push_back(file_id);
+                projected_remaining -= data_cost;
+            }
+        }
+
+        if (!include_manifest && selected_ids.empty())
+        {
+            continue;
+        }
+
+        PrewarmRequest prewarm_req;
+        prewarm_req.SetArgs(
+            partition, include_manifest, std::move(selected_ids));
+        ExecSync(&prewarm_req);
+        KvError err = prewarm_req.Error();
+
+        if (err == KvError::NoError || err == KvError::NotFound)
+        {
+            remaining = projected_remaining;
+            continue;
+        }
+
+        if (err == KvError::OutOfSpace || err == KvError::OpenFileLimit ||
+            err == KvError::TryAgain)
+        {
+            remaining = projected_remaining;
+            LOG(WARNING) << "Prewarm for " << partition
+                         << " stopped early: " << ErrorString(err);
+            continue;
+        }
+
+        LOG(WARNING) << "Prewarm failed for partition " << partition << ": "
+                     << ErrorString(err);
+    }
 }
 
 void EloqStore::HandleDropTableRequest(DropTableRequest *req)
