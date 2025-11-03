@@ -578,6 +578,7 @@ KvError ToKvError(int err_no)
     case -EMFILE:
         return KvError::OpenFileLimit;
     case -ENOSPC:
+        LOG(FATAL) << "OutOfSpace";
         return KvError::OutOfSpace;
     default:
         LOG(ERROR) << "ToKvError: " << err_no;
@@ -2062,6 +2063,7 @@ int CloudStoreMgr::ReserveCacheSpace(size_t size)
     {
         if (!HasEvictableFile())
         {
+            LOG(FATAL) << "No EvictableFile";
             return -ENOSPC;
         }
 
