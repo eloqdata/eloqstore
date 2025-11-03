@@ -78,7 +78,8 @@ bool EloqStore::ValidateOptions(const KvOptions &opts)
                           "storage is enabled";
             return false;
         }
-        if (uint64_t(opts.fd_limit) * uint64_t(opts.data_page_size) *
+        if (static_cast<uint64_t>(opts.fd_limit) *
+                static_cast<uint64_t>(opts.data_page_size) *
                 (1ULL << opts.pages_per_file_shift) >
             opts.local_space_limit)
         {
