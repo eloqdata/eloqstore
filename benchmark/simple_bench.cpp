@@ -1,6 +1,7 @@
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
+#include <algorithm>
 #include <iostream>
 #include <random>
 
@@ -18,6 +19,10 @@ DEFINE_uint32(kv_size, 128, "size of a pair of KV");
 DEFINE_uint32(batch_size, 8192, "number of KVs per batch");
 DEFINE_uint32(write_batchs, 32768, "number of batchs to write");
 DEFINE_uint32(partitions, 128, "number of partitions");
+DEFINE_uint32(key_interval, 4, "max increment between successive keys; 0 for sequential");
+DEFINE_uint32(delete_ratio,
+              4,
+              "one delete every N operations; 0 disables deletes");
 DEFINE_uint32(max_key, 1000000, "max key limit");
 DEFINE_uint32(write_interval, 0, "interval seconds between writes");
 DEFINE_uint32(read_per_part, 1, "concurrent read/scan requests per partition");
@@ -41,10 +46,6 @@ uint64_t DecodeKey(const std::string &key)
 
 thread_local std::mt19937 rand_gen(0);
 
-static constexpr size_t key_interval = 4;
-static constexpr size_t del_ratio = 4;
-static constexpr double upsert_ratio = 1 - (1.0 / del_ratio);
-
 class Writer
 {
 public:
@@ -52,11 +53,18 @@ public:
     void NextBatch();
 
     const uint32_t id_;
+    const bool allow_delete_;
+    const uint32_t delete_ratio_;
+    const uint32_t key_interval_;
     eloqstore::BatchWriteRequest request_;
     size_t writing_key_{0};
 };
 
-Writer::Writer(uint32_t id) : id_(id)
+Writer::Writer(uint32_t id)
+    : id_(id),
+      allow_delete_(FLAGS_delete_ratio > 0),
+      delete_ratio_(FLAGS_delete_ratio == 0 ? 1 : FLAGS_delete_ratio),
+      key_interval_(std::max(FLAGS_key_interval, 1u))
 {
     eloqstore::TableIdent tbl_id(table, id);
     std::vector<eloqstore::WriteDataEntry> entries;
@@ -67,10 +75,10 @@ Writer::Writer(uint32_t id) : id_(id)
         std::string key;
         key.resize(sizeof(uint64_t));
         EncodeKey(key.data(), writing_key_);
-        writing_key_ += (rand_gen() % key_interval) + 1;
+        writing_key_ += (rand_gen() % key_interval_) + 1;
         std::string value;
         value.resize(FLAGS_kv_size - sizeof(uint64_t));
-        if (rand_gen() % del_ratio == 0)
+        if (allow_delete_ && (rand_gen() % delete_ratio_ == 0))
         {
             entries.emplace_back(std::move(key),
                                  std::move(value),
@@ -86,7 +94,7 @@ Writer::Writer(uint32_t id) : id_(id)
         }
     }
     request_.SetArgs(tbl_id, std::move(entries));
-    if (writing_key_ > FLAGS_max_key)
+    if (FLAGS_max_key != 0 && writing_key_ > FLAGS_max_key)
     {
         writing_key_ = 0;
     }
@@ -97,10 +105,10 @@ void Writer::NextBatch()
     uint64_t ts = utils::UnixTs<milliseconds>();
     for (auto &entry : request_.batch_)
     {
-        writing_key_ += (rand_gen() % key_interval) + 1;
+        writing_key_ += (rand_gen() % key_interval_) + 1;
         EncodeKey(entry.key_.data(), writing_key_);
         entry.timestamp_ = ts;
-        if (rand_gen() % del_ratio == 0)
+        if (allow_delete_ && (rand_gen() % delete_ratio_ == 0))
         {
             entry.op_ = eloqstore::WriteOp::Delete;
         }
@@ -109,7 +117,7 @@ void Writer::NextBatch()
             entry.op_ = eloqstore::WriteOp::Upsert;
         }
     }
-    if (writing_key_ > FLAGS_max_key)
+    if (FLAGS_max_key != 0 && writing_key_ > FLAGS_max_key)
     {
         writing_key_ = 0;
     }
@@ -153,8 +161,11 @@ void WriteLoop(eloqstore::EloqStore *store)
             const uint64_t num_kvs =
                 uint64_t(FLAGS_batch_size) * FLAGS_partitions;
             const uint64_t kvs_per_sec = num_kvs * 1000 / cost_ms;
+            const double delete_rate =
+                FLAGS_delete_ratio > 0 ? 1.0 / FLAGS_delete_ratio : 0.0;
+            const double upsert_rate = 1.0 - delete_rate;
             const uint64_t mb_per_sec =
-                (uint64_t(kvs_per_sec * upsert_ratio) * FLAGS_kv_size) >> 20;
+                (uint64_t(kvs_per_sec * upsert_rate) * FLAGS_kv_size) >> 20;
             LOG(INFO) << "write speed " << kvs_per_sec << " kvs/s | cost "
                       << cost_ms << " ms | " << mb_per_sec << " MiB/s";
 
