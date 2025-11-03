@@ -179,8 +179,8 @@ private:
                size * nmemb;
     }
 
-    static constexpr uint32_t kInitialRetryDelayMs = 200;
-    static constexpr uint32_t kMaxRetryDelayMs = 5000;
+    static constexpr uint32_t kInitialRetryDelayMs = 10000;
+    static constexpr uint32_t kMaxRetryDelayMs = 60000;
 
     CURLM *multi_handle_{nullptr};
     std::unordered_map<CURL *, ObjectStore::Task *> active_requests_;
