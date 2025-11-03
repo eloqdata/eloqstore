@@ -103,8 +103,6 @@ private:
      *
      */
     PageId page_id_{MaxPageId};
-    FilePageId file_page_id_{MaxFilePageId};
-    Page page_;
     /**
      * @brief Number of concurrent tasks that have pinned the page. A page is
      * pinned when a read/write task is traversing down the tree. A pinned page
@@ -112,6 +110,8 @@ private:
      *
      */
     uint32_t ref_cnt_{0};
+    FilePageId file_page_id_{MaxFilePageId};
+    Page page_;
 
     WaitingZone waiting_;
 

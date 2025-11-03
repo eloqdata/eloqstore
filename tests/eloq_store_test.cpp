@@ -78,6 +78,15 @@ TEST_CASE("EloqStore ValidateOptions validates all parameters", "[eloq_store]")
 
     REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == true);
 
+    options.local_space_limit = 10ULL * 1024 * 1024 * 1024;
+    options.fd_limit = 1000000;
+    options.pages_per_file_shift = 12;
+    options.data_page_size = 4096;
+    options.data_append_mode = true;
+    options.cloud_store_path = "test";
+
+    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
+
     CleanupTestDir(test_dir);
 }
 
