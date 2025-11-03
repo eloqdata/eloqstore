@@ -40,9 +40,9 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
                        const std::unordered_set<FileId> &retained_files,
                        IouringMgr *io_mgr)
 {
-    LOG(INFO) << "ExecuteLocalGC: starting for table " << tbl_id.tbl_name_
-              << ", partition " << tbl_id.partition_id_
-              << ", retained_files count=" << retained_files.size();
+    DLOG(INFO) << "ExecuteLocalGC: starting for table " << tbl_id.tbl_name_
+               << ", partition " << tbl_id.partition_id_
+               << ", retained_files count=" << retained_files.size();
 
     // 1. list all files in local directory.
     std::vector<std::string> local_files;
@@ -391,9 +391,9 @@ KvError DeleteUnreferencedCloudFiles(
         }
         else
         {
-            LOG(INFO) << "skip file since file_id=" << file_id
-                      << ", least_not_archived_file_id="
-                      << least_not_archived_file_id;
+            DLOG(INFO) << "skip file since file_id=" << file_id
+                       << ", least_not_archived_file_id="
+                       << least_not_archived_file_id;
         }
     }
 
