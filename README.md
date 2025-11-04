@@ -35,6 +35,7 @@ ctest --test-dir build/tests/
 ### Benchmark for Bulk Load
 ```shell
 ./Release/benchmark/load_bench --kvoptions <path>
+./build/benchmark/simple_bench --kvoptions=./benchmark/opts_append.ini --workload=write-read --test_secs=60 --partitions=4 --read_thds=2 --write_batchs=8192  // You can change the workload to write-read/write-scan/read/write/scan
 ```
 
 ## 🔗 Integration with EloqKV
