@@ -51,8 +51,7 @@ LatencyMetrics CalculateLatencyMetrics(const std::vector<uint64_t> &samples)
         return metrics;
     }
 
-    uint64_t sum =
-        std::accumulate(samples.begin(), samples.end(), uint64_t{0});
+    uint64_t sum = std::accumulate(samples.begin(), samples.end(), uint64_t{0});
     std::vector<uint64_t> sorted(samples);
     std::sort(sorted.begin(), sorted.end());
     auto quantile_index = [&sorted](double quantile)
