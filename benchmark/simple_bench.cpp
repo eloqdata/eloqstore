@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <numeric>
 #include <random>
 #include <vector>
 
@@ -42,8 +43,7 @@ struct LatencyMetrics
     uint64_t max{0};
 };
 
-LatencyMetrics CalculateLatencyMetrics(const std::vector<uint64_t> &samples,
-                                       uint64_t sum)
+LatencyMetrics CalculateLatencyMetrics(const std::vector<uint64_t> &samples)
 {
     LatencyMetrics metrics;
     if (samples.empty())
@@ -51,6 +51,8 @@ LatencyMetrics CalculateLatencyMetrics(const std::vector<uint64_t> &samples,
         return metrics;
     }
 
+    uint64_t sum =
+        std::accumulate(samples.begin(), samples.end(), uint64_t{0});
     std::vector<uint64_t> sorted(samples);
     std::sort(sorted.begin(), sorted.end());
     auto quantile_index = [&sorted](double quantile)
@@ -180,7 +182,6 @@ void WriteLoop(eloqstore::EloqStore *store)
         finished.enqueue(p);
     };
 
-    uint64_t latency_sum_total = 0;
     std::vector<uint64_t> latencies_total;
     latencies_total.reserve(FLAGS_write_batchs + FLAGS_partitions);
     auto total_start = high_resolution_clock::now();
@@ -197,7 +198,6 @@ void WriteLoop(eloqstore::EloqStore *store)
 
         assert(writer->request_.IsDone());
         assert(writer->request_.Error() == eloqstore::KvError::NoError);
-        latency_sum_total += writer->latency_;
         latencies_total.push_back(writer->latency_);
         writer->NextBatch();
         writer->start_ts_ = utils::UnixTs<microseconds>();
@@ -247,8 +247,7 @@ void WriteLoop(eloqstore::EloqStore *store)
             (static_cast<uint64_t>(kvs_per_sec * upsert_ratio) *
              FLAGS_kv_size) >>
             20;
-        LatencyMetrics metrics =
-            CalculateLatencyMetrics(latencies_total, latency_sum_total);
+        LatencyMetrics metrics = CalculateLatencyMetrics(latencies_total);
         LOG(INFO) << "write summary " << kvs_per_sec << " kvs/s | cost "
                   << total_cost_ms << " ms | " << mb_per_sec
                   << " MiB/s | average latency " << metrics.average
@@ -311,7 +310,6 @@ void ReadLoop(eloqstore::EloqStore *store, uint32_t thd_id)
         store->ExecAsyn(&reader->request_, uint64_t(reader), callback);
     };
 
-    uint64_t latency_sum = 0;
     std::vector<uint64_t> latencies;
     latencies.reserve(kReadLatencyWindow);
     const auto start = high_resolution_clock::now();
@@ -324,7 +322,6 @@ void ReadLoop(eloqstore::EloqStore *store, uint32_t thd_id)
     {
         Reader *reader;
         finished.wait_dequeue(reader);
-        latency_sum += reader->latency_;
         latencies.push_back(reader->latency_);
 
         send_req(reader);
@@ -335,8 +332,7 @@ void ReadLoop(eloqstore::EloqStore *store, uint32_t thd_id)
             double cost_ms =
                 duration_cast<milliseconds>(now - last_time).count();
             uint64_t qps = latencies.size() * 1000 / cost_ms;
-            LatencyMetrics metrics =
-                CalculateLatencyMetrics(latencies, latency_sum);
+            LatencyMetrics metrics = CalculateLatencyMetrics(latencies);
             LOG(INFO) << "[" << thd_id << "]read speed " << qps
                       << " QPS | average latency " << metrics.average
                       << " microseconds | p50 " << metrics.p50
@@ -352,7 +348,6 @@ void ReadLoop(eloqstore::EloqStore *store, uint32_t thd_id)
             }
 
             last_time = high_resolution_clock::now();
-            latency_sum = 0;
             latencies.clear();
         }
     }
@@ -417,7 +412,6 @@ void ScanLoop(eloqstore::EloqStore *store, uint32_t thd_id)
         store->ExecAsyn(&scanner->request_, uint64_t(scanner), callback);
     };
 
-    uint64_t latency_sum = 0;
     std::vector<uint64_t> latencies;
     latencies.reserve(kScanLatencyWindow);
     const auto start = high_resolution_clock::now();
@@ -430,7 +424,6 @@ void ScanLoop(eloqstore::EloqStore *store, uint32_t thd_id)
     {
         Scanner *scanner;
         finished.wait_dequeue(scanner);
-        latency_sum += scanner->latency_;
         latencies.push_back(scanner->latency_);
 
         send_req(scanner);
@@ -441,8 +434,7 @@ void ScanLoop(eloqstore::EloqStore *store, uint32_t thd_id)
             double cost_ms =
                 duration_cast<milliseconds>(now - last_time).count();
             uint64_t qps = latencies.size() * 1000 / cost_ms;
-            LatencyMetrics metrics =
-                CalculateLatencyMetrics(latencies, latency_sum);
+            LatencyMetrics metrics = CalculateLatencyMetrics(latencies);
             uint64_t mb_per_sec =
                 (qps * Scanner::page_size * FLAGS_kv_size) >> 20;
             LOG(INFO) << "[" << thd_id << "]scan speed " << mb_per_sec
@@ -460,7 +452,6 @@ void ScanLoop(eloqstore::EloqStore *store, uint32_t thd_id)
             }
 
             last_time = high_resolution_clock::now();
-            latency_sum = 0;
             latencies.clear();
         }
     }
