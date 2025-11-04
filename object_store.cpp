@@ -86,7 +86,7 @@ void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
     curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, WriteCallback);
     curl_easy_setopt(easy, CURLOPT_WRITEDATA, &task->response_data_);
     curl_easy_setopt(easy, CURLOPT_PRIVATE, task);
-    curl_easy_setopt(easy, CURLOPT_TIMEOUT, 30L);
+    curl_easy_setopt(easy, CURLOPT_TIMEOUT, 100L);
 
     switch (task->TaskType())
     {
