@@ -659,6 +659,13 @@ void BatchWriteRequest::AddWrite(std::string key,
     batch_.push_back({std::move(key), std::move(value), ts, op});
 }
 
+void BatchWriteRequest::Clear()
+{
+    batch_.clear();
+    batch_.shrink_to_fit();
+}
+
+
 void TruncateRequest::SetArgs(TableIdent tbl_id, std::string_view position)
 {
     SetTableId(std::move(tbl_id));

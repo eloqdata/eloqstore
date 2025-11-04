@@ -221,6 +221,7 @@ public:
     }
     void SetArgs(TableIdent tid, std::vector<WriteDataEntry> &&batch);
     void AddWrite(std::string key, std::string value, uint64_t ts, WriteOp op);
+    void Clear();
 
     // input
     std::vector<WriteDataEntry> batch_;
