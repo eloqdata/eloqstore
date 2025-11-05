@@ -466,7 +466,8 @@ void IndexPageManager::FinishIo(MappingSnapshot *mapping,
 KvError IndexPageManager::SeekIndex(MappingSnapshot *mapping,
                                     PageId page_id,
                                     std::string_view key,
-                                    uint32_t &result)
+                                    uint32_t &result,
+                                    int *depth)
 {
     auto [node, err] = FindPage(mapping, page_id);
     CHECK_KV_ERR(err);
@@ -480,7 +481,8 @@ KvError IndexPageManager::SeekIndex(MappingSnapshot *mapping,
     }
     else
     {
-        return SeekIndex(mapping, child_id, key, result);
+        ++*depth;
+        return SeekIndex(mapping, child_id, key, result, depth);
     }
 }
 

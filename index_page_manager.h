@@ -63,7 +63,8 @@ public:
     KvError SeekIndex(MappingSnapshot *mapping,
                       PageId page_id,
                       std::string_view key,
-                      uint32_t &result);
+                      uint32_t &result,
+                      int *depth = nullptr);
 
     const KvOptions *Options() const;
     AsyncIoManager *IoMgr() const;

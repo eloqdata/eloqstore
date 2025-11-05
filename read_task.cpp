@@ -1,5 +1,7 @@
 #include "read_task.h"
 
+#include <bvar/latency_recorder.h>
+
 #include <string>
 #include <utility>
 
@@ -10,6 +12,8 @@
 
 namespace eloqstore
 {
+
+bvar::LatencyRecorder seek_index_lr("seek_index_depth_100times", "times");
 
 KvError ReadTask::Read(const TableIdent &tbl_id,
                        std::string_view search_key,
@@ -26,8 +30,10 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
     auto mapping = meta->mapper_->GetMappingSnapshot();
 
     PageId page_id;
+    int depth = 0;
     err = shard->IndexManager()->SeekIndex(
-        mapping.get(), meta->root_id_, search_key, page_id);
+        mapping.get(), meta->root_id_, search_key, page_id, &depth);
+    seek_index_lr << depth * 100;
     CHECK_KV_ERR(err);
     FilePageId file_page = mapping->ToFilePage(page_id);
     auto [page, err_load] = LoadDataPage(tbl_id, page_id, file_page);
