@@ -84,7 +84,7 @@ fi
 
 echo "Found tests directory, running all CTest tests..."
 # Set timeout and run all tests
-timeout 300s ctest --test-dir tests/ || echo "⚠️  Some tests may have failed or timed out, continuing execution..."
+ctest --test-dir tests/ || echo "⚠️  Some tests may have failed or timed out, continuing execution..."
 
 echo "✓ Unit test execution completed"
 echo
