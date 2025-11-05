@@ -24,16 +24,10 @@ public:
 
     int Compare(std::string_view a, std::string_view b) const override
     {
-        if (a.size() == 0)
-        {
-            return b.size() == 0 ? 0 : -1;
-        }
-        else if (b.size() == 0)
-        {
-            return 1;
-        }
-
-        return a.compare(b);
+        auto n = std::min(a.size(), b.size());
+        int r = memcmp(a.data(), b.data(), n);
+        if (r != 0) return r;
+        return (a.size() > b.size()) - (a.size() < b.size());
     }
 
     void FindShortestSeparator(std::string *start,
