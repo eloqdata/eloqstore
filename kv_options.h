@@ -41,7 +41,7 @@ struct KvOptions
     /**
      * @brief Max size of cached index pages per shard (in bytes).
      */
-    uint32_t index_buffer_pool_size = 32 * MB;
+    uint64_t index_buffer_pool_size = 32 * MB;
     /**
      * @brief Limit manifest file size.
      */
@@ -62,7 +62,7 @@ struct KvOptions
     /**
      * @brief The maximum number of pages per batch for the write task.
      */
-    uint16_t max_write_batch_pages = 256;
+    uint32_t max_write_batch_pages = 256;
     /**
      * @brief Size of io-uring selected buffer ring.
      * It must be a power-of 2, and can be up to 32768.
@@ -77,7 +77,7 @@ struct KvOptions
      * @brief Limit number of retained archives.
      * Only take effect when data_append_mode is enabled.
      */
-    uint16_t num_retained_archives = 0;
+    uint32_t num_retained_archives = 0;
     /**
      * @brief Set the (minimum) archive time interval in seconds.
      * 0 means do not generate archives automatically.
