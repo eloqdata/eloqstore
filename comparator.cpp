@@ -1,5 +1,7 @@
 #include "comparator.h"
 
+#include <immintrin.h>
+
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -24,10 +26,41 @@ public:
 
     int Compare(std::string_view a, std::string_view b) const override
     {
-        auto n = std::min(a.size(), b.size());
-        int r = memcmp(a.data(), b.data(), n);
-        if (r != 0) return r;
-        return (a.size() > b.size()) - (a.size() < b.size());
+        size_t lena = a.size();
+        size_t lenb = b.size();
+        size_t n = std::min(lena, lenb);
+
+        const unsigned char *pa = (const unsigned char *) a.data();
+        const unsigned char *pb = (const unsigned char *) b.data();
+
+        size_t i = 0;
+
+        // ==== 32B per iteration ====
+        for (; i + 32 <= n; i += 32)
+        {
+            __m256i va = _mm256_loadu_si256((__m256i *) (pa + i));
+            __m256i vb = _mm256_loadu_si256((__m256i *) (pb + i));
+            __m256i cmp = _mm256_cmpeq_epi8(va, vb);
+
+            uint32_t mask = _mm256_movemask_epi8(cmp);
+
+            if (mask != 0xFFFFFFFFu)
+            {
+                uint32_t diff_mask = ~mask;
+                int pos = __builtin_ctz(diff_mask);
+                return pa[i + pos] - pb[i + pos];
+            }
+        }
+
+        // tail bytes
+        for (; i < n; i++)
+        {
+            if (pa[i] != pb[i])
+                return pa[i] - pb[i];
+        }
+
+        // equal prefix → compare length
+        return (lena > lenb) - (lena < lenb);
     }
 
     void FindShortestSeparator(std::string *start,
