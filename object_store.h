@@ -55,7 +55,7 @@ public:
         curl_slist *headers_{nullptr};
 
         uint8_t retry_count_ = 0;
-        uint8_t max_retries_ = 3;
+        uint8_t max_retries_ = 5;
         bool waiting_retry_{false};
 
         // KvTask pointer for direct task resumption
@@ -74,7 +74,7 @@ public:
     {
     public:
         DownloadTask(const TableIdent *tbl_id, std::string_view filename)
-            : tbl_id_(tbl_id), filename_(filename) {};
+            : tbl_id_(tbl_id), filename_(filename){};
         Type TaskType() override
         {
             return Type::AsyncDownload;
@@ -87,7 +87,7 @@ public:
     {
     public:
         UploadTask(const TableIdent *tbl_id, std::vector<std::string> filenames)
-            : tbl_id_(tbl_id), filenames_(std::move(filenames)) {};
+            : tbl_id_(tbl_id), filenames_(std::move(filenames)){};
         Type TaskType() override
         {
             return Type::AsyncUpload;
@@ -104,7 +104,7 @@ public:
     {
     public:
         explicit ListTask(std::string_view remote_path)
-            : remote_path_(remote_path) {};
+            : remote_path_(remote_path){};
         Type TaskType() override
         {
             return Type::AsyncList;
@@ -116,7 +116,7 @@ public:
     {
     public:
         explicit DeleteTask(std::string remote_path, bool is_dir = false)
-            : remote_path_(std::move(remote_path)), is_dir_(is_dir) {};
+            : remote_path_(std::move(remote_path)), is_dir_(is_dir){};
         Type TaskType() override
         {
             return Type::AsyncDelete;
