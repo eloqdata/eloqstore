@@ -226,27 +226,29 @@ const char *IndexPageIter::DecodeEntry(const char *ptr,
         return nullptr;
     }
 
-    *shared = reinterpret_cast<const uint8_t *>(ptr)[0];
-    *non_shared = reinterpret_cast<const uint8_t *>(ptr)[1];
-    if ((*shared | *non_shared) < 128)
-    {
-        // Fast path: all three values are encoded in one byte each
-        ptr += 2;
-    }
-    else
-    {
-        if ((ptr = GetVarint32Ptr(ptr, limit, shared)) == nullptr)
-        {
-            return nullptr;
-        }
+    const auto *u8_ptr = reinterpret_cast<const uint8_t *>(ptr);
+    const uint32_t first = u8_ptr[0];
 
-        if ((ptr = GetVarint32Ptr(ptr, limit, non_shared)) == nullptr)
+    if (first < 128)
+    {
+        *shared = first;
+        ptr = reinterpret_cast<const char *>(u8_ptr + 1);
+
+        const uint32_t second = u8_ptr[1];
+        if (second < 128)
         {
-            return nullptr;
+            *non_shared = second;
+            return ptr + 1;
         }
     }
+    else if ((ptr = GetVarint32Ptr(ptr, limit, shared)) == nullptr)
+    {
+        return nullptr;
+    }
 
-    return ptr;
+    // ptr now points to the beginning of the non-shared length.
+
+    return GetVarint32Ptr(ptr, limit, non_shared);
 }
 
 std::string IndexPageIter::PeekNextKey() const
