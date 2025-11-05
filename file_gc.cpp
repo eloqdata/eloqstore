@@ -429,10 +429,10 @@ KvError DeleteUnreferencedCloudFiles(
 
     for (const std::string &remote_path : files_to_delete)
     {
-        ObjectStore::DeleteTask task(remote_path, false);
+        delete_tasks.emplace_back(remote_path, false);
+        ObjectStore::DeleteTask &task = delete_tasks.back();
         task.SetKvTask(current_task);
         http_mgr->SubmitRequest(&task);
-        delete_tasks.push_back(std::move(task));
     }
 
     current_task->WaitIo();
