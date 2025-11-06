@@ -2,6 +2,8 @@
 
 #include <curl/curl.h>
 
+#include <chrono>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -14,7 +16,6 @@
 
 // https://github.com/cameron314/concurrentqueue/issues/280
 #undef BLOCK_SIZE
-#include "concurrentqueue/blockingconcurrentqueue.h"
 
 namespace eloqstore
 {
@@ -50,15 +51,15 @@ public:
 
         KvError error_{KvError::NoError};
         std::string response_data_{};
+        std::string json_data_{};
+        curl_slist *headers_{nullptr};
 
         uint8_t retry_count_ = 0;
-        const uint8_t max_retries_ = 3;
+        uint8_t max_retries_ = 5;
+        bool waiting_retry_{false};
 
         // KvTask pointer for direct task resumption
         KvTask *kv_task_{nullptr};
-        // Inflight IO counter for handling multiple async operations
-        int inflight_io_{0};
-
         void SetKvTask(KvTask *task)
         {
             kv_task_ = task;
@@ -80,8 +81,6 @@ public:
         };
         const TableIdent *tbl_id_;
         std::string_view filename_;
-        curl_slist *headers_{nullptr};
-        std::string json_data_;
     };
 
     class UploadTask : public Task
@@ -99,7 +98,6 @@ public:
 
         // cURL related members
         curl_mime *mime_{nullptr};
-        curl_slist *headers_{nullptr};
     };
 
     class ListTask : public Task
@@ -112,49 +110,20 @@ public:
             return Type::AsyncList;
         }
         std::string remote_path_;
-        curl_slist *headers_{nullptr};
-        std::string json_data_;
     };
 
     class DeleteTask : public Task
     {
     public:
-        explicit DeleteTask(std::vector<std::string> file_paths,
-                            bool is_dir = false)
-            : file_paths_(std::move(file_paths)),
-              current_index_(0),
-              is_dir_(is_dir)
-        {
-            headers_list_.resize(file_paths_.size(), nullptr);
-            json_data_list_.resize(file_paths_.size());
-        }
+        explicit DeleteTask(std::string remote_path, bool is_dir = false)
+            : remote_path_(std::move(remote_path)), is_dir_(is_dir) {};
         Type TaskType() override
         {
             return Type::AsyncDelete;
         }
 
-        // Check if this batch is for directories
-        bool IsDir() const
-        {
-            return is_dir_;
-        }
-
-        // Set whether this batch is for directories
-        void SetIsDir(bool is_dir)
-        {
-            is_dir_ = is_dir;
-        }
-
-        std::vector<std::string> file_paths_;  // Support batch delete
-        size_t current_index_;  // Current index being processed in file_paths_
-
-        std::vector<struct curl_slist *> headers_list_;
-        std::vector<std::string> json_data_list_;
-        bool is_dir_{false};  // Track whether this batch is for directories
-                              // (default: false for files)
-
-        bool has_error_{false};
-        KvError first_error_{KvError::NoError};
+        std::string remote_path_;
+        bool is_dir_{false};
     };
 
 private:
@@ -187,6 +156,14 @@ private:
     void SetupDownloadRequest(ObjectStore::DownloadTask *task, CURL *easy);
     void SetupListRequest(ObjectStore::ListTask *task, CURL *easy);
     void SetupDeleteRequest(ObjectStore::DeleteTask *task, CURL *easy);
+    void ProcessPendingRetries();
+    void ScheduleRetry(ObjectStore::Task *task,
+                       std::chrono::steady_clock::duration delay);
+    uint32_t ComputeBackoffMs(uint8_t attempt) const;
+    bool IsCurlRetryable(CURLcode code) const;
+    bool IsHttpRetryable(int64_t response_code) const;
+    KvError ClassifyHttpError(int64_t response_code) const;
+    KvError ClassifyCurlError(CURLcode code) const;
 
     static size_t WriteCallback(void *contents,
                                 size_t size,
@@ -197,8 +174,13 @@ private:
                size * nmemb;
     }
 
+    static constexpr uint32_t kInitialRetryDelayMs = 10'000;
+    static constexpr uint32_t kMaxRetryDelayMs = 40'000;
+
     CURLM *multi_handle_{nullptr};
     std::unordered_map<CURL *, ObjectStore::Task *> active_requests_;
+    std::multimap<std::chrono::steady_clock::time_point, ObjectStore::Task *>
+        pending_retries_;
     const std::string daemon_url_;
     const std::string daemon_upload_url_;
     const std::string daemon_download_url_;

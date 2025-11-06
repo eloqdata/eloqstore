@@ -2087,8 +2087,7 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id, FileId file_id)
     download_task.SetKvTask(current_task);
 
     obj_store_.GetHttpManager()->SubmitRequest(&download_task);
-    current_task->status_ = TaskStatus::Blocked;
-    current_task->Yield();
+    current_task->WaitIo();
 
     return download_task.error_;
 }
@@ -2109,8 +2108,7 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
     upload_task.SetKvTask(current_task);
 
     obj_store_.GetHttpManager()->SubmitRequest(&upload_task);
-    current_task->status_ = TaskStatus::Blocked;
-    current_task->Yield();
+    current_task->WaitIo();
 
     return upload_task.error_;
 }

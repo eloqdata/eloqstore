@@ -106,7 +106,6 @@ struct KvOptions
      * Only take effect when cloud store is enabled.
      */
     uint16_t reserve_space_ratio = 100;
-
     /* NOTE:
      * The following options will be persisted in storage, so after the first
      * setting, them cannot be changed anymore in the future.
