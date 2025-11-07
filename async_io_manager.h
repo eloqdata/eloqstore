@@ -53,7 +53,7 @@ class EloqStore;
 class AsyncIoManager
 {
 public:
-    explicit AsyncIoManager(const KvOptions *opts) : options_(opts){};
+    explicit AsyncIoManager(const KvOptions *opts) : options_(opts) {};
     virtual ~AsyncIoManager() = default;
     static std::unique_ptr<AsyncIoManager> Instance(const EloqStore *store,
                                                     uint32_t fd_limit);
@@ -208,7 +208,7 @@ protected:
 
     struct BaseReq
     {
-        explicit BaseReq(KvTask *task = nullptr) : task_(task){};
+        explicit BaseReq(KvTask *task = nullptr) : task_(task) {};
         KvTask *task_;
         int res_{0};
         uint32_t flags_{0};

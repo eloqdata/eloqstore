@@ -206,7 +206,7 @@ bool BatchWriteTask::SetBatch(std::span<WriteDataEntry> entries)
     {
         if (ent.key_.empty() || ent.key_.size() > max_key_len)
         {
-            return false;
+            assert(false);
         }
     }
 #endif
