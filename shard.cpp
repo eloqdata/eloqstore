@@ -1,6 +1,7 @@
 #include "shard.h"
 
 #include "list_object_task.h"
+#include "prewarm_task.h"
 #include "utils.h"
 
 #ifdef ELOQ_MODULE_ENABLED
@@ -251,7 +252,8 @@ void Shard::ProcessReq(KvRequest *req)
         {
             KvTask *current_task = ThdTask();
             auto list_object_req = static_cast<ListObjectRequest *>(req);
-            ObjectStore::ListTask list_task("");
+            ObjectStore::ListTask list_task(list_object_req->RemotePath());
+            list_task.SetRecursive(list_object_req->Recursive());
 
             list_task.SetKvTask(task);
             auto cloud_mgr = static_cast<CloudStoreMgr *>(shard->io_mgr_.get());
@@ -267,12 +269,25 @@ void Shard::ProcessReq(KvRequest *req)
             }
 
             if (!utils::ParseRCloneListObjectsResponse(
-                    list_task.response_data_, *list_object_req->GetObjects()))
+                    list_task.response_data_,
+                    list_object_req->GetObjects(),
+                    list_object_req->GetDetails()))
             {
                 LOG(ERROR) << "Failed to parse ListObjects response";
                 return KvError::IoFail;
             }
             return KvError::NoError;
+        };
+        StartTask(task, req, lbd);
+        break;
+    }
+    case RequestType::Prewarm:
+    {
+        PrewarmTask *task = task_mgr_.GetPrewarmTask();
+        auto lbd = [task, req]() -> KvError
+        {
+            auto *prewarm_req = static_cast<PrewarmRequest *>(req);
+            return task->Prewarm(*prewarm_req);
         };
         StartTask(task, req, lbd);
         break;

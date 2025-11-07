@@ -20,6 +20,7 @@
 #include "async_io_manager.h"
 #include "common.h"
 #include "file_gc.h"
+#include "prewarm_task.h"
 #include "shard.h"
 #include "utils.h"
 
@@ -88,6 +89,11 @@ bool EloqStore::ValidateOptions(const KvOptions &opts)
                        << "local_space_limit";
             return false;
         }
+    }
+    else if (opts.prewarm_cloud_cache)
+    {
+        LOG(ERROR) << "prewarm_cloud_cache requires cloud_store_path to be set";
+        return false;
     }
 
     if (opts.data_append_mode)
@@ -178,6 +184,12 @@ KvError EloqStore::Start()
     {
         shard->Start();
     }
+
+    if (prewarm_service_ == nullptr)
+    {
+        prewarm_service_ = std::make_unique<PrewarmService>(this);
+    }
+    prewarm_service_->Start();
 
 #ifdef ELOQ_MODULE_ENABLED
     module_ = std::make_unique<EloqStoreModule>(&shards_);
@@ -281,6 +293,15 @@ void EloqStore::ExecSync(KvRequest *req)
     {
         req->SetDone(KvError::NotRunning);
     }
+}
+
+bool EloqStore::IsPrewarmCancelled() const
+{
+    if (prewarm_service_ == nullptr)
+    {
+        return true;
+    }
+    return prewarm_service_->IsCancelled();
 }
 
 KvError EloqStore::CollectTablePartitions(
@@ -435,6 +456,12 @@ bool EloqStore::SendRequest(KvRequest *req)
         return false;
     }
 
+    if (prewarm_service_ != nullptr && !prewarm_service_->IsCancelled() &&
+        prewarm_service_->ShouldCancelForRequest(req->Type()))
+    {
+        prewarm_service_->Cancel();
+    }
+
     req->err_ = KvError::NoError;
     req->done_.store(false, std::memory_order_relaxed);
 
@@ -457,6 +484,11 @@ void EloqStore::Stop()
     if (archive_crond_ != nullptr)
     {
         archive_crond_->Stop();
+    }
+
+    if (prewarm_service_ != nullptr)
+    {
+        prewarm_service_->Stop();
     }
 
     stopped_.store(true, std::memory_order_relaxed);

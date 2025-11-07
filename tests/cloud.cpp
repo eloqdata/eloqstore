@@ -1,7 +1,9 @@
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <filesystem>
 #include <map>
+#include <thread>
 
 #include "common.h"
 #include "kv_options.h"
@@ -20,6 +22,152 @@ TEST_CASE("simple cloud store", "[cloud]")
     tester.Upsert(0, 50);
     tester.WriteRnd(0, 200);
     tester.WriteRnd(0, 200);
+}
+
+TEST_CASE("cloud prewarm cancels on foreground activity", "[cloud][prewarm]")
+{
+    eloqstore::KvOptions options = cloud_options;
+    options.prewarm_cloud_cache = true;
+    options.local_space_limit = 64 << 22;  // keep budgets small for test
+    eloqstore::EloqStore *store = InitStore(options);
+
+    MapVerifier writer(test_tbl_id, store);
+    writer.SetValueSize(4096);
+    writer.WriteRnd(0, 8000);
+    writer.Validate();
+
+    store->Stop();
+    CleanupLocalStore(options);
+
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    writer.SetStore(store);
+
+    const std::filesystem::path partition_path =
+        std::filesystem::path(options.store_path[0]) / test_tbl_id.ToString();
+
+    bool prewarm_active = false;
+    for (int i = 0; i < 100; i++)
+    {
+        if (!store->IsPrewarmCancelled())
+        {
+            prewarm_active = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE(prewarm_active);
+
+    bool download_started = false;
+    for (int i = 0; i < 300; i++)
+    {
+        if (store->IsPrewarmCancelled())
+        {
+            break;
+        }
+        if (std::filesystem::exists(partition_path) &&
+            !std::filesystem::is_empty(partition_path))
+        {
+            download_started = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE(download_started);
+
+    auto begin = std::chrono::steady_clock::now();
+    writer.Read(0);
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - begin)
+                       .count();
+    REQUIRE(elapsed < 1000);  // request should not be blocked by prewarm
+
+    bool cancelled = false;
+    for (int i = 0; i < 200; i++)
+    {
+        if (store->IsPrewarmCancelled())
+        {
+            cancelled = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE(cancelled);
+
+    writer.Validate();
+}
+
+TEST_CASE("cloud prewarm respects cache budget", "[cloud][prewarm]")
+{
+    eloqstore::KvOptions options = cloud_options;
+    options.prewarm_cloud_cache = true;
+    options.local_space_limit = 2ULL << 30;
+
+    eloqstore::EloqStore *store = InitStore(options);
+    eloqstore::TableIdent tbl_id{"prewarm", 0};
+    MapVerifier writer(tbl_id, store);
+    writer.SetValueSize(16 << 10);
+    writer.Upsert(0, 8000);
+    writer.WriteRnd(0, 12000);
+    writer.Validate();
+
+    auto baseline_dataset = writer.DataSet();
+    REQUIRE_FALSE(baseline_dataset.empty());
+
+    store->Stop();
+
+    auto remote_bytes =
+        GetCloudSize(options.cloud_store_daemon_url, options.cloud_store_path);
+    REQUIRE(remote_bytes.has_value());
+
+    CleanupLocalStore(options);
+
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    writer.SetStore(store);
+    writer.SetValueSize(16 << 10);
+    writer.SwitchDataSet(baseline_dataset);
+
+    bool prewarm_active = false;
+    for (int i = 0; i < 200; i++)
+    {
+        if (!store->IsPrewarmCancelled())
+        {
+            prewarm_active = true;
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    REQUIRE(prewarm_active);
+
+    for (int i = 0; i < 600; i++)
+    {
+        if (store->IsPrewarmCancelled())
+        {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    REQUIRE(store->IsPrewarmCancelled());
+
+    const auto partition_path =
+        std::filesystem::path(options.store_path[0]) / tbl_id.ToString();
+    uint64_t local_size = DirectorySize(partition_path);
+
+    uint64_t limit_bytes = options.local_space_limit;
+    uint64_t expected_target = std::min(limit_bytes, remote_bytes.value());
+    if (expected_target == 0)
+    {
+        REQUIRE(local_size == 0);
+    }
+    else
+    {
+        double ratio = static_cast<double>(local_size) /
+                       static_cast<double>(expected_target);
+        REQUIRE(ratio >= 0.9);
+    }
+
+    writer.Validate();
+    writer.WriteRnd(12000, 12500);
+    writer.Validate();
 }
 
 TEST_CASE("cloud gc preserves archived data after truncate",

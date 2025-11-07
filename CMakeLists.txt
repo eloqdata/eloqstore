@@ -82,6 +82,7 @@ set(ELOQ_STORE_SOURCES
         task.cpp
         read_task.cpp
         scan_task.cpp
+        prewarm_task.cpp
         write_task.cpp
         batch_write_task.cpp
         background_write.cpp

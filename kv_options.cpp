@@ -186,6 +186,11 @@ int KvOptions::LoadFromIni(const char *path)
         reserve_space_ratio =
             reader.GetUnsigned(sec_run, "reserve_space_ratio", 100);
     }
+    if (reader.HasValue(sec_run, "prewarm_cloud_cache"))
+    {
+        prewarm_cloud_cache =
+            reader.GetBoolean(sec_run, "prewarm_cloud_cache", false);
+    }
     if (reader.HasValue(sec_run, "cloud_store_daemon_url"))
     {
         cloud_store_daemon_url = reader.Get(
@@ -281,6 +286,7 @@ bool KvOptions::operator==(const KvOptions &other) const
            file_amplify_factor == other.file_amplify_factor &&
            local_space_limit == other.local_space_limit &&
            reserve_space_ratio == other.reserve_space_ratio &&
+           prewarm_cloud_cache == other.prewarm_cloud_cache &&
            store_path == other.store_path &&
            cloud_store_path == other.cloud_store_path &&
            data_page_size == other.data_page_size &&

@@ -14,6 +14,15 @@ namespace chrono = std::chrono;
 
 namespace utils
 {
+struct CloudObjectInfo
+{
+    std::string name;
+    std::string path;
+    uint64_t size{0};
+    bool is_dir{false};
+    std::string mod_time;
+};
+
 template <typename T>
 inline T UnsetLowBits(T num, uint8_t n)
 {
@@ -63,8 +72,10 @@ inline int RandomInt(int n)
     return dist(gen);
 }
 
-inline bool ParseRCloneListObjectsResponse(std::string &response_data,
-                                           std::vector<std::string> &objects)
+inline bool ParseRCloneListObjectsResponse(
+    std::string &response_data,
+    std::vector<std::string> *objects,
+    std::vector<CloudObjectInfo> *object_infos = nullptr)
 {
     Json::Value response;
     Json::Reader reader;
@@ -72,12 +83,61 @@ inline bool ParseRCloneListObjectsResponse(std::string &response_data,
     {
         if (response.isMember("list") && response["list"].isArray())
         {
-            objects.clear();
+            if (objects != nullptr)
+            {
+                objects->clear();
+            }
+            if (object_infos != nullptr)
+            {
+                object_infos->clear();
+            }
             for (const auto &item : response["list"])
             {
-                if (item.isMember("Name") && item["Name"].isString())
+                if (objects != nullptr && item.isMember("Name") &&
+                    item["Name"].isString())
                 {
-                    objects.push_back(item["Name"].asString());
+                    objects->push_back(item["Name"].asString());
+                }
+                if (object_infos != nullptr)
+                {
+                    CloudObjectInfo info;
+                    if (item.isMember("Name") && item["Name"].isString())
+                    {
+                        info.name = item["Name"].asString();
+                    }
+                    if (item.isMember("Path") && item["Path"].isString())
+                    {
+                        info.path = item["Path"].asString();
+                    }
+                    if (item.isMember("ModTime") && item["ModTime"].isString())
+                    {
+                        info.mod_time = item["ModTime"].asString();
+                    }
+                    if (item.isMember("Size"))
+                    {
+                        const Json::Value &size_value = item["Size"];
+                        if (size_value.isUInt64())
+                        {
+                            info.size = size_value.asUInt64();
+                        }
+                        else if (size_value.isString())
+                        {
+                            try
+                            {
+                                info.size =
+                                    std::stoull(size_value.asString(), nullptr);
+                            }
+                            catch (const std::exception &)
+                            {
+                                info.size = 0;
+                            }
+                        }
+                    }
+                    if (item.isMember("IsDir") && item["IsDir"].isBool())
+                    {
+                        info.is_dir = item["IsDir"].asBool();
+                    }
+                    object_infos->push_back(std::move(info));
                 }
             }
         }

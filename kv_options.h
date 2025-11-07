@@ -106,6 +106,11 @@ struct KvOptions
      * Only take effect when cloud store is enabled.
      */
     uint16_t reserve_space_ratio = 100;
+    /**
+     * @brief Download recent files from cloud into local cache during startup.
+     */
+    bool prewarm_cloud_cache = false;
+
     /* NOTE:
      * The following options will be persisted in storage, so after the first
      * setting, them cannot be changed anymore in the future.

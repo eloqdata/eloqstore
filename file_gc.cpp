@@ -142,7 +142,7 @@ KvError ListCloudFiles(const TableIdent &tbl_id,
     try
     {
         if (!utils::ParseRCloneListObjectsResponse(list_task.response_data_,
-                                                   cloud_files))
+                                                   &cloud_files))
         {
             LOG(ERROR) << "Failed to parse JSON response: "
                        << list_task.response_data_;

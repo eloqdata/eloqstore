@@ -6,6 +6,7 @@
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 #include "../common.h"
@@ -181,4 +182,67 @@ inline std::vector<std::string> ListCloudFiles(
     }
 
     return files;
+}
+
+inline std::optional<uint64_t> GetCloudSize(const std::string &daemon_url,
+                                            const std::string &cloud_path)
+{
+    std::string json_data = "{\"fs\":\"" + cloud_path + "\"}";
+    std::string command =
+        "curl -s -X POST -H 'Content-Type: application/json' -d '" + json_data +
+        "' " + daemon_url + "/operations/size";
+
+    FILE *pipe = popen(command.c_str(), "r");
+    if (!pipe)
+    {
+        return std::nullopt;
+    }
+
+    std::string response;
+    char buffer[1024];
+    while (fgets(buffer, sizeof(buffer), pipe) != nullptr)
+    {
+        response += buffer;
+    }
+    pclose(pipe);
+
+    try
+    {
+        Json::Value root;
+        Json::Reader reader;
+        if (reader.parse(response, root) && root.isMember("bytes"))
+        {
+            return root["bytes"].asUInt64();
+        }
+    }
+    catch (const std::exception &)
+    {
+        // ignore parse errors
+    }
+    return std::nullopt;
+}
+
+inline uint64_t DirectorySize(const std::filesystem::path &path)
+{
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec))
+    {
+        return 0;
+    }
+    uint64_t total = 0;
+    for (std::filesystem::recursive_directory_iterator it(path, ec), end;
+         it != end && !ec;
+         it.increment(ec))
+    {
+        std::error_code file_ec;
+        if (it->is_regular_file(file_ec) && !file_ec)
+        {
+            total += it->file_size(file_ec);
+        }
+        if (ec)
+        {
+            break;
+        }
+    }
+    return total;
 }

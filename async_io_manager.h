@@ -26,6 +26,7 @@ namespace eloqstore
 class WriteReq;
 class WriteTask;
 class MemIndexPage;
+class PrewarmTask;
 
 class ManifestFile
 {
@@ -52,7 +53,7 @@ class EloqStore;
 class AsyncIoManager
 {
 public:
-    explicit AsyncIoManager(const KvOptions *opts) : options_(opts) {};
+    explicit AsyncIoManager(const KvOptions *opts) : options_(opts){};
     virtual ~AsyncIoManager() = default;
     static std::unique_ptr<AsyncIoManager> Instance(const EloqStore *store,
                                                     uint32_t fd_limit);
@@ -207,7 +208,7 @@ protected:
 
     struct BaseReq
     {
-        explicit BaseReq(KvTask *task = nullptr) : task_(task) {};
+        explicit BaseReq(KvTask *task = nullptr) : task_(task){};
         KvTask *task_;
         int res_{0};
         uint32_t flags_{0};
@@ -357,6 +358,10 @@ class CloudStoreMgr : public IouringMgr
 {
 public:
     CloudStoreMgr(const KvOptions *opts, uint32_t fd_limit);
+    static constexpr FileId ManifestFileId()
+    {
+        return LruFD::kManifest;
+    }
     void Start() override;
     bool IsIdle() override;
     void Stop() override;
@@ -439,7 +444,7 @@ private:
     class FileCleaner : public KvTask
     {
     public:
-        FileCleaner(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr) {};
+        explicit FileCleaner(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr) {};
         TaskType Type() const override;
         void Run();
         void Shutdown();
@@ -454,6 +459,8 @@ private:
     FileCleaner file_cleaner_;
 
     ObjectStore obj_store_;
+
+    friend class PrewarmTask;
 };
 
 class MemStoreMgr : public AsyncIoManager

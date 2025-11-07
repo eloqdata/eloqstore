@@ -188,7 +188,7 @@ void AsyncHttpManager::SetupListRequest(ObjectStore::ListTask *task, CURL *easy)
     request["fs"] = options_->cloud_store_path;
     request["remote"] = task->remote_path_;
     request["opt"] = Json::Value(Json::objectValue);
-    request["opt"]["recurse"] = false;
+    request["opt"]["recurse"] = task->Recursive();
     request["opt"]["showHash"] = false;
 
     Json::StreamWriterBuilder builder;
