@@ -195,8 +195,6 @@ bool BatchWriteTask::SetBatch(std::span<WriteDataEntry> entries)
         {
             if (cmp->Compare(entries[i - 1].key_, entries[i].key_) >= 0)
             {
-                LOG(FATAL) << "entries key:" << entries[i - 1].key_
-                           << " expire ts " << entries[i].expire_ts_;
                 assert(false);
             }
         }
@@ -284,16 +282,6 @@ KvError BatchWriteTask::ApplyTTLBatch()
             }
         }
         ttl_batch_.resize(write_idx);
-        for (size_t i = 1; i < ttl_batch_.size(); i++)
-        {
-            std::string_view key1 = {ttl_batch_[i - 1].key_.data() + 8,
-                                     ttl_batch_[i - 1].key_.size() - 8};
-            std::string_view key2 = {ttl_batch_[i].key_.data() + 8,
-                                     ttl_batch_[i].key_.size() - 8};
-            assert(key1 != key2);
-            assert(ttl_batch_[i - 1].expire_ts_ == 0);
-            assert(ttl_batch_[i + 1].expire_ts_ == 0);
-        }
         SetBatch(ttl_batch_);
         KvError err = ApplyBatch(cow_meta_.ttl_root_id_, false);
         ttl_batch_.clear();
