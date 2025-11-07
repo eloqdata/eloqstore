@@ -370,15 +370,6 @@ void PrewarmService::PrewarmCloudCache()
                   {
                       return lhs.mod_time > rhs.mod_time;
                   }
-                  if (lhs.tbl_id.tbl_name_ != rhs.tbl_id.tbl_name_)
-                  {
-                      return lhs.tbl_id.tbl_name_ < rhs.tbl_id.tbl_name_;
-                  }
-                  if (lhs.tbl_id.partition_id_ != rhs.tbl_id.partition_id_)
-                  {
-                      return lhs.tbl_id.partition_id_ <
-                             rhs.tbl_id.partition_id_;
-                  }
                   return lhs.file_id > rhs.file_id;
               });
 
@@ -386,7 +377,7 @@ void PrewarmService::PrewarmCloudCache()
 
     const size_t kMaxPrewarmInflight = std::max<size_t>(
         1, std::min<size_t>(32, store_->options_.num_threads * 2));
-    std::atomic<size_t> inflight{0};
+    auto inflight = std::make_shared<std::atomic<size_t>>(0);
     std::vector<std::shared_ptr<PrewarmRequest>> pending_requests;
     pending_requests.reserve(entries.size());
 
@@ -395,16 +386,16 @@ void PrewarmService::PrewarmCloudCache()
         using namespace std::chrono_literals;
         while (!IsCancelled())
         {
-            size_t cur = inflight.load(std::memory_order_relaxed);
+            size_t cur = inflight->load(std::memory_order_relaxed);
             if (cur >= kMaxPrewarmInflight)
             {
                 std::this_thread::sleep_for(1ms);
                 continue;
             }
-            if (inflight.compare_exchange_weak(cur,
-                                               cur + 1,
-                                               std::memory_order_acq_rel,
-                                               std::memory_order_relaxed))
+            if (inflight->compare_exchange_weak(cur,
+                                                cur + 1,
+                                                std::memory_order_acq_rel,
+                                                std::memory_order_relaxed))
             {
                 return true;
             }
@@ -426,7 +417,7 @@ void PrewarmService::PrewarmCloudCache()
         bool ok = store_->ExecAsyn(
             raw_req,
             0,
-            [this, entry, &inflight](KvRequest *finished_req)
+            [this, entry, inflight](KvRequest *finished_req)
             {
                 KvError err = finished_req->Error();
                 if (err != KvError::NoError && err != KvError::NotFound)
@@ -441,11 +432,11 @@ void PrewarmService::PrewarmCloudCache()
                         << "Prewarm request failed for " << entry.tbl_id
                         << " file " << file_name << ": " << ErrorString(err);
                 }
-                inflight.fetch_sub(1, std::memory_order_release);
+                inflight->fetch_sub(1, std::memory_order_release);
             });
         if (!ok)
         {
-            inflight.fetch_sub(1, std::memory_order_release);
+            inflight->fetch_sub(1, std::memory_order_release);
             return false;
         }
 
@@ -473,7 +464,7 @@ void PrewarmService::PrewarmCloudCache()
 
     using namespace std::chrono_literals;
 
-    while (inflight.load(std::memory_order_acquire) != 0)
+    while (inflight->load(std::memory_order_acquire) != 0)
     {
         if (IsCancelled())
         {
