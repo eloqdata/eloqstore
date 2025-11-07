@@ -26,7 +26,7 @@ public:
     KvError CleanExpiredKeys();
 
 private:
-    KvError ApplyBatch(PageId &root_id, bool update_ttl);
+    KvError ApplyBatch(PageId &root_id, bool update_ttl, uint64_t now_ts = 0);
     KvError ApplyTTLBatch();
     KvError ApplyOnePage(size_t &cidx, uint64_t now_ms);
 
