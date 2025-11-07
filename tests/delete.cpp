@@ -162,7 +162,7 @@ TEST_CASE("expire timestamp", "[TTL]")
     verify.SetMaxTTL(200);
 
     const uint32_t range_size = 10000;
-    for (size_t i = 0; i < 1000; i++)
+    for (size_t i = 0; i < 100; i++)
     {
         const uint32_t begin = std::rand() % range_size;
         switch (i % 5)

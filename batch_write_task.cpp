@@ -256,38 +256,11 @@ KvError BatchWriteTask::ApplyTTLBatch()
 {
     if (!ttl_batch_.empty())
     {
-#ifdef NDEBUG
         std::sort(ttl_batch_.begin(), ttl_batch_.end());
-#else
-        std::stable_sort(ttl_batch_.begin(), ttl_batch_.end());
-#endif
         for (size_t i = 1; i < ttl_batch_.size(); i++)
         {
             assert(ttl_batch_[i - 1].key_ != ttl_batch_[i].key_);
         }
-        /*
-        size_t write_idx = 0;
-        size_t read_idx = 0;
-        while (read_idx < ttl_batch_.size())
-        {
-            if (read_idx + 1 < ttl_batch_.size() &&
-                Comp()->Compare(ttl_batch_[read_idx].key_,
-                                ttl_batch_[read_idx + 1].key_) == 0)
-            {
-                assert(ttl_batch_[read_idx].op_ == WriteOp::Upsert &&
-                       ttl_batch_[read_idx + 1].op_ == WriteOp::Delete);
-                ttl_batch_[write_idx] = ttl_batch_[read_idx];
-                ttl_batch_[write_idx].op_ = WriteOp::Delete;
-                ++write_idx;
-                read_idx += 2;
-            }
-            else
-            {
-                ttl_batch_[write_idx++] = ttl_batch_[read_idx++];
-            }
-        }
-        ttl_batch_.resize(write_idx);
-        */
         SetBatch(ttl_batch_);
         KvError err = ApplyBatch(cow_meta_.ttl_root_id_, false);
         ttl_batch_.clear();
