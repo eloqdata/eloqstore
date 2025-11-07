@@ -24,7 +24,7 @@ inline T UnsetLowBits(T num, uint8_t n)
 template <typename T>
 uint64_t UnixTs()
 {
-    auto dur = chrono::steady_clock::now().time_since_epoch();
+    auto dur = chrono::system_clock::now().time_since_epoch();
     return chrono::duration_cast<T>(dur).count();
 }
 

@@ -195,7 +195,9 @@ bool BatchWriteTask::SetBatch(std::span<WriteDataEntry> entries)
         {
             if (cmp->Compare(entries[i - 1].key_, entries[i].key_) >= 0)
             {
-                return false;
+                LOG(FATAL) << "entries key:" << entries[i - 1].key_
+                           << " expire ts " << entries[i].expire_ts_;
+                assert(false);
             }
         }
     }
@@ -256,7 +258,42 @@ KvError BatchWriteTask::ApplyTTLBatch()
 {
     if (!ttl_batch_.empty())
     {
+#ifdef NDEBUG
         std::sort(ttl_batch_.begin(), ttl_batch_.end());
+#else
+        std::stable_sort(ttl_batch_.begin(), ttl_batch_.end());
+#endif
+        size_t write_idx = 0;
+        size_t read_idx = 0;
+        while (read_idx < ttl_batch_.size())
+        {
+            if (read_idx + 1 < ttl_batch_.size() &&
+                Comp()->Compare(ttl_batch_[read_idx].key_,
+                                ttl_batch_[read_idx + 1].key_) == 0)
+            {
+                assert(ttl_batch_[read_idx].op_ == WriteOp::Upsert &&
+                       ttl_batch_[read_idx + 1].op_ == WriteOp::Delete);
+                ttl_batch_[write_idx] = ttl_batch_[read_idx];
+                ttl_batch_[write_idx].op_ = WriteOp::Delete;
+                ++write_idx;
+                read_idx += 2;
+            }
+            else
+            {
+                ttl_batch_[write_idx++] = ttl_batch_[read_idx++];
+            }
+        }
+        ttl_batch_.resize(write_idx);
+        for (size_t i = 1; i < ttl_batch_.size(); i++)
+        {
+            std::string_view key1 = {ttl_batch_[i - 1].key_.data() + 8,
+                                     ttl_batch_[i - 1].key_.size() - 8};
+            std::string_view key2 = {ttl_batch_[i].key_.data() + 8,
+                                     ttl_batch_[i].key_.size() - 8};
+            assert(key1 != key2);
+            assert(ttl_batch_[i - 1].expire_ts_ == 0);
+            assert(ttl_batch_[i + 1].expire_ts_ == 0);
+        }
         SetBatch(ttl_batch_);
         KvError err = ApplyBatch(cow_meta_.ttl_root_id_, false);
         ttl_batch_.clear();
@@ -268,7 +305,9 @@ KvError BatchWriteTask::ApplyTTLBatch()
     }
 }
 
-KvError BatchWriteTask::ApplyBatch(PageId &root_id, bool update_ttl)
+KvError BatchWriteTask::ApplyBatch(PageId &root_id,
+                                   bool update_ttl,
+                                   uint64_t now_ts)
 {
     do_update_ttl_ = update_ttl;
     assert(!update_ttl || ttl_batch_.empty());
@@ -290,7 +329,8 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id, bool update_ttl)
 
     KvError err;
     size_t cidx = 0;
-    const uint64_t now_ms = utils::UnixTs<chrono::milliseconds>();
+    const uint64_t now_ms =
+        now_ts != 0 ? now_ts : utils::UnixTs<chrono::milliseconds>();
     while (cidx < data_batch_.size())
     {
         std::string_view batch_start_key = {data_batch_[cidx].key_.data(),
@@ -534,7 +574,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
                     err = DelOverflowValue(base_val);
                     CHECK_KV_ERR(err);
                 }
-                const uint32_t base_expire = base_page_iter.ExpireTs();
+                const uint64_t base_expire = base_page_iter.ExpireTs();
                 expire_ts = change_it->expire_ts_;
                 if (change_it->op_ == WriteOp::Delete)
                 {
@@ -1679,13 +1719,14 @@ KvError BatchWriteTask::CleanExpiredKeys()
     std::vector<WriteDataEntry> data_batch, ttl_batch;
     data_batch.reserve(128);
     ttl_batch.reserve(128);
-    const uint64_t now_ts = utils::UnixTs<chrono::milliseconds>();
+    const uint64_t now_ts_ms = utils::UnixTs<chrono::milliseconds>();
+    const uint64_t now_ts_us = utils::UnixTs<chrono::microseconds>();
     uint64_t next_expire_ts = 0;
     do
     {
         std::string_view ttl_key = iter.Key();
         uint64_t expire_ts = BigEndianToNative(DecodeFixed64(ttl_key.data()));
-        if (expire_ts > now_ts)
+        if (expire_ts > now_ts_ms)
         {
             next_expire_ts = expire_ts;
             break;
@@ -1693,7 +1734,7 @@ KvError BatchWriteTask::CleanExpiredKeys()
         ttl_batch.emplace_back(std::string(ttl_key), "", 0, WriteOp::Delete);
         std::string key(ttl_key.substr(8));
         data_batch.emplace_back(
-            std::move(key), "", now_ts, WriteOp::Delete, expire_ts);
+            std::move(key), "", now_ts_us, WriteOp::Delete, expire_ts);
     } while (iter.Next() == KvError::NoError);
 
     if (ttl_batch.empty())
@@ -1704,11 +1745,11 @@ KvError BatchWriteTask::CleanExpiredKeys()
     err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
     CHECK_KV_ERR(err);
     assert(cow_meta_.next_expire_ts_ != 0 &&
-           cow_meta_.next_expire_ts_ <= now_ts);
+           cow_meta_.next_expire_ts_ <= now_ts_ms);
 
     std::sort(data_batch.begin(), data_batch.end());
     SetBatch(data_batch);
-    err = ApplyBatch(cow_meta_.root_id_, false);
+    err = ApplyBatch(cow_meta_.root_id_, false, now_ts_ms);
     CHECK_KV_ERR(err);
 
     assert(std::is_sorted(ttl_batch.begin(), ttl_batch.end()));
