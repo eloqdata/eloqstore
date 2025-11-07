@@ -261,6 +261,11 @@ KvError BatchWriteTask::ApplyTTLBatch()
 #else
         std::stable_sort(ttl_batch_.begin(), ttl_batch_.end());
 #endif
+        for (size_t i = 1; i < ttl_batch_.size(); i++)
+        {
+            assert(ttl_batch_[i - 1].key_ != ttl_batch_[i].key_);
+        }
+        /*
         size_t write_idx = 0;
         size_t read_idx = 0;
         while (read_idx < ttl_batch_.size())
@@ -282,6 +287,7 @@ KvError BatchWriteTask::ApplyTTLBatch()
             }
         }
         ttl_batch_.resize(write_idx);
+        */
         SetBatch(ttl_batch_);
         KvError err = ApplyBatch(cow_meta_.ttl_root_id_, false);
         ttl_batch_.clear();
@@ -605,7 +611,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         else
         {
             adv_type = AdvanceType::Changes;
-            if (change_it->op_ == WriteOp::Delete)
+            if (change_it->op_ == WriteOp::Delete ||
+                (change_it->expire_ts_ != 0 && change_it->expire_ts_ <= now_ms))
             {
                 // deleting key not exists.
                 new_key = std::string_view{};
@@ -678,7 +685,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
 
     while (change_it != change_end_it)
     {
-        if (change_it->op_ == WriteOp::Upsert)
+        if (change_it->op_ == WriteOp::Upsert &&
+            (change_it->expire_ts_ == 0 || change_it->expire_ts_ > now_ms))
         {
             /* INSERT */
             std::string_view key{change_it->key_.data(),
