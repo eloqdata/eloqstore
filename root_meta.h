@@ -43,10 +43,24 @@ private:
     std::string buff_;
 };
 
+struct FilePageIdTermMapping
+{
+    void Append(FilePageId file_page_id, Term term);
+
+    Term MaxTerm();
+    /**
+     * Used to get the term a file page id belongs to.
+     * Find max i that file_page_id >= page_id_term_mapping_[i].first, then term
+     * is page_id_term_mapping_[i].second.
+     */
+    std::vector<std::pair<FilePageId, Term>> mapping_{};
+};
+
 struct CowRootMeta
 {
     CowRootMeta() = default;
     CowRootMeta(CowRootMeta &&rhs) = default;
+    void UpdateTerm(Term term) const;
     PageId root_id_{MaxPageId};
     PageId ttl_root_id_{MaxPageId};
     std::unique_ptr<PageMapper> mapper_{nullptr};
@@ -54,6 +68,7 @@ struct CowRootMeta
     std::shared_ptr<MappingSnapshot> old_mapping_{nullptr};
     uint64_t next_expire_ts_{};
     std::shared_ptr<compression::DictCompression> compression_{nullptr};
+    std::shared_ptr<FilePageIdTermMapping> page_id_term_mapping_{nullptr};
 };
 
 struct RootMeta
@@ -66,6 +81,8 @@ struct RootMeta
     void Pin();
     void Unpin();
 
+    Term CurrentTerm() const;
+
     PageId root_id_{MaxPageId};
     PageId ttl_root_id_{MaxPageId};
     std::unique_ptr<PageMapper> mapper_{nullptr};
@@ -73,6 +90,7 @@ struct RootMeta
     uint64_t manifest_size_{0};
     uint64_t next_expire_ts_{0};
     std::shared_ptr<compression::DictCompression> compression_{nullptr};
+    std::shared_ptr<FilePageIdTermMapping> page_id_term_mapping_{nullptr};
 
     uint32_t ref_cnt_{0};
     bool locked_{false};

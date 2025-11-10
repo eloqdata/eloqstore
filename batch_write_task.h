@@ -19,6 +19,7 @@ public:
     void Abort() override;
 
     bool SetBatch(std::span<WriteDataEntry> entries);
+    void SetTerm(size_t term);
     KvError Apply();
 
     KvError Truncate(std::string_view trunc_pos);
@@ -100,6 +101,8 @@ private:
     IndexPageBuilder idx_page_builder_;
     DataPageBuilder data_page_builder_;
     std::string overflow_ptrs_;
+
+    size_t term_{};
 
     /**
      * @brief To maintain the double link list between bottom data pages, we

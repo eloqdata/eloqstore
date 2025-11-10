@@ -219,10 +219,11 @@ public:
     {
         return RequestType::BatchWrite;
     }
-    void SetArgs(TableIdent tid, std::vector<WriteDataEntry> &&batch);
+    void SetArgs(TableIdent tid, std::vector<WriteDataEntry> &&batch, size_t term = 0);
     void AddWrite(std::string key, std::string value, uint64_t ts, WriteOp op);
     void Clear();
 
+    size_t term_{0};
     // input
     std::vector<WriteDataEntry> batch_;
 };

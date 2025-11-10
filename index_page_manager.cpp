@@ -170,7 +170,8 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
 }
 
 KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
-                                      CowRootMeta &cow_meta)
+                                      CowRootMeta &cow_meta,
+                                      size_t term)
 {
     auto [meta, err] = FindRoot(tbl_ident);
     if (err == KvError::NoError)
@@ -183,6 +184,25 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
         cow_meta.old_mapping_ = meta->mapper_->GetMappingSnapshot();
         cow_meta.manifest_size_ = meta->manifest_size_;
         cow_meta.next_expire_ts_ = meta->next_expire_ts_;
+        if (Options()->data_append_mode)
+        {
+            assert(meta->page_id_term_mapping_ != nullptr);
+            if (meta->CurrentTerm() > term)
+            {
+                return KvError::InvalidArgs;
+            }
+            if (meta->CurrentTerm() < term)
+            {
+                cow_meta.page_id_term_mapping_ =
+                    std::make_shared<FilePageIdTermMapping>(
+                        *meta->page_id_term_mapping_);
+                cow_meta.page_id_term_mapping_
+            }
+            else
+            {
+                cow_meta.page_id_term_mapping_ = meta->page_id_term_mapping_;
+            }
+        }
         if (meta->compression_->Dirty())
         {
             // This only happens when the dictionary is built from values with
@@ -210,6 +230,8 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
         cow_meta.next_expire_ts_ = 0;
         cow_meta.compression_ =
             std::make_shared<compression::DictCompression>();
+        cow_meta.page_id_term_mapping_ =
+            std::make_shared<FilePageIdTermMapping>();
         meta = &tbl_it->second;
     }
     else
@@ -240,6 +262,7 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
     meta.manifest_size_ = new_meta.manifest_size_;
     meta.next_expire_ts_ = new_meta.next_expire_ts_;
     meta.compression_ = std::move(new_meta.compression_);
+    meta.page_id_term_mapping_ = std::move(new_meta.page_id_term_mapping_);
 }
 
 std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(

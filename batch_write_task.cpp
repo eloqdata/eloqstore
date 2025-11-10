@@ -184,6 +184,12 @@ KvError BatchWriteTask::LeafLinkDelete()
     return KvError::NoError;
 }
 
+void BatchWriteTask::SetTerm(size_t term)
+{
+    term_ = term;
+}
+
+
 bool BatchWriteTask::SetBatch(std::span<WriteDataEntry> entries)
 {
 #ifndef NDEBUG
@@ -239,9 +245,9 @@ void BatchWriteTask::Abort()
 
 KvError BatchWriteTask::Apply()
 {
-    KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
-    cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
+    KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_, term_);
     CHECK_KV_ERR(err);
+    cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     err = ApplyBatch(cow_meta_.root_id_, true);
     CHECK_KV_ERR(err);
     err = ApplyTTLBatch();

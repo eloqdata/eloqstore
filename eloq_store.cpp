@@ -645,10 +645,12 @@ bool ScanRequest::HasRemaining() const
 }
 
 void BatchWriteRequest::SetArgs(TableIdent tbl_id,
-                                std::vector<WriteDataEntry> &&batch)
+                                std::vector<WriteDataEntry> &&batch,
+                                size_t term)
 {
     SetTableId(std::move(tbl_id));
     batch_ = std::move(batch);
+    term_ = term;
 }
 
 void BatchWriteRequest::AddWrite(std::string key,
@@ -656,7 +658,7 @@ void BatchWriteRequest::AddWrite(std::string key,
                                  uint64_t ts,
                                  WriteOp op)
 {
-    batch_.push_back({std::move(key), std::move(value), ts, op});
+    batch_.emplace_back(std::move(key), std::move(value), ts, op);
 }
 
 void BatchWriteRequest::Clear()

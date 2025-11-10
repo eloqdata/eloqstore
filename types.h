@@ -23,6 +23,8 @@ constexpr FilePageId MaxFilePageId = UINT64_MAX;
 using FileId = uint64_t;
 static constexpr FileId MaxFileId = UINT64_MAX;
 
+using Term = uint64_t;
+
 constexpr char FileNameSeparator = '_';
 static constexpr char FileNameData[] = "data";
 static constexpr char FileNameManifest[] = "manifest";

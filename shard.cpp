@@ -291,6 +291,7 @@ void Shard::ProcessReq(KvRequest *req)
             {
                 return KvError::InvalidArgs;
             }
+            task->SetTerm(write_req->term_);
             return task->Apply();
         };
         StartTask(task, req, lbd);

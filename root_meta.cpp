@@ -88,4 +88,25 @@ void RootMeta::Unpin()
     ref_cnt_--;
 }
 
+void CowRootMeta::UpdateTerm(Term term) const
+{
+    page_id_term_mapping_->Append(mapper_->FilePgAllocator()->MaxFilePageId(),
+                                  term);
+}
+
+Term RootMeta::CurrentTerm() const
+{
+    return page_id_term_mapping_->MaxTerm();
+}
+
+void FilePageIdTermMapping::Append(FilePageId file_page_id, Term term)
+{
+    mapping_.emplace_back(file_page_id, term);
+}
+
+Term FilePageIdTermMapping::MaxTerm()
+{
+    return mapping_.empty() ? 0 : mapping_.back().second;
+}
+
 }  // namespace eloqstore

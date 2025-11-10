@@ -45,7 +45,9 @@ public:
 
     std::pair<RootMeta *, KvError> FindRoot(const TableIdent &tbl_ident);
 
-    KvError MakeCowRoot(const TableIdent &tbl_ident, CowRootMeta &cow_meta);
+    KvError MakeCowRoot(const TableIdent &tbl_ident,
+                        CowRootMeta &cow_meta,
+                        size_t term = 0);
 
     void UpdateRoot(const TableIdent &tbl_ident, CowRootMeta new_meta);
 
