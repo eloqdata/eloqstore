@@ -246,7 +246,7 @@ void PrewarmService::PrewarmCloudCache()
         }
         TableIdent tbl_id;
         std::string filename;
-        if (!extract_partition(path, tbl_id, filename))
+        if (!ExtractPartition(path, tbl_id, filename))
         {
             continue;
         }
@@ -320,8 +320,8 @@ void PrewarmService::PrewarmCloudCache()
 
     std::vector<size_t> shard_remaining(store_->shards_.size(), budget);
 
-    const size_t kMaxPrewarmInflight = std::max<size_t>(
-        1, std::min<size_t>(32, store_->options_.num_threads * 2));
+    const size_t kMaxPrewarmInflight =
+        std::min<size_t>(20, store_->options_.num_threads * 10);
     auto inflight = std::make_shared<std::atomic<size_t>>(0);
     std::vector<std::shared_ptr<PrewarmRequest>> pending_requests;
     pending_requests.reserve(entries.size());
@@ -337,13 +337,8 @@ void PrewarmService::PrewarmCloudCache()
                 std::this_thread::sleep_for(1ms);
                 continue;
             }
-            if (inflight->compare_exchange_weak(cur,
-                                                cur + 1,
-                                                std::memory_order_acq_rel,
-                                                std::memory_order_relaxed))
-            {
-                return true;
-            }
+            inflight->fetch_add(1);
+            return true;
         }
         return false;
     };
@@ -419,9 +414,9 @@ void PrewarmService::PrewarmCloudCache()
     }
 }
 
-bool PrewarmService::extract_partition(const std::string &path,
-                                       TableIdent &tbl_id,
-                                       std::string &filename)
+bool PrewarmService::ExtractPartition(const std::string &path,
+                                      TableIdent &tbl_id,
+                                      std::string &filename)
 {
     size_t start = 0;
     while (start < path.size())

@@ -300,11 +300,7 @@ void EloqStore::ExecSync(KvRequest *req)
 
 bool EloqStore::IsPrewarmCancelled() const
 {
-    if (prewarm_service_ == nullptr)
-    {
-        return true;
-    }
-    return prewarm_service_->IsCancelled();
+    return prewarm_service_ == nullptr || prewarm_service_->IsCancelled();
 }
 
 KvError EloqStore::CollectTablePartitions(

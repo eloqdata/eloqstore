@@ -48,9 +48,9 @@ private:
     bool ListCloudObjects(const std::string &remote_path,
                           std::vector<utils::CloudObjectInfo> &details);
     bool WaitForRequest(KvRequest *req);
-    bool extract_partition(const std::string &path,
-                           TableIdent &tbl_id,
-                           std::string &filename);
+    bool ExtractPartition(const std::string &path,
+                          TableIdent &tbl_id,
+                          std::string &filename);
 
     EloqStore *store_;
     std::thread thread_;
