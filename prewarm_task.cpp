@@ -82,12 +82,7 @@ void PrewarmService::Start()
     {
         return;
     }
-    if (store_->options_.cloud_store_path.empty() ||
-        !store_->options_.prewarm_cloud_cache)
-    {
-        cancelled_.store(true, std::memory_order_relaxed);
-        return;
-    }
+
     cancelled_.store(false, std::memory_order_release);
     thread_ = std::thread([this]() { ThreadMain(); });
 }
@@ -131,8 +126,7 @@ void PrewarmService::ThreadMain()
 
 bool PrewarmService::ListCloudObjects(
     const std::string &remote_path,
-    std::vector<utils::CloudObjectInfo> &details,
-    bool recursive)
+    std::vector<utils::CloudObjectInfo> &details)
 {
     if (IsCancelled())
     {
@@ -148,7 +142,7 @@ bool PrewarmService::ListCloudObjects(
     ListObjectRequest request(nullptr);
     request.SetRemotePath(remote_path);
     request.SetDetailStorage(&details);
-    request.SetRecursive(recursive);
+    request.SetRecursive(true);
     request.err_ = KvError::NoError;
     request.done_.store(false, std::memory_order_relaxed);
     request.callback_ = nullptr;
@@ -183,12 +177,7 @@ bool PrewarmService::WaitForRequest(KvRequest *req)
 
 void PrewarmService::PrewarmCloudCache()
 {
-    if (store_->options_.cloud_store_path.empty() ||
-        !store_->options_.prewarm_cloud_cache)
-    {
-        return;
-    }
-    if (store_->shards_.empty() || IsCancelled())
+    if (IsCancelled())
     {
         return;
     }
@@ -219,7 +208,7 @@ void PrewarmService::PrewarmCloudCache()
     }
 
     std::vector<utils::CloudObjectInfo> all_infos;
-    if (!ListCloudObjects("", all_infos, true))
+    if (!ListCloudObjects("", all_infos))
     {
         if (!IsCancelled())
         {
@@ -227,50 +216,6 @@ void PrewarmService::PrewarmCloudCache()
         }
         return;
     }
-
-    auto extract_partition = [](const std::string &path,
-                                TableIdent &tbl_id,
-                                std::string &filename) -> bool
-    {
-        size_t start = 0;
-        while (start < path.size())
-        {
-            size_t slash = path.find('/', start);
-            size_t len = slash == std::string::npos ? path.size() - start
-                                                    : slash - start;
-            if (len == 0)
-            {
-                if (slash == std::string::npos)
-                {
-                    break;
-                }
-                start = slash + 1;
-                continue;
-            }
-            std::string component = path.substr(start, len);
-            if (component.find('.') != std::string::npos)
-            {
-                TableIdent ident = TableIdent::FromString(component);
-                if (!ident.IsValid())
-                {
-                    return false;
-                }
-                tbl_id = std::move(ident);
-                if (slash == std::string::npos || slash + 1 >= path.size())
-                {
-                    return false;
-                }
-                filename = path.substr(slash + 1);
-                return !filename.empty();
-            }
-            if (slash == std::string::npos)
-            {
-                break;
-            }
-            start = slash + 1;
-        }
-        return false;
-    };
 
     struct Entry
     {
@@ -473,5 +418,49 @@ void PrewarmService::PrewarmCloudCache()
         std::this_thread::sleep_for(10ms);
     }
 }
+
+bool PrewarmService::extract_partition(const std::string &path,
+                                       TableIdent &tbl_id,
+                                       std::string &filename)
+{
+    size_t start = 0;
+    while (start < path.size())
+    {
+        size_t slash = path.find('/', start);
+        size_t len =
+            slash == std::string::npos ? path.size() - start : slash - start;
+        if (len == 0)
+        {
+            if (slash == std::string::npos)
+            {
+                break;
+            }
+            start = slash + 1;
+            continue;
+        }
+        std::string component = path.substr(start, len);
+        if (component.find('.') != std::string::npos)
+        {
+            TableIdent ident = TableIdent::FromString(component);
+            if (!ident.IsValid())
+            {
+                return false;
+            }
+            tbl_id = std::move(ident);
+            if (slash == std::string::npos || slash + 1 >= path.size())
+            {
+                return false;
+            }
+            filename = path.substr(slash + 1);
+            return !filename.empty();
+        }
+        if (slash == std::string::npos)
+        {
+            break;
+        }
+        start = slash + 1;
+    }
+    return false;
+};
 
 }  // namespace eloqstore

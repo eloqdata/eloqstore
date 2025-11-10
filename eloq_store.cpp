@@ -185,11 +185,14 @@ KvError EloqStore::Start()
         shard->Start();
     }
 
-    if (prewarm_service_ == nullptr)
+    if (!options_.cloud_store_path.empty() && options_.prewarm_cloud_cache)
     {
-        prewarm_service_ = std::make_unique<PrewarmService>(this);
+        if (prewarm_service_ == nullptr)
+        {
+            prewarm_service_ = std::make_unique<PrewarmService>(this);
+        }
+        prewarm_service_->Start();
     }
-    prewarm_service_->Start();
 
 #ifdef ELOQ_MODULE_ENABLED
     module_ = std::make_unique<EloqStoreModule>(&shards_);
