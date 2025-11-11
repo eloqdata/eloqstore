@@ -339,10 +339,12 @@ void PrewarmService::PrewarmCloudCache()
     auto acquire_slot = [&, inflight_state]() -> bool
     {
         std::unique_lock<std::mutex> lk(inflight_state->mu);
-        inflight_state->cv.wait(
-            lk,
-            [&]()
-            { return IsCancelled() || inflight_state->count < kMaxPrewarmInflight; });
+        inflight_state->cv.wait(lk,
+                                [&]() {
+                                    return IsCancelled() ||
+                                           inflight_state->count <
+                                               kMaxPrewarmInflight;
+                                });
 
         if (IsCancelled())
         {
@@ -427,9 +429,7 @@ void PrewarmService::PrewarmCloudCache()
     {
         std::unique_lock<std::mutex> lk(inflight_state->mu);
         inflight_state->cv.wait(
-            lk,
-            [&]()
-            { return inflight_state->count == 0 || IsCancelled(); });
+            lk, [&]() { return inflight_state->count == 0 || IsCancelled(); });
     }
 }
 
