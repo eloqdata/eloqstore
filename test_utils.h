@@ -64,6 +64,7 @@ public:
 
     void Validate();
     void SetAutoValidate(bool v);
+    void SetAutoClean(bool v);
     void SetValueSize(uint32_t val_size);
     void SetStore(eloqstore::EloqStore *store);
     void SetTimestamp(uint64_t ts);
@@ -81,7 +82,7 @@ private:
     const uint16_t key_len_;
     uint32_t val_size_{12};
     uint32_t max_ttl_{0};  // Max TTL in milliseconds
-
+    bool auto_clean_{true};
     eloqstore::EloqStore *eloq_store_;
 };
 

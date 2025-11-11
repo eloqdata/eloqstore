@@ -134,7 +134,7 @@ MapVerifier::MapVerifier(eloqstore::TableIdent tid,
 
 MapVerifier::~MapVerifier()
 {
-    if (!answer_.empty())
+    if (!answer_.empty() && auto_clean_)
     {
         Clean();
     }
@@ -472,6 +472,10 @@ void MapVerifier::SetAutoValidate(bool v)
     auto_validate_ = v;
 }
 
+void MapVerifier::SetAutoClean(bool v)
+{
+    auto_clean_ = v;
+}
 void MapVerifier::SetValueSize(uint32_t val_size)
 {
     val_size_ = val_size;

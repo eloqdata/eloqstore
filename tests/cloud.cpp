@@ -4,6 +4,8 @@
 #include <filesystem>
 #include <map>
 #include <thread>
+#include <unordered_set>
+#include <vector>
 
 #include "common.h"
 #include "kv_options.h"
@@ -168,6 +170,80 @@ TEST_CASE("cloud prewarm respects cache budget", "[cloud][prewarm]")
     writer.Validate();
     writer.WriteRnd(12000, 12500);
     writer.Validate();
+}
+
+TEST_CASE("cloud prewarm filters partitions", "[cloud][prewarm]")
+{
+    eloqstore::KvOptions options = cloud_options;
+    options.prewarm_cloud_cache = true;
+    options.local_space_limit = 2ULL << 30;
+
+    const std::string tbl_name = "prewarm_filter";
+    std::vector<eloqstore::TableIdent> partitions;
+    for (uint32_t i = 0; i < 3; ++i)
+    {
+        partitions.emplace_back(tbl_name, i);
+    }
+
+    const std::unordered_set<eloqstore::TableIdent> included = {
+        partitions[0],
+        partitions[1],
+    };
+    options.prewarm_filter =
+        [included](const eloqstore::TableIdent &tbl) -> bool
+    { return included.count(tbl) != 0; };
+
+    eloqstore::EloqStore *store = InitStore(options);
+    for (const auto &tbl_id : partitions)
+    {
+        MapVerifier writer(tbl_id, store);
+        writer.SetAutoClean(false);
+        writer.SetValueSize(4096);
+        writer.WriteRnd(0, 4000);
+        writer.Validate();
+    }
+
+    store->Stop();
+    CleanupLocalStore(options);
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+
+    using namespace std::chrono_literals;
+    bool prewarm_active = false;
+    for (int i = 0; i < 200; i++)
+    {
+        if (!store->IsPrewarmCancelled())
+        {
+            prewarm_active = true;
+            break;
+        }
+        std::this_thread::sleep_for(10ms);
+    }
+    REQUIRE(prewarm_active);
+
+    for (int i = 0; i < 600; i++)
+    {
+        if (store->IsPrewarmCancelled())
+        {
+            break;
+        }
+        std::this_thread::sleep_for(20ms);
+    }
+    REQUIRE(store->IsPrewarmCancelled());
+
+    for (const auto &tbl_id : partitions)
+    {
+        const std::filesystem::path partition_path =
+            std::filesystem::path(options.store_path[0]) / tbl_id.ToString();
+        if (included.count(tbl_id) != 0)
+        {
+            REQUIRE(std::filesystem::exists(partition_path));
+            REQUIRE(!std::filesystem::is_empty(partition_path));
+        }
+        else
+        {
+            REQUIRE_FALSE(std::filesystem::exists(partition_path));
+        }
+    }
 }
 
 TEST_CASE("cloud gc preserves archived data after truncate",

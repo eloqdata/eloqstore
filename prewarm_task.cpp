@@ -250,6 +250,11 @@ void PrewarmService::PrewarmCloudCache()
         {
             continue;
         }
+        if (store_->options_.prewarm_filter &&
+            !store_->options_.prewarm_filter(tbl_id))
+        {
+            continue;
+        }
         if (filename.ends_with(TmpSuffix))
         {
             continue;

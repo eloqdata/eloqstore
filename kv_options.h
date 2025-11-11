@@ -2,11 +2,12 @@
 
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <string>
 #include <vector>
 
 #include "comparator.h"
-
+#include "types.h"
 namespace eloqstore
 {
 constexpr int KB = 1 << 10;
@@ -169,5 +170,7 @@ struct KvOptions
      * @brief Compression is enabled.
      */
     bool enable_compression = false;
+
+    std::function<bool(const TableIdent &)> prewarm_filter;
 };
 }  // namespace eloqstore
