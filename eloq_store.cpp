@@ -369,8 +369,7 @@ KvError EloqStore::CollectTablePartitions(
             finish = true;
             cv.notify_all();
         };
-        shards_[utils::RandomInt(static_cast<int>(shards_.size()))]
-            ->AddKvRequest(&list_object_request);
+        shards_[0]->AddKvRequest(&list_object_request);
         std::unique_lock<std::mutex> lk(mu);
         cv.wait(lk, [&finish] { return finish; });
         for (auto &object_name : objects)
@@ -455,7 +454,7 @@ bool EloqStore::SendRequest(KvRequest *req)
         return false;
     }
 
-    if (prewarm_service_ != nullptr && !prewarm_service_->IsCancelled() &&
+    if (!IsPrewarmCancelled() &&
         prewarm_service_->ShouldCancelForRequest(req->Type()))
     {
         prewarm_service_->Cancel();

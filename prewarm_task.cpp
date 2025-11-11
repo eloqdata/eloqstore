@@ -3,10 +3,11 @@
 #include <glog/logging.h>
 
 #include <algorithm>
-#include <atomic>
 #include <cassert>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -147,9 +148,7 @@ bool PrewarmService::ListCloudObjects(
     request.done_.store(false, std::memory_order_relaxed);
     request.callback_ = nullptr;
 
-    size_t shard_idx =
-        utils::RandomInt(static_cast<int>(store_->shards_.size()));
-    if (!store_->shards_[shard_idx]->AddKvRequest(&request))
+    if (!store_->shards_[0]->AddKvRequest(&request))
     {
         return false;
     }
@@ -327,25 +326,43 @@ void PrewarmService::PrewarmCloudCache()
 
     const size_t kMaxPrewarmInflight =
         std::min<size_t>(20, store_->options_.num_threads * 10);
-    auto inflight = std::make_shared<std::atomic<size_t>>(0);
+    struct InflightState
+    {
+        std::mutex mu;
+        std::condition_variable cv;
+        size_t count = 0;
+    };
+    auto inflight_state = std::make_shared<InflightState>();
     std::vector<std::shared_ptr<PrewarmRequest>> pending_requests;
     pending_requests.reserve(entries.size());
 
-    auto acquire_slot = [&]() -> bool
+    auto acquire_slot = [&, inflight_state]() -> bool
     {
-        using namespace std::chrono_literals;
-        while (!IsCancelled())
+        std::unique_lock<std::mutex> lk(inflight_state->mu);
+        inflight_state->cv.wait(
+            lk,
+            [&]()
+            { return IsCancelled() || inflight_state->count < kMaxPrewarmInflight; });
+
+        if (IsCancelled())
         {
-            size_t cur = inflight->load(std::memory_order_relaxed);
-            if (cur >= kMaxPrewarmInflight)
-            {
-                std::this_thread::sleep_for(1ms);
-                continue;
-            }
-            inflight->fetch_add(1);
-            return true;
+            return false;
         }
-        return false;
+
+        ++inflight_state->count;
+        return true;
+    };
+
+    auto release_slot = [inflight_state]()
+    {
+        {
+            std::lock_guard<std::mutex> lk(inflight_state->mu);
+            if (inflight_state->count > 0)
+            {
+                --inflight_state->count;
+            }
+        }
+        inflight_state->cv.notify_one();
     };
 
     auto submit_entry = [&](const Entry &entry) -> bool
@@ -362,7 +379,7 @@ void PrewarmService::PrewarmCloudCache()
         bool ok = store_->ExecAsyn(
             raw_req,
             0,
-            [this, entry, inflight](KvRequest *finished_req)
+            [this, entry, release_slot](KvRequest *finished_req)
             {
                 KvError err = finished_req->Error();
                 if (err != KvError::NoError && err != KvError::NotFound)
@@ -377,11 +394,11 @@ void PrewarmService::PrewarmCloudCache()
                         << "Prewarm request failed for " << entry.tbl_id
                         << " file " << file_name << ": " << ErrorString(err);
                 }
-                inflight->fetch_sub(1, std::memory_order_release);
+                release_slot();
             });
         if (!ok)
         {
-            inflight->fetch_sub(1, std::memory_order_release);
+            release_slot();
             return false;
         }
 
@@ -407,15 +424,12 @@ void PrewarmService::PrewarmCloudCache()
         remaining -= entry.cost;
     }
 
-    using namespace std::chrono_literals;
-
-    while (inflight->load(std::memory_order_acquire) != 0)
     {
-        if (IsCancelled())
-        {
-            break;
-        }
-        std::this_thread::sleep_for(10ms);
+        std::unique_lock<std::mutex> lk(inflight_state->mu);
+        inflight_state->cv.wait(
+            lk,
+            [&]()
+            { return inflight_state->count == 0 || IsCancelled(); });
     }
 }
 
