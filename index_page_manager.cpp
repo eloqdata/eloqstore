@@ -411,7 +411,7 @@ void IndexPageManager::EvictRootIfEmpty(
         else
         {
             // This is rare.
-            LOG(ERROR) << "ref_cnt == 1 but mapper use count :"
+            DLOG(INFO) << "ref_cnt == 1 but mapper use count :"
                        << meta.mapper_->UseCount();
         }
     }
