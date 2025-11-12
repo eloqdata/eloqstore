@@ -454,8 +454,7 @@ bool EloqStore::SendRequest(KvRequest *req)
         return false;
     }
 
-    if (!IsPrewarmCancelled() &&
-        prewarm_service_->ShouldCancelForRequest(req->Type()))
+    if (!IsPrewarmCancelled() && req->Type() != RequestType::Prewarm)
     {
         prewarm_service_->Cancel();
     }

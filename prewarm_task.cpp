@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cassert>
-#include <chrono>
 #include <condition_variable>
 #include <memory>
 #include <mutex>
@@ -107,18 +106,6 @@ bool PrewarmService::IsCancelled() const
     return cancelled_.load(std::memory_order_relaxed);
 }
 
-bool PrewarmService::ShouldCancelForRequest(RequestType type) const
-{
-    switch (type)
-    {
-    case RequestType::Prewarm:
-    case RequestType::ListObject:
-        return false;
-    default:
-        return true;
-    }
-}
-
 void PrewarmService::ThreadMain()
 {
     PrewarmCloudCache();
@@ -152,26 +139,8 @@ bool PrewarmService::ListCloudObjects(
     {
         return false;
     }
-    if (!WaitForRequest(&request))
-    {
-        return false;
-    }
-    return !IsCancelled() && request.Error() == KvError::NoError;
-}
-
-bool PrewarmService::WaitForRequest(KvRequest *req)
-{
-    using namespace std::chrono_literals;
-    constexpr auto kPollInterval = std::chrono::milliseconds(20);
-    while (!req->IsDone())
-    {
-        if (IsCancelled())
-        {
-            return false;
-        }
-        std::this_thread::sleep_for(kPollInterval);
-    }
-    return true;
+    request.Wait();
+    return request.Error() == KvError::NoError;
 }
 
 void PrewarmService::PrewarmCloudCache()

@@ -40,14 +40,12 @@ public:
     void Stop();
     void Cancel();
     bool IsCancelled() const;
-    bool ShouldCancelForRequest(RequestType type) const;
 
 private:
     void ThreadMain();
     void PrewarmCloudCache();
     bool ListCloudObjects(const std::string &remote_path,
                           std::vector<utils::CloudObjectInfo> &details);
-    bool WaitForRequest(KvRequest *req);
     bool ExtractPartition(const std::string &path,
                           TableIdent &tbl_id,
                           std::string &filename);
