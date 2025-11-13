@@ -22,6 +22,7 @@ struct PrewarmFile
     FileId file_id;
     size_t file_size;
     bool is_manifest;
+    std::string mod_time;
 };
 
 class PrewarmTask : public KvTask
