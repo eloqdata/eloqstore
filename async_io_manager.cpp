@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <utility>
@@ -226,7 +227,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               fd_ref_(std::move(fd)),
               offset_(offset),
-              page_(true) {};
+              page_(true){};
 
         LruFD::Ref fd_ref_;
         uint32_t offset_;
@@ -958,7 +959,7 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
     };
 
@@ -1744,7 +1745,10 @@ KvError IouringMgr::DeleteFiles(const std::vector<std::string> &file_paths)
 }
 
 CloudStoreMgr::CloudStoreMgr(const KvOptions *opts, uint32_t fd_limit)
-    : IouringMgr(opts, fd_limit), file_cleaner_(this), obj_store_(opts)
+    : IouringMgr(opts, fd_limit),
+      file_cleaner_(this),
+      prewarm_task_(this),
+      obj_store_(opts)
 {
     lru_file_head_.next_ = &lru_file_tail_;
     lru_file_tail_.prev_ = &lru_file_head_;
@@ -1760,6 +1764,16 @@ void CloudStoreMgr::Start()
             file_cleaner_.Run();
             return std::move(shard->main_);
         });
+    if (options_->prewarm_cloud_cache)
+    {
+        prewarm_task_.coro_ = boost::context::callcc(
+            [this](continuation &&sink)
+            {
+                shard->main_ = std::move(sink);
+                prewarm_task_.Run();
+                return std::move(shard->main_);
+            });
+    }
 }
 
 bool CloudStoreMgr::IsIdle()
@@ -1769,6 +1783,10 @@ bool CloudStoreMgr::IsIdle()
 
 void CloudStoreMgr::Stop()
 {
+    if (options_->prewarm_cloud_cache)
+    {
+        prewarm_task_.Shutdown();
+    }
     file_cleaner_.Shutdown();
 }
 
@@ -1784,6 +1802,16 @@ void CloudStoreMgr::PollComplete()
     obj_store_.GetHttpManager()->ProcessCompletedRequests();
 
     IouringMgr::PollComplete();
+}
+
+bool CloudStoreMgr::MaybeRunPrewarm()
+{
+    if (!prewarm_task_.HasPending())
+    {
+        return false;
+    }
+    prewarm_task_.Resume();
+    return true;
 }
 
 KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,

@@ -237,36 +237,6 @@ private:
     bool recursive_{false};
 };
 
-class PrewarmRequest : public KvRequest
-{
-public:
-    RequestType Type() const override
-    {
-        return RequestType::Prewarm;
-    }
-
-    void SetArgs(TableIdent tbl_id, bool is_manifest, FileId file_id)
-    {
-        SetTableId(std::move(tbl_id));
-        is_manifest_ = is_manifest;
-        file_id_ = file_id;
-    }
-
-    bool IsManifest() const
-    {
-        return is_manifest_;
-    }
-
-    FileId TargetFile() const
-    {
-        return file_id_;
-    }
-
-private:
-    bool is_manifest_{false};
-    FileId file_id_{0};
-};
-
 class WriteRequest : public KvRequest
 {
 public:
@@ -388,8 +358,6 @@ public:
     }
     bool ExecAsyn(KvRequest *req);
     void ExecSync(KvRequest *req);
-
-    bool IsPrewarmCancelled() const;
 
 private:
     bool SendRequest(KvRequest *req);

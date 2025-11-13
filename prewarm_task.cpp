@@ -4,9 +4,6 @@
 
 #include <algorithm>
 #include <cassert>
-#include <condition_variable>
-#include <memory>
-#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -21,49 +18,109 @@
 
 namespace eloqstore
 {
-KvError PrewarmTask::Prewarm(const PrewarmRequest &request)
+PrewarmTask::PrewarmTask(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr)
 {
-    CHECK(shard && eloq_store);
-    if (eloq_store->IsPrewarmCancelled())
+    assert(io_mgr_ != nullptr);
+}
+
+bool PrewarmTask::HasPending() const
+{
+    return !stop_ && next_index_ < pending_.size();
+}
+
+bool PrewarmTask::PopNext(PrewarmFile &file)
+{
+    if (next_index_ >= pending_.size())
     {
-        return KvError::NoError;
+        return false;
+    }
+    file = std::move(pending_[next_index_++]);
+    return true;
+}
+
+void PrewarmTask::Clear()
+{
+    pending_.clear();
+    next_index_ = 0;
+}
+
+void PrewarmTask::Run()
+{
+    while (true)
+    {
+        if (shutting_down_)
+        {
+            break;
+        }
+
+        if (stop_)
+        {
+            status_ = TaskStatus::Idle;
+            Yield();
+            continue;
+        }
+        status_ = TaskStatus::Ongoing;
+
+        PrewarmFile file;
+        if (io_mgr_->LocalCacheUsage() + file.file_size >
+                io_mgr_->ShardCacheLimit() ||
+            !PopNext(file))
+        {
+            LOG(INFO) << "Shard " << shard->shard_id_
+                      << " reached local cache budget during prewarm";
+            Clear();
+            stop_ = true;
+            status_ = TaskStatus::Finished;
+            break;
+        }
+
+        auto [fd_ref, err] = io_mgr_->OpenFD(file.tbl_id, file.file_id);
+        if (err == KvError::NoError)
+        {
+            fd_ref = nullptr;
+        }
+        else if (err == KvError::NotFound)
+        {
+            LOG(WARNING) << "Prewarm skip missing "
+                         << (file.is_manifest ? "manifest" : "data file")
+                         << " for " << file.tbl_id;
+        }
+        else if (err == KvError::OutOfSpace || err == KvError::OpenFileLimit)
+        {
+            LOG(WARNING) << "Prewarm stopped for shard " << shard->shard_id_
+                         << ": " << ErrorString(err);
+            Clear();
+            stop_ = true;
+            status_ = TaskStatus::Finished;
+            break;
+        }
+        else
+        {
+            LOG(WARNING) << "Prewarm failed for " << file.tbl_id << " file "
+                         << file.file_id << ": " << ErrorString(err);
+        }
+
+        if (shard->HasPendingRequests())
+        {
+            status_ = TaskStatus::Idle;
+            Yield();
+        }
     }
 
-    auto *cloud_mgr = static_cast<CloudStoreMgr *>(shard->IoManager());
+    Clear();
+    stop_ = true;
+    status_ = TaskStatus::Finished;
+}
 
-    const TableIdent &tbl_id = request.TableId();
-    auto [fd_ref, err] = cloud_mgr->OpenFD(tbl_id, request.TargetFile());
-    if (err == KvError::NoError)
+void PrewarmTask::Shutdown()
+{
+    shutting_down_ = true;
+    stop_ = true;
+    if (status_ != TaskStatus::Finished)
     {
-        fd_ref = nullptr;
-        return KvError::NoError;
+        Resume();
+        assert(status_ == TaskStatus::Finished);
     }
-
-    if (err == KvError::NotFound)
-    {
-        LOG(WARNING) << "Prewarm skip missing file "
-                     << (request.IsManifest() ? "manifest" : "data file")
-                     << " for table " << tbl_id;
-        return KvError::NoError;
-    }
-
-    if (err == KvError::OutOfSpace || err == KvError::OpenFileLimit)
-    {
-        LOG(WARNING) << "Prewarm stop for " << tbl_id << ": cannot cache "
-                     << (request.IsManifest() ? "manifest" : "data file")
-                     << " due to " << ErrorString(err);
-        return err;
-    }
-
-    if (err == KvError::TryAgain)
-    {
-        LOG(WARNING) << "Prewarm retryable failure for " << tbl_id << ": "
-                     << ErrorString(err);
-        return err;
-    }
-
-    LOG(WARNING) << "Prewarm failed for " << tbl_id << ": " << ErrorString(err);
-    return err;
 }
 
 PrewarmService::PrewarmService(EloqStore *store) : store_(store)
@@ -82,44 +139,21 @@ void PrewarmService::Start()
     {
         return;
     }
-
-    cancelled_.store(false, std::memory_order_release);
-    thread_ = std::thread([this]() { ThreadMain(); });
+    thread_ = std::thread([this]() { PrewarmCloudCache(); });
 }
 
 void PrewarmService::Stop()
 {
-    Cancel();
     if (thread_.joinable())
     {
         thread_.join();
     }
 }
 
-void PrewarmService::Cancel()
-{
-    cancelled_.store(true, std::memory_order_release);
-}
-
-bool PrewarmService::IsCancelled() const
-{
-    return cancelled_.load(std::memory_order_relaxed);
-}
-
-void PrewarmService::ThreadMain()
-{
-    PrewarmCloudCache();
-    cancelled_.store(true, std::memory_order_relaxed);
-}
-
 bool PrewarmService::ListCloudObjects(
     const std::string &remote_path,
     std::vector<utils::CloudObjectInfo> &details)
 {
-    if (IsCancelled())
-    {
-        return false;
-    }
     if (store_->shards_.empty())
     {
         return false;
@@ -145,11 +179,6 @@ bool PrewarmService::ListCloudObjects(
 
 void PrewarmService::PrewarmCloudCache()
 {
-    if (IsCancelled())
-    {
-        return;
-    }
-
     const uint16_t num_threads =
         std::max<uint16_t>(uint16_t{1}, store_->options_.num_threads);
     const size_t shard_limit =
@@ -160,49 +189,16 @@ void PrewarmService::PrewarmCloudCache()
         return;
     }
 
-    size_t reserve_space = 0;
-    if (store_->options_.reserve_space_ratio != 0)
-    {
-        reserve_space = static_cast<size_t>(
-            static_cast<double>(shard_limit) /
-            static_cast<double>(store_->options_.reserve_space_ratio));
-        reserve_space = std::min(reserve_space, shard_limit);
-    }
-    size_t budget = shard_limit - reserve_space;
-    if (budget == 0)
-    {
-        LOG(INFO) << "Skip cloud prewarm: reserved space consumes shard cache";
-        return;
-    }
-
     std::vector<utils::CloudObjectInfo> all_infos;
     if (!ListCloudObjects("", all_infos))
     {
-        if (!IsCancelled())
-        {
-            LOG(WARNING) << "Skip cloud prewarm: failed to list cloud root";
-        }
+        LOG(WARNING) << "Skip cloud prewarm: failed to list cloud root";
         return;
     }
 
-    struct Entry
-    {
-        TableIdent tbl_id;
-        FileId file_id;
-        bool is_manifest;
-        size_t cost;
-        std::string mod_time;
-        size_t shard_index;
-    };
-
-    std::vector<Entry> entries;
-    entries.reserve(all_infos.size());
+    std::vector<std::vector<PrewarmFile>> shard_files(store_->shards_.size());
     for (const auto &info : all_infos)
     {
-        if (IsCancelled())
-        {
-            return;
-        }
         if (info.is_dir)
         {
             continue;
@@ -223,21 +219,26 @@ void PrewarmService::PrewarmCloudCache()
         {
             continue;
         }
+        if (store_->options_.prewarm_filter &&
+            !store_->options_.prewarm_filter(tbl_id))
+        {
+            continue;
+        }
         if (filename.ends_with(TmpSuffix))
         {
             continue;
         }
+
+        PrewarmFile file;
+        file.tbl_id = tbl_id;
+        file.mod_time = info.mod_time;
         if (filename == FileNameManifest)
         {
-            entries.push_back({tbl_id,
-                               CloudStoreMgr::ManifestFileId(),
-                               true,
-                               store_->options_.manifest_limit,
-                               info.mod_time,
-                               tbl_id.ShardIndex(store_->shards_.size())});
-            continue;
+            file.file_id = CloudStoreMgr::ManifestFileId();
+            file.file_size = store_->options_.manifest_limit;
+            file.is_manifest = true;
         }
-        if (filename.rfind(FileNameData, 0) == 0)
+        else if (filename.rfind(FileNameData, 0) == 0)
         {
             size_t underscore = filename.find_first_of(FileNameSeparator);
             if (underscore == std::string::npos ||
@@ -248,157 +249,58 @@ void PrewarmService::PrewarmCloudCache()
             std::string id_str = filename.substr(underscore + 1);
             try
             {
-                FileId file_id = std::stoull(id_str);
-                size_t data_cost = info.size == 0
-                                       ? store_->options_.DataFileSize()
-                                       : static_cast<size_t>(info.size);
-                if (data_cost == 0)
-                {
-                    data_cost = store_->options_.DataFileSize();
-                }
-                entries.push_back({tbl_id,
-                                   file_id,
-                                   false,
-                                   data_cost,
-                                   info.mod_time,
-                                   tbl_id.ShardIndex(store_->shards_.size())});
+                file.file_id = std::stoull(id_str);
             }
             catch (const std::exception &)
             {
                 continue;
             }
-        }
-    }
-
-    if (entries.empty() || IsCancelled())
-    {
-        return;
-    }
-
-    std::sort(entries.begin(),
-              entries.end(),
-              [](const Entry &lhs, const Entry &rhs)
-              {
-                  if (lhs.is_manifest != rhs.is_manifest)
-                  {
-                      return lhs.is_manifest && !rhs.is_manifest;
-                  }
-                  if (!lhs.is_manifest && !rhs.is_manifest &&
-                      lhs.mod_time != rhs.mod_time)
-                  {
-                      return lhs.mod_time > rhs.mod_time;
-                  }
-                  return lhs.file_id > rhs.file_id;
-              });
-
-    std::vector<size_t> shard_remaining(store_->shards_.size(), budget);
-
-    const size_t kMaxPrewarmInflight =
-        std::min<size_t>(20, store_->options_.num_threads * 10);
-    struct InflightState
-    {
-        std::mutex mu;
-        std::condition_variable cv;
-        size_t count = 0;
-    };
-    auto inflight_state = std::make_shared<InflightState>();
-    std::vector<std::shared_ptr<PrewarmRequest>> pending_requests;
-    pending_requests.reserve(entries.size());
-
-    auto acquire_slot = [&, inflight_state]() -> bool
-    {
-        std::unique_lock<std::mutex> lk(inflight_state->mu);
-        inflight_state->cv.wait(lk,
-                                [&]() {
-                                    return IsCancelled() ||
-                                           inflight_state->count <
-                                               kMaxPrewarmInflight;
-                                });
-
-        if (IsCancelled())
-        {
-            return false;
-        }
-
-        ++inflight_state->count;
-        return true;
-    };
-
-    auto release_slot = [inflight_state]()
-    {
-        {
-            std::lock_guard<std::mutex> lk(inflight_state->mu);
-            if (inflight_state->count > 0)
+            file.file_size = info.size == 0 ? store_->options_.DataFileSize()
+                                            : static_cast<size_t>(info.size);
+            if (file.file_size == 0)
             {
-                --inflight_state->count;
+                file.file_size = store_->options_.DataFileSize();
             }
+            file.is_manifest = false;
         }
-        inflight_state->cv.notify_one();
-    };
-
-    auto submit_entry = [&](const Entry &entry) -> bool
-    {
-        if (!acquire_slot())
-        {
-            return false;
-        }
-
-        auto req = std::make_shared<PrewarmRequest>();
-        req->SetArgs(entry.tbl_id, entry.is_manifest, entry.file_id);
-        PrewarmRequest *raw_req = req.get();
-
-        bool ok = store_->ExecAsyn(
-            raw_req,
-            0,
-            [this, entry, release_slot](KvRequest *finished_req)
-            {
-                KvError err = finished_req->Error();
-                if (err != KvError::NoError && err != KvError::NotFound)
-                {
-                    const std::string file_name =
-                        entry.is_manifest
-                            ? std::string(FileNameManifest)
-                            : std::string(FileNameData) +
-                                  std::string(1, FileNameSeparator) +
-                                  std::to_string(entry.file_id);
-                    LOG(WARNING)
-                        << "Prewarm request failed for " << entry.tbl_id
-                        << " file " << file_name << ": " << ErrorString(err);
-                }
-                release_slot();
-            });
-        if (!ok)
-        {
-            release_slot();
-            return false;
-        }
-
-        pending_requests.push_back(std::move(req));
-        return true;
-    };
-
-    for (const auto &entry : entries)
-    {
-        if (IsCancelled())
-        {
-            break;
-        }
-        size_t &remaining = shard_remaining[entry.shard_index];
-        if (entry.cost > remaining)
+        else
         {
             continue;
         }
-        if (!submit_entry(entry))
-        {
-            break;
-        }
-        remaining -= entry.cost;
+
+        const size_t shard_index = tbl_id.ShardIndex(store_->shards_.size());
+        shard_files[shard_index].push_back(std::move(file));
     }
 
+    for (size_t i = 0; i < shard_files.size(); ++i)
     {
-        std::unique_lock<std::mutex> lk(inflight_state->mu);
-        inflight_state->cv.wait(
-            lk, [&]() { return inflight_state->count == 0 || IsCancelled(); });
+        if (shard_files[i].empty())
+        {
+            continue;
+        }
+        auto *cloud_mgr =
+            dynamic_cast<CloudStoreMgr *>(store_->shards_[i]->IoManager());
+        auto &files = shard_files[i];
+        std::sort(files.begin(),
+                  files.end(),
+                  [](const PrewarmFile &lhs, const PrewarmFile &rhs)
+                  {
+                      if (lhs.is_manifest != rhs.is_manifest)
+                      {
+                          return lhs.is_manifest && !rhs.is_manifest;
+                      }
+                      if (!lhs.is_manifest && !rhs.is_manifest &&
+                          lhs.mod_time != rhs.mod_time)
+                      {
+                          return lhs.mod_time > rhs.mod_time;
+                      }
+                      return lhs.file_id > rhs.file_id;
+                  });
+
+        cloud_mgr->prewarm_task_.pending_ = std::move(files);
+        cloud_mgr->prewarm_task_.next_index_ = 0;
+        cloud_mgr->prewarm_task_.shutting_down_ = false;
+        cloud_mgr->prewarm_task_.stop_ = false;
     }
 }
 
@@ -444,6 +346,6 @@ bool PrewarmService::ExtractPartition(const std::string &path,
         start = slash + 1;
     }
     return false;
-};
+}
 
 }  // namespace eloqstore

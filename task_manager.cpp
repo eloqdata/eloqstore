@@ -45,12 +45,6 @@ ListObjectTask *TaskManager::GetListObjectTask()
     return list_object_pool_.GetTask();
 }
 
-PrewarmTask *TaskManager::GetPrewarmTask()
-{
-    num_active_++;
-    return prewarm_pool_.GetTask();
-}
-
 void TaskManager::FreeTask(KvTask *task)
 {
     assert(task->status_ == TaskStatus::Finished);
@@ -72,9 +66,6 @@ void TaskManager::FreeTask(KvTask *task)
         break;
     case TaskType::ListObject:
         list_object_pool_.FreeTask(static_cast<ListObjectTask *>(task));
-        break;
-    case TaskType::Prewarm:
-        prewarm_pool_.FreeTask(static_cast<PrewarmTask *>(task));
         break;
     case TaskType::EvictFile:
         assert(false && "EvictFile task should not be freed here");

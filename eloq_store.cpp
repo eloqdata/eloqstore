@@ -298,11 +298,6 @@ void EloqStore::ExecSync(KvRequest *req)
     }
 }
 
-bool EloqStore::IsPrewarmCancelled() const
-{
-    return prewarm_service_ == nullptr || prewarm_service_->IsCancelled();
-}
-
 KvError EloqStore::CollectTablePartitions(
     const std::string &table_name, std::vector<TableIdent> &partitions) const
 {
@@ -452,11 +447,6 @@ bool EloqStore::SendRequest(KvRequest *req)
     if (stopped_.load(std::memory_order_relaxed))
     {
         return false;
-    }
-
-    if (!IsPrewarmCancelled() && req->Type() != RequestType::Prewarm)
-    {
-        prewarm_service_->Cancel();
     }
 
     req->err_ = KvError::NoError;

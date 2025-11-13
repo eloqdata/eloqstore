@@ -18,6 +18,7 @@
 #include "error.h"
 #include "kv_options.h"
 #include "object_store.h"
+#include "prewarm_task.h"
 #include "task.h"
 #include "types.h"
 
@@ -381,6 +382,16 @@ public:
     KvError ReadArchiveFileAndDelete(const std::string &file_path,
                                      std::string &content);
 
+    bool MaybeRunPrewarm();
+    size_t LocalCacheUsage() const
+    {
+        return used_local_space_;
+    }
+    size_t ShardCacheLimit() const
+    {
+        return shard_local_space_limit_;
+    }
+
 private:
     int CreateFile(LruFD::Ref dir_fd, FileId file_id) override;
     int OpenFile(const TableIdent &tbl_id,
@@ -399,7 +410,6 @@ private:
     void EnqueClosedFile(FileKey key);
     bool HasEvictableFile() const;
     int ReserveCacheSpace(size_t size);
-
     static std::string ToFilename(FileId file_id);
     size_t EstimateFileSize(FileId file_id) const;
     size_t EstimateFileSize(std::string_view filename) const;
@@ -457,10 +467,12 @@ private:
     };
 
     FileCleaner file_cleaner_;
+    PrewarmTask prewarm_task_;
 
     ObjectStore obj_store_;
 
     friend class PrewarmTask;
+    friend class PrewarmService;
 };
 
 class MemStoreMgr : public AsyncIoManager

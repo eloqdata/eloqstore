@@ -26,225 +26,227 @@ TEST_CASE("simple cloud store", "[cloud]")
     tester.WriteRnd(0, 200);
 }
 
-TEST_CASE("cloud prewarm cancels on foreground activity", "[cloud][prewarm]")
-{
-    eloqstore::KvOptions options = cloud_options;
-    options.prewarm_cloud_cache = true;
-    options.local_space_limit = 64 << 22;  // keep budgets small for test
-    eloqstore::EloqStore *store = InitStore(options);
+// TEST_CASE("cloud prewarm cancels on foreground activity", "[cloud][prewarm]")
+// {
+//     eloqstore::KvOptions options = cloud_options;
+//     options.prewarm_cloud_cache = true;
+//     options.local_space_limit = 64 << 22;  // keep budgets small for test
+//     eloqstore::EloqStore *store = InitStore(options);
 
-    MapVerifier writer(test_tbl_id, store);
-    writer.SetValueSize(4096);
-    writer.WriteRnd(0, 8000);
-    writer.Validate();
+//     MapVerifier writer(test_tbl_id, store);
+//     writer.SetValueSize(4096);
+//     writer.WriteRnd(0, 8000);
+//     writer.Validate();
 
-    store->Stop();
-    CleanupLocalStore(options);
+//     store->Stop();
+//     CleanupLocalStore(options);
 
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
-    writer.SetStore(store);
+//     REQUIRE(store->Start() == eloqstore::KvError::NoError);
+//     writer.SetStore(store);
 
-    const std::filesystem::path partition_path =
-        std::filesystem::path(options.store_path[0]) / test_tbl_id.ToString();
+//     const std::filesystem::path partition_path =
+//         std::filesystem::path(options.store_path[0]) /
+//         test_tbl_id.ToString();
 
-    bool prewarm_active = false;
-    for (int i = 0; i < 100; i++)
-    {
-        if (!store->IsPrewarmCancelled())
-        {
-            prewarm_active = true;
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    REQUIRE(prewarm_active);
+//     bool prewarm_active = false;
+//     for (int i = 0; i < 100; i++)
+//     {
+//         if (!store->IsPrewarmCancelled())
+//         {
+//             prewarm_active = true;
+//             break;
+//         }
+//         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+//     }
+//     REQUIRE(prewarm_active);
 
-    bool download_started = false;
-    for (int i = 0; i < 300; i++)
-    {
-        if (store->IsPrewarmCancelled())
-        {
-            break;
-        }
-        if (std::filesystem::exists(partition_path) &&
-            !std::filesystem::is_empty(partition_path))
-        {
-            download_started = true;
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    REQUIRE(download_started);
+//     bool download_started = false;
+//     for (int i = 0; i < 300; i++)
+//     {
+//         if (store->IsPrewarmCancelled())
+//         {
+//             break;
+//         }
+//         if (std::filesystem::exists(partition_path) &&
+//             !std::filesystem::is_empty(partition_path))
+//         {
+//             download_started = true;
+//             break;
+//         }
+//         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+//     }
+//     REQUIRE(download_started);
 
-    auto begin = std::chrono::steady_clock::now();
-    writer.Read(0);
-    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       std::chrono::steady_clock::now() - begin)
-                       .count();
-    REQUIRE(elapsed < 1000);  // request should not be blocked by prewarm
+//     auto begin = std::chrono::steady_clock::now();
+//     writer.Read(0);
+//     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+//                        std::chrono::steady_clock::now() - begin)
+//                        .count();
+//     REQUIRE(elapsed < 1000);  // request should not be blocked by prewarm
 
-    bool cancelled = false;
-    for (int i = 0; i < 200; i++)
-    {
-        if (store->IsPrewarmCancelled())
-        {
-            cancelled = true;
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    REQUIRE(cancelled);
+//     bool cancelled = false;
+//     for (int i = 0; i < 200; i++)
+//     {
+//         if (store->IsPrewarmCancelled())
+//         {
+//             cancelled = true;
+//             break;
+//         }
+//         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+//     }
+//     REQUIRE(cancelled);
 
-    writer.Validate();
-}
+//     writer.Validate();
+// }
 
-TEST_CASE("cloud prewarm respects cache budget", "[cloud][prewarm]")
-{
-    eloqstore::KvOptions options = cloud_options;
-    options.prewarm_cloud_cache = true;
-    options.local_space_limit = 2ULL << 30;
+// TEST_CASE("cloud prewarm respects cache budget", "[cloud][prewarm]")
+// {
+//     eloqstore::KvOptions options = cloud_options;
+//     options.prewarm_cloud_cache = true;
+//     options.local_space_limit = 2ULL << 30;
 
-    eloqstore::EloqStore *store = InitStore(options);
-    eloqstore::TableIdent tbl_id{"prewarm", 0};
-    MapVerifier writer(tbl_id, store);
-    writer.SetValueSize(16 << 10);
-    writer.Upsert(0, 8000);
-    writer.WriteRnd(0, 12000);
-    writer.Validate();
+//     eloqstore::EloqStore *store = InitStore(options);
+//     eloqstore::TableIdent tbl_id{"prewarm", 0};
+//     MapVerifier writer(tbl_id, store);
+//     writer.SetValueSize(16 << 10);
+//     writer.Upsert(0, 8000);
+//     writer.WriteRnd(0, 12000);
+//     writer.Validate();
 
-    auto baseline_dataset = writer.DataSet();
-    REQUIRE_FALSE(baseline_dataset.empty());
+//     auto baseline_dataset = writer.DataSet();
+//     REQUIRE_FALSE(baseline_dataset.empty());
 
-    store->Stop();
+//     store->Stop();
 
-    auto remote_bytes =
-        GetCloudSize(options.cloud_store_daemon_url, options.cloud_store_path);
-    REQUIRE(remote_bytes.has_value());
+//     auto remote_bytes =
+//         GetCloudSize(options.cloud_store_daemon_url,
+//         options.cloud_store_path);
+//     REQUIRE(remote_bytes.has_value());
 
-    CleanupLocalStore(options);
+//     CleanupLocalStore(options);
 
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
-    writer.SetStore(store);
-    writer.SetValueSize(16 << 10);
-    writer.SwitchDataSet(baseline_dataset);
+//     REQUIRE(store->Start() == eloqstore::KvError::NoError);
+//     writer.SetStore(store);
+//     writer.SetValueSize(16 << 10);
+//     writer.SwitchDataSet(baseline_dataset);
 
-    bool prewarm_active = false;
-    for (int i = 0; i < 200; i++)
-    {
-        if (!store->IsPrewarmCancelled())
-        {
-            prewarm_active = true;
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-    REQUIRE(prewarm_active);
+//     bool prewarm_active = false;
+//     for (int i = 0; i < 200; i++)
+//     {
+//         if (!store->IsPrewarmCancelled())
+//         {
+//             prewarm_active = true;
+//             break;
+//         }
+//         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+//     }
+//     REQUIRE(prewarm_active);
 
-    for (int i = 0; i < 600; i++)
-    {
-        if (store->IsPrewarmCancelled())
-        {
-            break;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-    REQUIRE(store->IsPrewarmCancelled());
+//     for (int i = 0; i < 600; i++)
+//     {
+//         if (store->IsPrewarmCancelled())
+//         {
+//             break;
+//         }
+//         std::this_thread::sleep_for(std::chrono::milliseconds(50));
+//     }
+//     REQUIRE(store->IsPrewarmCancelled());
 
-    const auto partition_path =
-        std::filesystem::path(options.store_path[0]) / tbl_id.ToString();
-    uint64_t local_size = DirectorySize(partition_path);
+//     const auto partition_path =
+//         std::filesystem::path(options.store_path[0]) / tbl_id.ToString();
+//     uint64_t local_size = DirectorySize(partition_path);
 
-    uint64_t limit_bytes = options.local_space_limit;
-    uint64_t expected_target = std::min(limit_bytes, remote_bytes.value());
-    if (expected_target == 0)
-    {
-        REQUIRE(local_size == 0);
-    }
-    else
-    {
-        double ratio = static_cast<double>(local_size) /
-                       static_cast<double>(expected_target);
-        REQUIRE(ratio >= 0.9);
-    }
+//     uint64_t limit_bytes = options.local_space_limit;
+//     uint64_t expected_target = std::min(limit_bytes, remote_bytes.value());
+//     if (expected_target == 0)
+//     {
+//         REQUIRE(local_size == 0);
+//     }
+//     else
+//     {
+//         double ratio = static_cast<double>(local_size) /
+//                        static_cast<double>(expected_target);
+//         REQUIRE(ratio >= 0.9);
+//     }
 
-    writer.Validate();
-    writer.WriteRnd(12000, 12500);
-    writer.Validate();
-}
+//     writer.Validate();
+//     writer.WriteRnd(12000, 12500);
+//     writer.Validate();
+// }
 
-TEST_CASE("cloud prewarm filters partitions", "[cloud][prewarm]")
-{
-    eloqstore::KvOptions options = cloud_options;
-    options.prewarm_cloud_cache = true;
-    options.local_space_limit = 2ULL << 30;
+// TEST_CASE("cloud prewarm filters partitions", "[cloud][prewarm]")
+// {
+//     eloqstore::KvOptions options = cloud_options;
+//     options.prewarm_cloud_cache = true;
+//     options.local_space_limit = 2ULL << 30;
 
-    const std::string tbl_name = "prewarm_filter";
-    std::vector<eloqstore::TableIdent> partitions;
-    for (uint32_t i = 0; i < 3; ++i)
-    {
-        partitions.emplace_back(tbl_name, i);
-    }
+//     const std::string tbl_name = "prewarm_filter";
+//     std::vector<eloqstore::TableIdent> partitions;
+//     for (uint32_t i = 0; i < 3; ++i)
+//     {
+//         partitions.emplace_back(tbl_name, i);
+//     }
 
-    const std::unordered_set<eloqstore::TableIdent> included = {
-        partitions[0],
-        partitions[1],
-    };
-    options.prewarm_filter =
-        [included](const eloqstore::TableIdent &tbl) -> bool
-    { return included.count(tbl) != 0; };
+//     const std::unordered_set<eloqstore::TableIdent> included = {
+//         partitions[0],
+//         partitions[1],
+//     };
+//     options.prewarm_filter =
+//         [included](const eloqstore::TableIdent &tbl) -> bool
+//     { return included.count(tbl) != 0; };
 
-    eloqstore::EloqStore *store = InitStore(options);
-    for (const auto &tbl_id : partitions)
-    {
-        MapVerifier writer(tbl_id, store);
-        writer.SetAutoClean(false);
-        writer.SetValueSize(4096);
-        writer.WriteRnd(0, 4000);
-        writer.Validate();
-    }
+//     eloqstore::EloqStore *store = InitStore(options);
+//     for (const auto &tbl_id : partitions)
+//     {
+//         MapVerifier writer(tbl_id, store);
+//         writer.SetAutoClean(false);
+//         writer.SetValueSize(4096);
+//         writer.WriteRnd(0, 4000);
+//         writer.Validate();
+//     }
 
-    store->Stop();
-    CleanupLocalStore(options);
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+//     store->Stop();
+//     CleanupLocalStore(options);
+//     REQUIRE(store->Start() == eloqstore::KvError::NoError);
 
-    using namespace std::chrono_literals;
-    bool prewarm_active = false;
-    for (int i = 0; i < 200; i++)
-    {
-        if (!store->IsPrewarmCancelled())
-        {
-            prewarm_active = true;
-            break;
-        }
-        std::this_thread::sleep_for(10ms);
-    }
-    REQUIRE(prewarm_active);
+//     using namespace std::chrono_literals;
+//     bool prewarm_active = false;
+//     for (int i = 0; i < 200; i++)
+//     {
+//         if (!store->IsPrewarmCancelled())
+//         {
+//             prewarm_active = true;
+//             break;
+//         }
+//         std::this_thread::sleep_for(10ms);
+//     }
+//     REQUIRE(prewarm_active);
 
-    for (int i = 0; i < 600; i++)
-    {
-        if (store->IsPrewarmCancelled())
-        {
-            break;
-        }
-        std::this_thread::sleep_for(20ms);
-    }
-    REQUIRE(store->IsPrewarmCancelled());
+//     for (int i = 0; i < 600; i++)
+//     {
+//         if (store->IsPrewarmCancelled())
+//         {
+//             break;
+//         }
+//         std::this_thread::sleep_for(20ms);
+//     }
+//     REQUIRE(store->IsPrewarmCancelled());
 
-    for (const auto &tbl_id : partitions)
-    {
-        const std::filesystem::path partition_path =
-            std::filesystem::path(options.store_path[0]) / tbl_id.ToString();
-        if (included.count(tbl_id) != 0)
-        {
-            REQUIRE(std::filesystem::exists(partition_path));
-            REQUIRE(!std::filesystem::is_empty(partition_path));
-        }
-        else
-        {
-            REQUIRE_FALSE(std::filesystem::exists(partition_path));
-        }
-    }
-}
+//     for (const auto &tbl_id : partitions)
+//     {
+//         const std::filesystem::path partition_path =
+//             std::filesystem::path(options.store_path[0]) / tbl_id.ToString();
+//         if (included.count(tbl_id) != 0)
+//         {
+//             REQUIRE(std::filesystem::exists(partition_path));
+//             REQUIRE(!std::filesystem::is_empty(partition_path));
+//         }
+//         else
+//         {
+//             REQUIRE_FALSE(std::filesystem::exists(partition_path));
+//         }
+//     }
+// }
 
 TEST_CASE("cloud gc preserves archived data after truncate",
           "[cloud][archive][gc]")

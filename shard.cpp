@@ -1,7 +1,10 @@
 #include "shard.h"
 
+#include <array>
+#include <chrono>
+
+#include "async_io_manager.h"
 #include "list_object_task.h"
-#include "prewarm_task.h"
 #include "utils.h"
 
 #ifdef ELOQ_MODULE_ENABLED
@@ -29,20 +32,29 @@ void Shard::WorkLoop()
 {
     shard = this;
     io_mgr_->Start();
+    const bool allow_prewarm = store_->Options().prewarm_cloud_cache;
+    CloudStoreMgr *cloud_mgr =
+        allow_prewarm ? static_cast<CloudStoreMgr *>(io_mgr_.get()) : nullptr;
 
     // Get new requests from the queue, only blocked when there are no requests
     // and no active tasks.
     // This allows the thread to exit gracefully when the store is stopped.
     std::array<KvRequest *, 128> reqs;
-    auto dequeue_requests = [this, &reqs]() -> int
+    auto dequeue_requests = [this, &reqs, allow_prewarm, cloud_mgr]() -> int
     {
-        size_t nreqs = requests_.try_dequeue_bulk(reqs.data(), reqs.size());
-        // only wait when no request no active task and io is idle,
-        // so will complete workloop after all task done and io is idle
-        if (nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle())
+        while (true)
         {
-            // Idle state, wait for new requests or exit.
-            while (nreqs == 0)
+            size_t nreqs = requests_.try_dequeue_bulk(reqs.data(), reqs.size());
+            if (nreqs > 0)
+            {
+                return nreqs;
+            }
+            if (allow_prewarm && task_mgr_.NumActive() == 0 &&
+                io_mgr_->IsIdle() && cloud_mgr->MaybeRunPrewarm())
+            {
+                continue;
+            }
+            if (task_mgr_.NumActive() == 0 && io_mgr_->IsIdle())
             {
                 if (store_->IsStopped())
                 {
@@ -51,9 +63,13 @@ void Shard::WorkLoop()
                 const auto timeout = std::chrono::milliseconds(100);
                 nreqs = requests_.wait_dequeue_bulk_timed(
                     reqs.data(), reqs.size(), timeout);
+                if (nreqs == 0)
+                {
+                    continue;
+                }
             }
+            return nreqs;
         }
-        return nreqs;
     };
 
     while (true)
@@ -281,17 +297,6 @@ void Shard::ProcessReq(KvRequest *req)
         StartTask(task, req, lbd);
         break;
     }
-    case RequestType::Prewarm:
-    {
-        PrewarmTask *task = task_mgr_.GetPrewarmTask();
-        auto lbd = [task, req]() -> KvError
-        {
-            auto *prewarm_req = static_cast<PrewarmRequest *>(req);
-            return task->Prewarm(*prewarm_req);
-        };
-        StartTask(task, req, lbd);
-        break;
-    }
     case RequestType::BatchWrite:
     {
         BatchWriteTask *task = task_mgr_.GetBatchWriteTask(req->TableId());
@@ -456,6 +461,11 @@ WriteRequest *Shard::PendingWriteQueue::PopFront()
 bool Shard::PendingWriteQueue::Empty() const
 {
     return head_ == nullptr;
+}
+
+bool Shard::HasPendingRequests() const
+{
+    return requests_.size_approx() > 0;
 }
 
 }  // namespace eloqstore

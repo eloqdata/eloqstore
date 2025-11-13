@@ -1,7 +1,5 @@
 #pragma once
-
 #include <atomic>
-#include <cstdint>
 #include <string>
 #include <thread>
 #include <vector>
@@ -16,18 +14,43 @@ struct CloudObjectInfo;
 namespace eloqstore
 {
 class EloqStore;
-class PrewarmRequest;
-enum class RequestType : uint8_t;
+class CloudStoreMgr;
+
+struct PrewarmFile
+{
+    TableIdent tbl_id;
+    FileId file_id;
+    size_t file_size;
+    bool is_manifest;
+};
 
 class PrewarmTask : public KvTask
 {
 public:
+    explicit PrewarmTask(CloudStoreMgr *io_mgr);
+
     TaskType Type() const override
     {
         return TaskType::Prewarm;
     }
 
-    KvError Prewarm(const PrewarmRequest &request);
+    void Run();
+    void Shutdown();
+
+    bool HasPending() const;
+
+private:
+    friend class CloudStoreMgr;
+    friend class PrewarmService;
+
+    bool PopNext(PrewarmFile &file);
+    void Clear();
+
+    CloudStoreMgr *io_mgr_;
+    std::vector<PrewarmFile> pending_;
+    size_t next_index_{0};
+    bool stop_{true};
+    bool shutting_down_{false};
 };
 
 class PrewarmService
@@ -38,11 +61,10 @@ public:
 
     void Start();
     void Stop();
-    void Cancel();
-    bool IsCancelled() const;
 
 private:
-    void ThreadMain();
+    friend class EloqStore;
+    friend class CloudStoreMgr;
     void PrewarmCloudCache();
     bool ListCloudObjects(const std::string &remote_path,
                           std::vector<utils::CloudObjectInfo> &details);
@@ -52,6 +74,5 @@ private:
 
     EloqStore *store_;
     std::thread thread_;
-    std::atomic<bool> cancelled_{true};
 };
 }  // namespace eloqstore

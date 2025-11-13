@@ -32,6 +32,8 @@ public:
     void AddPendingTTL(const TableIdent &tbl_id);
     bool HasPendingTTL(const TableIdent &tbl_id);
 
+    bool HasPendingRequests() const;
+
     const KvOptions *Options() const;
     AsyncIoManager *IoManager();
     IndexPageManager *IndexManager();
