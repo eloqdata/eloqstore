@@ -14,6 +14,7 @@
 #include "eloq_store.h"
 #include "error.h"
 #include "shard.h"
+#include "task.h"
 #include "utils.h"
 
 namespace eloqstore
@@ -46,34 +47,55 @@ void PrewarmTask::Clear()
 
 void PrewarmTask::Run()
 {
+    bool registered_active = false;
+    auto register_active = [&]()
+    {
+        if (!registered_active)
+        {
+            shard->TaskMgr()->AddExternalTask();
+            registered_active = true;
+        }
+    };
+    auto unregister_active = [&]()
+    {
+        if (registered_active)
+        {
+            shard->TaskMgr()->FinishExternalTask();
+            registered_active = false;
+        }
+    };
+
     while (true)
     {
         if (shutting_down_)
         {
+            Clear();
+            stop_ = true;
+            unregister_active();
             break;
         }
 
         if (stop_)
         {
-            status_ = TaskStatus::Idle;
+            unregister_active();
+            LOG(INFO) << "STOP RUN";
             Yield();
+            LOG(INFO) << "START RUN";
             continue;
         }
-        status_ = TaskStatus::Ongoing;
+        register_active();
 
         PrewarmFile file;
-        if (io_mgr_->LocalCacheUsage() + file.file_size >
-                io_mgr_->ShardCacheLimit() ||
-            !PopNext(file))
+        if (!PopNext(file) || io_mgr_->LocalCacheUsage() + file.file_size >
+                                  io_mgr_->ShardCacheLimit())
         {
             LOG(INFO) << "Shard " << shard->shard_id_
                       << " reached local cache budget during prewarm";
             Clear();
             stop_ = true;
-            status_ = TaskStatus::Finished;
-            break;
+            continue;
         }
-
+        LOG(INFO) << "OPENFD: file:" << file.file_id;
         auto [fd_ref, err] = io_mgr_->OpenFD(file.tbl_id, file.file_id);
         if (err == KvError::NoError)
         {
@@ -85,31 +107,21 @@ void PrewarmTask::Run()
                          << (file.is_manifest ? "manifest" : "data file")
                          << " for " << file.tbl_id;
         }
-        else if (err == KvError::OutOfSpace || err == KvError::OpenFileLimit)
-        {
-            LOG(WARNING) << "Prewarm stopped for shard " << shard->shard_id_
-                         << ": " << ErrorString(err);
-            Clear();
-            stop_ = true;
-            status_ = TaskStatus::Finished;
-            break;
-        }
         else
         {
             LOG(WARNING) << "Prewarm failed for " << file.tbl_id << " file "
                          << file.file_id << ": " << ErrorString(err);
+            Clear();
+            stop_ = true;
+            continue;
         }
 
         if (shard->HasPendingRequests())
         {
-            status_ = TaskStatus::Idle;
+            unregister_active();
             Yield();
         }
     }
-
-    Clear();
-    stop_ = true;
-    status_ = TaskStatus::Finished;
 }
 
 void PrewarmTask::Shutdown()
@@ -118,8 +130,7 @@ void PrewarmTask::Shutdown()
     stop_ = true;
     if (status_ != TaskStatus::Finished)
     {
-        Resume();
-        assert(status_ == TaskStatus::Finished);
+        coro_ = coro_.resume();
     }
 }
 
@@ -296,11 +307,16 @@ void PrewarmService::PrewarmCloudCache()
                       }
                       return lhs.file_id > rhs.file_id;
                   });
-
+        LOG(INFO) << "prewarm_task_.HasPending()"
+                  << cloud_mgr->prewarm_task_.HasPending();
+        LOG(INFO) << "files size :" << files.size();
         cloud_mgr->prewarm_task_.pending_ = std::move(files);
+
         cloud_mgr->prewarm_task_.next_index_ = 0;
         cloud_mgr->prewarm_task_.shutting_down_ = false;
         cloud_mgr->prewarm_task_.stop_ = false;
+        LOG(INFO) << "prewarm_task_.HasPending()"
+                  << cloud_mgr->prewarm_task_.HasPending();
     }
 }
 

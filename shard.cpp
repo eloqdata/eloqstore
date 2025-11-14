@@ -1,7 +1,11 @@
 #include "shard.h"
 
+#include <glog/logging.h>
+
 #include <array>
+#include <cassert>
 #include <chrono>
+#include <cstddef>
 
 #include "async_io_manager.h"
 #include "list_object_task.h"
@@ -32,50 +36,39 @@ void Shard::WorkLoop()
 {
     shard = this;
     io_mgr_->Start();
-    const bool allow_prewarm = store_->Options().prewarm_cloud_cache;
-    CloudStoreMgr *cloud_mgr =
-        allow_prewarm ? static_cast<CloudStoreMgr *>(io_mgr_.get()) : nullptr;
 
     // Get new requests from the queue, only blocked when there are no requests
     // and no active tasks.
     // This allows the thread to exit gracefully when the store is stopped.
     std::array<KvRequest *, 128> reqs;
-    auto dequeue_requests = [this, &reqs, allow_prewarm, cloud_mgr]() -> int
+    auto dequeue_requests = [this, &reqs]() -> int
     {
-        while (true)
+        int nreqs = requests_.try_dequeue_bulk(reqs.data(), reqs.size());
+        // Idle state, wait for new requests or exit.
+        while (nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle())
         {
-            size_t nreqs = requests_.try_dequeue_bulk(reqs.data(), reqs.size());
-            if (nreqs > 0)
+            if (store_->IsStopped())
             {
-                return nreqs;
+                return -1;
             }
-            if (allow_prewarm && task_mgr_.NumActive() == 0 &&
-                io_mgr_->IsIdle() && cloud_mgr->MaybeRunPrewarm())
+            if (io_mgr_->NeedPrewarm())
             {
-                continue;
+                io_mgr_->RunPrewarm();
+                return 0;
             }
-            if (task_mgr_.NumActive() == 0 && io_mgr_->IsIdle())
-            {
-                if (store_->IsStopped())
-                {
-                    return -1;
-                }
-                const auto timeout = std::chrono::milliseconds(100);
-                nreqs = requests_.wait_dequeue_bulk_timed(
-                    reqs.data(), reqs.size(), timeout);
-                if (nreqs == 0)
-                {
-                    continue;
-                }
-            }
-            return nreqs;
+            const auto timeout = std::chrono::milliseconds(100);
+            nreqs = requests_.wait_dequeue_bulk_timed(
+                reqs.data(), reqs.size(), timeout);
         }
+
+        return nreqs;
     };
 
     while (true)
     {
         while (true)
         {
+            // LOG(INFO) << "proccces";
             io_mgr_->Submit();
             io_mgr_->PollComplete();
             bool busy = ExecuteReadyTasks();
@@ -85,8 +78,8 @@ void Shard::WorkLoop()
                 break;
             }
         }
-
         int nreqs = dequeue_requests();
+        // LOG(INFO) << "nreqs:" << nreqs;
         if (nreqs < 0)
         {
             // Exit.
@@ -415,7 +408,10 @@ void Shard::WorkOneRound()
     if (nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle())
     {
         // No request and no active task and no active io.
-        return;
+        if (io_mgr_->NeedPrewarm())
+            io_mgr_->RunPrewarm();
+        else
+            return;
     }
 
     req_queue_size_.fetch_sub(nreqs, std::memory_order_relaxed);

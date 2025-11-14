@@ -467,7 +467,6 @@ void EloqStore::Stop()
 #ifdef ELOQ_MODULE_ENABLED
     eloq::unregister_module(module_.get());
 #endif
-
     if (archive_crond_ != nullptr)
     {
         archive_crond_->Stop();

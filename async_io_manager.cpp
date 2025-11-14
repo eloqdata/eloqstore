@@ -15,7 +15,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <iterator>
 #include <memory>
 #include <string>
 #include <utility>
@@ -1804,14 +1803,14 @@ void CloudStoreMgr::PollComplete()
     IouringMgr::PollComplete();
 }
 
-bool CloudStoreMgr::MaybeRunPrewarm()
+bool CloudStoreMgr::NeedPrewarm() const
 {
-    if (!prewarm_task_.HasPending())
-    {
-        return false;
-    }
+    return options_->prewarm_cloud_cache && prewarm_task_.HasPending();
+}
+
+void CloudStoreMgr::RunPrewarm()
+{
     prewarm_task_.Resume();
-    return true;
 }
 
 KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
@@ -2171,6 +2170,7 @@ TaskType CloudStoreMgr::FileCleaner::Type() const
 void CloudStoreMgr::FileCleaner::Run()
 {
     killed_ = false;
+    LOG(INFO) << "shard->main" << shard->main_;
     const KvOptions *opts = io_mgr_->options_;
     const size_t shard_local_space_limit = io_mgr_->shard_local_space_limit_;
     const size_t reserve_space = opts->reserve_space_ratio == 0

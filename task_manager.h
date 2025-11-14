@@ -23,6 +23,9 @@ public:
     ListObjectTask *GetListObjectTask();
     void FreeTask(KvTask *task);
 
+    void AddExternalTask();
+    void FinishExternalTask();
+
     size_t NumActive() const;
 
 private:

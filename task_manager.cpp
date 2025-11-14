@@ -70,7 +70,20 @@ void TaskManager::FreeTask(KvTask *task)
     case TaskType::EvictFile:
         assert(false && "EvictFile task should not be freed here");
         break;
+    case TaskType::Prewarm:
+        assert(false && "Prewarm task should not be freed here");
     }
+}
+
+void TaskManager::AddExternalTask()
+{
+    num_active_++;
+}
+
+void TaskManager::FinishExternalTask()
+{
+    assert(num_active_ > 0);
+    num_active_--;
 }
 
 size_t TaskManager::NumActive() const

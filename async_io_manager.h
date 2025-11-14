@@ -66,6 +66,11 @@ public:
     virtual void Stop() {};
     virtual void Submit() = 0;
     virtual void PollComplete() = 0;
+    virtual bool NeedPrewarm() const
+    {
+        return false;
+    }
+    virtual void RunPrewarm() {};
 
     /** These methods are provided for kv task. */
     virtual std::pair<Page, KvError> ReadPage(const TableIdent &tbl_id,
@@ -382,7 +387,8 @@ public:
     KvError ReadArchiveFileAndDelete(const std::string &file_path,
                                      std::string &content);
 
-    bool MaybeRunPrewarm();
+    bool NeedPrewarm() const override;
+    void RunPrewarm() override;
     size_t LocalCacheUsage() const
     {
         return used_local_space_;

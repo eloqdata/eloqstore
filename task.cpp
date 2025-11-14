@@ -24,7 +24,7 @@ void KvTask::Resume()
     {
         assert(status_ == TaskStatus::Blocked ||
                status_ == TaskStatus::BlockedIO ||
-               Type() == TaskType::EvictFile);
+               Type() == TaskType::EvictFile || Type() == TaskType::Prewarm);
         status_ = TaskStatus::Ongoing;
         shard->ready_tasks_.Enqueue(this);
     }
