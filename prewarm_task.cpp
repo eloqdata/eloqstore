@@ -113,8 +113,8 @@ void PrewarmTask::Run()
             stop_ = true;
             continue;
         }
-
-        if (shard->HasPendingRequests())
+        assert(shard->TaskMgr()->NumActive() != 0);
+        if (shard->HasPendingRequests() || shard->TaskMgr()->NumActive() >= 1)
         {
             unregister_active();
             Yield();
