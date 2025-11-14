@@ -226,7 +226,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               fd_ref_(std::move(fd)),
               offset_(offset),
-              page_(true){};
+              page_(true) {};
 
         LruFD::Ref fd_ref_;
         uint32_t offset_;
@@ -958,7 +958,7 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)){};
+            : BaseReq(task), fd_ref_(std::move(fd)) {};
         LruFD::Ref fd_ref_;
     };
 
@@ -1782,11 +1782,8 @@ bool CloudStoreMgr::IsIdle()
 
 void CloudStoreMgr::Stop()
 {
-    if (options_->prewarm_cloud_cache)
-    {
-        prewarm_task_.Shutdown();
-    }
     file_cleaner_.Shutdown();
+    prewarm_task_.Shutdown();
 }
 
 void CloudStoreMgr::Submit()
@@ -2170,7 +2167,6 @@ TaskType CloudStoreMgr::FileCleaner::Type() const
 void CloudStoreMgr::FileCleaner::Run()
 {
     killed_ = false;
-    LOG(INFO) << "shard->main" << shard->main_;
     const KvOptions *opts = io_mgr_->options_;
     const size_t shard_local_space_limit = io_mgr_->shard_local_space_limit_;
     const size_t reserve_space = opts->reserve_space_ratio == 0

@@ -107,10 +107,6 @@ struct KvOptions
      * Only take effect when cloud store is enabled.
      */
     uint16_t reserve_space_ratio = 100;
-    /**
-     * @brief Download recent files from cloud into local cache during startup.
-     */
-    bool prewarm_cloud_cache = false;
 
     /* NOTE:
      * The following options will be persisted in storage, so after the first
@@ -170,6 +166,12 @@ struct KvOptions
      * @brief Compression is enabled.
      */
     bool enable_compression = false;
+    /**
+     * @brief Download recent files from cloud into local cache during startup.
+     * The filter returning true means that this table partition needs to be
+     * prewarmed.
+     */
+    bool prewarm_cloud_cache = false;
 
     std::function<bool(const TableIdent &)> prewarm_filter;
 };

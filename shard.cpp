@@ -68,7 +68,6 @@ void Shard::WorkLoop()
     {
         while (true)
         {
-            // LOG(INFO) << "proccces";
             io_mgr_->Submit();
             io_mgr_->PollComplete();
             bool busy = ExecuteReadyTasks();
@@ -79,7 +78,6 @@ void Shard::WorkLoop()
             }
         }
         int nreqs = dequeue_requests();
-        // LOG(INFO) << "nreqs:" << nreqs;
         if (nreqs < 0)
         {
             // Exit.

@@ -82,7 +82,7 @@ private:
     TaskPool<BackgroundWrite> bg_write_pool_{1024};
     TaskPool<ReadTask> read_pool_{2048};
     TaskPool<ScanTask> scan_pool_{2048};
-    TaskPool<ListObjectTask> list_object_pool_{128};
+    TaskPool<ListObjectTask> list_object_pool_{512};
     size_t num_active_{0};
 };
 }  // namespace eloqstore

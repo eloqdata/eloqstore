@@ -78,9 +78,7 @@ void PrewarmTask::Run()
         if (stop_)
         {
             unregister_active();
-            LOG(INFO) << "STOP RUN";
             Yield();
-            LOG(INFO) << "START RUN";
             continue;
         }
         register_active();
@@ -89,13 +87,13 @@ void PrewarmTask::Run()
         if (!PopNext(file) || io_mgr_->LocalCacheUsage() + file.file_size >
                                   io_mgr_->ShardCacheLimit())
         {
-            LOG(INFO) << "Shard " << shard->shard_id_
-                      << " reached local cache budget during prewarm";
+            DLOG(INFO) << "Shard " << shard->shard_id_
+                       << " reached local cache budget during prewarm";
             Clear();
             stop_ = true;
             continue;
         }
-        LOG(INFO) << "OPENFD: file:" << file.file_id;
+        DLOG(INFO) << "prewarm file id:" << file.file_id;
         auto [fd_ref, err] = io_mgr_->OpenFD(file.tbl_id, file.file_id);
         if (err == KvError::NoError)
         {
@@ -126,12 +124,11 @@ void PrewarmTask::Run()
 
 void PrewarmTask::Shutdown()
 {
+    if (!Options()->prewarm_cloud_cache)
+        return;
     shutting_down_ = true;
     stop_ = true;
-    if (status_ != TaskStatus::Finished)
-    {
-        coro_ = coro_.resume();
-    }
+    coro_ = coro_.resume();
 }
 
 PrewarmService::PrewarmService(EloqStore *store) : store_(store)
@@ -207,7 +204,8 @@ void PrewarmService::PrewarmCloudCache()
         return;
     }
 
-    std::vector<std::vector<PrewarmFile>> shard_files(store_->shards_.size());
+    std::vector<PrewarmFile> all_files;
+    all_files.reserve(all_infos.size());
     for (const auto &info : all_infos)
     {
         if (info.is_dir)
@@ -222,11 +220,6 @@ void PrewarmService::PrewarmCloudCache()
         TableIdent tbl_id;
         std::string filename;
         if (!ExtractPartition(path, tbl_id, filename))
-        {
-            continue;
-        }
-        if (store_->options_.prewarm_filter &&
-            !store_->options_.prewarm_filter(tbl_id))
         {
             continue;
         }
@@ -279,7 +272,29 @@ void PrewarmService::PrewarmCloudCache()
             continue;
         }
 
-        const size_t shard_index = tbl_id.ShardIndex(store_->shards_.size());
+        all_files.push_back(std::move(file));
+    }
+
+    std::sort(all_files.begin(),
+              all_files.end(),
+              [](const PrewarmFile &lhs, const PrewarmFile &rhs)
+              {
+                  if (lhs.is_manifest != rhs.is_manifest)
+                  {
+                      return lhs.is_manifest && !rhs.is_manifest;
+                  }
+                  if (!lhs.is_manifest && !rhs.is_manifest &&
+                      lhs.mod_time != rhs.mod_time)
+                  {
+                      return lhs.mod_time > rhs.mod_time;
+                  }
+                  return lhs.file_id > rhs.file_id;
+              });
+
+    std::vector<std::vector<PrewarmFile>> shard_files(store_->shards_.size());
+    for (auto &file : all_files)
+    {
+        const size_t shard_index = file.tbl_id.ShardIndex(shard_files.size());
         shard_files[shard_index].push_back(std::move(file));
     }
 
@@ -290,33 +305,11 @@ void PrewarmService::PrewarmCloudCache()
             continue;
         }
         auto *cloud_mgr =
-            dynamic_cast<CloudStoreMgr *>(store_->shards_[i]->IoManager());
+            static_cast<CloudStoreMgr *>(store_->shards_[i]->IoManager());
         auto &files = shard_files[i];
-        std::sort(files.begin(),
-                  files.end(),
-                  [](const PrewarmFile &lhs, const PrewarmFile &rhs)
-                  {
-                      if (lhs.is_manifest != rhs.is_manifest)
-                      {
-                          return lhs.is_manifest && !rhs.is_manifest;
-                      }
-                      if (!lhs.is_manifest && !rhs.is_manifest &&
-                          lhs.mod_time != rhs.mod_time)
-                      {
-                          return lhs.mod_time > rhs.mod_time;
-                      }
-                      return lhs.file_id > rhs.file_id;
-                  });
-        LOG(INFO) << "prewarm_task_.HasPending()"
-                  << cloud_mgr->prewarm_task_.HasPending();
-        LOG(INFO) << "files size :" << files.size();
+        DLOG(INFO) << "files size :" << files.size();
         cloud_mgr->prewarm_task_.pending_ = std::move(files);
-
-        cloud_mgr->prewarm_task_.next_index_ = 0;
-        cloud_mgr->prewarm_task_.shutting_down_ = false;
         cloud_mgr->prewarm_task_.stop_ = false;
-        LOG(INFO) << "prewarm_task_.HasPending()"
-                  << cloud_mgr->prewarm_task_.HasPending();
     }
 }
 
