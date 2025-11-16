@@ -113,8 +113,8 @@ void PrewarmTask::Run()
             stop_ = true;
             continue;
         }
-        assert(shard->TaskMgr()->NumActive() != 0);
-        if (shard->HasPendingRequests() || shard->TaskMgr()->NumActive() >= 1)
+        assert(shard->TaskMgr()->NumActive() >= 0);
+        if (shard->HasPendingRequests() || shard->TaskMgr()->NumActive() > 1)
         {
             unregister_active();
             Yield();
@@ -203,7 +203,7 @@ void PrewarmService::PrewarmCloudCache()
         LOG(WARNING) << "Skip cloud prewarm: failed to list cloud root";
         return;
     }
-
+    
     std::vector<PrewarmFile> all_files;
     all_files.reserve(all_infos.size());
     for (const auto &info : all_infos)
