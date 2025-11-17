@@ -203,7 +203,7 @@ void PrewarmService::PrewarmCloudCache()
         LOG(WARNING) << "Skip cloud prewarm: failed to list cloud root";
         return;
     }
-    
+
     std::vector<PrewarmFile> all_files;
     all_files.reserve(all_infos.size());
     for (const auto &info : all_infos)
