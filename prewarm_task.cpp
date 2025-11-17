@@ -52,7 +52,8 @@ void PrewarmTask::Run()
     {
         if (!registered_active)
         {
-            LOG(INFO) << "Shard " << shard->shard_id_ << " continue prewarm task";
+            LOG(INFO) << "Shard " << shard->shard_id_
+                      << " continue prewarm task";
             shard->TaskMgr()->AddExternalTask();
             registered_active = true;
         }
