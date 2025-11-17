@@ -242,7 +242,6 @@ void PrewarmService::PrewarmCloudCache()
         if (filename == FileNameManifest)
         {
             file.file_id = CloudStoreMgr::ManifestFileId();
-            file.file_size = store_->options_.manifest_limit;
             file.is_manifest = true;
         }
         else if (filename.rfind(FileNameData, 0) == 0)
