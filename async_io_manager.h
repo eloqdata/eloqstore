@@ -389,13 +389,9 @@ public:
 
     bool NeedPrewarm() const override;
     void RunPrewarm() override;
-    size_t LocalCacheUsage() const
+    size_t LocalCacheRemained() const
     {
-        return used_local_space_;
-    }
-    size_t ShardCacheLimit() const
-    {
-        return shard_local_space_limit_;
+        return shard_local_space_limit_ - used_local_space_;
     }
 
 private:

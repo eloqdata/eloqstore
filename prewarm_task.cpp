@@ -84,8 +84,7 @@ void PrewarmTask::Run()
         register_active();
 
         PrewarmFile file;
-        if (!PopNext(file) || io_mgr_->LocalCacheUsage() + file.file_size >
-                                  io_mgr_->ShardCacheLimit())
+        if (!PopNext(file) || io_mgr_->LocalCacheRemained() < file.file_size)
         {
             DLOG(INFO) << "Shard " << shard->shard_id_
                        << " reached local cache budget during prewarm";
@@ -113,7 +112,6 @@ void PrewarmTask::Run()
             stop_ = true;
             continue;
         }
-        assert(shard->TaskMgr()->NumActive() >= 0);
         if (shard->HasPendingRequests() || shard->TaskMgr()->NumActive() > 1)
         {
             unregister_active();
@@ -171,7 +169,7 @@ bool PrewarmService::ListCloudObjects(
 
     ListObjectRequest request(nullptr);
     request.SetRemotePath(remote_path);
-    request.SetDetailStorage(&details);
+    request.SetDetails(&details);
     request.SetRecursive(true);
     request.err_ = KvError::NoError;
     request.done_.store(false, std::memory_order_relaxed);
@@ -259,12 +257,7 @@ void PrewarmService::PrewarmCloudCache()
             {
                 continue;
             }
-            file.file_size = info.size == 0 ? store_->options_.DataFileSize()
-                                            : static_cast<size_t>(info.size);
-            if (file.file_size == 0)
-            {
-                file.file_size = store_->options_.DataFileSize();
-            }
+
             file.is_manifest = false;
         }
         else

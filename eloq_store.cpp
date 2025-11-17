@@ -364,7 +364,8 @@ KvError EloqStore::CollectTablePartitions(
             finish = true;
             cv.notify_all();
         };
-        shards_[0]->AddKvRequest(&list_object_request);
+        shards_[utils::RandomInt(static_cast<int>(shards_.size()))]
+            ->AddKvRequest(&list_object_request);
         std::unique_lock<std::mutex> lk(mu);
         cv.wait(lk, [&finish] { return finish; });
         for (auto &object_name : objects)

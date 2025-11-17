@@ -211,7 +211,7 @@ public:
         return remote_path_;
     }
 
-    void SetDetailStorage(std::vector<utils::CloudObjectInfo> *details)
+    void SetDetails(std::vector<utils::CloudObjectInfo> *details)
     {
         details_ = details;
     }

@@ -43,7 +43,7 @@ void Shard::WorkLoop()
     std::array<KvRequest *, 128> reqs;
     auto dequeue_requests = [this, &reqs]() -> int
     {
-        int nreqs = requests_.try_dequeue_bulk(reqs.data(), reqs.size());
+        size_t nreqs = requests_.try_dequeue_bulk(reqs.data(), reqs.size());
         // Idle state, wait for new requests or exit.
         while (nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle())
         {
