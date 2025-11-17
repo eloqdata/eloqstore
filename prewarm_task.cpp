@@ -88,6 +88,9 @@ void PrewarmTask::Run()
         {
             DLOG(INFO) << "Shard " << shard->shard_id_
                        << " reached local cache budget during prewarm";
+            LOG(INFO) << "Prewarm shard " << shard->shard_id_
+                      << " used local cache "
+                      << io_mgr_->LocalCacheRemained() << "FILESIZE:" << file.file_size;
             Clear();
             stop_ = true;
             continue;
@@ -264,7 +267,7 @@ void PrewarmService::PrewarmCloudCache()
         {
             continue;
         }
-
+        file.file_size = static_cast<size_t>(info.size);
         all_files.push_back(std::move(file));
     }
 
