@@ -80,6 +80,7 @@ void PrewarmTask::Run()
         if (stop_)
         {
             unregister_active();
+            status_ = TaskStatus::Idle;
             Yield();
             continue;
         }
@@ -117,6 +118,7 @@ void PrewarmTask::Run()
         if (shard->HasPendingRequests() || shard->TaskMgr()->NumActive() > 1)
         {
             unregister_active();
+            status_ = TaskStatus::BlockedIO;
             Yield();
         }
     }
