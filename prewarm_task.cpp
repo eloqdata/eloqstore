@@ -52,6 +52,7 @@ void PrewarmTask::Run()
     {
         if (!registered_active)
         {
+            LOG(INFO) << "Continue prewarm task";
             shard->TaskMgr()->AddExternalTask();
             registered_active = true;
         }
@@ -60,6 +61,7 @@ void PrewarmTask::Run()
     {
         if (registered_active)
         {
+            LOG(INFO) << "Stop prewarm task";
             shard->TaskMgr()->FinishExternalTask();
             registered_active = false;
         }
