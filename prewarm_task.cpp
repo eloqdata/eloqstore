@@ -88,9 +88,6 @@ void PrewarmTask::Run()
         {
             DLOG(INFO) << "Shard " << shard->shard_id_
                        << " reached local cache budget during prewarm";
-            LOG(INFO) << "Prewarm shard " << shard->shard_id_
-                      << " used local cache "
-                      << io_mgr_->LocalCacheRemained() << "FILESIZE:" << file.file_size;
             Clear();
             stop_ = true;
             continue;
