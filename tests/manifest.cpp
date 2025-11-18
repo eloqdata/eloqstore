@@ -4,8 +4,10 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <string_view>
 #include <thread>
 
+#include "common.h"
 #include "kv_options.h"
 #include "test_utils.h"
 #include "tests/common.h"
@@ -321,108 +323,111 @@ TEST_CASE("enhanced rollback with mix operations", "[archive]")
     tester.Validate();
 }
 
-TEST_CASE("manifest deletion on rootmeta eviction", "[manifest][eviction]")
+void RunManifestEvictionTest(const eloqstore::KvOptions &opts,
+                             std::string_view mode,
+                             bool has_archive)
 {
-    eloqstore::KvOptions opts = {
-        .index_buffer_pool_size = 15 * 4 * KB,
-        .file_amplify_factor = 2,
-        .store_path = {test_path},
-        .data_append_mode = true,
-    };
+    INFO("manifest-eviction mode=" << mode << " has_archive=" << has_archive);
 
-    eloqstore::EloqStore *store = InitStore(opts);
+    eloqstore::KvOptions case_opts = opts;
+    case_opts.index_buffer_pool_size = 15 * 4 * KB;
+    case_opts.file_amplify_factor = 2;
+    case_opts.data_append_mode = true;
+    if (case_opts.store_path.empty())
+    {
+        case_opts.store_path = {test_path};
+    }
 
-    eloqstore::TableIdent partition_a{"test_table", 1};
-    eloqstore::TableIdent partition_b{"test_table", 2};
+    eloqstore::EloqStore *store = InitStore(case_opts);
+    std::string table_prefix = "manifest-evict-";
+    table_prefix.append(has_archive ? "archive-" : "plain-");
+    table_prefix.append(mode);
+
+    eloqstore::TableIdent partition_a{table_prefix, 1};
+    eloqstore::TableIdent partition_b{table_prefix, 2};
 
     MapVerifier verifier_a(partition_a, store, false);
     MapVerifier verifier_b(partition_b, store, false);
 
+    const std::string base_path = case_opts.store_path.empty()
+                                      ? std::string(test_path)
+                                      : case_opts.store_path[0];
     const fs::path partition_a_path =
-        fs::path(test_path) / partition_a.ToString();
-    const std::string manifest_path = (partition_a_path / "manifest").string();
+        fs::path(base_path) / partition_a.ToString();
+    const fs::path manifest_path = partition_a_path / "manifest";
 
-    LOG(INFO) << "Testing manifest deletion for partition: "
-              << partition_a.ToString();
-    LOG(INFO) << "Manifest path: " << manifest_path;
-
-    LOG(INFO) << "Phase 1: Writing data to partition A";
     verifier_a.Upsert(0, 100);
     verifier_a.Validate();
-
     REQUIRE(fs::exists(manifest_path));
-    LOG(INFO) << "Manifest file created successfully";
 
-    LOG(INFO) << "Phase 2: Truncating partition A";
-    verifier_a.Truncate(0, true);  // delete_all = true
+    fs::path archive_path;
+    if (has_archive)
+    {
+        archive_path = partition_a_path / ArchiveName(123456789);
+        fs::copy_file(
+            manifest_path, archive_path, fs::copy_options::overwrite_existing);
+        REQUIRE(fs::exists(archive_path));
+    }
 
+    verifier_a.Truncate(0, true);
+    verifier_a.Validate();
     REQUIRE(fs::exists(manifest_path));
-    LOG(INFO) << "Manifest still exists after truncate (expected)";
-
-    LOG(INFO) << "Phase 3: Writing data to partition B to trigger eviction";
 
     bool manifest_deleted = false;
-    int iteration = 0;
     const int max_iterations = 100;
 
-    for (iteration = 0; iteration < max_iterations; iteration++)
+    for (int iteration = 0; iteration < max_iterations; iteration++)
     {
-        // each time a batch of data is written
-        int start = iteration * 50;
-        int end = start + 50;
+        int start_key = iteration * 50;
+        int end_key = start_key + 50;
+        verifier_b.Upsert(start_key, end_key);
+        verifier_b.Validate();
 
-        LOG(INFO) << "Iteration " << iteration << ": Writing range [" << start
-                  << ", " << end << ")";
-        verifier_b.Upsert(start, end);
-
-        // check whether the manifest has been deleted
         if (!fs::exists(manifest_path))
         {
             manifest_deleted = true;
-            LOG(INFO) << "Manifest deleted after " << iteration
-                      << " iterations";
             break;
         }
+    }
 
-        if (iteration % 20 == 19)
+    if (has_archive)
+    {
+        REQUIRE_FALSE(manifest_deleted);
+        REQUIRE(fs::exists(manifest_path));
+        REQUIRE(fs::exists(partition_a_path));
+        if (!archive_path.empty())
         {
-            LOG(INFO) << "Completed " << (iteration + 1)
-                      << " iterations, manifest still exists";
+            REQUIRE(fs::exists(archive_path));
+            fs::remove(archive_path);
         }
     }
-
-    // manifest should be deleted
-    REQUIRE(manifest_deleted);
-    REQUIRE(!fs::exists(manifest_path));
-
-    // check that the partition directory exists but is empty
-    LOG(INFO) << "Checking partition directory state after manifest deletion";
-    REQUIRE(fs::exists(partition_a_path));
-    REQUIRE(fs::is_directory(partition_a_path));
-
-    // verify directory is empty
-    bool directory_empty = true;
-    int file_count = 0;
-    for (const auto &entry : fs::directory_iterator(partition_a_path))
+    else
     {
-        file_count++;
-        directory_empty = false;
-        LOG(INFO) << "Found unexpected file in partition directory: "
-                  << entry.path().filename().string();
+        REQUIRE(manifest_deleted);
+        REQUIRE_FALSE(fs::exists(manifest_path));
+        REQUIRE_FALSE(fs::exists(partition_a_path));
     }
 
-    REQUIRE(directory_empty);
-    LOG(INFO)
-        << "SUCCESS: Partition directory exists but is empty (file count: "
-        << file_count << ")";
-
-    LOG(INFO) << "SUCCESS: Manifest file successfully deleted after "
-              << iteration << " iterations";
-
-    LOG(INFO) << "Validating partition B data integrity";
     verifier_b.Validate();
-
-    // test remove manifest and then batch write
     verifier_a.Upsert(0, 100);
     verifier_a.Validate();
+}
+
+TEST_CASE("manifest deletion on rootmeta eviction", "[manifest][eviction]")
+{
+    auto run_case = [](const eloqstore::KvOptions &opts, std::string_view mode)
+    { RunManifestEvictionTest(opts, mode, false); };
+
+    run_case(default_opts, "local");
+    run_case(cloud_options, "cloud");
+}
+
+TEST_CASE("manifest deletion skipped when archives exist",
+          "[manifest][eviction]")
+{
+    auto run_case = [](const eloqstore::KvOptions &opts, std::string_view mode)
+    { RunManifestEvictionTest(opts, mode, true); };
+
+    run_case(default_opts, "local");
+    run_case(cloud_options, "cloud");
 }

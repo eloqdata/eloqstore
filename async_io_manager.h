@@ -312,6 +312,10 @@ protected:
                               std::span<LruFD::Ref> fds);
     KvError CloseFiles(std::span<LruFD::Ref> fds);
     virtual KvError CloseFile(LruFD::Ref fd_ref);
+    std::pair<bool, bool> HasOtherFile(
+        const TableIdent &tbl_id,
+        std::vector<std::string> *file_names = nullptr) const;
+    void ClosePartitionFiles(const TableIdent &tbl_id);
 
     static FdIdx GetRootFD(const TableIdent &tbl_id);
     /**
@@ -390,6 +394,7 @@ public:
     KvError CreateArchive(const TableIdent &tbl_id,
                           std::string_view snapshot,
                           uint64_t ts) override;
+    void CleanManifest(const TableIdent &tbl_id) override;
 
     ObjectStore &GetObjectStore()
     {
@@ -430,6 +435,8 @@ private:
     KvError DownloadFile(const TableIdent &tbl_id, FileId file_id);
     KvError UploadFiles(const TableIdent &tbl_id,
                         std::vector<std::string> filenames);
+    void RemoveCachedFileEntry(const TableIdent &tbl_id,
+                               const std::string &filename);
 
     bool DequeClosedFile(const FileKey &key);
     void EnqueClosedFile(FileKey key);
