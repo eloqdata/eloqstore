@@ -124,15 +124,18 @@ make install
    eloq_store_data_path_list={your_eloqstore_data_path1, your_eloqstore_data_path2,...}
    # Max number of open files used by eloqstore(default: 1024), cannot be larger than maxclients
    eloq_store_open_files_limit=1024
-   # The first part is the header of the rclone configuration file, and the second part is the bucket name.
-   eloq_store_cloud_store_path=eloqstore_cloud:dss-eloqstore-dev
+   eloq_store_cloud_store_path=dss-eloqstore-dev
    # Max amount of cached index pages (supports KB/MB/GB units, e.g., 32MB)
    eloq_store_index_buffer_pool_size=32MB
    # Local disk space usage limit
    eloq_store_local_space_limit=10GB
    # Cloud mode must use append mode.
    eloq_store_data_append_mode=true
-   eloq_store_cloud_store_daemon_ports=5572,5573,5574,5575,5576,5577,5578,5579,5580,5581
+   eloq_store_cloud_provider=aws
+   eloq_store_cloud_endpoint=http://127.0.0.1:9900
+   eloq_store_cloud_region=us-east-1
+   eloq_store_cloud_access_key=minioadmin
+   eloq_store_cloud_secret_key=minioadmin
    ```
 
 2. **Install MinIO and start:**
@@ -140,56 +143,21 @@ make install
    ./minio server ${your_minio_data_path} --address :9900 --console-address :9901
    ```
 
-3. **Install `rclone`:**
-   ```bash
-   sudo apt update
-   sudo apt install rclone
-   ```
-
-4. **Configure and start `rclone`:**
-   ```bash
-   rclone config
-   ```
-   
-   Follow the prompts to add your cloud storage service configuration.
-
-   **Example configuration:**
+3. **Configure S3 credentials for EloqStore:**
+   EloqStore now talks directly to MinIO/AWS-compatible endpoints using the
+   credentials in `kv_options`. Make sure the `[permanent]` section sets the
+   proper bucket/prefix and endpoint:
    ```ini
-   $ cat ~/.config/rclone/rclone.conf
-   [eloqstore_cloud]
-   type = s3
-   provider = Minio
-   env_auth = false
-   access_key_id = minioadmin
-   secret_access_key = minioadmin
-   region = us-east-1
-   endpoint = http://127.0.0.1:9900
-   acl = private
+   [permanent]
+   cloud_store_path = eloqstore/unit-test
+   cloud_endpoint = http://127.0.0.1:9900
+   cloud_region = us-east-1
+   cloud_access_key = minioadmin
+   cloud_secret_key = minioadmin
+   cloud_verify_ssl = false
    ```
-   ```bash
-   rclone rcd \
-   --rc-no-auth \
-   --rc-addr=127.0.0.1:5572 \
-   --transfers=16 \
-   --checkers=16 \
-   --s3-upload-concurrency=8 \
-   --s3-chunk-size=8M \
-   --s3-no-head \
-   --fast-list \
-   -v 
-   ```
-   To maximize throughput you can launch multiple `rclone rcd` instances listening on different ports and list all of them in `cloud_store_daemon_ports` (space or comma separated) inside your `kv_options` file:
-   ```bash
-   for p in $(seq 5572 5581); do
-     rclone rcd \
-       --rc-no-auth \
-       --rc-addr=127.0.0.1:$p \
-       --transfers=64 \
-       --checkers=32 \
-       -v &
-   done
-   ```
-   After starting EloqStore, terminate the background `rclone` processes when you are done (e.g., using `pkill -f "rclone rcd"`).
+   The `cloud_store_path` takes the form `bucket[/prefix]`. No additional
+   proxy daemons are required.
 5. **Start EloqKV:**
   ```bash
   cd install

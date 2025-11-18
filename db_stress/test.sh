@@ -19,6 +19,10 @@ DISK_LOG_FILE="$LOG_DIR/disk_usage.log"
 MINIO_DATA_PATH=""
 #MINIO_DATA_PATH="/home/sjh/minio/data"
 DISK_MONITOR_PID=""
+MINIO_ENDPOINT=${MINIO_ENDPOINT:-http://127.0.0.1:9900}
+MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
+MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-minioadmin}
+MINIO_REGION=${MINIO_REGION:-us-east-1}
 
 SWITCH_INTERVAL_HOURS=1
 KILL_WAIT_TIME=10
@@ -46,9 +50,9 @@ log_message() {
 PARAM_INDEX_FILE="$SCRIPT_DIR/log/current_param_index"
 SYSTEM_TYPE_PARAM_COMBINATIONS=(
 
-    " --data_append_mode=true --cloud_store_path=minio:db-stress/db-stress/  --fd_limit=1000 --num_threads=2  --throughput_report_interval_secs=10 --n_tables=2 --n_partitions=2 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=4000 --max_verify_ops_per_write=0 --write_percent=100"
-    # "--data_append_mode=true --cloud_store_path=minio:db-stress/db-stress/  --num_threads=4   --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
-    # "--data_append_mode=true --cloud_store_path=minio:db-stress/db-stress/  --num_threads=4   --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    " --data_append_mode=true --cloud_store_path=db-stress/db-stress/  --fd_limit=1000 --num_threads=2  --throughput_report_interval_secs=10 --n_tables=2 --n_partitions=2 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=4000 --max_verify_ops_per_write=0 --write_percent=100"
+    # "--data_append_mode=true --cloud_store_path=db-stress/db-stress/  --num_threads=4   --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
+    # "--data_append_mode=true --cloud_store_path=db-stress/db-stress/  --num_threads=4   --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
 
     #"--data_append_mode=false --num_threads=1  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=false --num_threads=8  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
@@ -213,7 +217,37 @@ log_error() {
         echo ""
     } >> "$error_log"
     
-    log_message "Error logged to: $error_log"
+log_message "Error logged to: $error_log"
+}
+# Delete all objects under a minio path specified as bucket[/prefix]
+cleanup_minio_remote() {
+    local remote="$1"
+    local path="${remote#/}"
+    path="${path%/}"
+    if [ -z "$path" ]; then
+        log_message "Missing bucket name in remote path: $remote"
+        return 1
+    fi
+
+    local bucket="${path%%/*}"
+    local prefix=""
+    if [[ "$path" == */* ]]; then
+        prefix="${path#*/}"
+    fi
+    prefix="${prefix#/}"
+    prefix="${prefix%/}"
+
+    local target="s3://$bucket"
+    if [ -n "$prefix" ]; then
+        target="$target/$prefix"
+    fi
+
+    AWS_ACCESS_KEY_ID="$MINIO_ACCESS_KEY" \
+    AWS_SECRET_ACCESS_KEY="$MINIO_SECRET_KEY" \
+    AWS_EC2_METADATA_DISABLED=true \
+        aws --endpoint-url "$MINIO_ENDPOINT" \
+            --region "$MINIO_REGION" \
+            s3 rm "$target" --recursive --quiet
 }
 # Cleanup function
 perform_cleanup() {
@@ -232,27 +266,26 @@ perform_cleanup() {
     if [ -n "$MINIO_DATA_PATH" ]; then
         # Clean up data in minio
         log_message "Starting cleanup of data in minio"
-        
-        # Check if rclone is available
-        if ! command -v rclone >/dev/null 2>&1; then
-            log_message "Warning: rclone command not available, skipping minio cleanup"
+
+        if ! command -v aws >/dev/null 2>&1; then
+            log_message "Warning: aws CLI not available, skipping minio cleanup"
             return 0
         fi
-        
+
         # Clean up all possible minio paths
         local minio_paths=(
-            "minio:db-stress/db-stress/"
+            "db-stress/db-stress/"
         )
-        
+
         for path in "${minio_paths[@]}"; do
             log_message "Cleaning minio path: $path"
-            if rclone delete "$path" --verbose 2>/dev/null; then
+            if cleanup_minio_remote "$path"; then
                 log_message "Successfully cleaned minio path: $path"
             else
                 log_message "Failed to clean minio path or path does not exist: $path"
             fi
         done
-        
+
         log_message "Minio cleanup operation completed"
     else
         log_message "MINIO_DATA_PATH is empty, skipping minio cleanup"
@@ -540,9 +573,9 @@ if ! command -v bc &> /dev/null; then
     exit 1
 fi
 if [ -n "$MINIO_DATA_PATH" ]; then
-    # Check rclone
-    if ! command -v rclone &> /dev/null; then
-        log_message "Error: rclone is not installed or not in PATH"
+    # Check aws cli
+    if ! command -v aws &> /dev/null; then
+        log_message "Error: aws CLI is not installed or not in PATH"
         exit 1
     fi
 
@@ -552,7 +585,7 @@ if [ -n "$MINIO_DATA_PATH" ]; then
         exit 1
     fi
 else
-    log_message "MINIO_DATA_PATH is empty, skipping rclone and docker dependency checks"
+    log_message "MINIO_DATA_PATH is empty, skipping aws CLI and docker dependency checks"
 fi
 
 log_message "=== Test Configuration ==="

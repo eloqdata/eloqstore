@@ -26,7 +26,6 @@ enum class RequestType : uint8_t
     Floor,
     Scan,
     ListObject,
-    Prewarm,
     BatchWrite,
     Truncate,
     DropTable,

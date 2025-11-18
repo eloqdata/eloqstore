@@ -123,24 +123,34 @@ struct KvOptions
     /**
      * @brief Storage path on cloud service.
      * Store all data locally if this is empty.
-     * Example: eloq-s3:mybucket/eloqstore
+     * Example: mybucket/eloqstore
      */
     std::string cloud_store_path;
-
     /**
-     * @brief Ports (or URLs) of cloud store daemons.
-     * you should start rclone server before using cloud mode
+     * @brief Selects the cloud backend implementation (e.g. aws, gcs).
      */
-    std::vector<std::string> cloud_store_daemon_ports = {"5572",
-                                                         "5573",
-                                                         "5574",
-                                                         "5575",
-                                                         "5576",
-                                                         "5577",
-                                                         "5578",
-                                                         "5579",
-                                                         "5580",
-                                                         "5581"};
+    std::string cloud_provider = "aws";
+    /**
+     * @brief Optional override for the cloud endpoint URL.
+     */
+    std::string cloud_endpoint;
+    /**
+     * @brief Cloud region/zone identifier.
+     */
+    std::string cloud_region = "us-east-1";
+    /**
+     * @brief Access key for cloud storage (e.g. AWS access key ID).
+     */
+    std::string cloud_access_key = "minioadmin";
+    /**
+     * @brief Secret key for cloud storage.
+     */
+    std::string cloud_secret_key = "minioadmin";
+    /**
+     * @brief Whether to verify TLS certificates when talking to the cloud
+     * endpoint.
+     */
+    bool cloud_verify_ssl = false;
 
     /**
      * @brief Size of B+Tree index/data node (page).

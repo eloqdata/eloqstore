@@ -85,51 +85,6 @@ static uint64_t ParseSizeWithUnit(std::string_view s)
     return v * mul;
 }
 
-static std::vector<std::string> SplitDaemonList(std::string_view raw)
-{
-    auto is_delim = [](char ch)
-    {
-        return ch == ',' || ch == ';' ||
-               std::isspace(static_cast<unsigned char>(ch));
-    };
-
-    std::vector<std::string> urls;
-    std::string current;
-    auto flush = [&]()
-    {
-        size_t begin = 0;
-        while (begin < current.size() &&
-               std::isspace(static_cast<unsigned char>(current[begin])))
-        {
-            begin++;
-        }
-        size_t end = current.size();
-        while (end > begin &&
-               std::isspace(static_cast<unsigned char>(current[end - 1])))
-        {
-            end--;
-        }
-        if (end > begin)
-        {
-            urls.emplace_back(current.substr(begin, end - begin));
-        }
-        current.clear();
-    };
-
-    for (char ch : raw)
-    {
-        if (is_delim(ch))
-        {
-            flush();
-        }
-        else
-        {
-            current.push_back(ch);
-        }
-    }
-    flush();
-    return urls;
-}
 int KvOptions::LoadFromIni(const char *path)
 {
     INIReader reader(path);
@@ -244,24 +199,6 @@ int KvOptions::LoadFromIni(const char *path)
         prewarm_task_count =
             reader.GetUnsigned(sec_run, "prewarm_task_count", 1);
     }
-    if (reader.HasValue(sec_run, "cloud_store_daemon_ports") ||
-        reader.HasValue(sec_run, "cloud_store_daemon_url"))
-    {
-        std::string raw =
-            reader.Get(sec_run, "cloud_store_daemon_ports", "5572");
-        // Backward compatibility: old key name
-        if (raw == "5572")
-        {
-            raw = reader.Get(sec_run, "cloud_store_daemon_url", raw);
-        }
-
-        auto parsed = SplitDaemonList(raw);
-        if (!parsed.empty())
-        {
-            cloud_store_daemon_ports = std::move(parsed);
-        }
-    }
-
     constexpr char sec_permanent[] = "permanent";
     if (!reader.HasSection(sec_permanent))
     {
@@ -276,6 +213,33 @@ int KvOptions::LoadFromIni(const char *path)
     if (reader.HasValue(sec_permanent, "cloud_store_path"))
     {
         cloud_store_path = reader.Get(sec_permanent, "cloud_store_path", "");
+    }
+    if (reader.HasValue(sec_permanent, "cloud_provider"))
+    {
+        cloud_provider = reader.Get(sec_permanent, "cloud_provider", "aws");
+    }
+    if (reader.HasValue(sec_permanent, "cloud_endpoint"))
+    {
+        cloud_endpoint = reader.Get(sec_permanent, "cloud_endpoint", "");
+    }
+    if (reader.HasValue(sec_permanent, "cloud_region"))
+    {
+        cloud_region = reader.Get(sec_permanent, "cloud_region", cloud_region);
+    }
+    if (reader.HasValue(sec_permanent, "cloud_access_key"))
+    {
+        cloud_access_key =
+            reader.Get(sec_permanent, "cloud_access_key", cloud_access_key);
+    }
+    if (reader.HasValue(sec_permanent, "cloud_secret_key"))
+    {
+        cloud_secret_key =
+            reader.Get(sec_permanent, "cloud_secret_key", cloud_secret_key);
+    }
+    if (reader.HasValue(sec_permanent, "cloud_verify_ssl"))
+    {
+        cloud_verify_ssl = reader.GetBoolean(
+            sec_permanent, "cloud_verify_ssl", cloud_verify_ssl);
     }
     if (reader.HasValue(sec_permanent, "data_page_size"))
     {
@@ -355,7 +319,12 @@ bool KvOptions::operator==(const KvOptions &other) const
            prewarm_task_count == other.prewarm_task_count &&
            store_path == other.store_path &&
            cloud_store_path == other.cloud_store_path &&
-           cloud_store_daemon_ports == other.cloud_store_daemon_ports &&
+           cloud_provider == other.cloud_provider &&
+           cloud_endpoint == other.cloud_endpoint &&
+           cloud_region == other.cloud_region &&
+           cloud_access_key == other.cloud_access_key &&
+           cloud_secret_key == other.cloud_secret_key &&
+           cloud_verify_ssl == other.cloud_verify_ssl &&
            data_page_size == other.data_page_size &&
            pages_per_file_shift == other.pages_per_file_shift &&
            overflow_pointers == other.overflow_pointers &&

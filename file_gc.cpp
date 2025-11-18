@@ -138,20 +138,13 @@ KvError ListCloudFiles(const TableIdent &tbl_id,
         return list_task.error_;
     }
 
-    // Parse the JSON response.
-    try
+    ObjectStore &object_store = cloud_mgr->GetObjectStore();
+    if (!object_store.ParseListObjectsResponse(list_task.response_data_,
+                                               list_task.json_data_,
+                                               &cloud_files,
+                                               nullptr))
     {
-        if (!utils::ParseRCloneListObjectsResponse(list_task.response_data_,
-                                                   &cloud_files))
-        {
-            LOG(ERROR) << "Failed to parse JSON response: "
-                       << list_task.response_data_;
-            return KvError::Corrupted;
-        }
-    }
-    catch (const std::exception &e)
-    {
-        LOG(ERROR) << "JSON parsing exception: " << e.what();
+        LOG(ERROR) << "Failed to parse cloud list response";
         return KvError::Corrupted;
     }
 
@@ -175,8 +168,8 @@ void ClassifyFiles(const std::vector<std::string> &files,
             continue;
         }
 
-        // rclone list command returns the file name directly, no need to
-        // handle the path prefix.
+        // Cloud list responses already strip the prefix, so file_name contains
+        // just the basename we need to classify.
         auto ret = ParseFileName(file_name);
 
         if (ret.first == FileNameManifest)
@@ -227,8 +220,18 @@ KvError DownloadArchiveFile(const TableIdent &tbl_id,
 
     fs::path local_path = tbl_id.StorePath(options->store_path) / archive_file;
 
+    KvError write_err = cloud_mgr->WriteFile(
+        tbl_id, archive_file, download_task.response_data_);
+    if (write_err != KvError::NoError)
+    {
+        LOG(ERROR) << "Failed to persist archive file: " << local_path
+                   << ", error: " << static_cast<int>(write_err);
+        return write_err;
+    }
+    download_task.response_data_.clear();
+
     KvError err =
-        cloud_mgr->ReadArchiveFileAndDelete(local_path.string(), content);
+        cloud_mgr->ReadArchiveFileAndDelete(tbl_id, archive_file, content);
     if (err != KvError::NoError)
     {
         LOG(ERROR) << "Failed to read archive file: " << local_path
@@ -333,14 +336,11 @@ KvError GetOrUpdateArchivedMaxFileId(
     }
     else
     {
-        // Local mode: read the archive file directly
-        fs::path dir_path = tbl_id.StorePath(io_mgr->options_->store_path);
-        fs::path archive_path = dir_path / latest_archive;
-
-        read_err =
-            io_mgr->ReadArchiveFile(archive_path.string(), archive_content);
+        read_err = io_mgr->ReadFile(tbl_id, latest_archive, archive_content);
         if (read_err != KvError::NoError)
         {
+            fs::path dir_path = tbl_id.StorePath(io_mgr->options_->store_path);
+            fs::path archive_path = dir_path / latest_archive;
             LOG(ERROR) << "Failed to read archive file: " << archive_path;
         }
     }
@@ -403,32 +403,20 @@ KvError DeleteUnreferencedCloudFiles(
 
     KvTask *current_task = ThdTask();
     auto *http_mgr = cloud_mgr->GetObjectStore().GetHttpManager();
+    if (files_to_delete.size() == data_files.size())
+    {
+        files_to_delete.emplace_back(tbl_id.ToString() + "/" +
+                                     FileNameManifest);
+    }
 
     // If we're deleting every file in the directory, issue a single purge
     // request for the table path.
-    if (files_to_delete.size() == data_files.size())
-    {
-        ObjectStore::DeleteTask delete_task(tbl_id.ToString(), true);
-        delete_task.SetKvTask(current_task);
-        http_mgr->SubmitRequest(&delete_task);
-        current_task->WaitIo();
-
-        if (delete_task.error_ != KvError::NoError)
-        {
-            LOG(ERROR) << "Failed to delete directory: "
-                       << ErrorString(delete_task.error_);
-            return delete_task.error_;
-        }
-
-        return KvError::NoError;
-    }
-
     std::vector<ObjectStore::DeleteTask> delete_tasks;
     delete_tasks.reserve(files_to_delete.size());
 
     for (const std::string &remote_path : files_to_delete)
     {
-        delete_tasks.emplace_back(remote_path, false);
+        delete_tasks.emplace_back(remote_path);
         ObjectStore::DeleteTask &task = delete_tasks.back();
         task.SetKvTask(current_task);
         http_mgr->SubmitRequest(&task);

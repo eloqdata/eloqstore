@@ -277,8 +277,9 @@ void Shard::ProcessReq(KvRequest *req)
                 return list_task.error_;
             }
 
-            if (!utils::ParseRCloneListObjectsResponse(
+            if (!cloud_mgr->GetObjectStore().ParseListObjectsResponse(
                     list_task.response_data_,
+                    list_task.json_data_,
                     list_object_req->GetObjects(),
                     list_object_req->GetDetails()))
             {

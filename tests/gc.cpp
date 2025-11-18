@@ -28,7 +28,7 @@ const eloqstore::KvOptions cloud_gc_opts = {
     .fd_limit = 30 + eloqstore::num_reserved_fd,
     .local_space_limit = 200 << 20,  // 200MB
     .store_path = {"/tmp/test-gc-cloud"},
-    .cloud_store_path = "docker-minio:eloqstore/gc-test",
+    .cloud_store_path = "eloqstore/gc-test",
     .pages_per_file_shift = 8,  // 1MB per datafile
     .data_append_mode = true,
 };
@@ -42,7 +42,7 @@ const eloqstore::KvOptions archive_gc_opts = {
     .file_amplify_factor = 2,
     .local_space_limit = 200 << 20,  // 200MB
     .store_path = {"/tmp/test-gc-archive"},
-    .cloud_store_path = "docker-minio:eloqstore/gc-archive-test",
+    .cloud_store_path = "eloqstore/gc-archive-test",
     .pages_per_file_shift = 8,
     .data_append_mode = true,
 };
@@ -72,9 +72,7 @@ bool CheckCloudPartitionExists(const eloqstore::KvOptions &opts,
     }
 
     std::vector<std::string> cloud_files =
-        ListCloudFiles(opts.cloud_store_daemon_ports,
-                       opts.cloud_store_path,
-                       tbl_id.ToString());
+        ListCloudFiles(opts, opts.cloud_store_path, tbl_id.ToString());
 
     LOG(INFO) << "CheckCloudPartitionExists, cloud_files size: "
               << cloud_files.size();
@@ -262,7 +260,7 @@ TEST_CASE("archive prevents data deletion after truncate", "[gc][archive]")
     {
         // For cloud mode, check that some files still exist (archive files)
         std::vector<std::string> remaining_files =
-            ListCloudFiles(archive_gc_opts.cloud_store_daemon_ports,
+            ListCloudFiles(archive_gc_opts,
                            archive_gc_opts.cloud_store_path,
                            tbl_id.ToString());
 
