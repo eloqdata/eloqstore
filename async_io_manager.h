@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -110,6 +111,27 @@ public:
     virtual std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) = 0;
 
+    virtual KvError ReadFile(const TableIdent &tbl_id,
+                             std::string_view filename,
+                             std::string &content)
+    {
+        fs::path path = tbl_id.StorePath(options_->store_path);
+        path /= filename;
+        return ReadFile(path.string(), content);
+    }
+    virtual KvError ReadFile(const std::string &file_path,
+                             std::string &content) = 0;
+    virtual KvError WriteFile(const TableIdent &tbl_id,
+                              std::string_view filename,
+                              std::string_view data)
+    {
+        __builtin_unreachable();
+    }
+    virtual KvError WriteFile(const std::string &file_path,
+                              std::string_view data)
+    {
+        __builtin_unreachable();
+    }
     virtual void CleanManifest(const TableIdent &tbl_id) = 0;
 
     const KvOptions *options_;
@@ -156,6 +178,11 @@ public:
         const TableIdent &tbl_id) override;
 
     KvError ReadArchiveFile(const std::string &file_path, std::string &content);
+    KvError ReadFile(const TableIdent &tbl_id,
+                     std::string_view filename,
+                     std::string &content) override;
+    KvError ReadFile(const std::string &file_path,
+                     std::string &content) override;
     KvError DeleteFiles(const std::vector<std::string> &file_paths);
     KvError CloseFiles(const TableIdent &tbl_id,
                        const std::span<FileId> file_ids);
@@ -180,6 +207,10 @@ protected:
             Ref &operator=(Ref &&other) noexcept;
             ~Ref();
             bool operator==(const Ref &other) const;
+            explicit operator bool() const
+            {
+                return fd_ != nullptr;
+            }
             FdIdx FdPair() const;
             LruFD *Get() const;
 
@@ -396,11 +427,17 @@ public:
         return obj_store_;
     }
 
-    KvError ReadArchiveFileAndDelete(const std::string &file_path,
+    KvError ReadArchiveFileAndDelete(const TableIdent &tbl_id,
+                                     const std::string &filename,
                                      std::string &content);
 
     bool NeedPrewarm() const override;
     void RunPrewarm() override;
+    KvError WriteFile(const std::string &file_path,
+                      std::string_view data) override;
+    KvError WriteFile(const TableIdent &tbl_id,
+                      std::string_view filename,
+                      std::string_view data) override;
     size_t LocalCacheRemained() const
     {
         return shard_local_space_limit_ - used_local_space_;
@@ -427,9 +464,14 @@ private:
                       std::span<LruFD::Ref> fds) override;
     KvError CloseFile(LruFD::Ref fd) override;
 
+    static constexpr size_t kMaxUploadBatch = 10;
+
     KvError DownloadFile(const TableIdent &tbl_id, FileId file_id);
     KvError UploadFiles(const TableIdent &tbl_id,
                         std::vector<std::string> filenames);
+    KvError ReadFiles(const TableIdent &tbl_id,
+                      std::span<const std::string> filenames,
+                      std::vector<std::string> &contents);
 
     bool DequeClosedFile(const FileKey &key);
     void EnqueClosedFile(FileKey key);
@@ -502,6 +544,9 @@ private:
 
     ObjectStore obj_store_;
 
+    size_t inflight_upload_files_{0};
+    WaitingZone upload_slots_waiting_;
+
     friend class Prewarmer;
     friend class PrewarmService;
 };
@@ -540,6 +585,11 @@ public:
                           uint64_t ts) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
+
+    KvError ReadFile(const std::string &file_path,
+                     std::string &content) override;
+    KvError WriteFile(const std::string &file_path,
+                      std::string_view data) override;
 
     void CleanManifest(const TableIdent &tbl_id) override;
 

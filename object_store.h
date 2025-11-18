@@ -3,6 +3,7 @@
 #include <curl/curl.h>
 
 #include <chrono>
+#include <cstdio>
 #include <map>
 #include <memory>
 #include <string>
@@ -11,8 +12,11 @@
 #include <utility>
 #include <vector>
 
+#include <jsoncpp/json/json.h>
+
 #include "error.h"
 #include "kv_options.h"
+#include "task.h"
 #include "types.h"
 
 // https://github.com/cameron314/concurrentqueue/issues/280
@@ -54,6 +58,7 @@ public:
         std::string response_data_{};
         std::string json_data_{};
         curl_slist *headers_{nullptr};
+        bool cloud_slot_acquired_{false};
 
         uint8_t retry_count_ = 0;
         uint8_t max_retries_ = 5;
@@ -87,18 +92,18 @@ public:
     class UploadTask : public Task
     {
     public:
-        UploadTask(const TableIdent *tbl_id, std::vector<std::string> filenames)
-            : tbl_id_(tbl_id), filenames_(std::move(filenames)) {};
+        UploadTask(const TableIdent *tbl_id, std::string filename)
+            : tbl_id_(tbl_id), filename_(std::move(filename)) {};
         Type TaskType() override
         {
             return Type::AsyncUpload;
         }
 
         const TableIdent *tbl_id_;
-        std::vector<std::string> filenames_;
-
-        // cURL related members
-        curl_mime *mime_{nullptr};
+        std::string filename_;
+        size_t file_size_{0};
+        std::string data_buffer_;
+        size_t buffer_offset_{0};
     };
 
     class ListTask : public Task
@@ -125,34 +130,64 @@ public:
     class DeleteTask : public Task
     {
     public:
-        explicit DeleteTask(std::string remote_path, bool is_dir = false)
-            : remote_path_(std::move(remote_path)), is_dir_(is_dir) {};
+        explicit DeleteTask(std::string remote_path)
+            : remote_path_(std::move(remote_path)) {};
         Type TaskType() override
         {
             return Type::AsyncDelete;
         }
 
         std::string remote_path_;
-        bool is_dir_{false};
     };
 
 private:
     std::unique_ptr<AsyncHttpManager> async_http_mgr_;
 };
 
+struct CloudPathInfo
+{
+    std::string bucket;
+    std::string prefix;
+};
+
+enum class CloudHttpMethod : uint8_t
+{
+    kGet = 0,
+    kPut,
+    kDelete
+};
+
+struct ListedObject
+{
+    std::string full_key;
+    std::string relative_path;
+    uint64_t size{0};
+    bool is_dir{false};
+    std::string mod_time;
+};
+
+class CloudBackend
+{
+public:
+    virtual ~CloudBackend() = default;
+
+    virtual std::string CreateSignedUrl(CloudHttpMethod method,
+                                        const std::string &key) = 0;
+    virtual KvError PerformBlockingRequest(CloudHttpMethod method,
+                                           const std::string &key,
+                                           std::string *response_out = nullptr) = 0;
+    virtual KvError ListObjectsOnce(const std::string &prefix,
+                                    const std::string &strip_prefix,
+                                    bool recursive,
+                                    const std::string &continuation,
+                                    bool *truncated,
+                                    std::string *next_token,
+                                    std::vector<ListedObject> &results) = 0;
+};
+
 class AsyncHttpManager
 {
 public:
-    struct DaemonEndpoint
-    {
-        std::string base_url;
-        std::string upload_url;
-        std::string download_url;
-        std::string list_url;
-        std::string delete_url;
-        std::string purge_url;
-    };
-
     explicit AsyncHttpManager(const KvOptions *options);
     ~AsyncHttpManager();
 
@@ -172,10 +207,11 @@ public:
 
 private:
     void CleanupTaskResources(ObjectStore::Task *task);
-    void SetupMultipartUpload(ObjectStore::UploadTask *task, CURL *easy);
-    void SetupDownloadRequest(ObjectStore::DownloadTask *task, CURL *easy);
-    void SetupListRequest(ObjectStore::ListTask *task, CURL *easy);
-    void SetupDeleteRequest(ObjectStore::DeleteTask *task, CURL *easy);
+    bool SetupUploadRequest(ObjectStore::UploadTask *task, CURL *easy);
+    bool SetupDownloadRequest(ObjectStore::DownloadTask *task, CURL *easy);
+    bool SetupDeleteRequest(ObjectStore::DeleteTask *task, CURL *easy);
+    void ExecuteListRequest(ObjectStore::ListTask *task);
+    void ExecuteRecursiveDelete(ObjectStore::DeleteTask *task);
     void ProcessPendingRetries();
     void ScheduleRetry(ObjectStore::Task *task,
                        std::chrono::steady_clock::duration delay);
@@ -188,23 +224,30 @@ private:
     static size_t WriteCallback(void *contents,
                                 size_t size,
                                 size_t nmemb,
-                                std::string *userp)
-    {
-        return userp->append(static_cast<char *>(contents), size * nmemb),
-               size * nmemb;
-    }
+                                std::string *userp);
 
     static constexpr uint32_t kInitialRetryDelayMs = 10'000;
     static constexpr uint32_t kMaxRetryDelayMs = 40'000;
+    static constexpr uint32_t kCloudConcurrencyLimit = 20;
 
     CURLM *multi_handle_{nullptr};
     std::unordered_map<CURL *, ObjectStore::Task *> active_requests_;
     std::multimap<std::chrono::steady_clock::time_point, ObjectStore::Task *>
         pending_retries_;
-    std::vector<DaemonEndpoint> endpoints_;
-    std::uint32_t next_endpoint_{0};
     const KvOptions *options_;
     int running_handles_{0};
+
+    CloudPathInfo cloud_path_;
+    std::unique_ptr<CloudBackend> backend_;
+    uint32_t cloud_inflight_{0};
+    WaitingZone cloud_waiting_;
+
+    std::string ComposeKey(const TableIdent *tbl_id,
+                           std::string_view filename) const;
+    std::string ComposeKeyFromRemote(std::string_view remote_path,
+                                     bool ensure_trailing_slash) const;
+    void AcquireCloudSlot(KvTask *task, ObjectStore::Task *store_task);
+    void ReleaseCloudSlot(ObjectStore::Task *store_task);
 };
 
 }  // namespace eloqstore

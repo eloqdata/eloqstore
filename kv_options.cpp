@@ -277,6 +277,33 @@ int KvOptions::LoadFromIni(const char *path)
     {
         cloud_store_path = reader.Get(sec_permanent, "cloud_store_path", "");
     }
+    if (reader.HasValue(sec_permanent, "cloud_provider"))
+    {
+        cloud_provider = reader.Get(sec_permanent, "cloud_provider", "aws");
+    }
+    if (reader.HasValue(sec_permanent, "cloud_endpoint"))
+    {
+        cloud_endpoint = reader.Get(sec_permanent, "cloud_endpoint", "");
+    }
+    if (reader.HasValue(sec_permanent, "cloud_region"))
+    {
+        cloud_region = reader.Get(sec_permanent, "cloud_region", cloud_region);
+    }
+    if (reader.HasValue(sec_permanent, "cloud_access_key"))
+    {
+        cloud_access_key =
+            reader.Get(sec_permanent, "cloud_access_key", cloud_access_key);
+    }
+    if (reader.HasValue(sec_permanent, "cloud_secret_key"))
+    {
+        cloud_secret_key =
+            reader.Get(sec_permanent, "cloud_secret_key", cloud_secret_key);
+    }
+    if (reader.HasValue(sec_permanent, "cloud_verify_ssl"))
+    {
+        cloud_verify_ssl =
+            reader.GetBoolean(sec_permanent, "cloud_verify_ssl", cloud_verify_ssl);
+    }
     if (reader.HasValue(sec_permanent, "data_page_size"))
     {
         std::string value_str =
@@ -355,6 +382,12 @@ bool KvOptions::operator==(const KvOptions &other) const
            prewarm_task_count == other.prewarm_task_count &&
            store_path == other.store_path &&
            cloud_store_path == other.cloud_store_path &&
+           cloud_provider == other.cloud_provider &&
+           cloud_endpoint == other.cloud_endpoint &&
+           cloud_region == other.cloud_region &&
+           cloud_access_key == other.cloud_access_key &&
+           cloud_secret_key == other.cloud_secret_key &&
+           cloud_verify_ssl == other.cloud_verify_ssl &&
            cloud_store_daemon_ports == other.cloud_store_daemon_ports &&
            data_page_size == other.data_page_size &&
            pages_per_file_shift == other.pages_per_file_shift &&

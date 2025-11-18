@@ -1,95 +1,508 @@
 #include "object_store.h"
 
+#include <aws/core/Aws.h>
+#include <aws/core/auth/AWSAuthSigner.h>
+#include <aws/core/auth/AWSCredentialsProvider.h>
+#include <aws/core/client/ClientConfiguration.h>
+#include <aws/core/http/Scheme.h>
+#include <aws/core/utils/DateTime.h>
+#include <aws/s3/S3Client.h>
+#include <aws/s3/model/ListObjectsV2Request.h>
 #include <glog/logging.h>
-#include <jsoncpp/json/json.h>
 
 #include <algorithm>
+#include <cassert>
+#include <cctype>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
+#include "async_io_manager.h"
 #include "task.h"
+
 namespace eloqstore
 {
 namespace fs = std::filesystem;
 namespace
 {
-std::string NormalizeBaseUrl(std::string url)
+std::mutex g_aws_mutex;
+size_t g_aws_refcount = 0;
+bool g_aws_initialized = false;
+Aws::SDKOptions g_sdk_options;
+bool g_aws_cleanup_registered = false;
+
+constexpr std::string_view kDefaultAwsEndpoint = "http://127.0.0.1:9900";
+constexpr std::string_view kDefaultAwsRegion = "us-east-1";
+constexpr std::string_view kDefaultGcsEndpoint =
+    "https://storage.googleapis.com";
+constexpr std::string_view kDefaultGcsRegion = "auto";
+
+void CleanupAws()
 {
-    // Add default scheme/host if only a port or host:port is provided.
-    if (url.find("://") == std::string::npos)
+    std::lock_guard lk(g_aws_mutex);
+    if (g_aws_initialized)
     {
-        if (!url.empty() && url.front() == ':')
-        {
-            url.erase(url.begin());
-        }
-        // If the string is only digits, treat it as a port on localhost.
-        bool all_digits =
-            !url.empty() &&
-            std::ranges::all_of(
-                url,
-                [](char c)
-                { return std::isdigit(static_cast<unsigned char>(c)); });
-        if (all_digits)
-        {
-            url = "127.0.0.1:" + url;
-        }
-        if (url.find("://") == std::string::npos)
-        {
-            url = "http://" + url;
-        }
+        Aws::ShutdownAPI(g_sdk_options);
+        g_aws_initialized = false;
     }
-    while (!url.empty() && url.back() == '/')
-    {
-        url.pop_back();
-    }
-    return url;
 }
+
+CloudPathInfo ParseCloudPath(const std::string &spec)
+{
+    CloudPathInfo info;
+    std::string_view path(spec);
+    auto colon = path.find(':');
+    if (colon != std::string::npos)
+    {
+        path.remove_prefix(colon + 1);
+    }
+    while (!path.empty() && path.front() == '/')
+    {
+        path.remove_prefix(1);
+    }
+    size_t slash = path.find('/');
+    if (slash == std::string::npos)
+    {
+        info.bucket.assign(path.data(), path.size());
+    }
+    else
+    {
+        info.bucket.assign(path.substr(0, slash).data(), slash);
+        std::string_view prefix = path.substr(slash + 1);
+        while (!prefix.empty() && prefix.front() == '/')
+        {
+            prefix.remove_prefix(1);
+        }
+        while (!prefix.empty() && prefix.back() == '/')
+        {
+            prefix.remove_suffix(1);
+        }
+        info.prefix.assign(prefix.data(), prefix.size());
+    }
+    if (info.bucket.empty())
+    {
+        LOG(FATAL) << "Invalid cloud_store_path: missing bucket name";
+    }
+    return info;
+}
+
+enum class BackendType
+{
+    kAws,
+    kGcs
+};
+
+BackendType DetermineBackendType(const KvOptions *options)
+{
+    std::string provider = options->cloud_provider;
+    std::string lowered;
+    lowered.reserve(provider.size());
+    for (char c : provider)
+    {
+        lowered.push_back(
+            static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+    }
+    if (lowered == "gcs" || lowered == "google" || lowered == "google-cloud")
+    {
+        return BackendType::kGcs;
+    }
+    return BackendType::kAws;
+}
+
+KvError ClassifyHttpStatus(int64_t response_code)
+{
+    switch (response_code)
+    {
+    case 400:
+    case 401:
+    case 403:
+    case 409:
+        return KvError::CloudErr;
+    case 404:
+        return KvError::NotFound;
+    case 408:
+    case 429:
+    case 500:
+    case 502:
+    case 503:
+    case 504:
+    case 505:
+        return KvError::Timeout;
+    default:
+        return KvError::CloudErr;
+    }
+}
+
+KvError ClassifyCurlCode(CURLcode code)
+{
+    switch (code)
+    {
+    case CURLE_COULDNT_CONNECT:
+    case CURLE_COULDNT_RESOLVE_HOST:
+    case CURLE_COULDNT_RESOLVE_PROXY:
+    case CURLE_RECV_ERROR:
+    case CURLE_SEND_ERROR:
+    case CURLE_OPERATION_TIMEDOUT:
+    case CURLE_GOT_NOTHING:
+        return KvError::Timeout;
+    default:
+        return KvError::CloudErr;
+    }
+}
+
+size_t CurlWriteToString(void *contents, size_t size, size_t nmemb, void *userp)
+{
+    auto *output = static_cast<std::string *>(userp);
+    size_t total = size * nmemb;
+    output->append(static_cast<char *>(contents), total);
+    return total;
+}
+
+class AwsCloudBackend : public CloudBackend
+{
+public:
+    AwsCloudBackend(const KvOptions *options, CloudPathInfo path)
+        : options_(options), cloud_path_(std::move(path))
+    {
+        credentials_provider_ = AwsCloudBackend::BuildCredentialsProvider();
+        Aws::Client::ClientConfiguration config =
+            AwsCloudBackend::BuildClientConfig();
+        s3_client_ = std::make_unique<Aws::S3::S3Client>(
+            credentials_provider_,
+            config,
+            Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
+            AwsCloudBackend::UseVirtualAddressing());
+    }
+
+    std::string CreateSignedUrl(CloudHttpMethod method,
+                                const std::string &key) override
+    {
+        Aws::Http::HttpMethod aws_method = ToAwsMethod(method);
+        Aws::String url = s3_client_->GeneratePresignedUrl(
+            cloud_path_.bucket.c_str(), key.c_str(), aws_method, 3600);
+        return std::string(url.c_str());
+    }
+
+    KvError PerformBlockingRequest(CloudHttpMethod method,
+                                   const std::string &key,
+                                   std::string *response_out) override
+    {
+        std::string url = CreateSignedUrl(method, key);
+        if (url.empty())
+        {
+            return KvError::CloudErr;
+        }
+
+        CURL *easy = curl_easy_init();
+        if (!easy)
+        {
+            return KvError::CloudErr;
+        }
+
+        curl_easy_setopt(easy, CURLOPT_PROXY, "");
+        curl_easy_setopt(easy, CURLOPT_NOPROXY, "*");
+        curl_easy_setopt(easy, CURLOPT_TIMEOUT, 300L);
+        curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
+        std::string buffer;
+        if (response_out)
+        {
+            response_out->clear();
+        }
+        std::string *target = response_out ? response_out : &buffer;
+        curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, CurlWriteToString);
+        curl_easy_setopt(easy, CURLOPT_WRITEDATA, target);
+
+        switch (method)
+        {
+        case CloudHttpMethod::kGet:
+            curl_easy_setopt(easy, CURLOPT_HTTPGET, 1L);
+            break;
+        case CloudHttpMethod::kDelete:
+            curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, "DELETE");
+            break;
+        case CloudHttpMethod::kPut:
+            break;
+        }
+
+        CURLcode res = curl_easy_perform(easy);
+        KvError err = KvError::NoError;
+        if (res != CURLE_OK)
+        {
+            err = ClassifyCurlCode(res);
+        }
+        else
+        {
+            int64_t status = 0;
+            curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &status);
+            if (status < 200 || status >= 300)
+            {
+                err = ClassifyHttpStatus(status);
+            }
+        }
+
+        curl_easy_cleanup(easy);
+        return err;
+    }
+
+    KvError ListObjectsOnce(const std::string &prefix,
+                            const std::string &strip_prefix,
+                            bool recursive,
+                            const std::string &continuation,
+                            bool *truncated,
+                            std::string *next_token,
+                            std::vector<ListedObject> &results) override
+    {
+        Aws::S3::Model::ListObjectsV2Request request;
+        request.SetBucket(cloud_path_.bucket.c_str());
+        if (!prefix.empty())
+        {
+            request.SetPrefix(prefix.c_str());
+        }
+        if (!recursive)
+        {
+            request.SetDelimiter("/");
+        }
+        if (!continuation.empty())
+        {
+            request.SetContinuationToken(continuation.c_str());
+        }
+
+        auto outcome = s3_client_->ListObjectsV2(request);
+        if (!outcome.IsSuccess())
+        {
+            LOG(ERROR) << "ListObjectsV2 failed: "
+                       << outcome.GetError().GetMessage();
+            return KvError::CloudErr;
+        }
+
+        const auto &result = outcome.GetResult();
+        *truncated = result.GetIsTruncated();
+        next_token->assign(result.GetNextContinuationToken().c_str());
+
+        std::string strip = strip_prefix;
+        if (!strip.empty() && strip.back() != '/')
+        {
+            strip.push_back('/');
+        }
+
+        for (const auto &object : result.GetContents())
+        {
+            ListedObject entry;
+            entry.full_key = object.GetKey().c_str();
+            entry.relative_path = entry.full_key;
+            if (!strip.empty() && entry.relative_path.rfind(strip, 0) == 0)
+            {
+                entry.relative_path.erase(0, strip.size());
+            }
+            entry.is_dir = false;
+            entry.size = static_cast<uint64_t>(object.GetSize());
+            entry.mod_time = object.GetLastModified()
+                                 .ToGmtString(Aws::Utils::DateFormat::ISO_8601)
+                                 .c_str();
+            results.push_back(std::move(entry));
+        }
+
+        if (!recursive)
+        {
+            for (const auto &prefix_entry : result.GetCommonPrefixes())
+            {
+                ListedObject entry;
+                entry.full_key = prefix_entry.GetPrefix().c_str();
+                entry.relative_path = entry.full_key;
+                if (!strip.empty() && entry.relative_path.rfind(strip, 0) == 0)
+                {
+                    entry.relative_path.erase(0, strip.size());
+                }
+                if (!entry.relative_path.empty() &&
+                    entry.relative_path.back() == '/')
+                {
+                    entry.relative_path.pop_back();
+                }
+                entry.is_dir = true;
+                results.push_back(std::move(entry));
+            }
+        }
+
+        return KvError::NoError;
+    }
+
+protected:
+    virtual Aws::Client::ClientConfiguration BuildClientConfig() const
+    {
+        Aws::Client::ClientConfiguration config;
+        std::string endpoint = options_->cloud_endpoint.empty()
+                                   ? DefaultEndpoint()
+                                   : options_->cloud_endpoint;
+        if (!endpoint.empty())
+        {
+            config.endpointOverride =
+                Aws::String(endpoint.c_str(), endpoint.size());
+            if (endpoint.rfind("https://", 0) == 0)
+            {
+                config.scheme = Aws::Http::Scheme::HTTPS;
+            }
+            else
+            {
+                config.scheme = Aws::Http::Scheme::HTTP;
+            }
+        }
+        std::string region = options_->cloud_region.empty()
+                                 ? DefaultRegion()
+                                 : options_->cloud_region;
+        config.region = Aws::String(region.c_str(), region.size());
+        bool verify_ssl = options_->cloud_endpoint.empty()
+                              ? DefaultVerifySsl()
+                              : options_->cloud_verify_ssl;
+        config.verifySSL = verify_ssl;
+        return config;
+    }
+
+    virtual std::shared_ptr<Aws::Auth::AWSCredentialsProvider>
+    BuildCredentialsProvider() const
+    {
+        return Aws::MakeShared<Aws::Auth::SimpleAWSCredentialsProvider>(
+            "eloqstore",
+            options_->cloud_access_key.c_str(),
+            options_->cloud_secret_key.c_str());
+    }
+
+    virtual std::string DefaultEndpoint() const
+    {
+        return std::string(kDefaultAwsEndpoint);
+    }
+
+    virtual std::string DefaultRegion() const
+    {
+        return std::string(kDefaultAwsRegion);
+    }
+
+    virtual bool DefaultVerifySsl() const
+    {
+        return false;
+    }
+
+    virtual bool UseVirtualAddressing() const
+    {
+        return false;
+    }
+
+    static Aws::Http::HttpMethod ToAwsMethod(CloudHttpMethod method)
+    {
+        switch (method)
+        {
+        case CloudHttpMethod::kPut:
+            return Aws::Http::HttpMethod::HTTP_PUT;
+        case CloudHttpMethod::kDelete:
+            return Aws::Http::HttpMethod::HTTP_DELETE;
+        case CloudHttpMethod::kGet:
+        default:
+            return Aws::Http::HttpMethod::HTTP_GET;
+        }
+    }
+
+    const KvOptions *options_;
+    CloudPathInfo cloud_path_;
+    std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentials_provider_;
+    std::unique_ptr<Aws::S3::S3Client> s3_client_;
+};
+
+class GcsCloudBackend : public AwsCloudBackend
+{
+public:
+    GcsCloudBackend(const KvOptions *options, CloudPathInfo path)
+        : AwsCloudBackend(options, std::move(path))
+    {
+    }
+
+protected:
+    std::string DefaultEndpoint() const override
+    {
+        return std::string(kDefaultGcsEndpoint);
+    }
+
+    std::string DefaultRegion() const override
+    {
+        return std::string(kDefaultGcsRegion);
+    }
+
+    bool DefaultVerifySsl() const override
+    {
+        return true;
+    }
+};
+
+std::unique_ptr<CloudBackend> CreateBackend(const KvOptions *options,
+                                            const CloudPathInfo &path)
+{
+    switch (DetermineBackendType(options))
+    {
+    case BackendType::kGcs:
+        return std::make_unique<GcsCloudBackend>(options, path);
+    case BackendType::kAws:
+    default:
+        return std::make_unique<AwsCloudBackend>(options, path);
+    }
+}
+
 }  // namespace
 
 ObjectStore::ObjectStore(const KvOptions *options)
 {
     curl_global_init(CURL_GLOBAL_DEFAULT);
+    {
+        std::lock_guard lk(g_aws_mutex);
+        if (g_aws_refcount == 0 && !g_aws_initialized)
+        {
+            Aws::InitAPI(g_sdk_options);
+            g_aws_initialized = true;
+        }
+        g_aws_refcount++;
+        if (!g_aws_cleanup_registered)
+        {
+            std::atexit(CleanupAws);
+            g_aws_cleanup_registered = true;
+        }
+    }
     async_http_mgr_ = std::make_unique<AsyncHttpManager>(options);
 }
 
 ObjectStore::~ObjectStore()
 {
+    async_http_mgr_.reset();
+    {
+        std::lock_guard lk(g_aws_mutex);
+        if (g_aws_refcount > 0)
+        {
+            g_aws_refcount--;
+        }
+    }
     curl_global_cleanup();
 }
 
 AsyncHttpManager::AsyncHttpManager(const KvOptions *options) : options_(options)
 {
-    const auto &daemon_urls = options_->cloud_store_daemon_ports;
-    for (const std::string &raw_url : daemon_urls)
+    if (options_->cloud_store_path.empty())
     {
-        std::string url = NormalizeBaseUrl(raw_url);
-        if (url.empty())
-        {
-            continue;
-        }
-        DaemonEndpoint endpoint{url,
-                                url + "/operations/uploadfile?remote=&fs=",
-                                url + "/operations/copyfile",
-                                url + "/operations/list",
-                                url + "/operations/deletefile",
-                                url + "/operations/purge"};
-        endpoints_.emplace_back(std::move(endpoint));
+        LOG(FATAL) << "cloud_store_path must be set when using cloud store";
     }
-    CHECK(!endpoints_.empty())
-        << "cloud_store_daemon_ports must contain at least one endpoint";
+    cloud_path_ = ParseCloudPath(options_->cloud_store_path);
+
+    backend_ = CreateBackend(options_, cloud_path_);
+    CHECK(backend_) << "Failed to initialize cloud backend";
 
     multi_handle_ = curl_multi_init();
     if (!multi_handle_)
     {
         LOG(FATAL) << "Failed to initialize cURL multi handle";
     }
-
-    // set the max connections
     curl_multi_setopt(multi_handle_, CURLMOPT_MAXCONNECTS, 200L);
 }
 
@@ -105,7 +518,10 @@ AsyncHttpManager::~AsyncHttpManager()
 void AsyncHttpManager::PerformRequests()
 {
     ProcessPendingRetries();
-    curl_multi_perform(multi_handle_, &running_handles_);
+    if (multi_handle_)
+    {
+        curl_multi_perform(multi_handle_, &running_handles_);
+    }
 }
 
 void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
@@ -116,16 +532,33 @@ void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
     bool is_retry = task->waiting_retry_;
     task->waiting_retry_ = false;
 
+    switch (task->TaskType())
+    {
+    case ObjectStore::Task::Type::AsyncList:
+        if (!is_retry)
+        {
+            task->kv_task_->inflight_io_++;
+        }
+        AcquireCloudSlot(task->kv_task_, task);
+        ExecuteListRequest(static_cast<ObjectStore::ListTask *>(task));
+        ReleaseCloudSlot(task);
+        return;
+    default:
+        break;
+    }
+
+    AcquireCloudSlot(task->kv_task_, task);
+
     CURL *easy = curl_easy_init();
     if (!easy)
     {
         LOG(ERROR) << "Failed to initialize cURL easy handle";
         task->error_ = KvError::CloudErr;
-        task->kv_task_->Resume();
+        task->kv_task_->FinishIo();
+        ReleaseCloudSlot(task);
         return;
     }
 
-    // base configuration
     curl_easy_setopt(easy, CURLOPT_PROXY, "");
     curl_easy_setopt(easy, CURLOPT_NOPROXY, "*");
     curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, WriteCallback);
@@ -133,29 +566,40 @@ void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
     curl_easy_setopt(easy, CURLOPT_PRIVATE, task);
     curl_easy_setopt(easy, CURLOPT_TIMEOUT, 300L);
 
+    bool setup_ok = false;
     switch (task->TaskType())
     {
     case ObjectStore::Task::Type::AsyncDownload:
-        SetupDownloadRequest(static_cast<ObjectStore::DownloadTask *>(task),
-                             easy);
+        setup_ok = SetupDownloadRequest(
+            static_cast<ObjectStore::DownloadTask *>(task), easy);
         break;
     case ObjectStore::Task::Type::AsyncUpload:
-        SetupMultipartUpload(static_cast<ObjectStore::UploadTask *>(task),
-                             easy);
-        break;
-    case ObjectStore::Task::Type::AsyncList:
-        SetupListRequest(static_cast<ObjectStore::ListTask *>(task), easy);
+        setup_ok = SetupUploadRequest(
+            static_cast<ObjectStore::UploadTask *>(task), easy);
         break;
     case ObjectStore::Task::Type::AsyncDelete:
-        SetupDeleteRequest(static_cast<ObjectStore::DeleteTask *>(task), easy);
+        setup_ok = SetupDeleteRequest(
+            static_cast<ObjectStore::DeleteTask *>(task), easy);
         break;
     default:
         LOG(ERROR) << "Unknown async task type";
+        task->error_ = KvError::CloudErr;
+        break;
+    }
+
+    if (!is_retry)
+    {
+        task->kv_task_->inflight_io_++;
+    }
+    if (!setup_ok)
+    {
+        CleanupTaskResources(task);
         curl_easy_cleanup(easy);
+        task->kv_task_->FinishIo();
+        ReleaseCloudSlot(task);
         return;
     }
 
-    // add to multi handle
     CURLMcode mres = curl_multi_add_handle(multi_handle_, easy);
     if (mres != CURLM_OK)
     {
@@ -163,123 +607,261 @@ void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
                    << curl_multi_strerror(mres);
         curl_easy_cleanup(easy);
         task->error_ = KvError::CloudErr;
-        task->kv_task_->Resume();
+        task->kv_task_->FinishIo();
+        ReleaseCloudSlot(task);
         return;
     }
 
-    // record the active request using CURL handle as key
     active_requests_[easy] = task;
-    if (!is_retry)
-    {
-        task->kv_task_->inflight_io_++;
-    }
 }
 
-void AsyncHttpManager::SetupDownloadRequest(ObjectStore::DownloadTask *task,
-                                            CURL *easy)
+std::string AsyncHttpManager::ComposeKey(const TableIdent *tbl_id,
+                                         std::string_view filename) const
 {
-    const DaemonEndpoint &endpoint =
-        endpoints_[next_endpoint_++ % endpoints_.size()];
-    Json::Value request;
-    request["srcFs"] =
-        options_->cloud_store_path + "/" + task->tbl_id_->ToString();
-    request["srcRemote"] = task->filename_.data();
-
-    fs::path dir_path = task->tbl_id_->StorePath(options_->store_path);
-    request["dstFs"] = dir_path.string();
-    request["dstRemote"] = task->filename_.data();
-
-    Json::StreamWriterBuilder builder;
-    task->json_data_ = Json::writeString(builder, request);
-
-    struct curl_slist *headers = nullptr;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-
-    curl_easy_setopt(easy, CURLOPT_URL, endpoint.download_url.c_str());
-    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->json_data_.c_str());
-    curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
-
-    task->headers_ = headers;
-}
-
-void AsyncHttpManager::SetupMultipartUpload(ObjectStore::UploadTask *task,
-                                            CURL *easy)
-{
-    const DaemonEndpoint &endpoint =
-        endpoints_[next_endpoint_++ % endpoints_.size()];
-    fs::path dir_path = task->tbl_id_->StorePath(options_->store_path);
-
-    // use the new MIME API
-    curl_mime *mime = curl_mime_init(easy);
-
-    for (const std::string &filename : task->filenames_)
+    std::string key;
+    auto append_component = [&](std::string_view part)
     {
-        std::string filepath = (dir_path / filename).string();
-        if (std::filesystem::exists(filepath))
+        if (part.empty())
         {
-            curl_mimepart *part = curl_mime_addpart(mime);
-            curl_mime_name(part, "file");
-            curl_mime_filedata(part, filepath.c_str());
+            return;
         }
+        if (!key.empty())
+        {
+            key.push_back('/');
+        }
+        key.append(part.data(), part.size());
+    };
+
+    append_component(cloud_path_.prefix);
+    std::string tbl = tbl_id->ToString();
+    append_component(tbl);
+    append_component(filename);
+    return key;
+}
+
+std::string AsyncHttpManager::ComposeKeyFromRemote(
+    std::string_view remote_path, bool ensure_trailing_slash) const
+{
+    std::string key;
+    auto append_component = [&](std::string_view part)
+    {
+        if (part.empty())
+        {
+            return;
+        }
+        if (!key.empty() && key.back() != '/')
+        {
+            key.push_back('/');
+        }
+        key.append(part.data(), part.size());
+    };
+
+    append_component(cloud_path_.prefix);
+
+    std::string_view trimmed = remote_path;
+    while (!trimmed.empty() && trimmed.front() == '/')
+    {
+        trimmed.remove_prefix(1);
+    }
+    while (!trimmed.empty() && trimmed.back() == '/')
+    {
+        trimmed.remove_suffix(1);
+    }
+    append_component(trimmed);
+
+    if (ensure_trailing_slash && !key.empty() && key.back() != '/')
+    {
+        key.push_back('/');
+    }
+    return key;
+}
+
+bool AsyncHttpManager::SetupDownloadRequest(ObjectStore::DownloadTask *task,
+                                            CURL *easy)
+{
+    std::string key = ComposeKey(task->tbl_id_, task->filename_);
+    task->json_data_ = backend_->CreateSignedUrl(CloudHttpMethod::kGet, key);
+    if (task->json_data_.empty())
+    {
+        task->error_ = KvError::CloudErr;
+        return false;
     }
 
-    std::string fs_param =
-        options_->cloud_store_path + "/" + task->tbl_id_->ToString();
-    std::string url = endpoint.upload_url + fs_param;
-
-    curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(easy, CURLOPT_MIMEPOST, mime);
-
-    // store mine object for later clean
-    task->mime_ = mime;
+    curl_easy_setopt(easy, CURLOPT_URL, task->json_data_.c_str());
+    curl_easy_setopt(easy, CURLOPT_HTTPGET, 1L);
+    task->headers_ = nullptr;
+    return true;
 }
 
-void AsyncHttpManager::SetupListRequest(ObjectStore::ListTask *task, CURL *easy)
-{
-    const DaemonEndpoint &endpoint =
-        endpoints_[next_endpoint_++ % endpoints_.size()];
-    Json::Value request;
-    request["fs"] = options_->cloud_store_path;
-    request["remote"] = task->remote_path_;
-    request["opt"] = Json::Value(Json::objectValue);
-    request["opt"]["recurse"] = task->Recursive();
-    request["opt"]["showHash"] = false;
-
-    Json::StreamWriterBuilder builder;
-    task->json_data_ = Json::writeString(builder, request);
-
-    curl_slist *headers = nullptr;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-
-    curl_easy_setopt(easy, CURLOPT_URL, endpoint.list_url.c_str());
-    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->json_data_.c_str());
-    curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
-
-    task->headers_ = headers;
-}
-void AsyncHttpManager::SetupDeleteRequest(ObjectStore::DeleteTask *task,
+bool AsyncHttpManager::SetupUploadRequest(ObjectStore::UploadTask *task,
                                           CURL *easy)
 {
-    const DaemonEndpoint &endpoint =
-        endpoints_[next_endpoint_++ % endpoints_.size()];
-    Json::Value request;
-    request["fs"] = options_->cloud_store_path;
-    request["remote"] = task->remote_path_;
+    const std::string &filename = task->filename_;
+    if (task->data_buffer_.empty())
+    {
+        LOG(ERROR) << "UploadTask missing data for file " << filename;
+        task->error_ = KvError::InvalidArgs;
+        return false;
+    }
+    task->file_size_ = task->data_buffer_.size();
+    task->buffer_offset_ = 0;
+
+    std::string key = ComposeKey(task->tbl_id_, filename);
+    task->json_data_ = backend_->CreateSignedUrl(CloudHttpMethod::kPut, key);
+    if (task->json_data_.empty())
+    {
+        task->error_ = KvError::CloudErr;
+        return false;
+    }
+
+    curl_easy_setopt(easy, CURLOPT_URL, task->json_data_.c_str());
+    curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, "PUT");
+    curl_easy_setopt(easy, CURLOPT_UPLOAD, 0L);
+    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->data_buffer_.data());
+    curl_easy_setopt(easy, CURLOPT_POSTFIELDSIZE_LARGE,
+                     static_cast<curl_off_t>(task->file_size_));
+    task->headers_ = nullptr;
+    task->headers_ = curl_slist_append(task->headers_, "Expect:");
+    if (task->headers_)
+    {
+        curl_easy_setopt(easy, CURLOPT_HTTPHEADER, task->headers_);
+    }
+    return true;
+}
+
+bool AsyncHttpManager::SetupDeleteRequest(ObjectStore::DeleteTask *task,
+                                          CURL *easy)
+{
+    std::string key = ComposeKeyFromRemote(task->remote_path_, false);
+    if (key.empty())
+    {
+        task->error_ = KvError::InvalidArgs;
+        return false;
+    }
+    task->json_data_ = backend_->CreateSignedUrl(CloudHttpMethod::kDelete, key);
+    if (task->json_data_.empty())
+    {
+        task->error_ = KvError::CloudErr;
+        return false;
+    }
+
+    curl_easy_setopt(easy, CURLOPT_URL, task->json_data_.c_str());
+    curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, "DELETE");
+    task->headers_ = nullptr;
+    return true;
+}
+
+size_t AsyncHttpManager::WriteCallback(void *contents,
+                                       size_t size,
+                                       size_t nmemb,
+                                       std::string *userp)
+{
+    size_t total = size * nmemb;
+    userp->append(static_cast<char *>(contents), total);
+    return total;
+}
+
+void AsyncHttpManager::ExecuteListRequest(ObjectStore::ListTask *task)
+{
+    Json::Value response(Json::objectValue);
+    response["list"] = Json::Value(Json::arrayValue);
+
+    std::string strip_prefix = ComposeKeyFromRemote(task->remote_path_, false);
+    std::string prefix = strip_prefix;
+    if (!prefix.empty())
+    {
+        prefix.push_back('/');
+    }
+
+    bool truncated = false;
+    std::string continuation;
+    std::vector<ListedObject> batch;
+
+    do
+    {
+        batch.clear();
+        std::string next_token;
+        KvError err = backend_->ListObjectsOnce(prefix,
+                                                strip_prefix,
+                                                task->Recursive(),
+                                                continuation,
+                                                &truncated,
+                                                &next_token,
+                                                batch);
+        if (err != KvError::NoError)
+        {
+            task->error_ = err;
+            task->kv_task_->FinishIo();
+            return;
+        }
+        continuation = next_token;
+        for (auto &entry : batch)
+        {
+            Json::Value item(Json::objectValue);
+            item["Name"] = entry.relative_path;
+            item["Path"] = entry.relative_path;
+            item["Size"] = Json::UInt64(entry.size);
+            item["IsDir"] = entry.is_dir;
+            item["ModTime"] = entry.mod_time;
+            response["list"].append(std::move(item));
+        }
+    } while (truncated);
 
     Json::StreamWriterBuilder builder;
-    task->json_data_ = Json::writeString(builder, request);
+    task->response_data_ = Json::writeString(builder, response);
+    task->kv_task_->FinishIo();
+}
 
-    curl_slist *headers = nullptr;
-    headers = curl_slist_append(headers, "Content-Type: application/json");
-    task->headers_ = headers;
+void AsyncHttpManager::ExecuteRecursiveDelete(ObjectStore::DeleteTask *task)
+{
+    std::string strip_prefix = ComposeKeyFromRemote(task->remote_path_, false);
+    if (strip_prefix.empty())
+    {
+        task->error_ = KvError::InvalidArgs;
+        task->kv_task_->FinishIo();
+        return;
+    }
+    std::string prefix = strip_prefix;
+    if (!prefix.empty())
+    {
+        prefix.push_back('/');
+    }
 
-    // Choose URL based on whether it's a directory or file
-    const std::string &url =
-        task->is_dir_ ? endpoint.purge_url : endpoint.delete_url;
+    bool truncated = false;
+    std::string continuation;
+    std::vector<ListedObject> batch;
 
-    curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
-    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->json_data_.c_str());
-    curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
+    do
+    {
+        batch.clear();
+        std::string next;
+        KvError err = backend_->ListObjectsOnce(
+            prefix, strip_prefix, true, continuation, &truncated, &next, batch);
+        if (err != KvError::NoError)
+        {
+            task->error_ = err;
+            task->kv_task_->FinishIo();
+            return;
+        }
+        continuation = next;
+        for (const auto &entry : batch)
+        {
+            if (entry.is_dir || entry.full_key.empty())
+            {
+                continue;
+            }
+            KvError del_err = backend_->PerformBlockingRequest(
+                CloudHttpMethod::kDelete, entry.full_key);
+            if (del_err != KvError::NoError && del_err != KvError::NotFound)
+            {
+                task->error_ = del_err;
+                task->kv_task_->FinishIo();
+                return;
+            }
+        }
+    } while (truncated);
+
+    task->kv_task_->FinishIo();
 }
 
 void AsyncHttpManager::ProcessCompletedRequests()
@@ -308,7 +890,7 @@ void AsyncHttpManager::ProcessCompletedRequests()
                 continue;
             }
 
-            int64_t response_code;
+            int64_t response_code = 0;
             curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &response_code);
 
             bool schedule_retry = false;
@@ -330,11 +912,11 @@ void AsyncHttpManager::ProcessCompletedRequests()
                     task->retry_count_++;
                     retry_delay_ms = ComputeBackoffMs(task->retry_count_);
                     schedule_retry = true;
-                    LOG(WARNING) << "HTTP error " << response_code
-                                 << " from rclone, scheduling retry "
-                                 << unsigned(task->retry_count_) << "/"
-                                 << unsigned(task->max_retries_) << " in "
-                                 << retry_delay_ms << " ms";
+                    LOG(WARNING)
+                        << "HTTP error " << response_code
+                        << ", scheduling retry " << unsigned(task->retry_count_)
+                        << "/" << unsigned(task->max_retries_) << " in "
+                        << retry_delay_ms << " ms";
                 }
                 else
                 {
@@ -365,16 +947,23 @@ void AsyncHttpManager::ProcessCompletedRequests()
                 }
             }
 
-            // clean curl resources first
             curl_multi_remove_handle(multi_handle_, easy);
             curl_easy_cleanup(easy);
             active_requests_.erase(easy);
             CleanupTaskResources(task);
+            ReleaseCloudSlot(task);
 
             if (schedule_retry)
             {
                 ScheduleRetry(task, std::chrono::milliseconds(retry_delay_ms));
                 continue;
+            }
+
+            if (task->TaskType() == ObjectStore::Task::Type::AsyncUpload)
+            {
+                auto upload_task = static_cast<ObjectStore::UploadTask *>(task);
+                upload_task->data_buffer_.clear();
+                upload_task->buffer_offset_ = 0;
             }
 
             task->kv_task_->FinishIo();
@@ -385,25 +974,15 @@ void AsyncHttpManager::ProcessCompletedRequests()
 void AsyncHttpManager::CleanupTaskResources(ObjectStore::Task *task)
 {
     curl_slist_free_all(task->headers_);
-
-    if (task->TaskType() == ObjectStore::Task::Type::AsyncUpload)
-    {
-        auto upload_task = static_cast<ObjectStore::UploadTask *>(task);
-        curl_mime_free(upload_task->mime_);
-    }
+    task->headers_ = nullptr;
 }
 
 void AsyncHttpManager::Cleanup()
 {
     for (auto &[easy, task] : active_requests_)
     {
-        // remove easy handle from multi handle
         curl_multi_remove_handle(multi_handle_, easy);
-
-        // clean Task associated resources
         CleanupTaskResources(task);
-
-        // clean cURL easy handle
         curl_easy_cleanup(easy);
 
         if (task->kv_task_->inflight_io_ > 0)
@@ -411,6 +990,38 @@ void AsyncHttpManager::Cleanup()
             task->error_ = KvError::CloudErr;
             task->kv_task_->FinishIo();
         }
+        ReleaseCloudSlot(task);
+    }
+    active_requests_.clear();
+}
+
+void AsyncHttpManager::AcquireCloudSlot(KvTask *kv_task, ObjectStore::Task *task)
+{
+    if (!task || task->cloud_slot_acquired_)
+    {
+        return;
+    }
+    CHECK(kv_task != nullptr) << "Cloud operations require KvTask";
+    while (cloud_inflight_ >= kCloudConcurrencyLimit)
+    {
+        cloud_waiting_.Wait(kv_task);
+    }
+    cloud_inflight_++;
+    task->cloud_slot_acquired_ = true;
+}
+
+void AsyncHttpManager::ReleaseCloudSlot(ObjectStore::Task *task)
+{
+    if (!task || !task->cloud_slot_acquired_)
+    {
+        return;
+    }
+    CHECK_GT(cloud_inflight_, 0);
+    cloud_inflight_--;
+    task->cloud_slot_acquired_ = false;
+    if (!cloud_waiting_.Empty())
+    {
+        cloud_waiting_.WakeOne();
     }
 }
 
@@ -503,42 +1114,11 @@ bool AsyncHttpManager::IsHttpRetryable(int64_t response_code) const
 
 KvError AsyncHttpManager::ClassifyHttpError(int64_t response_code) const
 {
-    switch (response_code)
-    {
-    case 400:
-    case 401:
-    case 403:
-    case 409:
-        return KvError::CloudErr;
-    case 404:
-        return KvError::NotFound;
-    case 408:
-    case 429:
-    case 500:
-    case 502:
-    case 503:
-    case 504:
-    case 505:
-        return KvError::Timeout;
-    default:
-        return KvError::CloudErr;
-    }
+    return ClassifyHttpStatus(response_code);
 }
 
 KvError AsyncHttpManager::ClassifyCurlError(CURLcode code) const
 {
-    switch (code)
-    {
-    case CURLE_COULDNT_CONNECT:
-    case CURLE_COULDNT_RESOLVE_HOST:
-    case CURLE_COULDNT_RESOLVE_PROXY:
-    case CURLE_RECV_ERROR:
-    case CURLE_SEND_ERROR:
-    case CURLE_OPERATION_TIMEDOUT:
-    case CURLE_GOT_NOTHING:
-        return KvError::Timeout;
-    default:
-        return KvError::CloudErr;
-    }
+    return ClassifyCurlCode(code);
 }
 }  // namespace eloqstore

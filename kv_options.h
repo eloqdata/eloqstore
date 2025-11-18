@@ -126,6 +126,30 @@ struct KvOptions
      * Example: eloq-s3:mybucket/eloqstore
      */
     std::string cloud_store_path;
+    /**
+     * @brief Selects the cloud backend implementation (e.g. aws, gcs).
+     */
+    std::string cloud_provider = "aws";
+    /**
+     * @brief Optional override for the cloud endpoint URL.
+     */
+    std::string cloud_endpoint;
+    /**
+     * @brief Cloud region/zone identifier.
+     */
+    std::string cloud_region = "us-east-1";
+    /**
+     * @brief Access key for cloud storage (e.g. AWS access key ID).
+     */
+    std::string cloud_access_key = "minioadmin";
+    /**
+     * @brief Secret key for cloud storage.
+     */
+    std::string cloud_secret_key = "minioadmin";
+    /**
+     * @brief Whether to verify TLS certificates when talking to the cloud endpoint.
+     */
+    bool cloud_verify_ssl = false;
 
     /**
      * @brief Ports (or URLs) of cloud store daemons.

@@ -34,6 +34,7 @@ find_package(Boost REQUIRED COMPONENTS context)
 find_package(jsoncpp REQUIRED)
 find_package(CURL REQUIRED)
 find_library(ZSTD_LIBRARY zstd)
+find_package(AWSSDK REQUIRED COMPONENTS s3)
 
 if (Boost_FOUND)
     message(STATUS "Boost found at: ${Boost_INCLUDE_DIRS}")
@@ -109,7 +110,7 @@ set(ELOQ_STORE_SOURCES
 add_library(eloqstore STATIC ${ELOQ_STORE_SOURCES} ${INI_SOURCES})
 
 target_include_directories(eloqstore PUBLIC ${ELOQ_STORE_INCLUDE})
-target_link_libraries(eloqstore PRIVATE ${URING_LIB} Boost::context glog::glog absl::flat_hash_map ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY})
+target_link_libraries(eloqstore PRIVATE ${URING_LIB} Boost::context glog::glog absl::flat_hash_map ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} ${AWSSDK_LINK_LIBRARIES})
 
 add_executable(page_checksum_tool tools/page_checksum_tool.cpp)
 target_include_directories(page_checksum_tool PUBLIC ${ELOQ_STORE_INCLUDE})
