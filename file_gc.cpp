@@ -460,6 +460,8 @@ KvError DeleteUnreferencedLocalFiles(
     fs::path dir_path = tbl_id.StorePath(io_mgr->options_->store_path);
 
     std::vector<std::string> files_to_delete;
+    std::vector<FileId> file_ids_to_close;
+    file_ids_to_close.reserve(data_files.size());
 
     for (const std::string &file_name : data_files)
     {
@@ -482,6 +484,7 @@ KvError DeleteUnreferencedLocalFiles(
         {
             fs::path file_path = dir_path / file_name;
             files_to_delete.push_back(file_path.string());
+            file_ids_to_close.push_back(file_id);
             DLOG(INFO) << "ExecuteLocalGC: marking file for deletion: "
                        << file_name << " (file_id=" << file_id << ")";
         }
@@ -499,6 +502,14 @@ KvError DeleteUnreferencedLocalFiles(
                << files_to_delete.size();
     if (!files_to_delete.empty())
     {
+        KvError close_err = io_mgr->CloseFiles(tbl_id, file_ids_to_close);
+        if (close_err != KvError::NoError)
+        {
+            LOG(ERROR) << "ExecuteLocalGC: Failed to close files before "
+                          "deletion, error: "
+                       << static_cast<int>(close_err);
+            return close_err;
+        }
         // Delete files using batch operation
         KvError delete_err = io_mgr->DeleteFiles(files_to_delete);
         if (delete_err != KvError::NoError)

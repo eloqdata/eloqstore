@@ -7,6 +7,7 @@
 #include <liburing/io_uring.h>
 #include <linux/openat2.h>
 
+#include <array>
 #include <boost/algorithm/string/predicate.hpp>
 #include <cassert>
 #include <cerrno>
@@ -17,6 +18,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -226,7 +228,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               fd_ref_(std::move(fd)),
               offset_(offset),
-              page_(true) {};
+              page_(true){};
 
         LruFD::Ref fd_ref_;
         uint32_t offset_;
@@ -494,6 +496,33 @@ KvError IouringMgr::AbortWrite(const TableIdent &tbl_id)
         fd.dirty_ = false;
     }
     return KvError::NoError;
+}
+
+KvError IouringMgr::CloseFiles(const TableIdent &tbl_id,
+                               std::span<const FileId> file_ids)
+{
+    if (file_ids.empty())
+    {
+        return KvError::NoError;
+    }
+
+    std::vector<LruFD::Ref> fd_refs;
+    fd_refs.reserve(file_ids.size());
+    for (FileId file_id : file_ids)
+    {
+        LruFD::Ref fd_ref = GetOpenedFD(tbl_id, file_id);
+        if (fd_ref != nullptr)
+        {
+            fd_refs.emplace_back(std::move(fd_ref));
+        }
+    }
+
+    if (fd_refs.empty())
+    {
+        return KvError::NoError;
+    }
+
+    return CloseFiles(std::span<LruFD::Ref>(fd_refs.data(), fd_refs.size()));
 }
 
 void IouringMgr::CleanManifest(const TableIdent &tbl_id)
@@ -958,7 +987,7 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
     };
 
@@ -997,6 +1026,188 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
         }
     }
     return err;
+}
+
+KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
+{
+    if (fds.empty())
+    {
+        return KvError::NoError;
+    }
+
+    struct CloseReq : BaseReq
+    {
+        CloseReq(KvTask *task, LruFD::Ref fd)
+            : BaseReq(task), fd_ref_(std::move(fd)){};
+        LruFD::Ref fd_ref_;
+        int fd_{LruFD::FdEmpty};
+    };
+
+    struct PendingClose
+    {
+        size_t span_idx;
+        LruFD *lru_fd;
+        bool locked;
+        bool needs_unregister;
+        int reg_idx;
+    };
+
+    std::vector<PendingClose> pendings;
+    pendings.reserve(fds.size());
+    std::unordered_map<const TableIdent *, std::vector<LruFD::Ref>>
+        dirty_groups;
+    dirty_groups.reserve(4);
+
+    for (size_t i = 0; i < fds.size(); ++i)
+    {
+        LruFD::Ref &fd_ref = fds[i];
+        LruFD *lru_fd = fd_ref.Get();
+        if (lru_fd == nullptr)
+        {
+            continue;
+        }
+
+        lru_fd->mu_.Lock();
+        if (lru_fd->fd_ == LruFD::FdEmpty)
+        {
+            lru_fd->mu_.Unlock();
+            continue;
+        }
+
+        pendings.push_back(PendingClose{
+            i, lru_fd, true, lru_fd->reg_idx_ >= 0, lru_fd->reg_idx_});
+        PendingClose &pending = pendings.back();
+        if (lru_fd->dirty_)
+        {
+            const TableIdent *tbl_id = lru_fd->tbl_->tbl_id_;
+            dirty_groups[tbl_id].emplace_back(fd_ref);
+        }
+    }
+
+    auto unlock_from = [&pendings](size_t start)
+    {
+        for (size_t i = start; i < pendings.size(); ++i)
+        {
+            if (pendings[i].locked)
+            {
+                pendings[i].lru_fd->mu_.Unlock();
+                pendings[i].locked = false;
+            }
+        }
+    };
+
+    KvError err = KvError::NoError;
+    for (auto &[tbl_id, refs] : dirty_groups)
+    {
+        err =
+            SyncFiles(*tbl_id, std::span<LruFD::Ref>(refs.data(), refs.size()));
+        if (err != KvError::NoError)
+        {
+            unlock_from(0);
+            return err;
+        }
+    }
+
+    struct UnregisterReq : BaseReq
+    {
+        UnregisterReq(KvTask *task, PendingClose *pending)
+            : BaseReq(task), pending_(pending){};
+        PendingClose *pending_;
+        int placeholder_{-1};
+    };
+
+    std::vector<UnregisterReq> unregister_reqs;
+    unregister_reqs.reserve(pendings.size());
+
+    for (PendingClose &pending : pendings)
+    {
+        if (!pending.locked || !pending.needs_unregister || pending.reg_idx < 0)
+        {
+            continue;
+        }
+        UnregisterReq &req = unregister_reqs.emplace_back(ThdTask(), &pending);
+        io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, &req);
+        io_uring_prep_files_update(sqe, &req.placeholder_, 1, pending.reg_idx);
+    }
+
+    KvError unregister_err = KvError::NoError;
+    if (!unregister_reqs.empty())
+    {
+        ThdTask()->WaitIo();
+        for (UnregisterReq &req : unregister_reqs)
+        {
+            if (req.res_ < 0)
+            {
+                LOG(ERROR) << "unregister file slot failed file_id="
+                           << req.pending_->lru_fd->file_id_ << " : "
+                           << strerror(-req.res_);
+                if (unregister_err == KvError::NoError)
+                {
+                    unregister_err = ToKvError(req.res_);
+                }
+            }
+            PendingClose *pending = req.pending_;
+            FreeRegisterIndex(pending->reg_idx);
+            pending->lru_fd->reg_idx_ = -1;
+            pending->reg_idx = -1;
+            pending->needs_unregister = false;
+        }
+    }
+    if (unregister_err != KvError::NoError)
+    {
+        unlock_from(0);
+        return unregister_err;
+    }
+
+    std::vector<CloseReq> reqs;
+    reqs.reserve(pendings.size());
+
+    for (size_t idx = 0; idx < pendings.size(); ++idx)
+    {
+        PendingClose &pending = pendings[idx];
+        if (!pending.locked)
+        {
+            continue;
+        }
+        LruFD *lru_fd = pending.lru_fd;
+        LruFD::Ref &fd_ref = fds[pending.span_idx];
+
+        CloseReq &req = reqs.emplace_back(ThdTask(), std::move(fd_ref));
+        req.fd_ = lru_fd->fd_;
+        lru_fd->fd_ = LruFD::FdEmpty;
+
+        io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, &req);
+        io_uring_prep_close(sqe, req.fd_);
+
+        lru_fd->mu_.Unlock();
+        pending.locked = false;
+    }
+
+    KvError close_err = KvError::NoError;
+    if (!reqs.empty())
+    {
+        ThdTask()->WaitIo();
+
+        for (const CloseReq &req : reqs)
+        {
+            if (req.res_ < 0)
+            {
+                LOG(ERROR) << "close file failed file_id="
+                           << req.fd_ref_.Get()->file_id_ << " : "
+                           << strerror(-req.res_);
+                if (close_err == KvError::NoError)
+                {
+                    close_err = ToKvError(req.res_);
+                }
+            }
+            else
+            {
+                lru_fd_count_--;
+            }
+        }
+    }
+    LOG(INFO) << "Close files";
+    return close_err;
 }
 
 int IouringMgr::Fdatasync(FdIdx fd)
