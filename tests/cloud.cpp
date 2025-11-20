@@ -127,7 +127,8 @@ TEST_CASE("cloud prewarm respects cache budget", "[cloud][prewarm]")
     store->Stop();
 
     auto remote_bytes =
-        GetCloudSize(options.cloud_store_daemon_url, options.cloud_store_path);
+        GetCloudSize(options.cloud_store_daemon_urls,
+                     options.cloud_store_path);
     REQUIRE(remote_bytes.has_value());
 
     CleanupLocalStore(options);
@@ -259,13 +260,13 @@ TEST_CASE("cloud gc preserves archived data after truncate",
     archive_req.Wait();
     REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
 
-    const std::string &daemon_url = cloud_archive_opts.cloud_store_daemon_url;
+    const auto &daemon_urls = cloud_archive_opts.cloud_store_daemon_urls;
     const std::string &cloud_root = cloud_archive_opts.cloud_store_path;
     const std::string partition = test_tbl_id.ToString();
     const std::string partition_remote = cloud_root + "/" + partition;
 
     std::vector<std::string> cloud_files =
-        ListCloudFiles(daemon_url, cloud_root, partition);
+        ListCloudFiles(daemon_urls, cloud_root, partition);
     REQUIRE_FALSE(cloud_files.empty());
 
     std::string archive_name;
@@ -300,7 +301,7 @@ TEST_CASE("cloud gc preserves archived data after truncate",
     REQUIRE(tester.DataSet().empty());
 
     std::vector<std::string> files_after_gc =
-        ListCloudFiles(daemon_url, cloud_root, partition);
+        ListCloudFiles(daemon_urls, cloud_root, partition);
     REQUIRE(std::find(files_after_gc.begin(),
                       files_after_gc.end(),
                       protected_data_file) != files_after_gc.end());
@@ -310,12 +311,12 @@ TEST_CASE("cloud gc preserves archived data after truncate",
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
     std::string backup_name = "manifest_" + std::to_string(backup_ts);
 
-    bool backup_ok =
-        MoveCloudFile(daemon_url, partition_remote, "manifest", backup_name);
+    bool backup_ok = MoveCloudFile(
+        daemon_urls, partition_remote, "manifest", backup_name);
     REQUIRE(backup_ok);
 
-    bool rollback_ok =
-        MoveCloudFile(daemon_url, partition_remote, archive_name, "manifest");
+    bool rollback_ok = MoveCloudFile(
+        daemon_urls, partition_remote, archive_name, "manifest");
     REQUIRE(rollback_ok);
 
     CleanupLocalStore(cloud_archive_opts);
@@ -325,12 +326,12 @@ TEST_CASE("cloud gc preserves archived data after truncate",
     tester.Validate();
     store->Stop();
 
-    bool restore_archive =
-        MoveCloudFile(daemon_url, partition_remote, "manifest", archive_name);
+    bool restore_archive = MoveCloudFile(
+        daemon_urls, partition_remote, "manifest", archive_name);
     REQUIRE(restore_archive);
 
-    bool restore_manifest =
-        MoveCloudFile(daemon_url, partition_remote, backup_name, "manifest");
+    bool restore_manifest = MoveCloudFile(
+        daemon_urls, partition_remote, backup_name, "manifest");
     REQUIRE(restore_manifest);
 
     CleanupLocalStore(cloud_archive_opts);
@@ -448,7 +449,7 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
     REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
 
     std::vector<std::string> cloud_files = ListCloudFiles(
-        cloud_archive_opts.cloud_store_daemon_url,
+        cloud_archive_opts.cloud_store_daemon_urls,
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString());
 
     std::string archive_name;
@@ -478,7 +479,7 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
 
     // Move current manifest to backup
     bool backup_success = MoveCloudFile(
-        cloud_archive_opts.cloud_store_daemon_url,
+        cloud_archive_opts.cloud_store_daemon_urls,
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString(),
         "manifest",
         backup_name);
@@ -486,7 +487,7 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
 
     // Move archive to manifest
     bool rollback_success = MoveCloudFile(
-        cloud_archive_opts.cloud_store_daemon_url,
+        cloud_archive_opts.cloud_store_daemon_urls,
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString(),
         archive_name,
         "manifest");
@@ -506,7 +507,7 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
 
     // Restore to full dataset by moving backup back to manifest
     bool restore_success = MoveCloudFile(
-        cloud_archive_opts.cloud_store_daemon_url,
+        cloud_archive_opts.cloud_store_daemon_urls,
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString(),
         backup_name,
         "manifest");
@@ -573,7 +574,7 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
     store->Stop();
 
     // Get cloud configuration from options
-    const std::string &daemon_url = cloud_archive_opts.cloud_store_daemon_url;
+    const auto &daemon_urls = cloud_archive_opts.cloud_store_daemon_urls;
     const std::string cloud_path =
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString();
 
@@ -583,12 +584,12 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
 
     // Backup current manifest
     bool backup_ok =
-        MoveCloudFile(daemon_url, cloud_path, "manifest", backup_name);
+        MoveCloudFile(daemon_urls, cloud_path, "manifest", backup_name);
     REQUIRE(backup_ok);
 
     // List cloud files to find the archive file
     std::vector<std::string> cloud_files =
-        ListCloudFiles(daemon_url, cloud_path);
+        ListCloudFiles(daemon_urls, cloud_path);
 
     // Find archive file (starts with "manifest_")
     std::string archive_name;
@@ -605,8 +606,8 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
     bool rollback_ok = false;
     if (!archive_name.empty())
     {
-        rollback_ok =
-            MoveCloudFile(daemon_url, cloud_path, archive_name, "manifest");
+        rollback_ok = MoveCloudFile(
+            daemon_urls, cloud_path, archive_name, "manifest");
     }
 
     // Clean up local store
@@ -624,8 +625,8 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
         store->Stop();
 
         // Restore backup to get back to phase 2 dataset
-        bool restore_ok =
-            MoveCloudFile(daemon_url, cloud_path, backup_name, "manifest");
+        bool restore_ok = MoveCloudFile(
+            daemon_urls, cloud_path, backup_name, "manifest");
         REQUIRE(restore_ok);
 
         CleanupLocalStore(cloud_archive_opts);

@@ -93,21 +93,32 @@ inline void CleanupStore(eloqstore::KvOptions opts)
 }
 
 // Helper function to send HTTP request to rclone server
-inline bool SendRcloneRequest(const std::string &daemon_url,
+inline std::string PrimaryDaemonUrl(
+    const std::vector<std::string> &daemon_urls)
+{
+    if (!daemon_urls.empty())
+    {
+        return daemon_urls.front();
+    }
+    return "http://127.0.0.1:5572";
+}
+
+inline bool SendRcloneRequest(const std::vector<std::string> &daemon_urls,
                               const std::string &operation,
                               const std::string &json_data)
 {
+    std::string base = PrimaryDaemonUrl(daemon_urls);
     std::string command =
         "curl -s -X POST -H 'Content-Type: application/json' -d '";
     command += json_data;
-    command += "' " + daemon_url + "/" + operation;
+    command += "' " + base + "/" + operation;
 
     int result = std::system(command.c_str());
     return result == 0;
 }
 
 // Helper function to move cloud file using rclone server
-inline bool MoveCloudFile(const std::string &daemon_url,
+inline bool MoveCloudFile(const std::vector<std::string> &daemon_urls,
                           const std::string &cloud_path,
                           const std::string &src_file,
                           const std::string &dst_file)
@@ -120,16 +131,18 @@ inline bool MoveCloudFile(const std::string &daemon_url,
                             "\",\"dstFs\":\"" + cloud_path +
                             "\",\"dstRemote\":\"" + dst_file + "\"}";
 
-    return SendRcloneRequest(daemon_url, "operations/movefile", json_data);
+    return SendRcloneRequest(
+        daemon_urls, "operations/movefile", json_data);
 }
 
 // Helper function to list cloud files using rclone server
 inline std::vector<std::string> ListCloudFiles(
-    const std::string &daemon_url,
+    const std::vector<std::string> &daemon_urls,
     const std::string &cloud_path,
     const std::string &remote_path = "")
 {
     std::vector<std::string> files;
+    std::string base = PrimaryDaemonUrl(daemon_urls);
 
     // Construct JSON request similar to object_store.cpp SetupListRequest
     std::string json_data =
@@ -139,7 +152,7 @@ inline std::vector<std::string> ListCloudFiles(
     // Send request to rclone daemon
     std::string command =
         "curl -s -X POST -H 'Content-Type: application/json' -d '" + json_data +
-        "' " + daemon_url + "/operations/list";
+        "' " + base + "/operations/list";
 
     FILE *pipe = popen(command.c_str(), "r");
     if (!pipe)
@@ -184,13 +197,15 @@ inline std::vector<std::string> ListCloudFiles(
     return files;
 }
 
-inline std::optional<uint64_t> GetCloudSize(const std::string &daemon_url,
+inline std::optional<uint64_t> GetCloudSize(
+    const std::vector<std::string> &daemon_urls,
                                             const std::string &cloud_path)
 {
     std::string json_data = "{\"fs\":\"" + cloud_path + "\"}";
+    std::string base = PrimaryDaemonUrl(daemon_urls);
     std::string command =
         "curl -s -X POST -H 'Content-Type: application/json' -d '" + json_data +
-        "' " + daemon_url + "/operations/size";
+        "' " + base + "/operations/size";
 
     FILE *pipe = popen(command.c_str(), "r");
     if (!pipe)

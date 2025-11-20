@@ -10,11 +10,24 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "task.h"
 namespace eloqstore
 {
 namespace fs = std::filesystem;
+namespace
+{
+std::string NormalizeBaseUrl(std::string url)
+{
+    while (!url.empty() && url.back() == '/')
+    {
+        url.pop_back();
+    }
+    return url;
+}
+}  // namespace
+
 ObjectStore::ObjectStore(const KvOptions *options)
 {
     curl_global_init(CURL_GLOBAL_DEFAULT);
@@ -26,15 +39,27 @@ ObjectStore::~ObjectStore()
     curl_global_cleanup();
 }
 
-AsyncHttpManager::AsyncHttpManager(const KvOptions *options)
-    : daemon_url_(options->cloud_store_daemon_url),
-      daemon_upload_url_(daemon_url_ + "/operations/uploadfile?remote=&fs="),
-      daemon_download_url_(daemon_url_ + "/operations/copyfile"),
-      daemon_list_url_(daemon_url_ + "/operations/list"),
-      daemon_delete_url_(daemon_url_ + "/operations/deletefile"),
-      daemon_purge_url_(daemon_url_ + "/operations/purge"),
-      options_(options)
+AsyncHttpManager::AsyncHttpManager(const KvOptions *options) : options_(options)
 {
+    const auto &daemon_urls = options_->cloud_store_daemon_urls;
+    for (const std::string &raw_url : daemon_urls)
+    {
+        std::string url = NormalizeBaseUrl(raw_url);
+        if (url.empty())
+        {
+            continue;
+        }
+        DaemonEndpoint endpoint{url,
+                                url + "/operations/uploadfile?remote=&fs=",
+                                url + "/operations/copyfile",
+                                url + "/operations/list",
+                                url + "/operations/deletefile",
+                                url + "/operations/purge"};
+        endpoints_.emplace_back(std::move(endpoint));
+    }
+    CHECK(!endpoints_.empty())
+        << "cloud_store_daemon_urls must contain at least one endpoint";
+
     multi_handle_ = curl_multi_init();
     if (!multi_handle_)
     {
@@ -130,6 +155,8 @@ void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
 void AsyncHttpManager::SetupDownloadRequest(ObjectStore::DownloadTask *task,
                                             CURL *easy)
 {
+    const DaemonEndpoint &endpoint =
+        endpoints_[next_endpoint_++ % endpoints_.size()];
     Json::Value request;
     request["srcFs"] =
         options_->cloud_store_path + "/" + task->tbl_id_->ToString();
@@ -145,7 +172,7 @@ void AsyncHttpManager::SetupDownloadRequest(ObjectStore::DownloadTask *task,
     struct curl_slist *headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
 
-    curl_easy_setopt(easy, CURLOPT_URL, daemon_download_url_.c_str());
+    curl_easy_setopt(easy, CURLOPT_URL, endpoint.download_url.c_str());
     curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->json_data_.c_str());
     curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
 
@@ -155,6 +182,8 @@ void AsyncHttpManager::SetupDownloadRequest(ObjectStore::DownloadTask *task,
 void AsyncHttpManager::SetupMultipartUpload(ObjectStore::UploadTask *task,
                                             CURL *easy)
 {
+    const DaemonEndpoint &endpoint =
+        endpoints_[next_endpoint_++ % endpoints_.size()];
     fs::path dir_path = task->tbl_id_->StorePath(options_->store_path);
 
     // use the new MIME API
@@ -173,7 +202,7 @@ void AsyncHttpManager::SetupMultipartUpload(ObjectStore::UploadTask *task,
 
     std::string fs_param =
         options_->cloud_store_path + "/" + task->tbl_id_->ToString();
-    std::string url = daemon_upload_url_ + fs_param;
+    std::string url = endpoint.upload_url + fs_param;
 
     curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
     curl_easy_setopt(easy, CURLOPT_MIMEPOST, mime);
@@ -184,6 +213,8 @@ void AsyncHttpManager::SetupMultipartUpload(ObjectStore::UploadTask *task,
 
 void AsyncHttpManager::SetupListRequest(ObjectStore::ListTask *task, CURL *easy)
 {
+    const DaemonEndpoint &endpoint =
+        endpoints_[next_endpoint_++ % endpoints_.size()];
     Json::Value request;
     request["fs"] = options_->cloud_store_path;
     request["remote"] = task->remote_path_;
@@ -197,7 +228,7 @@ void AsyncHttpManager::SetupListRequest(ObjectStore::ListTask *task, CURL *easy)
     curl_slist *headers = nullptr;
     headers = curl_slist_append(headers, "Content-Type: application/json");
 
-    curl_easy_setopt(easy, CURLOPT_URL, daemon_list_url_.c_str());
+    curl_easy_setopt(easy, CURLOPT_URL, endpoint.list_url.c_str());
     curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->json_data_.c_str());
     curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
 
@@ -206,6 +237,8 @@ void AsyncHttpManager::SetupListRequest(ObjectStore::ListTask *task, CURL *easy)
 void AsyncHttpManager::SetupDeleteRequest(ObjectStore::DeleteTask *task,
                                           CURL *easy)
 {
+    const DaemonEndpoint &endpoint =
+        endpoints_[next_endpoint_++ % endpoints_.size()];
     Json::Value request;
     request["fs"] = options_->cloud_store_path;
     request["remote"] = task->remote_path_;
@@ -218,10 +251,10 @@ void AsyncHttpManager::SetupDeleteRequest(ObjectStore::DeleteTask *task,
     task->headers_ = headers;
 
     // Choose URL based on whether it's a directory or file
-    const char *url =
-        task->is_dir_ ? daemon_purge_url_.c_str() : daemon_delete_url_.c_str();
+    const std::string &url =
+        task->is_dir_ ? endpoint.purge_url : endpoint.delete_url;
 
-    curl_easy_setopt(easy, CURLOPT_URL, url);
+    curl_easy_setopt(easy, CURLOPT_URL, url.c_str());
     curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->json_data_.c_str());
     curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
 }
@@ -485,5 +518,4 @@ KvError AsyncHttpManager::ClassifyCurlError(CURLcode code) const
         return KvError::CloudErr;
     }
 }
-
 }  // namespace eloqstore
