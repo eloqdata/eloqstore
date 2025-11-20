@@ -228,7 +228,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               fd_ref_(std::move(fd)),
               offset_(offset),
-              page_(true){};
+              page_(true) {};
 
         LruFD::Ref fd_ref_;
         uint32_t offset_;
@@ -987,7 +987,7 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)){};
+            : BaseReq(task), fd_ref_(std::move(fd)) {};
         LruFD::Ref fd_ref_;
     };
 
@@ -1030,11 +1030,6 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
 
 KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
 {
-    if (fds.empty())
-    {
-        return KvError::NoError;
-    }
-
     struct CloseReq : BaseReq
     {
         CloseReq(KvTask *task, LruFD::Ref fd)
@@ -1051,7 +1046,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
         bool needs_unregister;
         int reg_idx;
     };
-
+    // We need to do three things: flush dirty pages, unregister, and close.
     std::vector<PendingClose> pendings;
     pendings.reserve(fds.size());
     std::unordered_map<const TableIdent *, std::vector<LruFD::Ref>>
@@ -1084,9 +1079,9 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
         }
     }
 
-    auto unlock_from = [&pendings](size_t start)
+    auto unlock_pendings = [&pendings]()
     {
-        for (size_t i = start; i < pendings.size(); ++i)
+        for (size_t i = 0; i < pendings.size(); ++i)
         {
             if (pendings[i].locked)
             {
@@ -1103,7 +1098,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
             SyncFiles(*tbl_id, std::span<LruFD::Ref>(refs.data(), refs.size()));
         if (err != KvError::NoError)
         {
-            unlock_from(0);
+            unlock_pendings();
             return err;
         }
     }
@@ -1155,7 +1150,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     }
     if (unregister_err != KvError::NoError)
     {
-        unlock_from(0);
+        unlock_pendings();
         return unregister_err;
     }
 
