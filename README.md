@@ -172,8 +172,20 @@ make install
    --fast-list \
    -v 
    ```
-5. **Start EloqKV:**
+   To maximize throughput you can launch multiple `rclone rcd` instances listening on different ports and list all of them in `cloud_store_daemon_urls` (space or comma separated) inside your `kv_options` file:
    ```bash
-   cd install
-   ./bin/eloqkv --config=${config_file_path}/eloqkv.ini
+   for p in $(seq 5572 5581); do
+     rclone rcd \
+       --rc-no-auth \
+       --rc-addr=127.0.0.1:$p \
+       --transfers=64 \
+       --checkers=32 \
+       -v &
+   done
    ```
+   After starting EloqStore, terminate the background `rclone` processes when you are done (e.g., using `pkill -f "rclone rcd"`).
+5. **Start EloqKV:**
+  ```bash
+  cd install
+  ./bin/eloqkv --config=${config_file_path}/eloqkv.ini
+  ```

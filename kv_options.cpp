@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <vector>
 
 #include "inih/cpp/INIReader.h"
 
@@ -86,8 +87,10 @@ static uint64_t ParseSizeWithUnit(std::string_view s)
 static std::vector<std::string> SplitDaemonUrls(std::string_view raw)
 {
     auto is_delim = [](char ch)
-    { return ch == ',' || ch == ';' ||
-             std::isspace(static_cast<unsigned char>(ch)); };
+    {
+        return ch == ',' || ch == ';' ||
+               std::isspace(static_cast<unsigned char>(ch));
+    };
 
     std::vector<std::string> urls;
     std::string current;

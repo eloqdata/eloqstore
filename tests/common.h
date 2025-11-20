@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <optional>
 #include <string_view>
+#include <vector>
 
 #include "../common.h"
 #include "coding.h"
@@ -93,8 +94,7 @@ inline void CleanupStore(eloqstore::KvOptions opts)
 }
 
 // Helper function to send HTTP request to rclone server
-inline std::string PrimaryDaemonUrl(
-    const std::vector<std::string> &daemon_urls)
+inline std::string PrimaryDaemonUrl(const std::vector<std::string> &daemon_urls)
 {
     if (!daemon_urls.empty())
     {
@@ -131,8 +131,7 @@ inline bool MoveCloudFile(const std::vector<std::string> &daemon_urls,
                             "\",\"dstFs\":\"" + cloud_path +
                             "\",\"dstRemote\":\"" + dst_file + "\"}";
 
-    return SendRcloneRequest(
-        daemon_urls, "operations/movefile", json_data);
+    return SendRcloneRequest(daemon_urls, "operations/movefile", json_data);
 }
 
 // Helper function to list cloud files using rclone server
@@ -198,8 +197,7 @@ inline std::vector<std::string> ListCloudFiles(
 }
 
 inline std::optional<uint64_t> GetCloudSize(
-    const std::vector<std::string> &daemon_urls,
-                                            const std::string &cloud_path)
+    const std::vector<std::string> &daemon_urls, const std::string &cloud_path)
 {
     std::string json_data = "{\"fs\":\"" + cloud_path + "\"}";
     std::string base = PrimaryDaemonUrl(daemon_urls);
