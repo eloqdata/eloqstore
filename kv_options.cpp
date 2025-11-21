@@ -85,7 +85,7 @@ static uint64_t ParseSizeWithUnit(std::string_view s)
     return v * mul;
 }
 
-static std::vector<std::string> SplitDaemonUrls(std::string_view raw)
+static std::vector<std::string> SplitDaemonList(std::string_view raw)
 {
     auto is_delim = [](char ch)
     {
@@ -239,15 +239,18 @@ int KvOptions::LoadFromIni(const char *path)
         prewarm_cloud_cache =
             reader.GetBoolean(sec_run, "prewarm_cloud_cache", false);
     }
-    if (reader.HasValue(sec_run, "cloud_store_daemon_url"))
+    if (reader.HasValue(sec_run, "cloud_store_daemon_ports") ||
+        reader.HasValue(sec_run, "cloud_store_daemon_url"))
     {
         std::string raw = reader.Get(
-            sec_run, "cloud_store_daemon_url", "http://127.0.0.1:5572");
-        auto parsed = SplitDaemonUrls(raw);
-        if (parsed.empty() && !raw.empty())
+            sec_run, "cloud_store_daemon_ports", "5572");
+        // Backward compatibility: old key name
+        if (raw == "5572")
         {
-            parsed.emplace_back(raw);
+            raw = reader.Get(sec_run, "cloud_store_daemon_url", raw);
         }
+
+        auto parsed = SplitDaemonList(raw);
         if (!parsed.empty())
         {
             cloud_store_daemon_urls = std::move(parsed);

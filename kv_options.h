@@ -132,16 +132,16 @@ struct KvOptions
      * you should start rclone server before using cloud mode
      */
     std::vector<std::string> cloud_store_daemon_urls = {
-        "http://127.0.0.1:5572",
-        "http://127.0.0.1:5573",
-        "http://127.0.0.1:5574",
-        "http://127.0.0.1:5575",
-        "http://127.0.0.1:5576",
-        "http://127.0.0.1:5577",
-        "http://127.0.0.1:5578",
-        "http://127.0.0.1:5579",
-        "http://127.0.0.1:5580",
-        "http://127.0.0.1:5581"};
+        "5572",
+        "5573",
+        "5574",
+        "5575",
+        "5576",
+        "5577",
+        "5578",
+        "5579",
+        "5580",
+        "5581"};
 
     /**
      * @brief Size of B+Tree index/data node (page).

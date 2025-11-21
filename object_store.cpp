@@ -20,6 +20,27 @@ namespace
 {
 std::string NormalizeBaseUrl(std::string url)
 {
+    // Add default scheme/host if only a port or host:port is provided.
+    if (url.find("://") == std::string::npos)
+    {
+        if (!url.empty() && url.front() == ':')
+        {
+            url.erase(url.begin());
+        }
+        // If the string is only digits, treat it as a port on localhost.
+        bool all_digits =
+            !url.empty() &&
+            std::all_of(url.begin(), url.end(), [](char c)
+                        { return std::isdigit(static_cast<unsigned char>(c)); });
+        if (all_digits)
+        {
+            url = "127.0.0.1:" + url;
+        }
+        if (url.find("://") == std::string::npos)
+        {
+            url = "http://" + url;
+        }
+    }
     while (!url.empty() && url.back() == '/')
     {
         url.pop_back();

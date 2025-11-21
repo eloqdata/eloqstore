@@ -3,10 +3,13 @@
 #include <glog/logging.h>
 #include <jsoncpp/json/json.h>
 
+#include <algorithm>
 #include <catch2/catch_message.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <cctype>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -94,11 +97,32 @@ inline void CleanupStore(eloqstore::KvOptions opts)
 }
 
 // Helper function to send HTTP request to rclone server
-inline std::string PrimaryDaemonUrl(const std::vector<std::string> &daemon_urls)
+inline std::string PrimaryDaemonUrl(
+    const std::vector<std::string> &daemon_urls)
 {
+    auto normalize = [](std::string url) -> std::string
+    {
+        if (url.find("://") == std::string::npos)
+        {
+            if (!url.empty() && url.front() == ':')
+            {
+                url.erase(url.begin());
+            }
+            bool all_digits =
+                !url.empty() &&
+                std::all_of(url.begin(), url.end(), [](char c)
+                            { return std::isdigit(static_cast<unsigned char>(c)); });
+            if (all_digits)
+            {
+                url = "127.0.0.1:" + url;
+            }
+            url = "http://" + url;
+        }
+        return url;
+    };
     if (!daemon_urls.empty())
     {
-        return daemon_urls.front();
+        return normalize(daemon_urls.front());
     }
     return "http://127.0.0.1:5572";
 }
