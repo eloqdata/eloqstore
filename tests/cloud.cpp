@@ -127,7 +127,7 @@ TEST_CASE("cloud prewarm respects cache budget", "[cloud][prewarm]")
     store->Stop();
 
     auto remote_bytes =
-        GetCloudSize(options.cloud_store_daemon_urls, options.cloud_store_path);
+        GetCloudSize(options.cloud_store_daemon_ports, options.cloud_store_path);
     REQUIRE(remote_bytes.has_value());
 
     CleanupLocalStore(options);
@@ -259,7 +259,7 @@ TEST_CASE("cloud gc preserves archived data after truncate",
     archive_req.Wait();
     REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
 
-    const auto &daemon_urls = cloud_archive_opts.cloud_store_daemon_urls;
+    const auto &daemon_urls = cloud_archive_opts.cloud_store_daemon_ports;
     const std::string &cloud_root = cloud_archive_opts.cloud_store_path;
     const std::string partition = test_tbl_id.ToString();
     const std::string partition_remote = cloud_root + "/" + partition;
@@ -448,7 +448,7 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
     REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
 
     std::vector<std::string> cloud_files = ListCloudFiles(
-        cloud_archive_opts.cloud_store_daemon_urls,
+        cloud_archive_opts.cloud_store_daemon_ports,
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString());
 
     std::string archive_name;
@@ -478,7 +478,7 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
 
     // Move current manifest to backup
     bool backup_success = MoveCloudFile(
-        cloud_archive_opts.cloud_store_daemon_urls,
+        cloud_archive_opts.cloud_store_daemon_ports,
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString(),
         "manifest",
         backup_name);
@@ -486,7 +486,7 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
 
     // Move archive to manifest
     bool rollback_success = MoveCloudFile(
-        cloud_archive_opts.cloud_store_daemon_urls,
+        cloud_archive_opts.cloud_store_daemon_ports,
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString(),
         archive_name,
         "manifest");
@@ -506,7 +506,7 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
 
     // Restore to full dataset by moving backup back to manifest
     bool restore_success = MoveCloudFile(
-        cloud_archive_opts.cloud_store_daemon_urls,
+        cloud_archive_opts.cloud_store_daemon_ports,
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString(),
         backup_name,
         "manifest");
@@ -573,7 +573,7 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
     store->Stop();
 
     // Get cloud configuration from options
-    const auto &daemon_urls = cloud_archive_opts.cloud_store_daemon_urls;
+    const auto &daemon_urls = cloud_archive_opts.cloud_store_daemon_ports;
     const std::string cloud_path =
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString();
 

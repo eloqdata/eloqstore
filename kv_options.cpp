@@ -253,7 +253,7 @@ int KvOptions::LoadFromIni(const char *path)
         auto parsed = SplitDaemonList(raw);
         if (!parsed.empty())
         {
-            cloud_store_daemon_urls = std::move(parsed);
+            cloud_store_daemon_ports = std::move(parsed);
         }
     }
 
@@ -349,7 +349,7 @@ bool KvOptions::operator==(const KvOptions &other) const
            prewarm_cloud_cache == other.prewarm_cloud_cache &&
            store_path == other.store_path &&
            cloud_store_path == other.cloud_store_path &&
-           cloud_store_daemon_urls == other.cloud_store_daemon_urls &&
+           cloud_store_daemon_ports == other.cloud_store_daemon_ports &&
            data_page_size == other.data_page_size &&
            pages_per_file_shift == other.pages_per_file_shift &&
            overflow_pointers == other.overflow_pointers &&

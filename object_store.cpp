@@ -62,7 +62,7 @@ ObjectStore::~ObjectStore()
 
 AsyncHttpManager::AsyncHttpManager(const KvOptions *options) : options_(options)
 {
-    const auto &daemon_urls = options_->cloud_store_daemon_urls;
+    const auto &daemon_urls = options_->cloud_store_daemon_ports;
     for (const std::string &raw_url : daemon_urls)
     {
         std::string url = NormalizeBaseUrl(raw_url);
@@ -79,7 +79,7 @@ AsyncHttpManager::AsyncHttpManager(const KvOptions *options) : options_(options)
         endpoints_.emplace_back(std::move(endpoint));
     }
     CHECK(!endpoints_.empty())
-        << "cloud_store_daemon_urls must contain at least one endpoint";
+        << "cloud_store_daemon_ports must contain at least one endpoint";
 
     multi_handle_ = curl_multi_init();
     if (!multi_handle_)

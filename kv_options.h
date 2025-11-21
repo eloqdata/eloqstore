@@ -128,10 +128,10 @@ struct KvOptions
     std::string cloud_store_path;
 
     /**
-     * @brief URLs of cloud store daemons.
+     * @brief Ports (or URLs) of cloud store daemons.
      * you should start rclone server before using cloud mode
      */
-    std::vector<std::string> cloud_store_daemon_urls = {
+    std::vector<std::string> cloud_store_daemon_ports = {
         "5572",
         "5573",
         "5574",

@@ -172,7 +172,7 @@ make install
    --fast-list \
    -v 
    ```
-   To maximize throughput you can launch multiple `rclone rcd` instances listening on different ports and list all of them in `cloud_store_daemon_urls` (space or comma separated) inside your `kv_options` file:
+   To maximize throughput you can launch multiple `rclone rcd` instances listening on different ports and list all of them in `cloud_store_daemon_ports` (space or comma separated) inside your `kv_options` file:
    ```bash
    for p in $(seq 5572 5581); do
      rclone rcd \
