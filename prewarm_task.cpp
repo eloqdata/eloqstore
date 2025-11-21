@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "async_io_manager.h"
-#ifdef ELOQ_MODULE_ENALBED
+#ifdef ELOQ_MODULE_ENABLED
 #include "bthread/eloq_module.h"
 #endif
 #include "common.h"
