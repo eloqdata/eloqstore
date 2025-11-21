@@ -1,5 +1,8 @@
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
+#include <utility>
+#include <vector>
 
 #include "common.h"
 #include "test_utils.h"
@@ -29,6 +32,35 @@ TEST_CASE("mixed batch write with read", "[batch_write]")
             verify.Floor(std::rand() % max_val);
         }
     }
+}
+
+TEST_CASE("truncate from the first key", "[batch_write]")
+{
+    eloqstore::EloqStore *store = InitStore(append_opts);
+    MapVerifier verify(test_tbl_id, store, false);
+    verify.SetValueSize(200);
+    eloqstore::TableIdent tbl_id("t1", 1);
+    {
+        eloqstore::BatchWriteRequest batch_write_req;
+        std::vector<eloqstore::WriteDataEntry> entries;
+        entries.reserve(1000000);
+        for (int i = 1; i < 1000000; i++)
+        {
+            entries.emplace_back(
+                std::to_string(i), "value", 1, eloqstore::WriteOp::Upsert);
+        }
+        std::sort(entries.begin(), entries.end());
+        batch_write_req.SetArgs(tbl_id, std::move(entries));
+        verify.ExecWrite(&batch_write_req);
+    }
+    {
+        eloqstore::TruncateRequest batch_write_req;
+        std::vector<eloqstore::WriteDataEntry> entries;
+        batch_write_req.SetArgs(tbl_id, "0");
+        verify.ExecWrite(&batch_write_req);
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(6000));
 }
 
 TEST_CASE("batch write with big key", "[batch_write]")

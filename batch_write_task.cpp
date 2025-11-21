@@ -1544,6 +1544,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::TruncateIndexPage(
     if (builder.IsEmpty())
     {
         // This index page is wholly deleted
+        FreePage(page_id);
         return {nullptr, KvError::NoError};
     }
     // This index page is partially truncated
