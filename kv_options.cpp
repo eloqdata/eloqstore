@@ -242,8 +242,8 @@ int KvOptions::LoadFromIni(const char *path)
     if (reader.HasValue(sec_run, "cloud_store_daemon_ports") ||
         reader.HasValue(sec_run, "cloud_store_daemon_url"))
     {
-        std::string raw = reader.Get(
-            sec_run, "cloud_store_daemon_ports", "5572");
+        std::string raw =
+            reader.Get(sec_run, "cloud_store_daemon_ports", "5572");
         // Backward compatibility: old key name
         if (raw == "5572")
         {

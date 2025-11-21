@@ -131,17 +131,16 @@ struct KvOptions
      * @brief Ports (or URLs) of cloud store daemons.
      * you should start rclone server before using cloud mode
      */
-    std::vector<std::string> cloud_store_daemon_ports = {
-        "5572",
-        "5573",
-        "5574",
-        "5575",
-        "5576",
-        "5577",
-        "5578",
-        "5579",
-        "5580",
-        "5581"};
+    std::vector<std::string> cloud_store_daemon_ports = {"5572",
+                                                         "5573",
+                                                         "5574",
+                                                         "5575",
+                                                         "5576",
+                                                         "5577",
+                                                         "5578",
+                                                         "5579",
+                                                         "5580",
+                                                         "5581"};
 
     /**
      * @brief Size of B+Tree index/data node (page).
