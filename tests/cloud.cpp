@@ -126,8 +126,8 @@ TEST_CASE("cloud prewarm respects cache budget", "[cloud][prewarm]")
 
     store->Stop();
 
-    auto remote_bytes =
-        GetCloudSize(options.cloud_store_daemon_ports, options.cloud_store_path);
+    auto remote_bytes = GetCloudSize(options.cloud_store_daemon_ports,
+                                     options.cloud_store_path);
     REQUIRE(remote_bytes.has_value());
 
     CleanupLocalStore(options);

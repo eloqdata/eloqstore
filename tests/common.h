@@ -97,8 +97,7 @@ inline void CleanupStore(eloqstore::KvOptions opts)
 }
 
 // Helper function to send HTTP request to rclone server
-inline std::string PrimaryDaemonUrl(
-    const std::vector<std::string> &daemon_urls)
+inline std::string PrimaryDaemonUrl(const std::vector<std::string> &daemon_urls)
 {
     auto normalize = [](std::string url) -> std::string
     {
@@ -110,8 +109,11 @@ inline std::string PrimaryDaemonUrl(
             }
             bool all_digits =
                 !url.empty() &&
-                std::all_of(url.begin(), url.end(), [](char c)
-                            { return std::isdigit(static_cast<unsigned char>(c)); });
+                std::all_of(
+                    url.begin(),
+                    url.end(),
+                    [](char c)
+                    { return std::isdigit(static_cast<unsigned char>(c)); });
             if (all_digits)
             {
                 url = "127.0.0.1:" + url;
