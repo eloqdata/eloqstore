@@ -1,5 +1,8 @@
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
+#include <utility>
+#include <vector>
 
 #include "common.h"
 #include "test_utils.h"
