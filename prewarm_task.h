@@ -50,7 +50,7 @@ private:
     CloudStoreMgr *io_mgr_;
     std::vector<PrewarmFile> pending_;
     size_t next_index_{0};
-    bool stop_{true};
+    std::atomic<bool> stop_{true};
     bool shutting_down_{false};
 };
 
