@@ -1951,14 +1951,16 @@ KvError IouringMgr::DeleteFiles(const std::vector<std::string> &file_paths)
 }
 
 CloudStoreMgr::CloudStoreMgr(const KvOptions *opts, uint32_t fd_limit)
-    : IouringMgr(opts, fd_limit),
-      file_cleaner_(this),
-      prewarmer_(this),
-      obj_store_(opts)
+    : IouringMgr(opts, fd_limit), file_cleaner_(this), obj_store_(opts)
 {
     lru_file_head_.next_ = &lru_file_tail_;
     lru_file_tail_.prev_ = &lru_file_head_;
     shard_local_space_limit_ = opts->local_space_limit / opts->num_threads;
+    prewarmers_.reserve(opts->prewarm_task_count);
+    for (uint16_t i = 0; i < opts->prewarm_task_count; ++i)
+    {
+        prewarmers_.emplace_back(std::make_unique<Prewarmer>(this));
+    }
 }
 
 bool CloudStoreMgr::IsIdle()
@@ -1969,7 +1971,10 @@ bool CloudStoreMgr::IsIdle()
 void CloudStoreMgr::Stop()
 {
     file_cleaner_.Shutdown();
-    prewarmer_.Shutdown();
+    for (auto &task_ptr : prewarmers_)
+    {
+        task_ptr->Shutdown();
+    }
 }
 
 void CloudStoreMgr::Submit()
@@ -1988,12 +1993,70 @@ void CloudStoreMgr::PollComplete()
 
 bool CloudStoreMgr::NeedPrewarm() const
 {
-    return options_->prewarm_cloud_cache && prewarmer_.HasPending();
+    return options_->prewarm_cloud_cache && HasPrewarmPending();
 }
 
 void CloudStoreMgr::RunPrewarm()
 {
-    prewarmer_.Resume();
+    if (prewarmers_.empty() || !HasPrewarmPending())
+    {
+        return;
+    }
+    for (auto &task_ptr : prewarmers_)
+    {
+        task_ptr->Resume();
+    }
+}
+
+void CloudStoreMgr::RegisterPrewarmActive()
+{
+    ++active_prewarm_tasks_;
+}
+
+void CloudStoreMgr::UnregisterPrewarmActive()
+{
+    assert(active_prewarm_tasks_ > 0);
+    --active_prewarm_tasks_;
+}
+
+bool CloudStoreMgr::HasPrewarmPending() const
+{
+    return prewarm_next_index_ < prewarm_files_.size();
+}
+
+bool CloudStoreMgr::PopPrewarmFile(PrewarmFile &file)
+{
+    if (prewarm_next_index_ >= prewarm_files_.size())
+    {
+        return false;
+    }
+    file = std::move(prewarm_files_[prewarm_next_index_++]);
+    return true;
+}
+
+void CloudStoreMgr::ResetPrewarmFiles(std::vector<PrewarmFile> files)
+{
+    prewarm_files_ = std::move(files);
+    prewarm_next_index_ = 0;
+    bool stop = prewarm_files_.empty();
+    for (auto &task_ptr : prewarmers_)
+    {
+        task_ptr->stop_.store(stop, std::memory_order_release);
+    }
+}
+
+void CloudStoreMgr::ClearPrewarmFiles()
+{
+    prewarm_files_.clear();
+    prewarm_next_index_ = 0;
+}
+
+void CloudStoreMgr::StopAllPrewarmTasks()
+{
+    for (auto &task_ptr : prewarmers_)
+    {
+        task_ptr->stop_.store(true, std::memory_order_release);
+    }
 }
 
 KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
@@ -2251,13 +2314,16 @@ void CloudStoreMgr::InitBackgroundJob()
         });
     if (options_->prewarm_cloud_cache)
     {
-        prewarmer_.coro_ = boost::context::callcc(
-            [this](continuation &&sink)
-            {
-                shard->main_ = std::move(sink);
-                prewarmer_.Run();
-                return std::move(shard->main_);
-            });
+        for (auto &prewarmer : prewarmers_)
+        {
+            prewarmer->coro_ = boost::context::callcc(
+                [this, prewarmer_ptr = prewarmer.get()](continuation &&sink)
+                {
+                    shard->main_ = std::move(sink);
+                    prewarmer_ptr->Run();
+                    return std::move(shard->main_);
+                });
+        }
     }
 }
 

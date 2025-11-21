@@ -27,26 +27,9 @@ Prewarmer::Prewarmer(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr)
     assert(io_mgr_ != nullptr);
 }
 
-bool Prewarmer::HasPending() const
-{
-    return !stop_.load(std::memory_order_acquire) &&
-           next_index_ < pending_.size();
-}
-
 bool Prewarmer::PopNext(PrewarmFile &file)
 {
-    if (next_index_ >= pending_.size())
-    {
-        return false;
-    }
-    file = std::move(pending_[next_index_++]);
-    return true;
-}
-
-void Prewarmer::Clear()
-{
-    pending_.clear();
-    next_index_ = 0;
+    return io_mgr_->PopPrewarmFile(file);
 }
 
 void Prewarmer::Run()
@@ -59,6 +42,7 @@ void Prewarmer::Run()
             LOG(INFO) << "Shard " << shard->shard_id_
                       << " continue prewarm task";
             shard->TaskMgr()->AddExternalTask();
+            io_mgr_->RegisterPrewarmActive();
             registered_active = true;
         }
     };
@@ -67,6 +51,7 @@ void Prewarmer::Run()
         if (registered_active)
         {
             LOG(INFO) << "Shard " << shard->shard_id_ << " stop prewarm task";
+            io_mgr_->UnregisterPrewarmActive();
             shard->TaskMgr()->FinishExternalTask();
             registered_active = false;
         }
@@ -76,7 +61,8 @@ void Prewarmer::Run()
     {
         if (shutting_down_)
         {
-            Clear();
+            io_mgr_->ClearPrewarmFiles();
+            io_mgr_->StopAllPrewarmTasks();
             stop_ = true;
             unregister_active();
             break;
@@ -96,8 +82,8 @@ void Prewarmer::Run()
         {
             DLOG(INFO) << "Shard " << shard->shard_id_
                        << " reached local cache budget during prewarm";
-            Clear();
-            stop_ = true;
+            io_mgr_->ClearPrewarmFiles();
+            io_mgr_->StopAllPrewarmTasks();
             continue;
         }
         DLOG(INFO) << "prewarm file id:" << file.file_id;
@@ -116,11 +102,12 @@ void Prewarmer::Run()
         {
             LOG(WARNING) << "Prewarm failed for " << file.tbl_id << " file "
                          << file.file_id << ": " << ErrorString(err);
-            Clear();
-            stop_ = true;
+            io_mgr_->ClearPrewarmFiles();
+            io_mgr_->StopAllPrewarmTasks();
             continue;
         }
-        if (shard->HasPendingRequests() || shard->TaskMgr()->NumActive() > 1)
+        if (shard->HasPendingRequests() ||
+            shard->TaskMgr()->NumActive() > io_mgr_->ActivePrewarmTasks())
         {
             unregister_active();
             status_ = TaskStatus::BlockedIO;
@@ -307,10 +294,13 @@ void PrewarmService::PrewarmCloudCache()
         }
         auto *cloud_mgr =
             static_cast<CloudStoreMgr *>(store_->shards_[i]->IoManager());
+        if (cloud_mgr->prewarmers_.empty())
+        {
+            continue;
+        }
         auto &files = shard_files[i];
         DLOG(INFO) << "files size :" << files.size();
-        cloud_mgr->prewarmer_.pending_ = std::move(files);
-        cloud_mgr->prewarmer_.stop_.store(false, std::memory_order_release);
+        cloud_mgr->ResetPrewarmFiles(std::move(files));
 #ifdef ELOQ_MODULE_ENABLED
         eloq::EloqModule::NotifyWorker(i);
 #endif

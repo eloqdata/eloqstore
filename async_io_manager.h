@@ -405,6 +405,17 @@ public:
     {
         return shard_local_space_limit_ - used_local_space_;
     }
+    size_t ActivePrewarmTasks() const
+    {
+        return active_prewarm_tasks_;
+    }
+    void RegisterPrewarmActive();
+    void UnregisterPrewarmActive();
+    bool HasPrewarmPending() const;
+    bool PopPrewarmFile(PrewarmFile &file);
+    void ResetPrewarmFiles(std::vector<PrewarmFile> files);
+    void ClearPrewarmFiles();
+    void StopAllPrewarmTasks();
 
 private:
     int CreateFile(LruFD::Ref dir_fd, FileId file_id) override;
@@ -484,7 +495,10 @@ private:
 
     bool background_job_inited_{false};
     FileCleaner file_cleaner_;
-    Prewarmer prewarmer_;
+    std::vector<std::unique_ptr<Prewarmer>> prewarmers_;
+    size_t active_prewarm_tasks_{0};
+    std::vector<PrewarmFile> prewarm_files_;
+    size_t prewarm_next_index_{0};
 
     ObjectStore obj_store_;
 

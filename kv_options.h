@@ -181,6 +181,11 @@ struct KvOptions
      * prewarmed.
      */
     bool prewarm_cloud_cache = false;
+    /**
+     * @brief Number of prewarm tasks per shard when cloud cache prewarm is
+     * enabled.
+     */
+    uint16_t prewarm_task_count = 3;
 
     std::function<bool(const TableIdent &)> prewarm_filter;
 };

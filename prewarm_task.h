@@ -38,18 +38,13 @@ public:
     void Run();
     void Shutdown();
 
-    bool HasPending() const;
-
 private:
     friend class CloudStoreMgr;
     friend class PrewarmService;
 
     bool PopNext(PrewarmFile &file);
-    void Clear();
 
     CloudStoreMgr *io_mgr_;
-    std::vector<PrewarmFile> pending_;
-    size_t next_index_{0};
     std::atomic<bool> stop_{true};
     bool shutting_down_{false};
 };
