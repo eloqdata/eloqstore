@@ -72,9 +72,7 @@ bool CheckCloudPartitionExists(const eloqstore::KvOptions &opts,
     }
 
     std::vector<std::string> cloud_files = ListCloudFiles(
-        opts.cloud_store_daemon_urls,
-        opts.cloud_store_path,
-        tbl_id.ToString());
+        opts.cloud_store_daemon_urls, opts.cloud_store_path, tbl_id.ToString());
 
     LOG(INFO) << "CheckCloudPartitionExists, cloud_files size: "
               << cloud_files.size();
