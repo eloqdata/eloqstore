@@ -1620,7 +1620,7 @@ std::pair<bool, KvError> BatchWriteTask::TruncateDataPage(
                                iter.ExpireTs(),
                                iter.CompressionType());
     }
-    while (iter.Next())
+    do
     {
         if (iter.IsOverflow())
         {
@@ -1632,7 +1632,7 @@ std::pair<bool, KvError> BatchWriteTask::TruncateDataPage(
         }
         uint64_t expire_ts = iter.ExpireTs();
         UpdateTTL(expire_ts, iter.Key(), WriteOp::Delete);
-    }
+    } while (iter.Next());
 
     if (data_page_builder_.IsEmpty())
     {

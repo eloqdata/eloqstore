@@ -126,7 +126,8 @@ make install
    eloq_store_open_files_limit=1024
    eloq_store_cloud_store_path=eloqstore_cloud:dss-eloqstore-dev
    # Max amount of cached index pages (supports KB/MB/GB units, e.g., 32MB)
-   eloq_store_index_buffer_pool_size=536870912
+   eloq_store_index_buffer_pool_size=32MB
+   eloq_store_data_append_mode=true
    ```
 
 2. **Install MinIO and start:**
