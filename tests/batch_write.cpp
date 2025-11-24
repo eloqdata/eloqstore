@@ -63,6 +63,41 @@ TEST_CASE("truncate from the first key", "[batch_write]")
     std::this_thread::sleep_for(std::chrono::milliseconds(6000));
 }
 
+TEST_CASE("truncate twice overflow values", "[batch_write]")
+{
+    eloqstore::EloqStore *store = InitStore(append_opts);
+    MapVerifier verify(test_tbl_id, store, false);
+    eloqstore::TableIdent tbl_id("t1", 1);
+    std::string s(5000, 'x');
+    {
+        eloqstore::BatchWriteRequest batch_write_req;
+        std::vector<eloqstore::WriteDataEntry> entries;
+        entries.reserve(100000);
+        for (int i = 1; i < 100000; i++)
+        {
+            entries.emplace_back(
+                std::to_string(i), s, 1, eloqstore::WriteOp::Upsert);
+        }
+        std::sort(entries.begin(), entries.end());
+        batch_write_req.SetArgs(tbl_id, std::move(entries));
+        verify.ExecWrite(&batch_write_req);
+    }
+    {
+        eloqstore::TruncateRequest batch_write_req;
+        std::vector<eloqstore::WriteDataEntry> entries;
+        batch_write_req.SetArgs(tbl_id, "40000");
+        verify.ExecWrite(&batch_write_req);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(6000));
+    {
+        eloqstore::TruncateRequest batch_write_req;
+        std::vector<eloqstore::WriteDataEntry> entries;
+        batch_write_req.SetArgs(tbl_id, "1");
+        verify.ExecWrite(&batch_write_req);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(6000));
+}
+
 TEST_CASE("batch write with big key", "[batch_write]")
 {
     eloqstore::EloqStore *store = InitStore(mem_store_opts);
