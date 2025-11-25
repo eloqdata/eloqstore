@@ -425,8 +425,8 @@ void Shard::WorkOneRound()
     auto duration = std::chrono::duration_cast<std::chrono::microseconds>(
                         stop_time - start_time)
                         .count();
-    LOG(INFO) << "Shard#" << shard_id_ << " WorkOneRound took " << duration
-              << " us, processed " << nreqs << " requests.";
+    // LOG(INFO) << "Shard#" << shard_id_ << " WorkOneRound took " << duration
+    //          << " us, processed " << nreqs << " requests.";
 }
 #endif
 
