@@ -1095,6 +1095,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     KvError err = KvError::NoError;
     for (auto &[tbl_id, refs] : dirty_groups)
     {
+        LOG(FATAL) << "Now only Gc will trigger this function so it should not be here";
         err =
             SyncFiles(*tbl_id, std::span<LruFD::Ref>(refs.data(), refs.size()));
         if (err != KvError::NoError)
