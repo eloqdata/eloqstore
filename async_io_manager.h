@@ -307,7 +307,7 @@ protected:
     /**
      * @brief Get file descripter if it is already opened.
      */
-    LruFD::Ref GetOpenedFD(const TableIdent &tbl_id, FileId file_id);   
+    LruFD::Ref GetOpenedFD(const TableIdent &tbl_id, FileId file_id);
     /**
      * @brief Open file if already exists. Only data file is opened with
      * O_DIRECT by default. Set `direct` to true to open manifest with O_DIRECT.
