@@ -59,7 +59,6 @@ TEST_CASE("truncate from the first key", "[batch_write]")
         batch_write_req.SetArgs(tbl_id, "0");
         verify.ExecWrite(&batch_write_req);
     }
-
 }
 
 TEST_CASE("truncate twice overflow values", "[batch_write]")

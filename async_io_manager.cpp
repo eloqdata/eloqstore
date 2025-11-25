@@ -1109,7 +1109,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     struct UnregisterReq : BaseReq
     {
         UnregisterReq(KvTask *task, PendingClose *pending)
-            : BaseReq(task), pending_(pending){};
+            : BaseReq(task), pending_(pending) {};
         PendingClose *pending_;
         int placeholder_{-1};
     };
