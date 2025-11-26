@@ -30,11 +30,10 @@ std::string NormalizeBaseUrl(std::string url)
         // If the string is only digits, treat it as a port on localhost.
         bool all_digits =
             !url.empty() &&
-            std::all_of(url.begin(),
-                        url.end(),
-                        [](char c) {
-                            return std::isdigit(static_cast<unsigned char>(c));
-                        });
+            std::ranges::all_of(
+                url,
+                [](char c)
+                { return std::isdigit(static_cast<unsigned char>(c)); });
         if (all_digits)
         {
             url = "127.0.0.1:" + url;

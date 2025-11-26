@@ -46,7 +46,7 @@ private:
 
 KvError BackgroundWrite::CompactDataFile()
 {
-    LOG(INFO) << "start CompactDataFile on" << this->tbl_ident_;
+    LOG(INFO) << "start CompactDataFile on " << this->tbl_ident_;
     const KvOptions *opts = Options();
     assert(opts->data_append_mode);
     assert(opts->file_amplify_factor != 0);
@@ -70,7 +70,7 @@ KvError BackgroundWrite::CompactDataFile()
         return KvError::NoError;
     }
     CHECK((meta->root_id_ != MaxPageId) || (meta->ttl_root_id_ != MaxPageId))
-        << "mapping_cnt=" << mapping_cnt;
+        << "mapping_cnt=" << mapping_cnt << " tbl:" << tbl_ident_;
 
     const uint32_t pages_per_file = allocator->PagesPerFile();
     const double file_saf_limit = opts->file_amplify_factor;

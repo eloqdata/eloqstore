@@ -22,18 +22,18 @@
 
 namespace eloqstore
 {
-PrewarmTask::PrewarmTask(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr)
+Prewarmer::Prewarmer(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr)
 {
     assert(io_mgr_ != nullptr);
 }
 
-bool PrewarmTask::HasPending() const
+bool Prewarmer::HasPending() const
 {
     return !stop_.load(std::memory_order_acquire) &&
            next_index_ < pending_.size();
 }
 
-bool PrewarmTask::PopNext(PrewarmFile &file)
+bool Prewarmer::PopNext(PrewarmFile &file)
 {
     if (next_index_ >= pending_.size())
     {
@@ -43,13 +43,13 @@ bool PrewarmTask::PopNext(PrewarmFile &file)
     return true;
 }
 
-void PrewarmTask::Clear()
+void Prewarmer::Clear()
 {
     pending_.clear();
     next_index_ = 0;
 }
 
-void PrewarmTask::Run()
+void Prewarmer::Run()
 {
     bool registered_active = false;
     auto register_active = [&]()
@@ -129,7 +129,7 @@ void PrewarmTask::Run()
     }
 }
 
-void PrewarmTask::Shutdown()
+void Prewarmer::Shutdown()
 {
     if (!Options()->prewarm_cloud_cache)
         return;
@@ -309,8 +309,8 @@ void PrewarmService::PrewarmCloudCache()
             static_cast<CloudStoreMgr *>(store_->shards_[i]->IoManager());
         auto &files = shard_files[i];
         DLOG(INFO) << "files size :" << files.size();
-        cloud_mgr->prewarm_task_.pending_ = std::move(files);
-        cloud_mgr->prewarm_task_.stop_.store(false, std::memory_order_release);
+        cloud_mgr->prewarmer_.pending_ = std::move(files);
+        cloud_mgr->prewarmer_.stop_.store(false, std::memory_order_release);
 #ifdef ELOQ_MODULE_ENABLED
         eloq::EloqModule::NotifyWorker(i);
 #endif

@@ -185,6 +185,10 @@ KvError EloqStore::Start()
         shard->Start();
     }
 
+#ifdef ELOQ_MODULE_ENABLED
+    module_ = std::make_unique<EloqStoreModule>(&shards_);
+    eloq::register_module(module_.get());
+#endif
     if (!options_.cloud_store_path.empty() && options_.prewarm_cloud_cache)
     {
         if (prewarm_service_ == nullptr)
@@ -193,11 +197,6 @@ KvError EloqStore::Start()
         }
         prewarm_service_->Start();
     }
-
-#ifdef ELOQ_MODULE_ENABLED
-    module_ = std::make_unique<EloqStoreModule>(&shards_);
-    eloq::register_module(module_.get());
-#endif
 
     LOG(INFO) << "EloqStore is started.";
     return KvError::NoError;

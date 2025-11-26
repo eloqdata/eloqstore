@@ -27,7 +27,6 @@ namespace eloqstore
 class WriteReq;
 class WriteTask;
 class MemIndexPage;
-class PrewarmTask;
 
 class ManifestFile
 {
@@ -61,14 +60,25 @@ public:
 
     /** These methods are provided for worker thread. */
     virtual KvError Init(Shard *shard) = 0;
-    virtual void Start() {};
+    virtual void Start()
+    {
+    }
     virtual bool IsIdle();
-    virtual void Stop() {};
+    virtual void Stop()
+    {
+    }
     virtual void Submit() = 0;
     virtual void PollComplete() = 0;
     virtual bool NeedPrewarm() const
     {
         return false;
+    }
+    virtual void InitBackgroundJob()
+    {
+    }
+    virtual bool BackgroundJobInited()
+    {
+        return true;
     }
     virtual void RunPrewarm() {};
 
@@ -371,7 +381,6 @@ public:
     {
         return LruFD::kManifest;
     }
-    void Start() override;
     bool IsIdle() override;
     void Stop() override;
     void Submit() override;
@@ -418,6 +427,8 @@ private:
     static std::string ToFilename(FileId file_id);
     size_t EstimateFileSize(FileId file_id) const;
     size_t EstimateFileSize(std::string_view filename) const;
+    bool BackgroundJobInited() override;
+    void InitBackgroundJob() override;
 
     struct CachedFile
     {
@@ -471,12 +482,13 @@ private:
         bool killed_{false};
     };
 
+    bool background_job_inited_{false};
     FileCleaner file_cleaner_;
-    PrewarmTask prewarm_task_;
+    Prewarmer prewarmer_;
 
     ObjectStore obj_store_;
 
-    friend class PrewarmTask;
+    friend class Prewarmer;
     friend class PrewarmService;
 };
 

@@ -109,9 +109,8 @@ inline std::string PrimaryDaemonUrl(const std::vector<std::string> &daemon_urls)
             }
             bool all_digits =
                 !url.empty() &&
-                std::all_of(
-                    url.begin(),
-                    url.end(),
+                std::ranges::all_of(
+                    url,
                     [](char c)
                     { return std::isdigit(static_cast<unsigned char>(c)); });
             if (all_digits)

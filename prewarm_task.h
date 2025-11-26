@@ -25,10 +25,10 @@ struct PrewarmFile
     std::string mod_time;
 };
 
-class PrewarmTask : public KvTask
+class Prewarmer : public KvTask
 {
 public:
-    explicit PrewarmTask(CloudStoreMgr *io_mgr);
+    explicit Prewarmer(CloudStoreMgr *io_mgr);
 
     TaskType Type() const override
     {

@@ -386,7 +386,11 @@ void IndexPageManager::EvictRootIfEmpty(
 
                 // Note: it will also clean manifest when data_append = false
                 // although it is not remove datafile
+#ifndef NDEBUG
+                // Manifest record max file page id, deleting it can lead to
+                // creating existing files.
                 IoMgr()->CleanManifest(tbl_id);
+#endif
 
                 // Wake up any waiting threads before erasing
                 meta.waiting_.WakeAll();

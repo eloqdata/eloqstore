@@ -1,5 +1,7 @@
 #pragma once
 
+#include <glog/logging.h>
+
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
@@ -52,7 +54,7 @@ public:
 
     void Unpin()
     {
-        assert(ref_cnt_ > 0);
+        CHECK_GT(ref_cnt_, 0);
         --ref_cnt_;
     }
 
