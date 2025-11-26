@@ -409,7 +409,7 @@ struct Timer
 
 void Shard::WorkOneRound()
 {
-    if (__builtin_expect(!io_mgr_->BackgroundJobInited(), true))
+    if (__builtin_expect(!io_mgr_->BackgroundJobInited(), false))
     {
         io_mgr_->InitBackgroundJob();
     }
