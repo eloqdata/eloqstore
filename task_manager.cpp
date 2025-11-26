@@ -5,15 +5,23 @@
 
 #include "list_object_task.h"
 #include "read_task.h"
+#include "shard.h"
 #include "task.h"
 
 using namespace boost::context;
 
 namespace eloqstore
 {
+thread_local size_t max_num_active_ = 0;
 BatchWriteTask *TaskManager::GetBatchWriteTask(const TableIdent &tbl_id)
 {
     num_active_++;
+    if (num_active_ > max_num_active_)
+    {
+        max_num_active_ = num_active_;
+        LOG(INFO) << "EloqStore shard " << shard->shard_id_
+                  << " max_num_active_: " << max_num_active_;
+    }
     BatchWriteTask *task = batch_write_pool_.GetTask();
     task->Reset(tbl_id);
     return task;
@@ -22,6 +30,12 @@ BatchWriteTask *TaskManager::GetBatchWriteTask(const TableIdent &tbl_id)
 BackgroundWrite *TaskManager::GetBackgroundWrite(const TableIdent &tbl_id)
 {
     num_active_++;
+    if (num_active_ > max_num_active_)
+    {
+        max_num_active_ = num_active_;
+        LOG(INFO) << "EloqStore shard " << shard->shard_id_
+                  << " max_num_active_: " << max_num_active_;
+    }
     BackgroundWrite *task = bg_write_pool_.GetTask();
     task->Reset(tbl_id);
     return task;
@@ -30,18 +44,36 @@ BackgroundWrite *TaskManager::GetBackgroundWrite(const TableIdent &tbl_id)
 ReadTask *TaskManager::GetReadTask()
 {
     num_active_++;
+    if (num_active_ > max_num_active_)
+    {
+        max_num_active_ = num_active_;
+        LOG(INFO) << "EloqStore shard " << shard->shard_id_
+                   << " max_num_active_: " << max_num_active_;
+    }
     return read_pool_.GetTask();
 }
 
 ScanTask *TaskManager::GetScanTask()
 {
     num_active_++;
+    if (num_active_ > max_num_active_)
+    {
+        max_num_active_ = num_active_;
+        LOG(INFO) << "EloqStore shard " << shard->shard_id_
+                  << " max_num_active_: " << max_num_active_;
+    }
     return scan_pool_.GetTask();
 }
 
 ListObjectTask *TaskManager::GetListObjectTask()
 {
     num_active_++;
+    if (num_active_ > max_num_active_)
+    {
+        max_num_active_ = num_active_;
+        LOG(INFO) << "EloqStore shard " << shard->shard_id_
+                  << " max_num_active_: " << max_num_active_;
+    }
     return list_object_pool_.GetTask();
 }
 
@@ -78,6 +110,12 @@ void TaskManager::FreeTask(KvTask *task)
 void TaskManager::AddExternalTask()
 {
     num_active_++;
+    if (num_active_ > max_num_active_)
+    {
+        max_num_active_ = num_active_;
+        LOG(INFO) << "EloqStore shard " << shard->shard_id_
+                  << " max_num_active_: " << max_num_active_;
+    }
 }
 
 void TaskManager::FinishExternalTask()

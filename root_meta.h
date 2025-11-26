@@ -28,6 +28,7 @@ public:
     std::string_view Finalize(PageId new_root, PageId ttl_root);
     std::string_view BuffView() const;
     void Reset();
+    void Clear();
     bool Empty() const;
     uint32_t CurrentSize() const;
 

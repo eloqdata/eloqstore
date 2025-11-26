@@ -14,6 +14,7 @@
 #ifdef ELOQ_MODULE_ENABLED
 #include <bthread/eloq_module.h>
 #include <bvar/latency_recorder.h>
+#include <mimalloc-2.1/mimalloc.h>
 #endif
 namespace eloqstore
 {
@@ -398,6 +399,18 @@ void Shard::OnTaskFinished(KvTask *task)
 #ifdef ELOQ_MODULE_ENABLED
 void Shard::WorkOneRound()
 {
+    int64_t current_ts_{butil::cpuwide_time_s()};
+    if (current_ts_ - last_memory_report_ts_ > 30)
+    {
+        int64_t allocated, committed;
+        mi_thread_stats(&allocated, &committed);
+        last_memory_report_ts_ = current_ts_;
+        LOG(INFO) << "EloqStore shard " << shard_id_ << " allocated "
+                  << allocated << " committed " << committed << ", frag ratio "
+                  << std::setprecision(2)
+                  << 100 * (static_cast<float>(committed - allocated) /
+                            static_cast<float>(committed));
+    }
     if (__builtin_expect(!io_mgr_->BackgroundJobInited(), false))
     {
         io_mgr_->InitBackgroundJob();

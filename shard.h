@@ -131,6 +131,7 @@ private:
 
 #ifdef ELOQ_MODULE_ENABLED
     std::atomic<size_t> req_queue_size_{0};
+    int64_t last_memory_report_ts_{0};
 #endif
 
     friend class EloqStoreModule;

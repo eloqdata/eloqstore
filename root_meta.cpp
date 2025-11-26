@@ -50,6 +50,13 @@ void ManifestBuilder::Reset()
     buff_.resize(header_bytes);
 }
 
+void ManifestBuilder::Clear()
+{
+    buff_.clear();
+    buff_.shrink_to_fit();
+}
+
+
 bool ManifestBuilder::Empty() const
 {
     return buff_.size() <= header_bytes;

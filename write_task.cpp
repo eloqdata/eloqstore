@@ -250,6 +250,7 @@ KvError WriteTask::FlushManifest()
         cow_meta_.manifest_size_ = snapshot.size();
         cow_meta_.compression_->ClearDirty();
     }
+    wal_builder_.Clear();
     return KvError::NoError;
 }
 
