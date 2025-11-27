@@ -396,24 +396,12 @@ void Shard::OnTaskFinished(KvTask *task)
 }
 
 #ifdef ELOQ_MODULE_ENABLED
-inline bvar::LatencyRecorder eloq_store_lr("eloq_store_one_round", "us");
-
-struct Timer
-{
-    ~Timer()
-    {
-        eloq_store_lr << (butil::cpuwide_time_us() - start_ts_);
-    }
-    int64_t start_ts_{butil::cpuwide_time_us()};
-};
-
 void Shard::WorkOneRound()
 {
     if (__builtin_expect(!io_mgr_->BackgroundJobInited(), false))
     {
         io_mgr_->InitBackgroundJob();
     }
-    Timer timer;
     KvRequest *reqs[128];
     size_t nreqs = requests_.try_dequeue_bulk(reqs, std::size(reqs));
     for (size_t i = 0; i < nreqs; i++)
