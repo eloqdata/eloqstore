@@ -223,27 +223,6 @@ KvError EloqStore::Start()
 
 KvError EloqStore::InitStoreSpace()
 {
-    rlimit fd_limit;
-    int res = getrlimit(RLIMIT_NOFILE, &fd_limit);
-    if (res < 0)
-    {
-        LOG(ERROR) << "failed to read open file limit: " << strerror(errno);
-        return ToKvError(res);
-    }
-    DLOG(INFO) << "rlimit open file " << fd_limit.rlim_cur << ", hard limit "
-               << fd_limit.rlim_max;
-    if (fd_limit.rlim_cur < options_.fd_limit)
-    {
-        LOG(INFO) << "increase open file limit to " << options_.fd_limit;
-        fd_limit.rlim_cur = options_.fd_limit;
-        if (setrlimit(RLIMIT_NOFILE, &fd_limit) != 0)
-        {
-            LOG(ERROR) << "failed to increase open file limit: "
-                       << strerror(errno);
-            return KvError::OpenFileLimit;
-        }
-    }
-
     const bool cloud_store = !options_.cloud_store_path.empty();
     for (const fs::path store_path : options_.store_path)
     {
@@ -279,7 +258,7 @@ KvError EloqStore::InitStoreSpace()
     assert(root_fds_.empty());
     for (const fs::path store_path : options_.store_path)
     {
-        res = open(store_path.c_str(), IouringMgr::oflags_dir);
+        int res = open(store_path.c_str(), IouringMgr::oflags_dir);
         if (res < 0)
         {
             for (int fd : root_fds_)
