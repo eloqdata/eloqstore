@@ -2,6 +2,7 @@
 
 #include <dirent.h>
 #include <fcntl.h>
+#include <gflags/gflags_declare.h>
 #include <glog/logging.h>
 #include <liburing.h>
 #include <liburing/io_uring.h>
@@ -18,6 +19,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <system_error>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -31,6 +33,8 @@
 #include "shard.h"
 #include "task.h"
 #include "write_task.h"
+
+DECLARE_bool(allow_reuse_local_files);
 
 namespace eloqstore
 {
@@ -169,7 +173,8 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
         return {std::move(page), err};
     }
 
-    auto read_page = [this](FdIdx fd, size_t offset, Page &result) -> KvError
+    auto read_page = [this, file_id](
+                         FdIdx fd, size_t offset, Page &result) -> KvError
     {
         int res;
         do
@@ -191,7 +196,8 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
             }
             if (res == 0)
             {
-                LOG(ERROR) << "read page failed, reach end of file";
+                LOG(ERROR) << "read page failed, reach end of file, file id:"
+                           << file_id << ", offset:" << offset;
                 return KvError::EndOfFile;
             }
             // retry if we read less than expected.
@@ -2175,6 +2181,36 @@ int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
     if (res < 0)
     {
         return res;
+    }
+    if (FLAGS_allow_reuse_local_files && file_id != LruFD::kManifest)
+    {
+        fs::path local_path =
+            options_->store_path[tbl_id.DiskIndex(options_->store_path.size())];
+        local_path /= tbl_id.ToString();
+        local_path /= ToFilename(file_id);
+        std::error_code ec;
+        if (fs::exists(local_path, ec) && !ec)
+        {
+            bool reusable = true;
+            if (file_id <= LruFD::kMaxDataFile)
+            {
+                uint64_t file_size = fs::file_size(local_path, ec);
+                reusable = !ec && file_size >= size;
+            }
+            if (reusable)
+            {
+                res = IouringMgr::OpenFile(tbl_id, file_id, direct);
+                if (res >= 0)
+                {
+                    used_local_space_ += size;
+                    return res;
+                }
+                if (res < 0 && res != -ENOENT)
+                {
+                    return res;
+                }
+            }
+        }
     }
     KvError err = DownloadFile(tbl_id, file_id);
     switch (err)
