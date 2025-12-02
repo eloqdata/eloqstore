@@ -366,6 +366,8 @@ private:
     void HandleDropTableRequest(DropTableRequest *req);
     KvError CollectTablePartitions(const std::string &table_name,
                                    std::vector<TableIdent> &partitions) const;
+    KvError CollectLocalPartitions(
+        std::vector<TableIdent> &partitions) const;
     KvError InitStoreSpace();
 
     KvOptions options_;

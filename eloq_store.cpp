@@ -166,6 +166,19 @@ KvError EloqStore::Start()
         KvError err = InitStoreSpace();
         CHECK_KV_ERR(err);
     }
+    std::vector<std::vector<TableIdent>> cached_partitions;
+    if (!options_.cloud_store_path.empty() && FLAGS_allow_reuse_local_files)
+    {
+        std::vector<TableIdent> local_partitions;
+        KvError err = CollectLocalPartitions(local_partitions);
+        CHECK_KV_ERR(err);
+        cached_partitions.resize(options_.num_threads);
+        for (TableIdent &partition : local_partitions)
+        {
+            cached_partitions[partition.ShardIndex(options_.num_threads)]
+                .push_back(std::move(partition));
+        }
+    }
 
     // There are files opened at very early stage like stdin/stdout/stderr, glog
     // file, and root directories of data.
@@ -183,6 +196,10 @@ KvError EloqStore::Start()
         if (shards_[i] == nullptr)
         {
             shards_[i] = std::make_unique<Shard>(this, i, shard_fd_limit);
+        }
+        if (!cached_partitions.empty())
+        {
+            shards_[i]->SetCachedPartitions(std::move(cached_partitions[i]));
         }
         KvError err = shards_[i]->Init();
         CHECK_KV_ERR(err);
@@ -375,6 +392,56 @@ KvError EloqStore::CollectTablePartitions(
             {
                 continue;
             }
+            partitions.push_back(std::move(ident));
+        }
+    }
+    return KvError::NoError;
+}
+
+KvError EloqStore::CollectLocalPartitions(
+    std::vector<TableIdent> &partitions) const
+{
+    partitions.clear();
+    std::error_code ec;
+#ifndef NDEBUG
+    std::unordered_set<TableIdent> seen;
+#endif
+    for (const fs::path root : options_.store_path)
+    {
+        fs::directory_iterator dir_it(root, ec);
+        if (ec)
+        {
+            return ToKvError(-ec.value());
+        }
+        fs::directory_iterator end;
+        for (; dir_it != end; dir_it.increment(ec))
+        {
+            if (ec)
+            {
+                return ToKvError(-ec.value());
+            }
+            const fs::directory_entry &entry = *dir_it;
+            bool is_dir = entry.is_directory(ec);
+            if (ec)
+            {
+                return ToKvError(-ec.value());
+            }
+            if (!is_dir)
+            {
+                continue;
+            }
+            TableIdent ident =
+                TableIdent::FromString(entry.path().filename().string());
+            if (!ident.IsValid())
+            {
+                continue;
+            }
+#ifndef NDEBUG
+            if (!seen.insert(ident).second)
+            {
+                LOG(FATAL) << "Duplicated partition directory: " << ident;
+            }
+#endif
             partitions.push_back(std::move(ident));
         }
     }

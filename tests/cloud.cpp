@@ -3,6 +3,7 @@
 #include <chrono>
 #include <filesystem>
 #include <functional>
+#include <gflags/gflags.h>
 #include <map>
 #include <thread>
 #include <unordered_set>
@@ -404,6 +405,35 @@ TEST_CASE("cloud store cached file LRU", "[cloud]")
         rand_tester()->Read(std::rand() % max_key);
         rand_tester()->Read(std::rand() % max_key);
     }
+}
+
+TEST_CASE("cloud reuse local files across restart", "[cloud][reuse]")
+{
+    eloqstore::KvOptions opts = cloud_options;
+    opts.store_path = {"/tmp/test-data-reuse"};
+    CleanupStore(opts);
+
+    gflags::FlagSaver saver;
+    gflags::SetCommandLineOption("allow_reuse_local_files", "true");
+
+    auto store = std::make_unique<eloqstore::EloqStore>(opts);
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+
+    const eloqstore::TableIdent tbl_id{"reuse_tbl", 0};
+    MapVerifier verifier(tbl_id, store.get(), false);
+    verifier.SetAutoClean(false);
+    verifier.SetValueSize(2048);
+    verifier.WriteRnd(0, 256);
+
+    store->Stop();
+
+    // Restart without cleaning local cache; allowed by flag.
+    store = std::make_unique<eloqstore::EloqStore>(opts);
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    verifier.SetStore(store.get());
+    verifier.Validate();
+    store->Stop();
+
 }
 
 TEST_CASE("concurrent test with cloud", "[cloud]")

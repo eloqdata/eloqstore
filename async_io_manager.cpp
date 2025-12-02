@@ -2065,6 +2065,19 @@ void CloudStoreMgr::StopAllPrewarmTasks()
     }
 }
 
+void CloudStoreMgr::AddCachedPartitions(std::vector<TableIdent> partitions)
+{
+    if (partitions.empty())
+    {
+        return;
+    }
+    cached_partitions_.reserve(cached_partitions_.size() + partitions.size());
+    for (auto &partition : partitions)
+    {
+        cached_partitions_.push_back(std::move(partition));
+    }
+}
+
 KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
                                       std::string_view snapshot)
 {
@@ -2181,36 +2194,6 @@ int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
     if (res < 0)
     {
         return res;
-    }
-    if (FLAGS_allow_reuse_local_files && file_id != LruFD::kManifest)
-    {
-        fs::path local_path =
-            options_->store_path[tbl_id.DiskIndex(options_->store_path.size())];
-        local_path /= tbl_id.ToString();
-        local_path /= ToFilename(file_id);
-        std::error_code ec;
-        if (fs::exists(local_path, ec) && !ec)
-        {
-            bool reusable = true;
-            if (file_id <= LruFD::kMaxDataFile)
-            {
-                uint64_t file_size = fs::file_size(local_path, ec);
-                reusable = !ec && file_size >= size;
-            }
-            if (reusable)
-            {
-                res = IouringMgr::OpenFile(tbl_id, file_id, direct);
-                if (res >= 0)
-                {
-                    used_local_space_ += size;
-                    return res;
-                }
-                if (res < 0 && res != -ENOENT)
-                {
-                    return res;
-                }
-            }
-        }
     }
     KvError err = DownloadFile(tbl_id, file_id);
     switch (err)
@@ -2333,6 +2316,104 @@ size_t CloudStoreMgr::EstimateFileSize(std::string_view filename) const
     __builtin_unreachable();
 }
 
+void CloudStoreMgr::LoadCachedFilesFromLocal()
+{
+    if (!FLAGS_allow_reuse_local_files || cached_partitions_.empty())
+    {
+        return;
+    }
+
+    for (const TableIdent &tbl_id : cached_partitions_)
+    {
+        fs::path partition_path = tbl_id.StorePath(options_->store_path);
+        std::error_code ec;
+        if (!fs::exists(partition_path, ec) ||
+            !fs::is_directory(partition_path, ec))
+        {
+            if (ec)
+            {
+                LOG(WARNING) << "Failed to access partition directory "
+                             << partition_path << ": " << ec.message();
+            }
+            continue;
+        }
+
+        fs::directory_iterator dir_it(partition_path, ec);
+        if (ec)
+        {
+            LOG(WARNING) << "Failed to iterate partition directory "
+                         << partition_path << ": " << ec.message();
+            continue;
+        }
+
+        fs::directory_iterator end;
+        for (; dir_it != end; dir_it.increment(ec))
+        {
+            if (ec)
+            {
+                LOG(WARNING) << "Failed to iterate partition directory "
+                             << partition_path << ": " << ec.message();
+                break;
+            }
+            const fs::directory_entry &entry = *dir_it;
+            bool is_file = entry.is_regular_file(ec);
+            if (ec)
+            {
+                LOG(WARNING) << "Failed to stat cached file "
+                             << entry.path().string() << ": " << ec.message();
+                continue;
+            }
+            if (!is_file)
+            {
+                continue;
+            }
+
+            std::string filename = entry.path().filename().string();
+            if (filename.empty() ||
+                boost::algorithm::ends_with(filename, TmpSuffix) ||
+                (filename.front() != 'd' && filename.front() != 'm'))
+            {
+                continue;
+            }
+
+            size_t estimated_size = EstimateFileSize(filename);
+            bool reusable = true;
+            if (filename.front() == 'd')
+            {
+                uint64_t file_size = entry.file_size(ec);
+                if (ec)
+                {
+                    LOG(WARNING) << "Failed to get size of cached file "
+                                 << entry.path().string()
+                                 << ": " << ec.message();
+                    reusable = false;
+                }
+                else if (file_size < estimated_size)
+                {
+                    LOG(WARNING) << "Skip cached file " << entry.path().string()
+                                 << ", size " << file_size
+                                 << " smaller than expected "
+                                 << estimated_size;
+                    reusable = false;
+                }
+            }
+            if (!reusable)
+            {
+                continue;
+            }
+
+            FileKey key(tbl_id, filename);
+            if (closed_files_.find(key) != closed_files_.end())
+            {
+                continue;
+            }
+            used_local_space_ += estimated_size;
+            EnqueClosedFile(std::move(key));
+        }
+    }
+    cached_partitions_.clear();
+}
+
 inline bool CloudStoreMgr::BackgroundJobInited()
 {
     return background_job_inited_;
@@ -2348,6 +2429,12 @@ void CloudStoreMgr::InitBackgroundJob()
             file_cleaner_.Run();
             return std::move(shard->main_);
         });
+    LoadCachedFilesFromLocal();
+    if (used_local_space_ > shard_local_space_limit_ &&
+        file_cleaner_.status_ == TaskStatus::Idle)
+    {
+        file_cleaner_.Resume();
+    }
     if (options_->prewarm_cloud_cache)
     {
         for (auto &prewarmer : prewarmers_)

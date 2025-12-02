@@ -25,6 +25,7 @@ public:
     KvError Init();
     void Start();
     void Stop();
+    void SetCachedPartitions(std::vector<TableIdent> partitions);
     bool AddKvRequest(KvRequest *req);
 
     void AddPendingCompact(const TableIdent &tbl_id);

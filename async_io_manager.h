@@ -416,6 +416,7 @@ public:
     void ResetPrewarmFiles(std::vector<PrewarmFile> files);
     void ClearPrewarmFiles();
     void StopAllPrewarmTasks();
+    void AddCachedPartitions(std::vector<TableIdent> partitions);
 
 private:
     int CreateFile(LruFD::Ref dir_fd, FileId file_id) override;
@@ -440,6 +441,7 @@ private:
     size_t EstimateFileSize(std::string_view filename) const;
     bool BackgroundJobInited() override;
     void InitBackgroundJob() override;
+    void LoadCachedFilesFromLocal();
 
     struct CachedFile
     {
@@ -499,6 +501,7 @@ private:
     size_t active_prewarm_tasks_{0};
     std::vector<PrewarmFile> prewarm_files_;
     size_t prewarm_next_index_{0};
+    std::vector<TableIdent> cached_partitions_;
 
     ObjectStore obj_store_;
 

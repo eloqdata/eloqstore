@@ -33,6 +33,19 @@ KvError Shard::Init()
     return res;
 }
 
+void Shard::SetCachedPartitions(std::vector<TableIdent> partitions)
+{
+    if (partitions.empty())
+    {
+        return;
+    }
+    auto *cloud_mgr = dynamic_cast<CloudStoreMgr *>(io_mgr_.get());
+    if (cloud_mgr != nullptr)
+    {
+        cloud_mgr->AddCachedPartitions(std::move(partitions));
+    }
+}
+
 void Shard::WorkLoop()
 {
     shard = this;
