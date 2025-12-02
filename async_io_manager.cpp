@@ -3366,19 +3366,6 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
                                  std::string_view data)
 {
     auto [type, id_view] = ParseFileName(filename);
-    bool direct_io = false;
-    if (type == FileNameData)
-    {
-        uint64_t parsed = 0;
-        auto conv = std::from_chars(
-            id_view.data(), id_view.data() + id_view.size(), parsed);
-        if (conv.ec != std::errc{} ||
-            conv.ptr != id_view.data() + id_view.size())
-        {
-            return KvError::InvalidArgs;
-        }
-        direct_io = true;
-    }
 
     fs::path path = tbl_id.StorePath(options_->store_path);
     path /= filename;
@@ -3387,10 +3374,6 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
 
     std::string path_str = path.string();
     int flags = O_WRONLY | O_CREAT | O_TRUNC;
-    if (direct_io)
-    {
-        flags |= O_DIRECT;
-    }
     int fd = OpenAt({AT_FDCWD, false}, path_str.c_str(), flags, 0644);
     if (fd < 0)
     {
