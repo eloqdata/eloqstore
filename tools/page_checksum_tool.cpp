@@ -36,9 +36,10 @@ std::pair<bool, uint64_t> ParseUint64(const std::string &input)
 
 void PrintUsage(const char *prog)
 {
-    std::cerr << "Usage: " << prog
-              << " <file_path> <offset_bytes> [page_size_bytes]\n"
-              << "Offset and page size accept decimal or 0x-prefixed hex values.\n";
+    std::cerr
+        << "Usage: " << prog
+        << " <file_path> <offset_bytes> [page_size_bytes]\n"
+        << "Offset and page size accept decimal or 0x-prefixed hex values.\n";
 }
 
 }  // namespace
@@ -75,7 +76,8 @@ int main(int argc, char **argv)
     std::ifstream file(path, std::ios::binary);
     if (!file)
     {
-        std::cerr << "Failed to open " << path << ": " << std::strerror(errno) << "\n";
+        std::cerr << "Failed to open " << path << ": " << std::strerror(errno)
+                  << "\n";
         return 1;
     }
 
@@ -83,8 +85,9 @@ int main(int argc, char **argv)
     const auto file_size = static_cast<uint64_t>(file.tellg());
     if (offset + page_size > file_size)
     {
-        std::cerr << "Requested range [" << offset << ", " << (offset + page_size)
-                  << ") exceeds file size " << file_size << "\n";
+        std::cerr << "Requested range [" << offset << ", "
+                  << (offset + page_size) << ") exceeds file size " << file_size
+                  << "\n";
         return 1;
     }
 
@@ -93,12 +96,13 @@ int main(int argc, char **argv)
     file.read(buffer.data(), static_cast<std::streamsize>(page_size));
     if (file.gcount() != static_cast<std::streamsize>(page_size))
     {
-        std::cerr << "Unable to read " << page_size << " bytes at offset " << offset
-                  << "\n";
+        std::cerr << "Unable to read " << page_size << " bytes at offset "
+                  << offset << "\n";
         return 1;
     }
 
-    const bool valid = ValidateChecksum(std::string_view(buffer.data(), page_size));
+    const bool valid =
+        ValidateChecksum(std::string_view(buffer.data(), page_size));
     std::cout << (valid ? "Checksum OK" : "Checksum FAILED")
               << " for page at offset " << offset << "\n";
 
