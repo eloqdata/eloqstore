@@ -111,6 +111,10 @@ add_library(eloqstore STATIC ${ELOQ_STORE_SOURCES} ${INI_SOURCES})
 target_include_directories(eloqstore PUBLIC ${ELOQ_STORE_INCLUDE})
 target_link_libraries(eloqstore PRIVATE ${URING_LIB} Boost::context glog::glog absl::flat_hash_map ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY})
 
+add_executable(page_checksum_tool tools/page_checksum_tool.cpp)
+target_include_directories(page_checksum_tool PUBLIC ${ELOQ_STORE_INCLUDE})
+target_link_libraries(page_checksum_tool PRIVATE eloqstore)
+
 
 add_library(test_util STATIC test_utils.cpp)
 target_link_libraries(test_util PUBLIC eloqstore)

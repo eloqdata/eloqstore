@@ -30,6 +30,7 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     tbl_ident_ = tbl_id;
     write_err_ = KvError::NoError;
     wal_builder_.Reset();
+    batch_pages_.clear();
 }
 
 void WriteTask::Abort()
