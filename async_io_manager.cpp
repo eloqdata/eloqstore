@@ -2187,6 +2187,11 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
+void CloudStoreMgr::CleanManifest(const TableIdent &tbl_id)
+{
+
+}
+
 KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
                                      std::string_view snapshot,
                                      uint64_t ts)
