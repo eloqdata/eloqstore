@@ -158,7 +158,7 @@ public:
     KvError ReadArchiveFile(const std::string &file_path, std::string &content);
     KvError DeleteFiles(const std::vector<std::string> &file_paths);
     KvError CloseFiles(const TableIdent &tbl_id,
-                               const std::span<FileId> file_ids);
+                       const std::span<FileId> file_ids);
 
     void CleanManifest(const TableIdent &tbl_id) override;
 
