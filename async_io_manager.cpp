@@ -2388,6 +2388,7 @@ inline bool CloudStoreMgr::BackgroundJobInited()
 void CloudStoreMgr::InitBackgroundJob()
 {
     background_job_inited_ = true;
+    shard->running_ = &file_cleaner_;
     file_cleaner_.coro_ = boost::context::callcc(
         [this](continuation &&sink)
         {
@@ -2399,6 +2400,7 @@ void CloudStoreMgr::InitBackgroundJob()
     {
         for (auto &prewarmer : prewarmers_)
         {
+            shard->running_ = prewarmer.get();
             prewarmer->coro_ = boost::context::callcc(
                 [this, prewarmer_ptr = prewarmer.get()](continuation &&sink)
                 {
