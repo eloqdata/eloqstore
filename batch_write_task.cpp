@@ -1600,7 +1600,35 @@ KvError BatchWriteTask::Truncate(std::string_view trunc_pos)
             cow_meta_.compression_ = std::make_shared<compression::DictCompression>();
         }
         
-        // Set roots to empty without deleting pages
+        // Free all pages in the mapping table to clear mappings
+        MappingSnapshot *mapping = cow_meta_.mapper_->GetMapping();
+        auto &mapping_tbl = mapping->mapping_tbl_;
+        for (PageId page_id = 0; page_id < mapping_tbl.size(); page_id++)
+        {
+            uint64_t val = mapping_tbl[page_id];
+            MappingSnapshot::ValType val_type = MappingSnapshot::GetValType(val);
+            
+            // Skip pages that are already free
+            if (val_type == MappingSnapshot::ValType::Invalid ||
+                val_type == MappingSnapshot::ValType::PageId)
+            {
+                continue;
+            }
+            
+            // Handle swizzling pointers: unswizzle them first
+            if (val_type == MappingSnapshot::ValType::SwizzlingPointer)
+            {
+                MemIndexPage *idx_page = reinterpret_cast<MemIndexPage *>(val);
+                // Unswizzle converts the pointer to file page ID in mapping table
+                mapping->Unswizzling(idx_page);
+                shard->IndexManager()->FreeIndexPage(idx_page);
+            }
+            
+            // Free the page (now it should be a file page ID after unswizzling)
+            FreePage(page_id);
+        }
+        
+        // Set roots to empty
         cow_meta_.root_id_ = MaxPageId;
         cow_meta_.ttl_root_id_ = MaxPageId;
         
