@@ -1591,49 +1591,39 @@ KvError BatchWriteTask::Truncate(std::string_view trunc_pos)
 
     if (trunc_pos.empty())
     {
-        // Full partition truncation: skip tree deletion and directly update metadata
+        // Full partition truncation: recycle all mapped pages without
+        // traversing the tree.
         do_update_ttl_ = false;
-        
-        // Reset compression dictionary since all data is being deleted
-        if (cow_meta_.compression_ != nullptr)
-        {
-            cow_meta_.compression_ = std::make_shared<compression::DictCompression>();
-        }
-        
-        // Free all pages in the mapping table to clear mappings
+        ttl_batch_.clear();
+
         MappingSnapshot *mapping = cow_meta_.mapper_->GetMapping();
         auto &mapping_tbl = mapping->mapping_tbl_;
-        for (PageId page_id = 0; page_id < mapping_tbl.size(); page_id++)
+        for (PageId page_id = 0; page_id < mapping_tbl.size(); ++page_id)
         {
             uint64_t val = mapping_tbl[page_id];
-            MappingSnapshot::ValType val_type = MappingSnapshot::GetValType(val);
-            
-            // Skip pages that are already free
+            auto val_type = MappingSnapshot::GetValType(val);
             if (val_type == MappingSnapshot::ValType::Invalid ||
                 val_type == MappingSnapshot::ValType::PageId)
             {
                 continue;
             }
-            
-            // Handle swizzling pointers: unswizzle them first
+
             if (val_type == MappingSnapshot::ValType::SwizzlingPointer)
             {
-                MemIndexPage *idx_page = reinterpret_cast<MemIndexPage *>(val);
-                // Unswizzle converts the pointer to file page ID in mapping table
+                auto *idx_page = reinterpret_cast<MemIndexPage *>(val);
                 mapping->Unswizzling(idx_page);
-                shard->IndexManager()->FreeIndexPage(idx_page);
+                val = mapping_tbl[page_id];
+                val_type = MappingSnapshot::GetValType(val);
+                assert(val_type == MappingSnapshot::ValType::FilePageId);
             }
-            
-            // Free the page (now it should be a file page ID after unswizzling)
+
             FreePage(page_id);
         }
-        
-        // Set roots to empty
+
         cow_meta_.root_id_ = MaxPageId;
         cow_meta_.ttl_root_id_ = MaxPageId;
-        
-        // Ensure manifest is written even if wal_builder_ is empty
-        // We'll handle this in UpdateMeta by ensuring FlushManifest writes a snapshot
+        cow_meta_.next_expire_ts_ = 0;
+        wal_builder_.Reset();
         return UpdateMeta();
     }
 
