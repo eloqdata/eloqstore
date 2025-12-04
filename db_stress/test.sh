@@ -58,7 +58,6 @@ SYSTEM_TYPE_PARAM_COMBINATIONS=(
     "--data_append_mode=true --num_threads=8  --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=true --num_threads=32 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
 
-    # 压缩因子的影响
     "--data_append_mode=true  --file_amplify_factor=2 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=true  --file_amplify_factor=3 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
     "--data_append_mode=true  --file_amplify_factor=4 --throughput_report_interval_secs=10 --n_tables=10 --n_partitions=10 --max_key=10000 --shortest_value=1024 --longest_value=40960 --active_width=10000 --keys_per_batch=2000 --max_verify_ops_per_write=0 --write_percent=100"
@@ -367,7 +366,6 @@ start_whitebox_test() {
     start_disk_monitor "whitebox" "$theoretical_usage"
 
     # Start whitebox test, pass calculated duration
-    # 注意这边随机参数被删掉了
     setsid stdbuf -oL -eL python3 "$CRASH_TEST_PY" whitebox \
         --db_path="$DB_DIR" \
         --shared_state_path="$SHARED_STATE_DIR" \
@@ -541,7 +539,6 @@ if ! command -v bc &> /dev/null; then
     log_message "Error: bc is not installed or not in PATH (required for disk usage calculations)"
     exit 1
 fi
-# 只有在MINIO_DATA_PATH不为空时才检查rclone和docker
 if [ -n "$MINIO_DATA_PATH" ]; then
     # Check rclone
     if ! command -v rclone &> /dev/null; then

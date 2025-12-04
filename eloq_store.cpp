@@ -354,6 +354,7 @@ KvError EloqStore::CollectTablePartitions(
     {
         std::vector<std::string> objects;
         ListObjectRequest list_object_request(&objects);
+        list_object_request.done_.store(false, std::memory_order_relaxed);
         shards_[utils::RandomInt(static_cast<int>(shards_.size()))]
             ->AddKvRequest(&list_object_request);
         LOG(INFO) << "ADD TO SHARD";
