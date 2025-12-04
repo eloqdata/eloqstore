@@ -210,13 +210,12 @@ FilePageId WriteTask::ToFilePage(PageId page_id)
 
 KvError WriteTask::FlushManifest()
 {
-    // If wal_builder_ is empty but roots are MaxPageId and we have existing manifest,
-    // we need to write a snapshot to mark the partition as empty
-    bool need_empty_snapshot = wal_builder_.Empty() && 
-                               cow_meta_.root_id_ == MaxPageId && 
-                               cow_meta_.ttl_root_id_ == MaxPageId &&
-                               cow_meta_.manifest_size_ > 0;
-    
+    // If wal_builder_ is empty but roots are MaxPageId and we have existing
+    // manifest, we need to write a snapshot to mark the partition as empty
+    bool need_empty_snapshot =
+        wal_builder_.Empty() && cow_meta_.root_id_ == MaxPageId &&
+        cow_meta_.ttl_root_id_ == MaxPageId && cow_meta_.manifest_size_ > 0;
+
     if (wal_builder_.Empty() && !need_empty_snapshot)
     {
         return KvError::NoError;
@@ -233,7 +232,7 @@ KvError WriteTask::FlushManifest()
         dict_bytes = {dict_vec.data(), dict_vec.size()};
     }
     const bool dict_dirty = cow_meta_.compression_->Dirty();
-    
+
     if (need_empty_snapshot)
     {
         // Write a snapshot with empty roots and empty mapping
@@ -252,7 +251,7 @@ KvError WriteTask::FlushManifest()
         cow_meta_.compression_->ClearDirty();
         return KvError::NoError;
     }
-    
+
     if (!dict_dirty && manifest_size > 0 &&
         manifest_size + wal_builder_.CurrentSize() <= opts->manifest_limit)
     {
