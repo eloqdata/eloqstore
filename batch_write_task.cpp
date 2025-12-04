@@ -194,7 +194,6 @@ void BatchWriteTask::Reset(const TableIdent &tbl_id)
     overflow_ptrs_.clear();
 }
 
-
 bool BatchWriteTask::SetBatch(std::span<WriteDataEntry> entries)
 {
 #ifndef NDEBUG
