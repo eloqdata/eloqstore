@@ -354,20 +354,10 @@ KvError EloqStore::CollectTablePartitions(
     {
         std::vector<std::string> objects;
         ListObjectRequest list_object_request(&objects);
-        std::mutex mu;
-        std::condition_variable cv;
-        bool finish = false;
-        list_object_request.callback_ =
-            [&mu, &cv, &finish](eloqstore::KvRequest *req)
-        {
-            std::unique_lock<std::mutex> lk(mu);
-            finish = true;
-            cv.notify_all();
-        };
+        list_object_request.done_.store(false, std::memory_order_relaxed);
         shards_[utils::RandomInt(static_cast<int>(shards_.size()))]
             ->AddKvRequest(&list_object_request);
-        std::unique_lock<std::mutex> lk(mu);
-        cv.wait(lk, [&finish] { return finish; });
+        list_object_request.Wait();
         for (auto &object_name : objects)
         {
             TableIdent ident = TableIdent::FromString(object_name);
