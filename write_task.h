@@ -20,7 +20,7 @@ public:
     WriteTask(const WriteTask &) = delete;
 
     void Abort() override;
-    void Reset(const TableIdent &tbl_id);
+    virtual void Reset(const TableIdent &tbl_id);
     const TableIdent &TableId() const;
 
     /**

@@ -16,6 +16,7 @@ public:
     {
         return TaskType::BatchWrite;
     }
+    void Reset(const TableIdent &tbl_id) override;
     void Abort() override;
 
     bool SetBatch(std::span<WriteDataEntry> entries);

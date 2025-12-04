@@ -184,6 +184,17 @@ KvError BatchWriteTask::LeafLinkDelete()
     return KvError::NoError;
 }
 
+void BatchWriteTask::Reset(const TableIdent &tbl_id)
+{
+    WriteTask::Reset(tbl_id);
+    stack_.clear();
+    ttl_batch_.clear();
+    idx_page_builder_.Reset();
+    data_page_builder_.Reset();
+    overflow_ptrs_.clear();
+}
+
+
 bool BatchWriteTask::SetBatch(std::span<WriteDataEntry> entries)
 {
 #ifndef NDEBUG
