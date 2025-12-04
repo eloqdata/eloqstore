@@ -1591,19 +1591,25 @@ KvError BatchWriteTask::Truncate(std::string_view trunc_pos)
 
     if (trunc_pos.empty())
     {
+        // Full partition truncation: skip tree deletion and directly update metadata
         do_update_ttl_ = false;
-        err = DeleteTree(cow_meta_.root_id_, false);
-        CHECK_KV_ERR(err);
-        cow_meta_.root_id_ = MaxPageId;
-        if (cow_meta_.ttl_root_id_ != MaxPageId)
+        
+        // Reset compression dictionary since all data is being deleted
+        if (cow_meta_.compression_ != nullptr)
         {
-            err = DeleteTree(cow_meta_.ttl_root_id_, false);
-            CHECK_KV_ERR(err);
-            cow_meta_.ttl_root_id_ = MaxPageId;
+            cow_meta_.compression_ = std::make_shared<compression::DictCompression>();
         }
+        
+        // Set roots to empty without deleting pages
+        cow_meta_.root_id_ = MaxPageId;
+        cow_meta_.ttl_root_id_ = MaxPageId;
+        
+        // Ensure manifest is written even if wal_builder_ is empty
+        // We'll handle this in UpdateMeta by ensuring FlushManifest writes a snapshot
         return UpdateMeta();
     }
 
+    // Partial truncation
     do_update_ttl_ = true;
     auto [new_root, error] = TruncateIndexPage(cow_meta_.root_id_, trunc_pos);
     CHECK_KV_ERR(error);
