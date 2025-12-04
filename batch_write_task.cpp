@@ -1608,15 +1608,6 @@ KvError BatchWriteTask::Truncate(std::string_view trunc_pos)
                 continue;
             }
 
-            if (val_type == MappingSnapshot::ValType::SwizzlingPointer)
-            {
-                auto *idx_page = reinterpret_cast<MemIndexPage *>(val);
-                mapping->Unswizzling(idx_page);
-                val = mapping_tbl[page_id];
-                val_type = MappingSnapshot::GetValType(val);
-                assert(val_type == MappingSnapshot::ValType::FilePageId);
-            }
-
             FreePage(page_id);
         }
 

@@ -35,6 +35,7 @@ void WriteTask::Reset(const TableIdent &tbl_id)
 
 void WriteTask::Abort()
 {
+    LOG(INFO) << "WriteTask to " << tbl_ident_ << " is aborted";
     if (!Options()->data_append_mode)
     {
         IoMgr()->AbortWrite(tbl_ident_);
