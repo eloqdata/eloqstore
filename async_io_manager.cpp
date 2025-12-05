@@ -2437,8 +2437,12 @@ KvError CloudStoreMgr::ReadFiles(const TableIdent &tbl_id,
         size_t remaining_{0};
         size_t read_offset_{0};
         int fd_{-1};
-        struct statx stat_buf_{};
-        struct open_how open_how_{};
+        struct statx stat_buf_
+        {
+        };
+        struct open_how open_how_
+        {
+        };
         Stage stage_{Stage::NeedOpen};
     };
 
