@@ -631,10 +631,10 @@ void ScanRequest::SetPagination(size_t entries, size_t size)
 
 void ScanRequest::SetPrefetchPages(size_t pages)
 {
-    prefetch_pages_ = pages == 0 ? kDefaultScanPrefetchPageCount : pages;
-    if (prefetch_pages_ > max_read_pages_batch)
+    prefetch_page_num_ = pages == 0 ? kDefaultScanPrefetchPageCount : pages;
+    if (prefetch_page_num_ > max_read_pages_batch)
     {
-        prefetch_pages_ = max_read_pages_batch;
+        prefetch_page_num_ = max_read_pages_batch;
     }
 }
 
@@ -674,7 +674,7 @@ bool ScanRequest::HasRemaining() const
 
 size_t ScanRequest::PrefetchPages() const
 {
-    return prefetch_pages_;
+    return prefetch_page_num_;
 }
 
 void BatchWriteRequest::SetArgs(TableIdent tbl_id,

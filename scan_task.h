@@ -40,7 +40,7 @@ private:
     };
 
     const TableIdent tbl_id_;
-    size_t prefetch_pages_;
+    size_t prefetch_page_num_;
     PageId root_id_{MaxPageId};
     std::shared_ptr<MappingSnapshot> mapping_;
     DataPage data_page_;

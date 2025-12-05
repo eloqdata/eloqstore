@@ -23,14 +23,14 @@ ScanIterator::ScanIterator(const TableIdent &tbl_id,
                            std::vector<Page> &read_pages,
                            size_t prefetch_pages)
     : tbl_id_(tbl_id),
-      prefetch_pages_(prefetch_pages),
+      prefetch_page_num_(prefetch_pages),
       mapping_(),
       iter_(nullptr, Options()),
       prefetched_pages_(&prefetched_pages),
       read_pages_(&read_pages)
 {
-    prefetched_pages_->reserve(prefetch_pages_);
-    read_pages_->reserve(prefetch_pages_);
+    prefetched_pages_->reserve(prefetch_page_num_);
+    read_pages_->reserve(prefetch_page_num_);
 }
 
 ScanIterator::~ScanIterator()
@@ -175,7 +175,7 @@ KvError ScanIterator::PrefetchFromStack()
     prefetched_leaf_ids_.fill(MaxPageId);
 
     PageId leaf_id = index_stack_.back().iter.GetPageId();
-    while (leaf_cnt < prefetch_pages_ && leaf_id != MaxPageId)
+    while (leaf_cnt < prefetch_page_num_ && leaf_id != MaxPageId)
     {
         prefetched_leaf_ids_[leaf_cnt] = leaf_id;
         FilePageId file_id = mapping_->ToFilePage(leaf_id);
@@ -183,7 +183,7 @@ KvError ScanIterator::PrefetchFromStack()
         prefetched_file_page_ids_[leaf_cnt] = file_id;
         ++leaf_cnt;
 
-        bool reached_limit = leaf_cnt >= prefetch_pages_;
+        bool reached_limit = leaf_cnt >= prefetch_page_num_;
         if (reached_limit)
         {
             KvError err = AdvanceToNextLeaf();
@@ -241,33 +241,15 @@ KvError ScanIterator::ConsumePrefetchedPage()
 
 KvError ScanIterator::LoadNextDataPage()
 {
-    if (prefetch_pages_ > 1)
+    if (prefetched_offset_ >= prefetched_count_)
     {
-        if (prefetched_offset_ >= prefetched_count_)
+        KvError err = PrefetchFromStack();
+        if (err != KvError::NoError)
         {
-            KvError err = PrefetchFromStack();
-            if (err != KvError::NoError)
-            {
-                return err;
-            }
+            return err;
         }
-        return ConsumePrefetchedPage();
     }
-
-    PageId page_id = data_page_.NextPageId();
-    if (page_id == MaxPageId)
-    {
-        return KvError::EndOfFile;
-    }
-    FilePageId file_page = mapping_->ToFilePage(page_id);
-    assert(file_page != MaxFilePageId);
-    auto [page, err] = LoadDataPage(tbl_id_, page_id, file_page);
-    CHECK_KV_ERR(err);
-
-    data_page_ = std::move(page);
-    iter_.Reset(&data_page_, Options()->data_page_size);
-    assert(iter_.HasNext());
-    return KvError::NoError;
+    return ConsumePrefetchedPage();
 }
 
 KvError ScanIterator::Next()

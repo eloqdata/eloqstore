@@ -186,7 +186,7 @@ private:
     std::vector<KvEntry> entries_;
     size_t num_entries_{0};
     bool has_remaining_;
-    size_t prefetch_pages_{kDefaultScanPrefetchPageCount};
+    size_t prefetch_page_num_{kDefaultScanPrefetchPageCount};
     friend class ScanTask;
 };
 
