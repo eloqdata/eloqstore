@@ -156,10 +156,7 @@ KvError ScanIterator::AdvanceToNextLeaf()
                 descend_id = next_child;
             }
         }
-        if (frame.page != nullptr)
-        {
-            frame.page->Unpin();
-        }
+        frame.page->Unpin();
         index_stack_.pop_back();
     }
     return KvError::EndOfFile;
