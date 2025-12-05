@@ -151,8 +151,8 @@ public:
     /**
      * @brief Set number of pages to prefetch during scan.
      */
-    void SetPrefetchPages(size_t pages);
-    size_t PrefetchPages() const;
+    void SetPrefetchPageNum(size_t pages);
+    size_t PrefetchPageNum() const;
 
     std::string_view BeginKey() const;
     std::string_view EndKey() const;

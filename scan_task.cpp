@@ -303,7 +303,7 @@ KvError ScanTask::Scan()
     size_t result_size = 0;
 
     ScanIterator iter(
-        tbl_id, prefetched_pages_, read_pages_, req->PrefetchPages());
+        tbl_id, prefetched_pages_, read_pages_, req->PrefetchPageNum());
     KvError err = iter.Seek(req->BeginKey());
     if (err != KvError::NoError)
     {

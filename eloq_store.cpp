@@ -629,7 +629,7 @@ void ScanRequest::SetPagination(size_t entries, size_t size)
     }
 }
 
-void ScanRequest::SetPrefetchPages(size_t pages)
+void ScanRequest::SetPrefetchPageNum(size_t pages)
 {
     prefetch_page_num_ = pages == 0 ? kDefaultScanPrefetchPageCount : pages;
     if (prefetch_page_num_ > max_read_pages_batch)
@@ -672,7 +672,7 @@ bool ScanRequest::HasRemaining() const
     return has_remaining_;
 }
 
-size_t ScanRequest::PrefetchPages() const
+size_t ScanRequest::PrefetchPageNum() const
 {
     return prefetch_page_num_;
 }
