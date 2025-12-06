@@ -638,3 +638,86 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
         tester.Validate();
     }
 }
+
+TEST_CASE("archive triggers with cloud-only partitions", "[cloud][archive]")
+{
+    using namespace std::chrono_literals;
+    constexpr uint32_t kPartitionCount = 1000;
+    const std::string tbl_name = "remote_archive";
+
+    eloqstore::KvOptions options = cloud_archive_opts;
+    options.num_threads = 1;             // single shard handles all partitions
+    options.prewarm_cloud_cache = false;  // keep local cache empty after restart
+    options.archive_interval_secs = 1;    // trigger archiver quickly
+    options.local_space_limit = 64ULL << 20;
+
+    eloqstore::EloqStore *store = InitStore(options);
+
+    std::vector<std::unique_ptr<eloqstore::BatchWriteRequest>> writes;
+    writes.reserve(kPartitionCount);
+    for (uint32_t pid = 0; pid < kPartitionCount; ++pid)
+    {
+        auto req = std::make_unique<eloqstore::BatchWriteRequest>();
+        req->SetTableId({tbl_name, pid});
+        req->AddWrite(test_util::Key(0),
+                      test_util::Value(pid, 8),
+                      utils::UnixTs<chrono::microseconds>(),
+                      eloqstore::WriteOp::Upsert);
+        REQUIRE(store->ExecAsyn(req.get()));
+        writes.emplace_back(std::move(req));
+    }
+    for (auto &req : writes)
+    {
+        req->Wait();
+        REQUIRE(req->Error() == eloqstore::KvError::NoError);
+    }
+
+    store->Stop();
+    CleanupLocalStore(options);
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+
+    std::unordered_set<uint32_t> pending;
+    for (uint32_t pid = 0; pid < kPartitionCount; ++pid)
+    {
+        pending.insert(pid);
+    }
+
+    bool archived = WaitForCondition(60s,
+                                     2s,
+                                     [&]()
+                                     {
+                                         for (auto it = pending.begin();
+                                              it != pending.end();)
+                                         {
+                                             eloqstore::TableIdent tid{
+                                                 tbl_name, *it};
+                                             auto files = ListCloudFiles(
+                                                 options,
+                                                 options.cloud_store_path,
+                                                 tid.ToString());
+                                             bool has_archive =
+                                                 std::any_of(files.begin(),
+                                                             files.end(),
+                                                             [](const auto &f)
+                                                             {
+                                                                 return f.rfind(
+                                                                            "manifest_",
+                                                                            0) ==
+                                                                        0;
+                                                             });
+                                             if (has_archive)
+                                             {
+                                                 it = pending.erase(it);
+                                             }
+                                             else
+                                             {
+                                                 ++it;
+                                             }
+                                         }
+                                         return pending.empty();
+                                     });
+    REQUIRE(archived);
+
+    store->Stop();
+    CleanupStore(options);
+}
