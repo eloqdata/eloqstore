@@ -21,7 +21,7 @@ TEST_CASE("file size tests - different page sizes", "[chore][file_size]")
 
     for (uint16_t page_size : page_sizes)
     {
-        KvOptions opts = default_opts;
+        KvOptions opts = inplace_opts;
         opts.data_page_size = page_size;
         opts.pages_per_file_shift = 10;  // 1024 pages per file
         opts.data_append_mode = true;
@@ -50,7 +50,7 @@ TEST_CASE("file size tests - different file sizes", "[chore][file_size]")
 
     for (auto [shift, size_desc] : file_configs)
     {
-        KvOptions opts = default_opts;
+        KvOptions opts = inplace_opts;
         opts.data_page_size = 1 << 12;  // 4KB
         opts.pages_per_file_shift = shift;
         opts.data_append_mode = true;
@@ -70,7 +70,7 @@ TEST_CASE("file size tests - different file sizes", "[chore][file_size]")
 
 TEST_CASE("file size tests - massive data injection", "[chore][file_size]")
 {
-    KvOptions opts = default_opts;
+    KvOptions opts = inplace_opts;
     opts.data_page_size = 1 << 12;   // 4KB
     opts.pages_per_file_shift = 16;  // 256MB files
     opts.data_append_mode = true;
@@ -111,7 +111,7 @@ TEST_CASE("file size tests - extreme page count per file", "[chore][file_size]")
 
     for (auto [shift, size_desc] : extreme_configs)
     {
-        KvOptions opts = default_opts;
+        KvOptions opts = inplace_opts;
         opts.data_page_size = 1 << 12;  // 4KB
         opts.pages_per_file_shift = shift;
         opts.data_append_mode = true;
@@ -142,7 +142,7 @@ TEST_CASE("file size tests - mixed page and file size combinations",
 
     for (auto [page_size, shift, desc] : combinations)
     {
-        KvOptions opts = default_opts;
+        KvOptions opts = inplace_opts;
         opts.data_page_size = page_size;
         opts.pages_per_file_shift = shift;
         opts.data_append_mode = true;

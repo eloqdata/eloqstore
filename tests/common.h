@@ -31,8 +31,10 @@
 
 constexpr char test_path[] = "/tmp/eloqstore";
 static const eloqstore::TableIdent test_tbl_id = {"t0", 0};
+extern eloqstore::KvOptions default_opts;
+
 const eloqstore::KvOptions mem_store_opts = {};
-const eloqstore::KvOptions default_opts = {
+const eloqstore::KvOptions inplace_opts = {
     .store_path = {test_path},
 };
 
@@ -71,6 +73,7 @@ const eloqstore::KvOptions cloud_archive_opts = {
     .pages_per_file_shift = 8,
     .data_append_mode = true,
 };
+
 eloqstore::EloqStore *InitStore(const eloqstore::KvOptions &opts);
 
 bool ValidateFileSizes(const eloqstore::KvOptions &opts);

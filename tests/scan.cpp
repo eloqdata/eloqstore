@@ -9,7 +9,7 @@ using namespace test_util;
 
 TEST_CASE("delete scan", "[scan]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     MapVerifier verify(test_tbl_id, store);
     verify.SetValueSize(400);
     verify.WriteRnd(1, 100);
@@ -22,7 +22,7 @@ TEST_CASE("delete scan", "[scan]")
 
 TEST_CASE("complex scan", "[scan]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     MapVerifier verify(test_tbl_id, store);
     verify.Upsert(1, 1000);
     verify.Upsert(2000, 3000);
@@ -43,7 +43,7 @@ TEST_CASE("complex scan", "[scan]")
 
 TEST_CASE("random write and scan", "[scan]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     MapVerifier verify(test_tbl_id, store);
     constexpr uint64_t max_val = 1000;
     for (int i = 0; i < 10; i++)
@@ -59,7 +59,7 @@ TEST_CASE("random write and scan", "[scan]")
 
 TEST_CASE("paginate the scan results", "[scan]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     MapVerifier verify(test_tbl_id, store, false);
     verify.SetValueSize(100);
     verify.WriteRnd(0, 10000, 0, 90);
@@ -78,7 +78,7 @@ TEST_CASE("paginate the scan results", "[scan]")
 
 TEST_CASE("read floor", "[read]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     MapVerifier verify(test_tbl_id, store, false);
     verify.SetValueSize(1000);
     verify.Upsert(2, 12);

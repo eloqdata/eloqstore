@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+eloqstore::KvOptions default_opts = append_opts;
 
 eloqstore::EloqStore *InitStore(const eloqstore::KvOptions &opts)
 {

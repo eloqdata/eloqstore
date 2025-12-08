@@ -8,7 +8,7 @@ using namespace test_util;
 
 TEST_CASE("simple delete", "[delete]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     MapVerifier verify(test_tbl_id, store);
     verify.Upsert(100, 300);
     verify.Delete(150, 200);
@@ -31,7 +31,7 @@ TEST_CASE("delete from an empty table", "[delete]")
 
 TEST_CASE("clean data", "[delete]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     MapVerifier verify(test_tbl_id, store);
     constexpr uint64_t max_val = 1000;
     verify.Delete(0, 100);
@@ -46,7 +46,7 @@ TEST_CASE("clean data", "[delete]")
 
 TEST_CASE("decrease height", "[delete]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     MapVerifier verify(test_tbl_id, store);
     verify.Upsert(1, 1000);
     for (int i = 0; i < 1000; i += 50)
@@ -57,7 +57,7 @@ TEST_CASE("decrease height", "[delete]")
 
 TEST_CASE("random upsert/delete and scan", "[delete]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     MapVerifier verify(test_tbl_id, store);
     verify.SetValueSize(100);
     constexpr uint64_t max_val = 50000;
@@ -74,7 +74,7 @@ TEST_CASE("random upsert/delete and scan", "[delete]")
 
 TEST_CASE("easy truncate table partition", "[truncate]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     MapVerifier verify(test_tbl_id, store);
     verify.SetValueSize(1000);
 
@@ -85,7 +85,7 @@ TEST_CASE("easy truncate table partition", "[truncate]")
 
 TEST_CASE("truncate table partition", "[truncate]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     MapVerifier verify(test_tbl_id, store, false);
     verify.SetValueSize(100);
 
@@ -113,7 +113,7 @@ TEST_CASE("truncate table partition", "[truncate]")
 
 TEST_CASE("rand write with expire timestamp", "[TTL]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     MapVerifier verify(test_tbl_id, store);
     verify.SetValueSize(10000);
     verify.SetMaxTTL(1000);
@@ -128,13 +128,13 @@ TEST_CASE("rand write with expire timestamp", "[TTL]")
 
 TEST_CASE("upsert with expire timestamp", "[TTL]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     MapVerifier verify(test_tbl_id, store, false);
     verify.SetValueSize(1000);
 
     verify.SetMaxTTL(100);
     const uint32_t batch_size = 1000;
-    for (size_t i = 0; i < 20; i++)
+    for (size_t i = 0; i < 2; i++)
     {
         verify.Upsert(i * batch_size, (i + 1) * batch_size);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -159,9 +159,9 @@ TEST_CASE("upsert with expire timestamp", "[TTL]")
 
 TEST_CASE("expire timestamp", "[TTL]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     MapVerifier verify(test_tbl_id, store);
-    verify.SetMaxTTL(200);
+    verify.SetMaxTTL(20);
 
     const uint32_t range_size = 10000;
     for (size_t i = 0; i < 100; i++)

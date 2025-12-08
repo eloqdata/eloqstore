@@ -417,6 +417,6 @@ TEST_CASE("manifest deletion on rootmeta eviction", "[manifest][eviction]")
         verifier_a.Validate();
     };
 
-    RunManifestEvictionTest(default_opts, "local", false);
-    RunManifestEvictionTest(default_opts, "local", true);
+    RunManifestEvictionTest(inplace_opts, "local", false);
+    RunManifestEvictionTest(inplace_opts, "local", true);
 }

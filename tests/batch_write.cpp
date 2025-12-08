@@ -18,7 +18,7 @@ TEST_CASE("batch entry with smaller timestamp", "[batch_write]")
 
 TEST_CASE("mixed batch write with read", "[batch_write]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     MapVerifier verify(test_tbl_id, store, false);
     verify.SetValueSize(200);
     constexpr uint64_t max_val = 10000;
@@ -98,7 +98,7 @@ TEST_CASE("truncate twice overflow values", "[batch_write]")
 
 TEST_CASE("batch write with big key", "[batch_write]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     MapVerifier verify(test_tbl_id, store, false, 200);
     verify.SetValueSize(300);
     constexpr uint64_t max_val = 10000;

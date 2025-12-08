@@ -12,7 +12,7 @@ using namespace test_util;
 
 TEST_CASE("concurrently write to partition", "[concurrency]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    eloqstore::EloqStore *store = InitStore(default_opts);
     eloqstore::TableIdent tbl_id("concurrent-write", 1);
     eloqstore::BatchWriteRequest requests[128];
     const uint32_t batch = 100;
@@ -58,12 +58,12 @@ TEST_CASE("concurrently write to partition", "[concurrency]")
 
 TEST_CASE("easy concurrency test", "[persist][concurrency]")
 {
-    eloqstore::EloqStore *store = InitStore(default_opts);
+    eloqstore::EloqStore *store = InitStore(inplace_opts);
     ConcurrencyTester tester(store, "t1", 1, 32);
     tester.Init();
     tester.Run(20, 5, 32);
 
-    REQUIRE(ValidateFileSizes(default_opts));
+    REQUIRE(ValidateFileSizes(inplace_opts));
 
     tester.Clear();
 }

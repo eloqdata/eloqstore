@@ -25,7 +25,7 @@ namespace fs = std::filesystem;
 
 TEST_CASE("simple persist", "[persist]")
 {
-    eloqstore::EloqStore *store = InitStore(default_opts);
+    eloqstore::EloqStore *store = InitStore(inplace_opts);
     MapVerifier verify(test_tbl_id, store);
     verify.Upsert(100, 200);
     verify.Delete(100, 150);
@@ -36,7 +36,7 @@ TEST_CASE("simple persist", "[persist]")
 
 TEST_CASE("complex persist", "[persist]")
 {
-    eloqstore::EloqStore *store = InitStore(default_opts);
+    eloqstore::EloqStore *store = InitStore(inplace_opts);
     MapVerifier verify(test_tbl_id, store);
     for (int i = 0; i < 5; i++)
     {
@@ -46,7 +46,7 @@ TEST_CASE("complex persist", "[persist]")
 
 TEST_CASE("persist with restart", "[persist]")
 {
-    eloqstore::EloqStore *store = InitStore(default_opts);
+    eloqstore::EloqStore *store = InitStore(inplace_opts);
 
     std::vector<std::unique_ptr<MapVerifier>> tbls;
     for (uint32_t i = 0; i < 3; i++)
@@ -169,7 +169,7 @@ TEST_CASE("drop table clears all partitions", "[persist][droptable]")
         CleanupStore(opts);
     };
 
-    run_drop_table_case(default_opts, "local");
+    run_drop_table_case(inplace_opts, "local");
     run_drop_table_case(cloud_options, "cloud");
 }
 
@@ -217,7 +217,7 @@ TEST_CASE("complex LRU for opened fd", "[persist]")
 
 TEST_CASE("detect corrupted page", "[persist][checksum]")
 {
-    eloqstore::EloqStore *store = InitStore(default_opts);
+    eloqstore::EloqStore *store = InitStore(inplace_opts);
     eloqstore::TableIdent tbl_id = {"detect-corrupted", 1};
     {
         std::vector<eloqstore::WriteDataEntry> entries;
@@ -267,7 +267,7 @@ TEST_CASE("detect corrupted page", "[persist][checksum]")
 
 TEST_CASE("overflow kv", "[persist][overflow_kv]")
 {
-    eloqstore::EloqStore *store = InitStore(default_opts);
+    eloqstore::EloqStore *store = InitStore(inplace_opts);
 
     const eloqstore::TableIdent tbl_id("overflow", 0);
     const uint32_t biggest = (128 << 20);
@@ -300,7 +300,7 @@ TEST_CASE("overflow kv", "[persist][overflow_kv]")
 
 TEST_CASE("random overflow kv", "[persist][overflow_kv]")
 {
-    eloqstore::EloqStore *store = InitStore(default_opts);
+    eloqstore::EloqStore *store = InitStore(inplace_opts);
     MapVerifier verifier(test_tbl_id, store);
     verifier.SetValueSize(5000);
     verifier.WriteRnd(1, 100);
