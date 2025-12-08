@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "common.h"
+#include "task_manager.h"
 #include "test_utils.h"
 
 using test_util::MapVerifier;
@@ -121,3 +122,80 @@ TEST_CASE("batch write arguments", "[batch_write]")
     // TODO: Batch write with duplicated or disordered keys
 }
 #endif
+
+TEST_CASE("batch write task pool cleaned after abort", "[batch_write]")
+{
+    struct PoolSizeGuard
+    {
+        PoolSizeGuard()
+        {
+            eloqstore::TaskManager::SetPoolSizesForTest(1, 1, 1, 1, 1);
+        }
+        ~PoolSizeGuard()
+        {
+            eloqstore::TaskManager::SetPoolSizesForTest(
+                1024, 1024, 2048, 2048, 512);
+        }
+    } guard;
+
+    eloqstore::KvOptions opts = append_opts;
+    opts.num_threads = 1;  // route all partitions to the same shard
+    opts.index_buffer_pool_size =
+        opts.data_page_size;  // only one index page buffer
+
+    eloqstore::EloqStore *store = InitStore(opts);
+    const std::vector<eloqstore::TableIdent> partitions = {
+        {"stress", 0}, {"stress", 1}, {"stress", 2}, {"stress", 3}};
+
+    auto make_entries = [](int start, int count)
+    {
+        std::vector<eloqstore::WriteDataEntry> entries;
+        entries.reserve(count);
+        for (int i = 0; i < count; ++i)
+        {
+            entries.emplace_back(std::to_string(start + i),
+                                 "v",
+                                 /*ts=*/1,
+                                 eloqstore::WriteOp::Upsert);
+        }
+        std::sort(entries.begin(), entries.end());
+        return entries;
+    };
+
+    auto submit_batch =
+        [&](const eloqstore::TableIdent &tbl, int start, int count)
+    {
+        eloqstore::BatchWriteRequest req;
+        req.SetArgs(tbl, make_entries(start, count));
+        REQUIRE(store->ExecAsyn(&req));
+        req.Wait();
+        return req.Error();
+    };
+
+    bool saw_abort = false;
+    // Alternate between two partition pairs; heavy batches are prone to OOM and
+    // abort.
+    for (int round = 0; round < 20; ++round)
+    {
+        eloqstore::BatchWriteRequest req_a;
+        eloqstore::BatchWriteRequest req_b;
+        req_a.SetArgs(partitions[0], make_entries(round * 1000, 800));
+        req_b.SetArgs(partitions[1], make_entries(round * 2000, 800));
+        REQUIRE(store->ExecAsyn(&req_a));
+        REQUIRE(store->ExecAsyn(&req_b));
+        req_a.Wait();
+        req_b.Wait();
+        saw_abort = saw_abort ||
+                    req_a.Error() == eloqstore::KvError::OutOfMem ||
+                    req_b.Error() == eloqstore::KvError::OutOfMem;
+
+        // Smaller batches on the other partitions should still succeed even
+        // after aborts.
+        auto err_c = submit_batch(partitions[2], round * 10, 8);
+        auto err_d = submit_batch(partitions[3], round * 10, 8);
+        REQUIRE(err_c == eloqstore::KvError::NoError);
+        REQUIRE(err_d == eloqstore::KvError::NoError);
+    }
+
+    REQUIRE(saw_abort);
+}

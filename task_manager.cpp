@@ -13,33 +13,33 @@ namespace eloqstore
 {
 namespace
 {
-uint32_t batch_write_pool_size = 1024;
-uint32_t background_write_pool_size = 1024;
-uint32_t read_pool_size = 2048;
-uint32_t scan_pool_size = 2048;
-uint32_t list_object_pool_size = 512;
+uint32_t batch_write_pool_size_default = 1024;
+uint32_t background_write_pool_size_default = 1024;
+uint32_t read_pool_size_default = 2048;
+uint32_t scan_pool_size_default = 2048;
+uint32_t list_object_pool_size_default = 512;
 }  // namespace
 
 TaskManager::TaskManager()
-    : batch_write_pool_(batch_write_pool_size),
-      bg_write_pool_(background_write_pool_size),
-      read_pool_(read_pool_size),
-      scan_pool_(scan_pool_size),
-      list_object_pool_(list_object_pool_size)
+    : batch_write_pool_(batch_write_pool_size_default),
+      bg_write_pool_(background_write_pool_size_default),
+      read_pool_(read_pool_size_default),
+      scan_pool_(scan_pool_size_default),
+      list_object_pool_(list_object_pool_size_default)
 {
 }
 
-void TaskManager::SetPoolSizesForTest(uint32_t batch_write_pool_size_,
-                                      uint32_t background_write_pool_size_,
-                                      uint32_t read_pool_size_,
-                                      uint32_t scan_pool_size_,
-                                      uint32_t list_object_pool_size_)
+void TaskManager::SetPoolSizesForTest(uint32_t batch_write_pool_size,
+                                      uint32_t background_write_pool_size,
+                                      uint32_t read_pool_size,
+                                      uint32_t scan_pool_size,
+                                      uint32_t list_object_pool_size)
 {
-    batch_write_pool_size = batch_write_pool_size_;
-    background_write_pool_size = background_write_pool_size_;
-    read_pool_size = read_pool_size_;
-    scan_pool_size = scan_pool_size_;
-    list_object_pool_size = list_object_pool_size_;
+    batch_write_pool_size_default = batch_write_pool_size;
+    background_write_pool_size_default = background_write_pool_size;
+    read_pool_size_default = read_pool_size;
+    scan_pool_size_default = scan_pool_size;
+    list_object_pool_size_default = list_object_pool_size;
 }
 
 BatchWriteTask *TaskManager::GetBatchWriteTask(const TableIdent &tbl_id)
