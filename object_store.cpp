@@ -825,10 +825,11 @@ bool AsyncHttpManager::ParseListObjectsResponse(
 void AsyncHttpManager::PerformRequests()
 {
     ProcessPendingRetries();
-    if (multi_handle_)
+    if (!multi_handle_ || active_requests_.empty())
     {
-        curl_multi_perform(multi_handle_, &running_handles_);
+        return;
     }
+    curl_multi_perform(multi_handle_, &running_handles_);
 }
 
 void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
