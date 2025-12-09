@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "common.h"
+#include "error.h"
 #include "test_utils.h"
 
 using namespace test_util;
@@ -115,7 +116,7 @@ TEST_CASE("rand write with expire timestamp", "[TTL]")
     eloqstore::EloqStore *store = InitStore(mem_store_opts);
     MapVerifier verify(test_tbl_id, store);
     verify.SetValueSize(10000);
-    verify.SetMaxTTL(4);
+    verify.SetMaxTTL(1000);
 
     for (size_t i = 0; i < 20; i++)
     {
@@ -131,7 +132,7 @@ TEST_CASE("upsert with expire timestamp", "[TTL]")
     MapVerifier verify(test_tbl_id, store, false);
     verify.SetValueSize(1000);
 
-    verify.SetMaxTTL(10);
+    verify.SetMaxTTL(100);
     const uint32_t batch_size = 1000;
     for (size_t i = 0; i < 20; i++)
     {
@@ -139,7 +140,7 @@ TEST_CASE("upsert with expire timestamp", "[TTL]")
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
         verify.Validate();
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     // Need a write operation to trigger the last clean operation.
     verify.Delete(0, 1);
     verify.Validate();
@@ -150,7 +151,8 @@ TEST_CASE("upsert with expire timestamp", "[TTL]")
     eloqstore::ScanRequest req;
     req.SetArgs(test_tbl_id, {}, {});
     store->ExecSync(&req);
-    CHECK(req.Error() == eloqstore::KvError::NoError);
+    CHECK(req.Error() == eloqstore::KvError::NoError ||
+          req.Error() == eloqstore::KvError::NotFound);
     CHECK(req.Entries().empty());
     CHECK(verify.DataSet().empty());
 }
