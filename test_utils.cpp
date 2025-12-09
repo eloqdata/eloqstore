@@ -343,13 +343,16 @@ void MapVerifier::Scan(std::string_view begin,
     auto it = answer_.lower_bound(begin_key);
     const auto it_end = answer_.lower_bound(end_key);
 
-    const uint64_t scan_now_ts = utils::UnixTs<chrono::milliseconds>();
     auto clean_expired = [&](std::string_view next_key)
     {
+        uint64_t now_ts = utils::UnixTs<chrono::milliseconds>();
         while (it != it_end && it->first < next_key)
         {
             CHECK(it->second.expire_ts_ != 0) << "key:" << it->first;
-            CHECK(it->second.expire_ts_ <= scan_now_ts) << "key:" << it->first;
+            CHECK(it->second.expire_ts_ <= now_ts)
+                << "key:" << it->first
+                << " expire_ts: " << it->second.expire_ts_
+                << " now_ts: " << now_ts;
             answer_.erase(it++);
         }
     };
@@ -361,6 +364,7 @@ void MapVerifier::Scan(std::string_view begin,
         if (req.Error() != eloqstore::KvError::NoError)
         {
             CHECK(req.Error() == eloqstore::KvError::NotFound);
+            LOG(INFO) << "Scan NotFound key:" << begin_key;
             clean_expired(end_key);
             CHECK(it == it_end);
             break;
