@@ -66,7 +66,7 @@ private:
         uint64_t ts,
         uint64_t expire_ts,
         std::string_view last_key,
-        uint64_t last_ts,
+        int64_t last_ts,
         bool restart);
 
     const KvOptions *const options_;

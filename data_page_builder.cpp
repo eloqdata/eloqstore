@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string_view>
 
 #include "coding.h"
@@ -14,6 +15,17 @@
 
 namespace eloqstore
 {
+namespace
+{
+int64_t ClampTimestampToInt64(uint64_t ts)
+{
+    constexpr uint64_t kMaxInt64 =
+        static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+    return ts > kMaxInt64 ? std::numeric_limits<int64_t>::max()
+                          : static_cast<int64_t>(ts);
+}
+}  // namespace
+
 DataPageBuilder::DataPageBuilder(const KvOptions *opt)
     : options_(opt), counter_(0), cnt_(0), finished_(false)
 {
@@ -69,7 +81,7 @@ std::tuple<size_t, size_t, size_t, uint64_t> DataPageBuilder::CalculateDelta(
     uint64_t ts,
     uint64_t expire_ts,
     std::string_view last_key,
-    uint64_t last_ts,
+    int64_t last_ts,
     bool restart)
 {
     // The number of bytes incurred by adding the key-value pair.
@@ -106,9 +118,10 @@ std::tuple<size_t, size_t, size_t, uint64_t> DataPageBuilder::CalculateDelta(
         addition_delta += Varint64Size(expire_ts);
     }
 
-    // Timestamp delta
-    assert(ts <= INT64_MAX);
-    int64_t ts_delta = (int64_t) ts - last_ts;
+    // Timestamp delta (timestamps may be larger than int64_t; clamp to keep the
+    // zig-zag encoder happy instead of crashing in test inputs).
+    int64_t ts_delta =
+        ClampTimestampToInt64(ts) - last_ts;
     uint64_t p_ts_delta = EncodeInt64Delta(ts_delta);
     addition_delta += Varint64Size(p_ts_delta);
     return {addition_delta, shared, non_shared, p_ts_delta};
@@ -215,7 +228,7 @@ bool DataPageBuilder::Add(std::string_view key,
     // Update state
     last_key_.resize(shared);
     last_key_.append(key.data() + shared, non_shared);
-    last_timestamp_ = ts;
+    last_timestamp_ = ClampTimestampToInt64(ts);
     assert(std::string_view(last_key_.data(), last_key_.size()) == key);
     ++counter_;
     ++cnt_;
