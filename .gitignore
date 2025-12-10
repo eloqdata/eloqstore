@@ -38,6 +38,8 @@ Release
 build
 build_coverage
 build-fuzz
+build-prof
+fuzz/out
 install
 .cache
 .vscode
