@@ -120,8 +120,7 @@ std::tuple<size_t, size_t, size_t, uint64_t> DataPageBuilder::CalculateDelta(
 
     // Timestamp delta (timestamps may be larger than int64_t; clamp to keep the
     // zig-zag encoder happy instead of crashing in test inputs).
-    int64_t ts_delta =
-        ClampTimestampToInt64(ts) - last_ts;
+    int64_t ts_delta = ClampTimestampToInt64(ts) - last_ts;
     uint64_t p_ts_delta = EncodeInt64Delta(ts_delta);
     addition_delta += Varint64Size(p_ts_delta);
     return {addition_delta, shared, non_shared, p_ts_delta};
