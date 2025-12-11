@@ -110,7 +110,10 @@ void DoWrite(eloqstore::EloqStore &store,
         val = cursor.TakeString(kMaxValueSize);
     }
     uint64_t ts = cursor.TakeU64();
-    uint64_t expire_ts = (cursor.TakeU8() & 1U) != 0 ? cursor.TakeU64() : 0;
+    uint64_t expire_ts =
+        op == eloqstore::WriteOp::Delete
+            ? 0
+            : ((cursor.TakeU8() & 1U) != 0 ? cursor.TakeU64() : 0);
 
     eloqstore::BatchWriteRequest req;
     std::vector<eloqstore::WriteDataEntry> batch;
@@ -211,7 +214,8 @@ void DoBatchWrite(eloqstore::EloqStore &store,
             val = cursor.TakeString(kMaxValueSize);
         }
         uint64_t ts = cursor.TakeU64();
-        uint64_t expire_ts = cursor.TakeBool() ? cursor.TakeU64() : 0;
+        uint64_t expire_ts =
+            is_upsert ? (cursor.TakeBool() ? cursor.TakeU64() : 0) : 0;
 
         entries.emplace_back(
             std::move(key),
