@@ -6,6 +6,7 @@
 
 #include "circular_queue.h"
 #include "eloq_store.h"
+#include "page_mapper.h"
 #include "task_manager.h"
 
 // https://github.com/cameron314/concurrentqueue/issues/280
@@ -104,6 +105,7 @@ private:
     std::thread thd_;
     PagesPool page_pool_;
     std::unique_ptr<AsyncIoManager> io_mgr_;
+    MappingArena mapping_arena_;
     IndexPageManager index_mgr_;
     TaskManager task_mgr_;
 #ifndef NDEBUG

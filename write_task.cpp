@@ -261,6 +261,7 @@ KvError WriteTask::FlushManifest()
         err = IoMgr()->AppendManifest(tbl_ident_, blob, manifest_size);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ += blob.size();
+        YieldNonBlocking();
     }
     else
     {
@@ -277,6 +278,7 @@ KvError WriteTask::FlushManifest()
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
         cow_meta_.compression_->ClearDirty();
+        YieldNonBlocking();
     }
     return KvError::NoError;
 }
@@ -292,20 +294,24 @@ KvError WriteTask::UpdateMeta()
         {
             err = FlushBatchPages();
             CHECK_KV_ERR(err);
+            YieldNonBlocking();
         }
     }
     else
     {
         err = WaitWrite();
         CHECK_KV_ERR(err);
+        YieldNonBlocking();
     }
 
     err = IoMgr()->SyncData(tbl_ident_);
     CHECK_KV_ERR(err);
+    YieldNonBlocking();
 
     // Update meta data in storage and then in memory.
     err = FlushManifest();
     CHECK_KV_ERR(err);
+    YieldNonBlocking();
 
     // Hooks after modified partition.
     CompactIfNeeded(cow_meta_.mapper_.get());

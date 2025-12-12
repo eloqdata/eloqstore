@@ -17,11 +17,13 @@ namespace eloqstore
 {
 class KvTask;
 class PageMapper;
+class MappingArena;
 
 class IndexPageManager
 {
 public:
-    IndexPageManager(AsyncIoManager *io_manager);
+    IndexPageManager(AsyncIoManager *io_manager,
+                     MappingArena *mapping_arena = nullptr);
     ~IndexPageManager();
 
     const Comparator *GetComparator() const;
@@ -73,6 +75,7 @@ public:
 
     const KvOptions *Options() const;
     AsyncIoManager *IoMgr() const;
+    MappingArena *MapperArena() const;
 
     void EvictRootIfEmpty(const TableIdent &tbl_id);
 
@@ -124,5 +127,6 @@ private:
     std::unordered_map<TableIdent, RootMeta> tbl_roots_;
 
     AsyncIoManager *io_manager_;
+    MappingArena *mapping_arena_;
 };
 }  // namespace eloqstore

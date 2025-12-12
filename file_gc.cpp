@@ -402,7 +402,7 @@ KvError DeleteUnreferencedCloudFiles(
     }
 
     KvTask *current_task = ThdTask();
-    auto *http_mgr = cloud_mgr->GetObjectStore().GetHttpManager();
+    AsyncHttpManager *http_mgr = cloud_mgr->GetObjectStore().GetHttpManager();
     if (files_to_delete.size() == data_files.size())
     {
         files_to_delete.emplace_back(tbl_id.ToString() + "/" +
