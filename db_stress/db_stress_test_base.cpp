@@ -4,8 +4,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include <string_view>
-
 #include <atomic>
 #include <cassert>
 #include <cstddef>
@@ -13,6 +11,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "db_stress_common.h"
