@@ -343,9 +343,9 @@ void MapVerifier::Scan(std::string_view begin,
     auto it = answer_.lower_bound(begin_key);
     const auto it_end = answer_.lower_bound(end_key);
 
-    const uint64_t scan_now_ts = utils::UnixTs<chrono::milliseconds>();
     auto clean_expired = [&](std::string_view next_key)
     {
+        uint64_t scan_now_ts = utils::UnixTs<chrono::milliseconds>();
         while (it != it_end && it->first < next_key)
         {
             CHECK(it->second.expire_ts_ != 0) << "key:" << it->first;
