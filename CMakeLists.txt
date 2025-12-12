@@ -14,7 +14,7 @@ if(WITH_COVERAGE)
     add_link_options(--coverage)
 endif()
 
-option(WITH_ASAN "build with ASAN" ON)
+option(WITH_ASAN "build with ASAN" OFF)
 if(WITH_ASAN)
     message("build eloqstore with ASAN: ${WITH_ASAN}")
     set(BOOST_CONTEXT_ASAN_PATH "$ENV{HOME}/boost_ucontext_asan")
