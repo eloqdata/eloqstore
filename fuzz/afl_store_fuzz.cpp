@@ -29,11 +29,11 @@ namespace fs = std::filesystem;
 
 namespace
 {
-constexpr size_t kMaxInputSize = 4096;
+constexpr size_t kMaxInputSize = 8192;
 constexpr size_t kMaxKeySize = 24;
 constexpr size_t kMaxValueSize = 96;
-constexpr size_t kMaxBatch = 24;
-constexpr size_t kMaxInflight = 64;
+constexpr size_t kMaxBatch = 64;
+constexpr size_t kMaxInflight = 256;
 
 using InflightCounter = std::atomic<size_t>;
 using RequestHolder =
@@ -62,7 +62,7 @@ void WaitForInflightBudget(InflightCounter &inflight)
 {
     while (inflight.load(std::memory_order_relaxed) >= kMaxInflight)
     {
-        std::this_thread::sleep_for(std::chrono::microseconds(50));
+        std::this_thread::sleep_for(std::chrono::microseconds(10));
     }
 }
 
@@ -74,9 +74,9 @@ void SubmitAsync(eloqstore::EloqStore &store,
 {
     WaitForInflightBudget(inflight);
     auto *req = new Request();
-    RequestHolder holder(
-        req, [](eloqstore::KvRequest *ptr)
-        { delete static_cast<Request *>(ptr); });
+    RequestHolder holder(req,
+                         [](eloqstore::KvRequest *ptr)
+                         { delete static_cast<Request *>(ptr); });
     fill_request(*req);
     inflight.fetch_add(1, std::memory_order_relaxed);
     auto on_finish = [&inflight](eloqstore::KvRequest *done)
@@ -281,8 +281,7 @@ void DoTruncate(eloqstore::EloqStore &store,
         store,
         inflight,
         owned_reqs,
-        [tbl, position_holder](
-            eloqstore::TruncateRequest &pending)
+        [tbl, position_holder](eloqstore::TruncateRequest &pending)
         { pending.SetArgs(tbl, *position_holder); });
 }
 
@@ -371,8 +370,12 @@ void DoPaginatedScan(eloqstore::EloqStore &store,
         store,
         inflight,
         owned_reqs,
-        [tbl, begin = std::move(begin), end = std::move(end), page_entries, page_size, prefetch_pages](
-            eloqstore::ScanRequest &pending)
+        [tbl,
+         begin = std::move(begin),
+         end = std::move(end),
+         page_entries,
+         page_size,
+         prefetch_pages](eloqstore::ScanRequest &pending)
         {
             pending.SetArgs(tbl, begin, end);
             pending.SetPagination(page_entries, page_size);
@@ -382,10 +385,13 @@ void DoPaginatedScan(eloqstore::EloqStore &store,
 
 void MaybeSleep(Cursor &cursor)
 {
-    const uint8_t pause_ms = cursor.TakeU8() % 5;
-    if (pause_ms != 0)
+    if ((cursor.TakeU8() & 7U) == 0)
     {
-        std::this_thread::sleep_for(std::chrono::milliseconds(pause_ms));
+        const uint8_t pause_ms = cursor.TakeU8() % 2;
+        if (pause_ms != 0)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(pause_ms));
+        }
     }
 }
 
@@ -393,10 +399,10 @@ eloqstore::KvOptions BuildOptions(const fs::path &workdir, Cursor &cursor)
 {
     eloqstore::KvOptions opts;
     opts.store_path = {workdir.string()};
-    opts.num_threads = 1 + (cursor.TakeU8() % 4);
-    opts.fd_limit = 64 + cursor.TakeU8();
-    opts.io_queue_size = 64 + (cursor.TakeU8() % 8) * 64;
-    opts.max_write_batch_pages = 8 + cursor.TakeU8();
+    opts.num_threads = 2 + (cursor.TakeU8() % 7);
+    opts.fd_limit = 128 + cursor.TakeU8();
+    opts.io_queue_size = 128 + (cursor.TakeU8() % 16) * 64;
+    opts.max_write_batch_pages = 16 + cursor.TakeU8();
     opts.pages_per_file_shift = 10 + (cursor.TakeU8() % 6);
     opts.data_append_mode = true;
     opts.enable_compression = cursor.TakeBool();
@@ -449,7 +455,7 @@ void RunOneInput(const uint8_t *data, size_t len)
                             static_cast<uint32_t>(cursor.TakeU8()));
     }
 
-    const size_t op_budget = 1 + (cursor.TakeU8() % 64);
+    const size_t op_budget = 32 + (cursor.TakeU8() % 224);
     InflightCounter inflight{0};
     std::vector<RequestHolder> owned_reqs;
     owned_reqs.reserve(op_budget + 4);
