@@ -17,7 +17,7 @@ endif()
 option(WITH_ASAN "build with ASAN" OFF)
 if(WITH_ASAN)
     message("build eloqstore with ASAN: ${WITH_ASAN}")
-    set(BOOST_CONTEXT_ASAN_PATH "/usr/local/boost_ucontext_asan")
+    set(BOOST_CONTEXT_ASAN_PATH "$ENV{HOME}/boost_ucontext_asan")
     add_compile_definitions(BOOST_USE_ASAN)
     add_compile_definitions(BOOST_USE_UCONTEXT)
 
@@ -26,8 +26,10 @@ if(WITH_ASAN)
             NAMES boost_context
             PATHS ${BOOST_CONTEXT_ASAN_PATH}/lib
             NO_DEFAULT_PATH)
+    set(BOOST_CONTEXT_TARGET ${Boost_CONTEXT_LIBRARY})
 else ()
     find_package(Boost REQUIRED COMPONENTS context)
+    set(BOOST_CONTEXT_TARGET Boost::context)
 endif()
 
 option(ELOQ_MODULE_ENABLED "Enable EloqModule" OFF)
@@ -120,12 +122,7 @@ set(ELOQ_STORE_SOURCES
 add_library(eloqstore STATIC ${ELOQ_STORE_SOURCES} ${INI_SOURCES})
 
 target_include_directories(eloqstore PUBLIC ${ELOQ_STORE_INCLUDE})
-target_link_libraries(eloqstore PRIVATE ${URING_LIB} glog::glog absl::flat_hash_map ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} ${AWSSDK_LINK_LIBRARIES})
-if(WITH_ASAN)
-    target_link_libraries(eloqstore PRIVATE ${Boost_CONTEXT_LIBRARY})
-else ()
-    target_link_libraries(eloqstore PRIVATE Boost::context)
-endif ()
+target_link_libraries(eloqstore PRIVATE ${URING_LIB} glog::glog absl::flat_hash_map ${BOOST_CONTEXT_TARGET} ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} ${AWSSDK_LINK_LIBRARIES})
 
 add_executable(page_checksum_tool tools/page_checksum_tool.cpp)
 target_include_directories(page_checksum_tool PUBLIC ${ELOQ_STORE_INCLUDE})
