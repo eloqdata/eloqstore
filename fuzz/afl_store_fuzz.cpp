@@ -1,9 +1,12 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -30,6 +33,64 @@ constexpr size_t kMaxInputSize = 4096;
 constexpr size_t kMaxKeySize = 24;
 constexpr size_t kMaxValueSize = 96;
 constexpr size_t kMaxBatch = 24;
+constexpr size_t kMaxInflight = 64;
+
+using InflightCounter = std::atomic<size_t>;
+using RequestHolder =
+    std::unique_ptr<eloqstore::KvRequest,
+                    std::function<void(eloqstore::KvRequest *)>>;
+
+bool IsAcceptableStatus(const eloqstore::KvRequest *req)
+{
+    const eloqstore::KvError err = req->Error();
+    switch (req->Type())
+    {
+    case eloqstore::RequestType::BatchWrite:
+    case eloqstore::RequestType::Truncate:
+        return err == eloqstore::KvError::NoError;
+    case eloqstore::RequestType::Read:
+    case eloqstore::RequestType::Floor:
+    case eloqstore::RequestType::Scan:
+        return err == eloqstore::KvError::NoError ||
+               err == eloqstore::KvError::NotFound;
+    default:
+        return true;
+    }
+}
+
+void WaitForInflightBudget(InflightCounter &inflight)
+{
+    while (inflight.load(std::memory_order_relaxed) >= kMaxInflight)
+    {
+        std::this_thread::sleep_for(std::chrono::microseconds(50));
+    }
+}
+
+template <typename Request, typename F>
+void SubmitAsync(eloqstore::EloqStore &store,
+                 InflightCounter &inflight,
+                 std::vector<RequestHolder> &owned_reqs,
+                 F &&fill_request)
+{
+    WaitForInflightBudget(inflight);
+    auto *req = new Request();
+    RequestHolder holder(
+        req, [](eloqstore::KvRequest *ptr)
+        { delete static_cast<Request *>(ptr); });
+    fill_request(*req);
+    inflight.fetch_add(1, std::memory_order_relaxed);
+    auto on_finish = [&inflight](eloqstore::KvRequest *done)
+    {
+        [[maybe_unused]] const bool ok = IsAcceptableStatus(done);
+        inflight.fetch_sub(1, std::memory_order_relaxed);
+    };
+    if (!store.ExecAsyn(req, 0, on_finish))
+    {
+        inflight.fetch_sub(1, std::memory_order_relaxed);
+        return;
+    }
+    owned_reqs.push_back(std::move(holder));
+}
 
 struct Cursor
 {
@@ -97,7 +158,9 @@ private:
 void DoWrite(eloqstore::EloqStore &store,
              const eloqstore::TableIdent &tbl,
              Cursor &cursor,
-             eloqstore::WriteOp op)
+             eloqstore::WriteOp op,
+             InflightCounter &inflight,
+             std::vector<RequestHolder> &owned_reqs)
 {
     std::string key = cursor.TakeString(kMaxKeySize);
     if (key.empty())
@@ -115,30 +178,41 @@ void DoWrite(eloqstore::EloqStore &store,
             ? 0
             : ((cursor.TakeU8() & 1U) != 0 ? cursor.TakeU64() : 0);
 
-    eloqstore::BatchWriteRequest req;
     std::vector<eloqstore::WriteDataEntry> batch;
     batch.emplace_back(std::move(key), std::move(val), ts, op, expire_ts);
-    req.SetArgs(tbl, std::move(batch));
-    store.ExecSync(&req);
+    SubmitAsync<eloqstore::BatchWriteRequest>(
+        store,
+        inflight,
+        owned_reqs,
+        [tbl, batch = std::move(batch)](
+            eloqstore::BatchWriteRequest &pending) mutable
+        { pending.SetArgs(tbl, std::move(batch)); });
 }
 
 void DoRead(eloqstore::EloqStore &store,
             const eloqstore::TableIdent &tbl,
-            Cursor &cursor)
+            Cursor &cursor,
+            InflightCounter &inflight,
+            std::vector<RequestHolder> &owned_reqs)
 {
     std::string key = cursor.TakeString(kMaxKeySize);
     if (key.empty())
     {
         return;
     }
-    eloqstore::ReadRequest req;
-    req.SetArgs(tbl, key);
-    store.ExecSync(&req);
+    SubmitAsync<eloqstore::ReadRequest>(
+        store,
+        inflight,
+        owned_reqs,
+        [tbl, key = std::move(key)](eloqstore::ReadRequest &pending)
+        { pending.SetArgs(tbl, std::move(key)); });
 }
 
 void DoScan(eloqstore::EloqStore &store,
             const eloqstore::TableIdent &tbl,
-            Cursor &cursor)
+            Cursor &cursor,
+            InflightCounter &inflight,
+            std::vector<RequestHolder> &owned_reqs)
 {
     std::string begin = cursor.TakeString(kMaxKeySize);
     std::string end = cursor.TakeString(kMaxKeySize);
@@ -156,44 +230,67 @@ void DoScan(eloqstore::EloqStore &store,
         std::swap(begin, end);
     }
 
-    eloqstore::ScanRequest req;
-    req.SetArgs(tbl, begin, end);
-    req.SetPagination(8, 4 * 1024);
-    req.SetPrefetchPageNum(1 + (cursor.TakeU8() % 4));
-    store.ExecSync(&req);
+    const size_t prefetch = 1 + (cursor.TakeU8() % 4);
+    SubmitAsync<eloqstore::ScanRequest>(
+        store,
+        inflight,
+        owned_reqs,
+        [tbl, begin = std::move(begin), end = std::move(end), prefetch](
+            eloqstore::ScanRequest &pending)
+        {
+            pending.SetArgs(tbl, begin, end);
+            pending.SetPagination(8, 4 * 1024);
+            pending.SetPrefetchPageNum(prefetch);
+        });
 }
 
 void DoFloor(eloqstore::EloqStore &store,
              const eloqstore::TableIdent &tbl,
-             Cursor &cursor)
+             Cursor &cursor,
+             InflightCounter &inflight,
+             std::vector<RequestHolder> &owned_reqs)
 {
     std::string key = cursor.TakeString(kMaxKeySize);
     if (key.empty())
     {
         return;
     }
-    eloqstore::FloorRequest req;
-    req.SetArgs(tbl, key);
-    store.ExecSync(&req);
+    SubmitAsync<eloqstore::FloorRequest>(
+        store,
+        inflight,
+        owned_reqs,
+        [tbl, key = std::move(key)](eloqstore::FloorRequest &pending)
+        { pending.SetArgs(tbl, std::move(key)); });
 }
 
 void DoTruncate(eloqstore::EloqStore &store,
                 const eloqstore::TableIdent &tbl,
-                Cursor &cursor)
+                Cursor &cursor,
+                InflightCounter &inflight,
+                std::vector<RequestHolder> &owned_reqs,
+                std::vector<std::shared_ptr<std::string>> &truncate_payloads)
 {
     std::string position = cursor.TakeString(kMaxKeySize);
     if (position.empty())
     {
         position = "0";
     }
-    eloqstore::TruncateRequest req;
-    req.SetArgs(tbl, position);
-    store.ExecSync(&req);
+    auto position_holder = std::make_shared<std::string>(std::move(position));
+    truncate_payloads.push_back(position_holder);
+    SubmitAsync<eloqstore::TruncateRequest>(
+        store,
+        inflight,
+        owned_reqs,
+        [tbl, position_holder](
+            eloqstore::TruncateRequest &pending)
+        { pending.SetArgs(tbl, *position_holder); });
 }
 
 void DoBatchWrite(eloqstore::EloqStore &store,
                   const eloqstore::TableIdent &tbl,
-                  Cursor &cursor)
+                  Cursor &cursor,
+                  InflightCounter &inflight,
+                  std::vector<RequestHolder> &owned_reqs)
 {
     const size_t count = 1 + cursor.TakeSize(kMaxBatch);
     std::vector<eloqstore::WriteDataEntry> entries;
@@ -235,14 +332,20 @@ void DoBatchWrite(eloqstore::EloqStore &store,
 
     entries.erase(dedup_end, entries.end());
 
-    eloqstore::BatchWriteRequest req;
-    req.SetArgs(tbl, std::move(entries));
-    store.ExecSync(&req);
+    SubmitAsync<eloqstore::BatchWriteRequest>(
+        store,
+        inflight,
+        owned_reqs,
+        [tbl, entries = std::move(entries)](
+            eloqstore::BatchWriteRequest &pending) mutable
+        { pending.SetArgs(tbl, std::move(entries)); });
 }
 
 void DoPaginatedScan(eloqstore::EloqStore &store,
                      const eloqstore::TableIdent &tbl,
-                     Cursor &cursor)
+                     Cursor &cursor,
+                     InflightCounter &inflight,
+                     std::vector<RequestHolder> &owned_reqs)
 {
     std::string begin = cursor.TakeString(kMaxKeySize);
     std::string end = cursor.TakeString(kMaxKeySize);
@@ -264,22 +367,17 @@ void DoPaginatedScan(eloqstore::EloqStore &store,
     const size_t page_size = 256 + (cursor.TakeSize(15) * 256);
     const size_t prefetch_pages = 1 + cursor.TakeSize(6);
 
-    eloqstore::ScanRequest req;
-    req.SetArgs(tbl, begin, end);
-    req.SetPagination(page_entries, page_size);
-    req.SetPrefetchPageNum(prefetch_pages);
-    store.ExecSync(&req);
-
-    // Walk the pagination path a few times to cover HasRemaining logic.
-    int guard = 0;
-    while (req.HasRemaining() && !req.Entries().empty() && guard++ < 4)
-    {
-        const std::string &next_begin = req.Entries().back().key_;
-        req.SetArgs(tbl, next_begin, end, false);
-        req.SetPagination(page_entries, page_size);
-        req.SetPrefetchPageNum(prefetch_pages);
-        store.ExecSync(&req);
-    }
+    SubmitAsync<eloqstore::ScanRequest>(
+        store,
+        inflight,
+        owned_reqs,
+        [tbl, begin = std::move(begin), end = std::move(end), page_entries, page_size, prefetch_pages](
+            eloqstore::ScanRequest &pending)
+        {
+            pending.SetArgs(tbl, begin, end);
+            pending.SetPagination(page_entries, page_size);
+            pending.SetPrefetchPageNum(prefetch_pages);
+        });
 }
 
 void MaybeSleep(Cursor &cursor)
@@ -295,7 +393,7 @@ eloqstore::KvOptions BuildOptions(const fs::path &workdir, Cursor &cursor)
 {
     eloqstore::KvOptions opts;
     opts.store_path = {workdir.string()};
-    opts.num_threads = 1 + (cursor.TakeU8() % 2);
+    opts.num_threads = 1 + (cursor.TakeU8() % 4);
     opts.fd_limit = 64 + cursor.TakeU8();
     opts.io_queue_size = 64 + (cursor.TakeU8() % 8) * 64;
     opts.max_write_batch_pages = 8 + cursor.TakeU8();
@@ -352,6 +450,11 @@ void RunOneInput(const uint8_t *data, size_t len)
     }
 
     const size_t op_budget = 1 + (cursor.TakeU8() % 64);
+    InflightCounter inflight{0};
+    std::vector<RequestHolder> owned_reqs;
+    owned_reqs.reserve(op_budget + 4);
+    std::vector<std::shared_ptr<std::string>> truncate_payloads;
+    truncate_payloads.reserve(op_budget / 2 + 1);
     for (size_t i = 0; i < op_budget && cursor.Remaining() > 0; ++i)
     {
         const eloqstore::TableIdent &tbl =
@@ -360,36 +463,55 @@ void RunOneInput(const uint8_t *data, size_t len)
         switch (op % 7)
         {
         case 0:
-            DoBatchWrite(store, tbl, cursor);
+            DoBatchWrite(store, tbl, cursor, inflight, owned_reqs);
             break;
         case 1:
-            DoWrite(store, tbl, cursor, eloqstore::WriteOp::Upsert);
+            DoWrite(store,
+                    tbl,
+                    cursor,
+                    eloqstore::WriteOp::Upsert,
+                    inflight,
+                    owned_reqs);
             break;
         case 2:
-            DoWrite(store, tbl, cursor, eloqstore::WriteOp::Delete);
+            DoWrite(store,
+                    tbl,
+                    cursor,
+                    eloqstore::WriteOp::Delete,
+                    inflight,
+                    owned_reqs);
             break;
         case 3:
-            DoRead(store, tbl, cursor);
+            DoRead(store, tbl, cursor, inflight, owned_reqs);
             break;
         case 4:
-            DoScan(store, tbl, cursor);
+            DoScan(store, tbl, cursor, inflight, owned_reqs);
             break;
         case 5:
-            DoPaginatedScan(store, tbl, cursor);
+            DoPaginatedScan(store, tbl, cursor, inflight, owned_reqs);
             break;
         case 6:
-            DoFloor(store, tbl, cursor);
+            DoFloor(store, tbl, cursor, inflight, owned_reqs);
             break;
         }
         if ((op & 3U) == 0 && cursor.TakeBool())
         {
-            DoTruncate(store, tbl, cursor);
+            DoTruncate(
+                store, tbl, cursor, inflight, owned_reqs, truncate_payloads);
         }
         if ((op & 1U) != 0)
         {
             MaybeSleep(cursor);
         }
     }
+
+    while (inflight.load(std::memory_order_acquire) != 0)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    owned_reqs.clear();
+    truncate_payloads.clear();
 
     store.Stop();
     fs::remove_all(workdir, ec);
