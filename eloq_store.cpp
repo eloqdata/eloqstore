@@ -691,7 +691,15 @@ void BatchWriteRequest::Clear()
 void TruncateRequest::SetArgs(TableIdent tbl_id, std::string_view position)
 {
     SetTableId(std::move(tbl_id));
+    position_storage_.clear();
     position_ = position;
+}
+
+void TruncateRequest::SetArgs(TableIdent tbl_id, std::string position)
+{
+    SetTableId(std::move(tbl_id));
+    position_storage_ = std::move(position);
+    position_ = position_storage_;
 }
 
 void DropTableRequest::SetArgs(std::string table_name)

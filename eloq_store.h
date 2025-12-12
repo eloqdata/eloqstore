@@ -177,6 +177,9 @@ public:
 private:
     // input
     bool begin_inclusive_;
+    // output
+    bool has_remaining_;
+    // input
     std::variant<std::string_view, std::string> begin_key_;
     std::variant<std::string_view, std::string> end_key_;
     size_t page_entries_{SIZE_MAX};
@@ -184,7 +187,6 @@ private:
     // output
     std::vector<KvEntry> entries_;
     size_t num_entries_{0};
-    bool has_remaining_;
     size_t prefetch_page_num_{kDefaultScanPrefetchPageCount};
     friend class ScanTask;
 };
@@ -279,9 +281,13 @@ public:
         return RequestType::Truncate;
     }
     void SetArgs(TableIdent tid, std::string_view position);
+    void SetArgs(TableIdent tid, std::string position);
 
     // input
     std::string_view position_;
+
+private:
+    std::string position_storage_;
 };
 
 class DropTableRequest : public KvRequest

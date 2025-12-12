@@ -57,7 +57,8 @@ TEST_CASE("truncate from the first key", "[batch_write]")
     {
         eloqstore::TruncateRequest batch_write_req;
         std::vector<eloqstore::WriteDataEntry> entries;
-        batch_write_req.SetArgs(tbl_id, "0");
+        std::string key = "0";
+        batch_write_req.SetArgs(tbl_id, std::move(key));
         verify.ExecWrite(&batch_write_req);
     }
 }
@@ -84,14 +85,16 @@ TEST_CASE("truncate twice overflow values", "[batch_write]")
     {
         eloqstore::TruncateRequest batch_write_req;
         std::vector<eloqstore::WriteDataEntry> entries;
-        batch_write_req.SetArgs(tbl_id, "40000");
+        std::string key = "40000";
+        batch_write_req.SetArgs(tbl_id, std::move(key));
         verify.ExecWrite(&batch_write_req);
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(2000));
     {
         eloqstore::TruncateRequest batch_write_req;
         std::vector<eloqstore::WriteDataEntry> entries;
-        batch_write_req.SetArgs(tbl_id, "1");
+        std::string key = "1";
+        batch_write_req.SetArgs(tbl_id, std::move(key));
         verify.ExecWrite(&batch_write_req);
     }
 }

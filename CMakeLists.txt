@@ -15,9 +15,26 @@ if(WITH_COVERAGE)
 endif()
 
 option(WITH_ASAN "build with ASAN" OFF)
-if (WITH_ASAN)
+if(WITH_ASAN)
+    message("build eloqstore with ASAN: ${WITH_ASAN}")
+    set(BOOST_CONTEXT_ASAN_PATH "$ENV{HOME}/boost_ucontext_asan")
+    add_compile_definitions(BOOST_USE_ASAN)
+    add_compile_definitions(BOOST_USE_UCONTEXT)
+
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
-endif ()
+    find_library(Boost_CONTEXT_LIBRARY
+            NAMES boost_context
+            PATHS ${BOOST_CONTEXT_ASAN_PATH}/lib
+            NO_DEFAULT_PATH)
+    set(BOOST_CONTEXT_TARGET ${Boost_CONTEXT_LIBRARY})
+    if(NOT Boost_CONTEXT_LIBRARY)
+        message(FATAL_ERROR
+                "boost_context (ASAN/ucontext) not found in ${BOOST_CONTEXT_ASAN_PATH}/lib")
+    endif()
+else ()
+    find_package(Boost REQUIRED COMPONENTS context)
+    set(BOOST_CONTEXT_TARGET Boost::context)
+endif()
 
 option(ELOQ_MODULE_ENABLED "Enable EloqModule" OFF)
 message("ELOQ_MODULE_ENABLED: " ${ELOQ_MODULE_ENABLED})
@@ -29,18 +46,11 @@ endif ()
 find_package(Threads REQUIRED)
 find_package(glog REQUIRED)
 
-find_package(Boost REQUIRED COMPONENTS context)
 
 find_package(jsoncpp REQUIRED)
 find_package(CURL REQUIRED)
 find_library(ZSTD_LIBRARY zstd)
 find_package(AWSSDK REQUIRED COMPONENTS s3)
-
-if (Boost_FOUND)
-    message(STATUS "Boost found at: ${Boost_INCLUDE_DIRS}")
-else ()
-    message(FATAL_ERROR "Boost.Context not found!")
-endif ()
 
 find_path(URING_INCLUDE_PATH NAMES liburing.h)
 find_library(URING_LIB NAMES uring)
@@ -110,7 +120,7 @@ set(ELOQ_STORE_SOURCES
 add_library(eloqstore STATIC ${ELOQ_STORE_SOURCES} ${INI_SOURCES})
 
 target_include_directories(eloqstore PUBLIC ${ELOQ_STORE_INCLUDE})
-target_link_libraries(eloqstore PRIVATE ${URING_LIB} Boost::context glog::glog absl::flat_hash_map ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} ${AWSSDK_LINK_LIBRARIES})
+target_link_libraries(eloqstore PRIVATE ${URING_LIB} glog::glog absl::flat_hash_map ${BOOST_CONTEXT_TARGET} ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} ${AWSSDK_LINK_LIBRARIES})
 
 add_executable(page_checksum_tool tools/page_checksum_tool.cpp)
 target_include_directories(page_checksum_tool PUBLIC ${ELOQ_STORE_INCLUDE})
