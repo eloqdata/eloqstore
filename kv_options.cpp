@@ -4,7 +4,6 @@
 
 #include <bit>
 #include <boost/algorithm/string.hpp>
-#include <catch2/catch_test_macros.hpp>
 #include <cctype>
 #include <charconv>
 #include <limits>

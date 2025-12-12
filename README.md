@@ -14,6 +14,20 @@ cd build
 cmake .. -DCMAKE_BUILD_TYPE=Debug -DWITH_ASAN=ON
 cmake --build . -j8
 cd ..
+
+# Note that https://www.boost.org/doc/libs/master/libs/context/doc/html/context/stack/sanitizers.html
+wget https://github.com/boostorg/boost/releases/download/boost-1.90.0/boost-1.90.0-b2-nodocs.tar.gz
+cd boost-1.90.0
+./bootstrap.sh
+sudo ./b2 --with-context \
+     context-impl=ucontext \
+     cxxflags="-fsanitize=address -DBOOST_USE_ASAN" \
+     linkflags="-fsanitize=address" \
+     variant=debug \
+     threading=multi \
+     link=static,shared \
+     install \
+     --prefix=$HOME/boost_ucontext_asan
 ```
 
 ### Release Mode
