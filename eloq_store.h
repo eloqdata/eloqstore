@@ -279,9 +279,13 @@ public:
         return RequestType::Truncate;
     }
     void SetArgs(TableIdent tid, std::string_view position);
+    void SetArgs(TableIdent tid, std::string position);
 
     // input
     std::string_view position_;
+
+private:
+    std::string position_storage_;
 };
 
 class DropTableRequest : public KvRequest

@@ -193,7 +193,7 @@ void MapVerifier::Truncate(uint64_t position, bool delete_all)
     else
     {
         std::string key = Key(position, key_len_);
-        req.SetArgs(tid_, key);
+        req.SetArgs(tid_, std::move(key));
     }
     ExecWrite(&req);
 }
@@ -251,7 +251,7 @@ void MapVerifier::Clean()
     LOG(INFO) << "Clean()";
 
     eloqstore::TruncateRequest req;
-    req.SetArgs(tid_, {});
+    req.SetArgs(tid_, std::string_view{});
     ExecWrite(&req);
 }
 
@@ -884,7 +884,7 @@ void ConcurrencyTester::Clear()
     for (Partition &part : partitions_)
     {
         eloqstore::TruncateRequest req;
-        req.SetArgs({tbl_name_, part.id_}, {});
+        req.SetArgs({tbl_name_, part.id_}, std::string_view{});
         store_->ExecSync(&req);
         CHECK(req.Error() == eloqstore::KvError::NoError);
     }

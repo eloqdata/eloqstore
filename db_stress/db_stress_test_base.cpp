@@ -4,6 +4,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <string_view>
+
 #include <atomic>
 #include <cassert>
 #include <cstddef>
@@ -218,7 +220,7 @@ void StressTest::ClearDb()
     for (auto partition : partitions_)
     {
         partition->trun_req_.SetArgs(
-            {thread_state_->table_name_, partition->id_}, {});
+            {thread_state_->table_name_, partition->id_}, std::string_view{});
         user_data = partition->id_;
         bool ok =
             store_->ExecAsyn(&partition->trun_req_,
