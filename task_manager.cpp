@@ -1,6 +1,6 @@
 #include "task_manager.h"
 
-#include <boost/context/continuation_fcontext.hpp>
+#include <boost/context/continuation.hpp>
 #include <cassert>
 
 #include "list_object_task.h"
