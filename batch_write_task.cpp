@@ -1641,8 +1641,14 @@ std::pair<bool, KvError> BatchWriteTask::TruncateDataPage(
     const Comparator *cmp = shard->IndexManager()->GetComparator();
     DataPageIter iter{&page, Options()};
     data_page_builder_.Reset();
-    while (iter.Next() && cmp->Compare(iter.Key(), trunc_pos) < 0)
+    bool has_trunc_tail = false;
+    while (iter.Next())
     {
+        if (cmp->Compare(iter.Key(), trunc_pos) >= 0)
+        {
+            has_trunc_tail = true;
+            break;
+        }
         data_page_builder_.Add(iter.Key(),
                                iter.Value(),
                                iter.IsOverflow(),
@@ -1650,19 +1656,22 @@ std::pair<bool, KvError> BatchWriteTask::TruncateDataPage(
                                iter.ExpireTs(),
                                iter.CompressionType());
     }
-    do
+    if (has_trunc_tail)
     {
-        if (iter.IsOverflow())
+        do
         {
-            err = DelOverflowValue(iter.Value());
-            if (err != KvError::NoError)
+            if (iter.IsOverflow())
             {
-                return {true, err};
+                err = DelOverflowValue(iter.Value());
+                if (err != KvError::NoError)
+                {
+                    return {true, err};
+                }
             }
-        }
-        uint64_t expire_ts = iter.ExpireTs();
-        UpdateTTL(expire_ts, iter.Key(), WriteOp::Delete);
-    } while (iter.Next());
+            uint64_t expire_ts = iter.ExpireTs();
+            UpdateTTL(expire_ts, iter.Key(), WriteOp::Delete);
+        } while (iter.Next());
+    }
 
     if (data_page_builder_.IsEmpty())
     {

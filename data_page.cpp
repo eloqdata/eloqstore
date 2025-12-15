@@ -112,9 +112,7 @@ DataPageIter::DataPageIter(const DataPage *data_page, const KvOptions *options)
       restart_offset_(data_page == nullptr
                           ? 0
                           : data_page->ContentLength() -
-                                (1 + restart_num_) * sizeof(uint16_t)),
-      curr_offset_(DataPage::content_offset),
-      curr_restart_idx_(0)
+                                (1 + restart_num_) * sizeof(uint16_t))
 {
 }
 
@@ -419,6 +417,7 @@ void DataPageIter::Invalidate()
     value_ = std::string_view{};
     expire_ts_ = 0;
     timestamp_ = 0;
+    overflow_ = false;
     compression_type_ = compression::CompressionType::None;
 }
 

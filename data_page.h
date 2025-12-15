@@ -154,7 +154,7 @@ private:
     uint16_t RegionOffset(uint16_t region_idx) const;
     std::string_view page_;
     uint16_t cur_region_idx_{0};
-    uint16_t num_regions_;
+    uint16_t num_regions_{};
     const char *restart_array_{nullptr};
 };
 
