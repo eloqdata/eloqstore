@@ -125,8 +125,17 @@ KvError BackgroundWrite::CompactDataFile()
     const FileId end_file_id = allocator->CurrentFileId();
     FileId min_file_id = end_file_id;
     uint32_t empty_file_cnt = 0;
-    for (FileId file_id = begin_file_id; file_id < end_file_id; file_id++)
+    size_t compacted_data = 0;
+    size_t compaction_limit = Options()->compacted_data_per_compaction;
+    bool unfinished = false;
+    FileId file_id = begin_file_id;
+    for (; file_id < end_file_id; file_id++)
     {
+        if (compaction_limit > 0 && compacted_data >= compaction_limit)
+        {
+            unfinished = true;
+            break;
+        }
         FilePageId end_fp_id = (file_id + 1) << opts->pages_per_file_shift;
         while (it_high != fp_ids.end() && it_high->first < end_fp_id)
         {
@@ -172,6 +181,7 @@ KvError BackgroundWrite::CompactDataFile()
                     auto [_, new_fp_id] = AllocatePage(page_id);
                     moving_cached.Add(page, new_fp_id);
                     err = WritePage(page, new_fp_id);
+                    compacted_data += Options()->data_page_size;
                     CHECK_KV_ERR(err);
                 }
                 else
@@ -199,6 +209,7 @@ KvError BackgroundWrite::CompactDataFile()
                 }
                 auto [_, new_fp_id] = AllocatePage(page_id);
                 err = WritePage(std::move(move_batch_buf[i]), new_fp_id);
+                compacted_data += Options()->data_page_size;
                 CHECK_KV_ERR(err);
                 i++;
             }
@@ -209,7 +220,10 @@ KvError BackgroundWrite::CompactDataFile()
         }
         it_low = it_high;
     }
-    allocator->UpdateStat(min_file_id, empty_file_cnt);
+    if (!unfinished)
+    {
+        allocator->UpdateStat(min_file_id, empty_file_cnt);
+    }
     assert(mapping_cnt == mapper->MappingCount());
     assert(allocator->SpaceSize() >= mapping_cnt);
     assert(meta->mapper_->DebugStat());
@@ -218,6 +232,11 @@ KvError BackgroundWrite::CompactDataFile()
     CHECK_KV_ERR(err);
     moving_cached.Finish();
     TriggerFileGC();
+    if (unfinished)
+    {
+        LOG(INFO) << "Compacted " << compacted_data << " bytes on "
+                  << this->tbl_ident_ << " and will continue later";
+    }
     return KvError::NoError;
 }
 

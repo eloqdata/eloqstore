@@ -373,3 +373,36 @@ TEST_CASE("batch write task pool cleaned after abort", "[batch_write]")
 
     REQUIRE(saw_abort);
 }
+
+TEST_CASE("truncate big data", "[batch_write]")
+{
+    auto opts = append_opts;
+    eloqstore::EloqStore *store = InitStore(opts);
+    eloqstore::TableIdent tbl_id("t1", 1);
+    MapVerifier verify(tbl_id, store, false);
+    std::string large(1024 * 1024, 'x');
+    std::vector<eloqstore::WriteDataEntry> entries;
+    entries.reserve(1000);
+    for (int i = 0; i < 1000; i++)
+    {
+        entries.emplace_back(
+            std::to_string(i), large, 1, eloqstore::WriteOp::Upsert);
+    }
+    std::sort(entries.begin(), entries.end());
+    for (int round = 0; round < 10; ++round)
+    {
+        auto batch = entries;
+        for (size_t i = 0; i < batch.size(); ++i)
+        {
+            if (i % 5 == round / 2)
+            {
+                batch[i].op_ = eloqstore::WriteOp::Delete;
+                batch[i].expire_ts_ = 0;
+            }
+        }
+        eloqstore::BatchWriteRequest batch_write_req;
+        batch_write_req.SetArgs(tbl_id, std::move(batch));
+        verify.ExecWrite(&batch_write_req);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+}

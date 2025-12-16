@@ -225,6 +225,11 @@ struct KvOptions
      * @brief Size of mapping arena.
      */
     size_t mapping_arena_size = 128;
+    /**
+     * @brief Data volume to compact per compaction. Used for avoid blocking
+     * online writes. 0 for unlimited.
+     */
+    size_t compacted_data_per_compaction = 32 * MB;
 
     std::function<bool(const TableIdent &)> prewarm_filter;
 };

@@ -40,6 +40,7 @@ const eloqstore::KvOptions append_opts = {
     .store_path = {test_path},
     .pages_per_file_shift = 8,
     .data_append_mode = true,
+    .compacted_data_per_compaction = 1,
 };
 const eloqstore::KvOptions archive_opts = {
     .num_retained_archives = 1,
