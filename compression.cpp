@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "coding.h"
+#include "task.h"
 
 namespace eloqstore::compression
 {
@@ -194,7 +195,7 @@ void DictCompression::AddSample(const std::string &sample)
 void DictCompression::SampleAndBuildDictionaryIfNeeded(
     const std::span<WriteDataEntry> &entries)
 {
-    if (HasDictionary())
+    if (!Options()->enable_compression || HasDictionary())
     {
         return;
     }
