@@ -437,10 +437,10 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
         mapping->Unswizzling(page);
     }
     meta.Unpin();
-    EvictRootIfEmpty(tbl_it);
 
     // Removes the page from the active list.
     page->Deque();
+    EvictRootIfEmpty(tbl_it);
     assert(page->page_id_ != MaxPageId);
     assert(page->file_page_id_ != MaxFilePageId);
     page->page_id_ = MaxPageId;

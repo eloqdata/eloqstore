@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -117,6 +118,176 @@ TEST_CASE("batch write with big key", "[batch_write]")
         }
     }
     verify.Validate();
+}
+
+TEST_CASE("batch write abort releases pinned index pages",
+          "[batch_write][abort]")
+{
+    eloqstore::KvOptions opts = append_opts;
+    opts.store_path = {test_path};
+    opts.num_threads = 1;
+    opts.data_page_size = 4096;
+    opts.index_buffer_pool_size = 4096;  // Allow only a single MemIndexPage.
+    opts.buf_ring_size = 8;
+    opts.max_write_batch_pages = 4;
+
+    auto build_entries =
+        [](uint32_t start, uint32_t count, size_t key_len, size_t value_len)
+    {
+        std::vector<eloqstore::WriteDataEntry> entries;
+        entries.reserve(count);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            std::string key = std::to_string(start + i);
+            key.push_back('-');
+            if (key.size() < key_len)
+            {
+                char fill = static_cast<char>('a' + ((start + i) % 26));
+                key.append(key_len - key.size(), fill);
+            }
+            std::string value(value_len, 'v');
+            entries.emplace_back(std::move(key),
+                                 std::move(value),
+                                 1,
+                                 eloqstore::WriteOp::Upsert);
+        }
+        return entries;
+    };
+
+    eloqstore::EloqStore *store = InitStore(opts);
+
+    const size_t key_len = 96;
+    const size_t large_value_len = 3500;
+
+    eloqstore::TableIdent tbl_id{"abort-oom", 0};
+    eloqstore::BatchWriteRequest first_req;
+    first_req.SetArgs(tbl_id, build_entries(0, 4, key_len, large_value_len));
+    store->ExecSync(&first_req);
+    REQUIRE(first_req.Error() == eloqstore::KvError::NoError);
+
+    // The second write must allocate a fresh index page while the existing root
+    // is pinned. With only one slot in the index buffer pool, this triggers
+    // KvError::OutOfMem and calls BatchWriteTask::Abort to unpin/recycle pages.
+    eloqstore::BatchWriteRequest oom_req;
+    oom_req.SetArgs(tbl_id, build_entries(4, 2, key_len, large_value_len));
+    store->ExecSync(&oom_req);
+    REQUIRE(oom_req.Error() == eloqstore::KvError::OutOfMem);
+
+    // After abort the pool should be reusable; a new partition can evict the
+    // released page and finish normally.
+    eloqstore::TableIdent recover_tbl{"abort-oom", 1};
+    eloqstore::BatchWriteRequest recover_req;
+    recover_req.SetArgs(recover_tbl, build_entries(0, 1, 32, 64));
+    store->ExecSync(&recover_req);
+    REQUIRE(recover_req.Error() == eloqstore::KvError::NoError);
+}
+
+TEST_CASE("batch write task pool handles many partitions concurrently",
+          "[batch_write][task_pool]")
+{
+    eloqstore::KvOptions opts = append_opts;
+    opts.store_path = {test_path};
+    opts.num_threads = 1;                      // single shard, many partitions
+    opts.index_buffer_pool_size = 4096 * 400;  // enough for many pages
+    opts.max_write_batch_pages = 8;
+
+    auto make_entries = [](uint32_t base, uint32_t count)
+    {
+        std::vector<eloqstore::WriteDataEntry> entries;
+        entries.reserve(count);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            std::string key = "k" + std::to_string(base + i);
+            std::string val = "v" + std::to_string(base + i);
+            entries.emplace_back(
+                std::move(key), std::move(val), 1, eloqstore::WriteOp::Upsert);
+        }
+        return entries;
+    };
+
+    eloqstore::EloqStore *store = InitStore(opts);
+
+    constexpr uint32_t partitions = 3000;
+    std::vector<eloqstore::BatchWriteRequest> wave1(partitions);
+    std::vector<eloqstore::BatchWriteRequest> wave2(partitions);
+
+    for (uint32_t pid = 0; pid < partitions; ++pid)
+    {
+        eloqstore::TableIdent tbl_id{"pool", pid};
+        wave1[pid].SetArgs(tbl_id, make_entries(0, 4));
+        REQUIRE(store->ExecAsyn(&wave1[pid]));
+    }
+    for (uint32_t pid = 0; pid < partitions; ++pid)
+    {
+        wave1[pid].Wait();
+        // With many partitions sharing one shard, a few can hit OOM.
+        REQUIRE((wave1[pid].Error() == eloqstore::KvError::NoError ||
+                 wave1[pid].Error() == eloqstore::KvError::OutOfMem));
+    }
+    // Truncate everything to free index/data pages before the second wave.
+    std::vector<eloqstore::TruncateRequest> trunc1(partitions);
+    for (uint32_t pid = 0; pid < partitions; ++pid)
+    {
+        eloqstore::TableIdent tbl_id{"pool", pid};
+        trunc1[pid].SetTableId(tbl_id);
+        REQUIRE(store->ExecAsyn(&trunc1[pid]));
+    }
+    for (uint32_t pid = 0; pid < partitions; ++pid)
+    {
+        trunc1[pid].Wait();
+        REQUIRE(trunc1[pid].Error() == eloqstore::KvError::NoError);
+    }
+
+    // Second wave reuses TaskPool slots and exercises reuse after completions.
+    std::vector<uint32_t> succeeded;
+    for (uint32_t pid = 0; pid < partitions; ++pid)
+    {
+        eloqstore::TableIdent tbl_id{"pool", pid};
+        wave2[pid].SetArgs(tbl_id, make_entries(100, 3));
+        REQUIRE(store->ExecAsyn(&wave2[pid]));
+    }
+    for (uint32_t pid = 0; pid < partitions; ++pid)
+    {
+        wave2[pid].Wait();
+        if (wave2[pid].Error() == eloqstore::KvError::NoError)
+        {
+            succeeded.push_back(pid);
+        }
+        else
+        {
+            REQUIRE(wave2[pid].Error() == eloqstore::KvError::OutOfMem);
+        }
+    }
+    REQUIRE(succeeded.size() >= 3);
+
+    // Spot-check a few partitions to ensure data landed after pooled reuse.
+    auto pick = [&](size_t idx)
+    { return succeeded[std::min(idx, succeeded.size() - 1)]; };
+    for (uint32_t pid :
+         {pick(0), pick(succeeded.size() / 2), pick(succeeded.size() - 1)})
+    {
+        eloqstore::TableIdent tbl_id{"pool", pid};
+        eloqstore::ReadRequest read;
+        read.SetArgs(tbl_id, "k100");
+        store->ExecSync(&read);
+        REQUIRE(read.Error() == eloqstore::KvError::NoError);
+        REQUIRE(read.value_ == "v100");
+    }
+
+    // Final truncate across all partitions to make sure TaskPool objects and
+    // mapping snapshots can be recycled repeatedly.
+    std::vector<eloqstore::TruncateRequest> trunc2(partitions);
+    for (uint32_t pid = 0; pid < partitions; ++pid)
+    {
+        eloqstore::TableIdent tbl_id{"pool", pid};
+        trunc2[pid].SetTableId(tbl_id);
+        REQUIRE(store->ExecAsyn(&trunc2[pid]));
+    }
+    for (uint32_t pid = 0; pid < partitions; ++pid)
+    {
+        trunc2[pid].Wait();
+        REQUIRE(trunc2[pid].Error() == eloqstore::KvError::NoError);
+    }
 }
 
 #ifndef NDEBUG
