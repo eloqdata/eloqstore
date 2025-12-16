@@ -494,7 +494,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
                 // Finishes the current page.
                 KvError err = FinishDataPage(std::move(curr_page_key), page_id);
                 CHECK_KV_ERR(err);
-                YieldNonBlocking();
+                YieldToNextRound();
                 // Starts a new page.
                 curr_page_key = cmp->FindShortestSeparator(
                     {prev_key.data(), prev_key.size()}, key);
@@ -722,7 +722,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     else
     {
         err = FinishDataPage(std::move(curr_page_key), page_id);
-        YieldNonBlocking();
+        YieldToNextRound();
         CHECK_KV_ERR(err);
     }
     assert(!TripleElement(1));
@@ -792,7 +792,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         {
             err = FinishIndexPage(prev_page, std::move(curr_page_key));
             CHECK_KV_ERR(err);
-            YieldNonBlocking();
+            YieldToNextRound();
             curr_page_key = new_key;
             idx_page_builder_.Reset();
             // The first index entry is the leftmost pointer w/o the key.
@@ -1373,7 +1373,7 @@ KvError BatchWriteTask::WriteOverflowValue(std::string_view value)
             err =
                 WritePage(OverflowPage(end_page_id, opts, page_val, pointers));
             CHECK_KV_ERR(err);
-            YieldNonBlocking();
+            YieldToNextRound();
         }
 
         // Write the next overflow pages group.
@@ -1398,7 +1398,7 @@ KvError BatchWriteTask::WriteOverflowValue(std::string_view value)
             value = value.substr(page_val_size);
             err = WritePage(OverflowPage(pg_id, opts, page_val));
             CHECK_KV_ERR(err);
-            YieldNonBlocking();
+            YieldToNextRound();
         }
         assert(i == pointers.size());
     }
@@ -1465,7 +1465,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::TruncateIndexPage(
         {
             ret = TruncateIndexPage(sub_node_id, trunc_pos);
         }
-        YieldNonBlocking();
+        YieldToNextRound();
         CHECK_KV_ERR(ret.second);
         if (ret.first)
         {
@@ -1754,7 +1754,7 @@ KvError BatchWriteTask::CleanExpiredKeys()
             std::move(key), "", now_ts_us, WriteOp::Delete, expire_ts);
         if (++collected % 64 == 0)
         {
-            YieldNonBlocking();
+            YieldToNextRound();
         }
     } while (iter.Next() == KvError::NoError);
 
@@ -1769,17 +1769,17 @@ KvError BatchWriteTask::CleanExpiredKeys()
            cow_meta_.next_expire_ts_ <= now_ts_ms);
 
     std::sort(data_batch.begin(), data_batch.end());
-    YieldNonBlocking();
+    YieldToNextRound();
     SetBatch(data_batch);
     err = ApplyBatch(cow_meta_.root_id_, false, now_ts_ms);
     CHECK_KV_ERR(err);
-    YieldNonBlocking();
+    YieldToNextRound();
 
     assert(std::is_sorted(ttl_batch.begin(), ttl_batch.end()));
     SetBatch(ttl_batch);
     err = ApplyBatch(cow_meta_.ttl_root_id_, false);
     CHECK_KV_ERR(err);
-    YieldNonBlocking();
+    YieldToNextRound();
     cow_meta_.next_expire_ts_ = next_expire_ts;
     return UpdateMeta();
 }

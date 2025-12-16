@@ -101,7 +101,7 @@ public:
     virtual TaskType Type() const = 0;
     virtual void Abort() {};
     void Yield();
-    void YieldNonBlocking();
+    void YieldToNextRound();
     /**
      * @brief Re-schedules the task to run. Note: the resumed task does not run
      * in place.

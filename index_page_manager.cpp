@@ -483,7 +483,7 @@ KvError IndexPageManager::SeekIndex(MappingSnapshot *mapping,
     PageId child_id = idx_it.GetPageId();
     if (!node->IsPointingToLeaf())
     {
-        ThdTask()->YieldNonBlocking();
+        ThdTask()->YieldToNextRound();
         return SeekIndex(mapping, child_id, key, results, result_size_dst);
     }
 
@@ -524,7 +524,7 @@ KvError IndexPageManager::SeekIndex(MappingSnapshot *mapping,
     }
     else
     {
-        ThdTask()->YieldNonBlocking();
+        ThdTask()->YieldToNextRound();
         return SeekIndex(mapping, child_id, key, result);
     }
 }

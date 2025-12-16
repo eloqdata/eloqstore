@@ -90,7 +90,7 @@ PageMapper::PageMapper(const PageMapper &rhs)
         copied += n;
         if (copied < src_tbl.size())
         {
-            ThdTask()->YieldNonBlocking();
+            ThdTask()->YieldToNextRound();
         }
     }
     assert(file_page_allocator_->MaxFilePageId() ==
