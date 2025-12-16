@@ -6,6 +6,8 @@
 #include <filesystem>
 #include <mutex>
 #include <span>
+#include <string>
+#include <vector>
 
 #include "eloq_store.h"
 #include "utils.h"
