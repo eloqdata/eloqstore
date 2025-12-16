@@ -1465,8 +1465,8 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::TruncateIndexPage(
         {
             ret = TruncateIndexPage(sub_node_id, trunc_pos);
         }
-        YieldToNextRound();
         CHECK_KV_ERR(ret.second);
+        YieldToNextRound();
         if (ret.first)
         {
             // This sub-node is partially truncated
