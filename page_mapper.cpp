@@ -27,15 +27,11 @@ std::vector<uint64_t> MappingArena::Get()
 
 void MappingArena::Return(std::vector<uint64_t> tbl)
 {
-    if (tbl.capacity() == 0)
+    if (tbl.capacity() == 0 || pool_.size() >= max_cached_)
     {
         return;
     }
     tbl.clear();
-    if (pool_.size() >= max_cached_)
-    {
-        return;
-    }
     pool_.push_back(std::move(tbl));
 }
 
