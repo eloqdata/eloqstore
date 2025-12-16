@@ -11,7 +11,6 @@
 
 #include "coding.h"
 #include "compression.h"
-#include "eloq_store.h"
 #include "kv_options.h"
 
 namespace eloqstore

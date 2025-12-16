@@ -21,9 +21,8 @@
 
 namespace eloqstore
 {
-IndexPageManager::IndexPageManager(AsyncIoManager *io_manager,
-                                   MappingArena *mapping_arena)
-    : io_manager_(io_manager), mapping_arena_(mapping_arena)
+IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
+    : io_manager_(io_manager)
 {
     active_head_.EnqueNext(&active_tail_);
 }
@@ -233,15 +232,13 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
     RootMeta &meta = tbl_it->second;
     meta.root_id_ = new_meta.root_id_;
     meta.ttl_root_id_ = new_meta.ttl_root_id_;
-    auto old_mapper = std::move(meta.mapper_);
-    if (old_mapper != nullptr && !Options()->data_append_mode)
+    if (meta.mapper_ != nullptr && !Options()->data_append_mode)
     {
         assert(new_meta.mapper_ != nullptr);
-        MappingSnapshot *prev_snapshot = old_mapper->GetMapping();
+        MappingSnapshot *prev_snapshot = meta.mapper_->GetMapping();
         prev_snapshot->next_snapshot_ = new_meta.mapper_->GetMappingSnapshot();
     }
     meta.mapper_ = std::move(new_meta.mapper_);
-    old_mapper.reset();
     meta.manifest_size_ = new_meta.manifest_size_;
     meta.next_expire_ts_ = new_meta.next_expire_ts_;
     meta.compression_ = std::move(new_meta.compression_);
@@ -483,7 +480,6 @@ KvError IndexPageManager::SeekIndex(MappingSnapshot *mapping,
     PageId child_id = idx_it.GetPageId();
     if (!node->IsPointingToLeaf())
     {
-        ThdTask()->YieldToNextRound();
         return SeekIndex(mapping, child_id, key, results, result_size_dst);
     }
 
@@ -524,7 +520,6 @@ KvError IndexPageManager::SeekIndex(MappingSnapshot *mapping,
     }
     else
     {
-        ThdTask()->YieldToNextRound();
         return SeekIndex(mapping, child_id, key, result);
     }
 }
@@ -537,10 +532,5 @@ const KvOptions *IndexPageManager::Options() const
 AsyncIoManager *IndexPageManager::IoMgr() const
 {
     return io_manager_;
-}
-
-MappingArena *IndexPageManager::MapperArena() const
-{
-    return mapping_arena_;
 }
 }  // namespace eloqstore

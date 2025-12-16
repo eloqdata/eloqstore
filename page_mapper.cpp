@@ -2,92 +2,30 @@
 
 #include <glog/logging.h>
 
-#include <algorithm>
 #include <cassert>
 #include <cstdint>
-#include <utility>
 
 #include "coding.h"
 #include "index_page_manager.h"
-#include "task.h"
 
 namespace eloqstore
 {
-std::vector<uint64_t> MappingArena::Get()
-{
-    if (pool_.empty())
-    {
-        return {};
-    }
-    auto tbl = std::move(pool_.back());
-    pool_.pop_back();
-    tbl.clear();
-    return tbl;
-}
-
-void MappingArena::Return(std::vector<uint64_t> tbl)
-{
-    if (tbl.capacity() == 0 || pool_.size() >= max_cached_)
-    {
-        return;
-    }
-    pool_.push_back(std::move(tbl));
-}
-
-namespace
-{
-void EnsureCapacity(std::vector<uint64_t> &tbl, size_t desired)
-{
-    if (tbl.capacity() >= desired)
-    {
-        return;
-    }
-    tbl.reserve(desired);
-}
-}  // namespace
 
 PageMapper::PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident)
-    : mapping_(nullptr), file_page_allocator_(nullptr)
+    : mapping_(std::make_shared<MappingSnapshot>(idx_mgr, tbl_ident)),
+      file_page_allocator_(FilePageAllocator::Instance(Options()))
 {
-    auto *arena = idx_mgr->MapperArena();
-    std::vector<uint64_t> tbl =
-        arena == nullptr ? std::vector<uint64_t>() : arena->Get();
-    mapping_ = std::make_shared<MappingSnapshot>(
-        idx_mgr, tbl_ident, std::move(tbl), arena);
-    file_page_allocator_ = FilePageAllocator::Instance(Options());
-    EnsureCapacity(mapping_->mapping_tbl_, Options()->init_page_count);
+    mapping_->mapping_tbl_.reserve(Options()->init_page_count);
 }
 
 PageMapper::PageMapper(const PageMapper &rhs)
-    : mapping_(std::make_shared<MappingSnapshot>(
-          rhs.mapping_->idx_mgr_,
-          rhs.mapping_->tbl_ident_,
-          rhs.mapping_->arena_ == nullptr ? std::vector<uint64_t>()
-                                          : rhs.mapping_->arena_->Get(),
-          rhs.mapping_->arena_)),
+    : mapping_(std::make_shared<MappingSnapshot>(rhs.mapping_->idx_mgr_,
+                                                 rhs.mapping_->tbl_ident_)),
       free_page_head_(rhs.free_page_head_),
       free_page_cnt_(rhs.free_page_cnt_),
       file_page_allocator_(rhs.file_page_allocator_->Clone())
 {
-    const auto &src_tbl = rhs.mapping_->mapping_tbl_;
-    auto &dst_tbl = mapping_->mapping_tbl_;
-    EnsureCapacity(dst_tbl, src_tbl.size());
-    dst_tbl.clear();
-    size_t copied = 0;
-
-    while (copied < src_tbl.size())
-    {
-        static constexpr size_t kChunkSize = 512;
-        size_t n = std::min(kChunkSize, src_tbl.size() - copied);
-        dst_tbl.insert(dst_tbl.end(),
-                       src_tbl.begin() + copied,
-                       src_tbl.begin() + copied + n);
-        copied += n;
-        if (copied < src_tbl.size())
-        {
-            ThdTask()->YieldToNextRound();
-        }
-    }
+    mapping_->mapping_tbl_ = std::vector<uint64_t>(rhs.mapping_->mapping_tbl_);
     assert(file_page_allocator_->MaxFilePageId() ==
            rhs.file_page_allocator_->MaxFilePageId());
 }
@@ -208,19 +146,14 @@ uint64_t MappingSnapshot::DecodeId(uint64_t val)
 }
 
 MappingSnapshot::MappingSnapshot(IndexPageManager *idx_mgr,
-                                 const TableIdent *tbl_id,
-                                 MappingArena *arena)
-    : idx_mgr_(idx_mgr), tbl_ident_(tbl_id), arena_(arena)
+                                 const TableIdent *tbl_id)
+    : idx_mgr_(idx_mgr), tbl_ident_(tbl_id)
 {
 }
 
 MappingSnapshot::~MappingSnapshot()
 {
     idx_mgr_->FreeMappingSnapshot(this);
-    if (arena_ != nullptr)
-    {
-        arena_->Return(std::move(mapping_tbl_));
-    }
 }
 
 FilePageId MappingSnapshot::ToFilePage(PageId page_id) const

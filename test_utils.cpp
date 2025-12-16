@@ -349,10 +349,7 @@ void MapVerifier::Scan(std::string_view begin,
         while (it != it_end && it->first < next_key)
         {
             CHECK(it->second.expire_ts_ != 0) << "key:" << it->first;
-            CHECK(it->second.expire_ts_ <= scan_now_ts)
-                << "key:" << it->first
-                << ", expire_ts:" << it->second.expire_ts_
-                << ", scan_now_ts:" << scan_now_ts;
+            CHECK(it->second.expire_ts_ <= scan_now_ts) << "key:" << it->first;
             answer_.erase(it++);
         }
     };
@@ -901,7 +898,7 @@ uint64_t ConcurrencyTester::CurrentTimestamp()
 ManifestVerifier::ManifestVerifier(eloqstore::KvOptions opts)
     : options_(opts),
       io_mgr_(&options_),
-      idx_mgr_(&io_mgr_, nullptr),
+      idx_mgr_(&io_mgr_),
       answer_(&idx_mgr_, &tbl_id_)
 {
     if (!options_.data_append_mode)

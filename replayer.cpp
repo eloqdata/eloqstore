@@ -10,7 +10,6 @@
 #include "async_io_manager.h"
 #include "coding.h"
 #include "error.h"
-#include "index_page_manager.h"
 #include "kv_options.h"
 #include "root_meta.h"
 
@@ -140,7 +139,7 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
                                                 const TableIdent *tbl_ident)
 {
     auto mapping = std::make_shared<MappingSnapshot>(
-        idx_mgr, tbl_ident, std::move(mapping_tbl_), idx_mgr->MapperArena());
+        idx_mgr, tbl_ident, std::move(mapping_tbl_));
     auto mapper = std::make_unique<PageMapper>(std::move(mapping));
     auto &m_table = mapper->GetMapping()->mapping_tbl_;
 

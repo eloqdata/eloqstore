@@ -15,34 +15,15 @@ class MemIndexPage;
 class ManifestBuilder;
 struct KvOptions;
 
-class MappingArena
-{
-public:
-    explicit MappingArena(size_t max_cached = 32) : max_cached_(max_cached)
-    {
-    }
-
-    std::vector<uint64_t> Get();
-    void Return(std::vector<uint64_t> tbl);
-
-private:
-    const size_t max_cached_;
-    std::vector<std::vector<uint64_t>> pool_;
-};
-
 struct MappingSnapshot
 {
+    MappingSnapshot(IndexPageManager *idx_mgr, const TableIdent *tbl_id);
     MappingSnapshot(IndexPageManager *idx_mgr,
                     const TableIdent *tbl_id,
-                    MappingArena *arena = nullptr);
-    MappingSnapshot(IndexPageManager *idx_mgr,
-                    const TableIdent *tbl_id,
-                    std::vector<uint64_t> tbl,
-                    MappingArena *arena = nullptr)
+                    std::vector<uint64_t> tbl)
         : idx_mgr_(idx_mgr),
           tbl_ident_(tbl_id),
-          mapping_tbl_(std::move(tbl)),
-          arena_(arena) {};
+          mapping_tbl_(std::move(tbl)) {};
     ~MappingSnapshot();
 
     static constexpr uint8_t TypeBits = 3;
@@ -86,7 +67,6 @@ struct MappingSnapshot
     const TableIdent *tbl_ident_;
 
     std::vector<uint64_t> mapping_tbl_;
-    MappingArena *arena_{nullptr};
 
     /**
      * @brief A list of file pages to be freed in this mapping snapshot.

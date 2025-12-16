@@ -39,7 +39,6 @@ enum class TaskStatus : uint8_t
     Ongoing,
     Blocked,
     BlockedIO,
-    RunNextRound,
     Finished
 };
 
@@ -101,7 +100,6 @@ public:
     virtual TaskType Type() const = 0;
     virtual void Abort() {};
     void Yield();
-    void YieldToNextRound();
     /**
      * @brief Re-schedules the task to run. Note: the resumed task does not run
      * in place.
