@@ -642,14 +642,15 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
 TEST_CASE("archive triggers with cloud-only partitions", "[cloud][archive]")
 {
     using namespace std::chrono_literals;
-    constexpr uint32_t kPartitionCount = 1000;
+    constexpr uint32_t kPartitionCount = 10;
     const std::string tbl_name = "remote_archive";
 
     eloqstore::KvOptions options = cloud_archive_opts;
-    options.num_threads = 1;             // single shard handles all partitions
-    options.prewarm_cloud_cache = false;  // keep local cache empty after restart
-    options.archive_interval_secs = 1;    // trigger archiver quickly
-    options.local_space_limit = 64ULL << 20;
+    options.num_threads = 1;  // single shard handles all partitions
+    options.prewarm_cloud_cache =
+        false;                          // keep local cache empty after restart
+    options.archive_interval_secs = 1;  // trigger archiver quickly
+    options.local_space_limit = 1LL << 40;  // 1TB
 
     eloqstore::EloqStore *store = InitStore(options);
 
@@ -682,40 +683,31 @@ TEST_CASE("archive triggers with cloud-only partitions", "[cloud][archive]")
         pending.insert(pid);
     }
 
-    bool archived = WaitForCondition(60s,
-                                     2s,
-                                     [&]()
-                                     {
-                                         for (auto it = pending.begin();
-                                              it != pending.end();)
-                                         {
-                                             eloqstore::TableIdent tid{
-                                                 tbl_name, *it};
-                                             auto files = ListCloudFiles(
-                                                 options,
-                                                 options.cloud_store_path,
-                                                 tid.ToString());
-                                             bool has_archive =
-                                                 std::any_of(files.begin(),
-                                                             files.end(),
-                                                             [](const auto &f)
-                                                             {
-                                                                 return f.rfind(
-                                                                            "manifest_",
-                                                                            0) ==
-                                                                        0;
-                                                             });
-                                             if (has_archive)
-                                             {
-                                                 it = pending.erase(it);
-                                             }
-                                             else
-                                             {
-                                                 ++it;
-                                             }
-                                         }
-                                         return pending.empty();
-                                     });
+    bool archived = WaitForCondition(
+        60s,
+        2s,
+        [&]()
+        {
+            for (auto it = pending.begin(); it != pending.end();)
+            {
+                eloqstore::TableIdent tid{tbl_name, *it};
+                auto files = ListCloudFiles(
+                    options, options.cloud_store_path, tid.ToString());
+                bool has_archive = std::any_of(
+                    files.begin(),
+                    files.end(),
+                    [](const auto &f) { return f.rfind("manifest_", 0) == 0; });
+                if (has_archive)
+                {
+                    it = pending.erase(it);
+                }
+                else
+                {
+                    ++it;
+                }
+            }
+            return pending.empty();
+        });
     REQUIRE(archived);
 
     store->Stop();

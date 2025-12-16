@@ -101,8 +101,7 @@ void ArchiveCrond::StartArchiving()
         for (size_t i = 0; i < ids.size(); i += archive_batch)
         {
             auto it_begin = ids.begin() + i;
-            const size_t size =
-                std::min(size_t(archive_batch), ids.size() - i);
+            const size_t size = std::min(size_t(archive_batch), ids.size() - i);
             do_archiving({it_begin, size});
         }
     };
