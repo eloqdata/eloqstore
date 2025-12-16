@@ -31,7 +31,6 @@ void MappingArena::Return(std::vector<uint64_t> tbl)
     {
         return;
     }
-    tbl.clear();
     pool_.push_back(std::move(tbl));
 }
 
