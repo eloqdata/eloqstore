@@ -192,11 +192,13 @@ void PrewarmService::PrewarmCloudCache()
     }
 
     std::vector<utils::CloudObjectInfo> all_infos;
+    LOG(INFO) << "PrewarmService start to list objects.";
     if (!ListCloudObjects("", all_infos))
     {
         LOG(WARNING) << "Skip cloud prewarm: failed to list cloud root";
         return;
     }
+    LOG(INFO) << "PrewarmService found " << all_infos.size() << " objects";
 
     std::vector<PrewarmFile> all_files;
     all_files.reserve(all_infos.size());
