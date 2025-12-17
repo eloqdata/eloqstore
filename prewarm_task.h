@@ -44,9 +44,11 @@ private:
 
     bool PopNext(PrewarmFile &file);
 
-    CloudStoreMgr *io_mgr_;
     std::atomic<bool> stop_{true};
     bool shutting_down_{false};
+    CloudStoreMgr *io_mgr_;
+    std::vector<PrewarmFile> pending_;
+    size_t next_index_{0};
 };
 
 class PrewarmService

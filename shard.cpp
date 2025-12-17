@@ -1,5 +1,8 @@
 #include "shard.h"
 
+#ifdef ELOQ_MODULE_ENABLED
+#include <bvar/latency_recorder.h>
+#endif
 #include <glog/logging.h>
 
 #include <array>
@@ -14,15 +17,39 @@
 #ifdef ELOQ_MODULE_ENABLED
 #include <bthread/eloq_module.h>
 #include <bvar/latency_recorder.h>
+#include <mimalloc-2.1/mimalloc.h>
 #endif
 namespace eloqstore
 {
+
+#ifdef ELOQ_MODULE_ENABLED
+const char *Shard::ApplyPhaseLabel(ApplyPhase phase)
+{
+    switch (phase)
+    {
+    case ApplyPhase::MakeCowRoot:
+        return "Apply.MakeCowRoot";
+    case ApplyPhase::ApplyBatch:
+        return "Apply.ApplyBatch";
+    case ApplyPhase::ApplyTTLBatch:
+        return "Apply.ApplyTTLBatch";
+    case ApplyPhase::UpdateMeta:
+        return "Apply.UpdateMeta";
+    case ApplyPhase::TriggerTTL:
+        return "Apply.TriggerTTL";
+    case ApplyPhase::Count:
+        break;
+    }
+    return "Apply.Unknown";
+}
+#endif
 Shard::Shard(const EloqStore *store, size_t shard_id, uint32_t fd_limit)
     : store_(store),
       shard_id_(shard_id),
       page_pool_(&store->options_),
       io_mgr_(AsyncIoManager::Instance(store, fd_limit)),
-      index_mgr_(io_mgr_.get()),
+      mapping_arena_(),
+      index_mgr_(io_mgr_.get(), &mapping_arena_),
       stack_allocator_(store->options_.coroutine_stack_size)
 {
 }
@@ -316,6 +343,7 @@ void Shard::ProcessReq(KvRequest *req)
         auto lbd = [task, req]() -> KvError
         {
             auto trunc_req = static_cast<TruncateRequest *>(req);
+            LOG(INFO) << "Truncate Request on " << req->TableId();
             return task->Truncate(trunc_req->position_);
         };
         StartTask(task, req, lbd);
@@ -354,16 +382,26 @@ void Shard::ProcessReq(KvRequest *req)
 bool Shard::ExecuteReadyTasks()
 {
     bool busy = ready_tasks_.Size() > 0;
-    while (ready_tasks_.Size() > 0)
+    size_t task_num = ready_tasks_.Size();
+    while (task_num-- > 0)
     {
         KvTask *task = ready_tasks_.Peek();
         ready_tasks_.Dequeue();
-        assert(task->status_ == TaskStatus::Ongoing);
-        running_ = task;
-        task->coro_ = task->coro_.resume();
-        if (task->status_ == TaskStatus::Finished)
+        assert(task->status_ == TaskStatus::Ongoing ||
+               task->status_ == TaskStatus::RunNextRound);
+        if (task->status_ == TaskStatus::Ongoing)
         {
-            OnTaskFinished(task);
+            running_ = task;
+            task->coro_ = task->coro_.resume();
+            if (task->status_ == TaskStatus::Finished)
+            {
+                OnTaskFinished(task);
+            }
+        }
+        else
+        {
+            task->status_ = TaskStatus::Ongoing;
+            ready_tasks_.Enqueue(task);
         }
     }
     running_ = nullptr;
@@ -399,6 +437,51 @@ void Shard::OnTaskFinished(KvTask *task)
 #ifdef ELOQ_MODULE_ENABLED
 void Shard::WorkOneRound()
 {
+    if (__builtin_expect(!heap_inited_, false))
+    {
+        heap_inited_ = true;
+        heap_ = mi_heap_new();
+        thread_id_ = mi_thread_id();
+    }
+    // HeapGuard heap_guard(this);
+    int64_t current_ts_{butil::cpuwide_time_s()};
+    if (current_ts_ - last_memory_report_ts_ > 30)
+    {
+        int64_t allocated, committed;
+        mi_thread_stats(&allocated, &committed);
+        last_memory_report_ts_ = current_ts_;
+        LOG(INFO) << "EloqStore shard " << shard_id_ << " allocated "
+                  << allocated << " committed " << committed << ", frag ratio "
+                  << std::setprecision(2)
+                  << 100 * (static_cast<float>(committed - allocated) /
+                            static_cast<float>(committed));
+        auto log_recorder = [this](const char *label,
+                                   int64_t &allocated_counter,
+                                   int64_t &committed_counter)
+        {
+            if (allocated_counter == 0 && committed_counter == 0)
+            {
+                return;
+            }
+            LOG(INFO) << "EloqStore shard " << shard_id_ << " " << label
+                      << " allocated " << allocated_counter << " committed "
+                      << committed_counter;
+            allocated_counter = 0;
+            committed_counter = 0;
+        };
+        log_recorder("Apply", apply_allocated_, apply_committed_);
+        for (size_t i = 0; i < kApplyPhaseCount; ++i)
+        {
+            auto phase = static_cast<ApplyPhase>(i);
+            log_recorder(ApplyPhaseLabel(phase),
+                         apply_phase_allocated_[i],
+                         apply_phase_committed_[i]);
+        }
+        log_recorder("TriggerGC", trigger_gc_allocated_, trigger_gc_committed_);
+        log_recorder("CompactDataFile",
+                     compact_data_file_allocated_,
+                     compact_data_file_committed_);
+    }
     if (__builtin_expect(!io_mgr_->BackgroundJobInited(), false))
     {
         io_mgr_->InitBackgroundJob();

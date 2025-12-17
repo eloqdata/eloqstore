@@ -59,6 +59,9 @@ KvError WriteTask::WritePage(DataPage &&page)
 {
     SetChecksum({page.PagePtr(), Options()->data_page_size});
     auto [_, fp_id] = AllocatePage(page.GetPageId());
+    LOG(INFO) << "[" << tbl_ident_
+              << "] Write data page logical=" << page.GetPageId()
+              << " fp_id=" << fp_id;
     return WritePage(std::move(page), fp_id);
 }
 
@@ -66,6 +69,9 @@ KvError WriteTask::WritePage(OverflowPage &&page)
 {
     SetChecksum({page.PagePtr(), Options()->data_page_size});
     auto [_, fp_id] = AllocatePage(page.GetPageId());
+    LOG(INFO) << "[" << tbl_ident_
+              << "] Write overflow page logical=" << page.GetPageId()
+              << " fp_id " << fp_id;
     return WritePage(std::move(page), fp_id);
 }
 
@@ -75,6 +81,9 @@ KvError WriteTask::WritePage(MemIndexPage *page)
     auto [page_id, file_page_id] = AllocatePage(page->GetPageId());
     page->SetPageId(page_id);
     page->SetFilePageId(file_page_id);
+    LOG(INFO) << "[" << tbl_ident_
+              << "] Write index page logical=" << page->GetPageId()
+              << " fp_id:" << file_page_id;
     return WritePage(page, file_page_id);
 }
 
@@ -188,12 +197,15 @@ std::pair<PageId, FilePageId> WriteTask::AllocatePage(PageId page_id)
     }
     FilePageId file_page_id = cow_meta_.mapper_->FilePgAllocator()->Allocate();
     cow_meta_.mapper_->UpdateMapping(page_id, file_page_id);
+    LOG(INFO) << "[" << tbl_ident_ << "] Allocate logical page " << page_id
+              << " -> file page " << file_page_id;
     wal_builder_.UpdateMapping(page_id, file_page_id);
     return {page_id, file_page_id};
 }
 
 void WriteTask::FreePage(PageId page_id)
 {
+    LOG(INFO) << "[" << tbl_ident_ << "] Free logical page " << page_id;
     if (!Options()->data_append_mode)
     {
         // Free file page.
@@ -261,6 +273,7 @@ KvError WriteTask::FlushManifest()
         err = IoMgr()->AppendManifest(tbl_ident_, blob, manifest_size);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ += blob.size();
+        // YieldToNextRound();
     }
     else
     {
@@ -277,12 +290,15 @@ KvError WriteTask::FlushManifest()
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
         cow_meta_.compression_->ClearDirty();
+        // YieldToNextRound();
     }
+    wal_builder_.Clear();
     return KvError::NoError;
 }
 
 KvError WriteTask::UpdateMeta()
 {
+    LOG(INFO) << "UpdateMeta " << tbl_ident_;
     KvError err;
     const KvOptions *opts = Options();
     // Flush data pages.
@@ -292,20 +308,28 @@ KvError WriteTask::UpdateMeta()
         {
             err = FlushBatchPages();
             CHECK_KV_ERR(err);
+            // YieldToNextRound();
+        }
+        else
+        {
+            LOG(INFO) << "UpdateMeta " << tbl_ident_ << " no need to flush";
         }
     }
     else
     {
         err = WaitWrite();
         CHECK_KV_ERR(err);
+        // YieldToNextRound();
     }
 
     err = IoMgr()->SyncData(tbl_ident_);
     CHECK_KV_ERR(err);
+    // YieldToNextRound();
 
     // Update meta data in storage and then in memory.
     err = FlushManifest();
     CHECK_KV_ERR(err);
+    // YieldToNextRound();
 
     // Hooks after modified partition.
     CompactIfNeeded(cow_meta_.mapper_.get());
@@ -369,6 +393,9 @@ void WriteTask::TriggerTTL()
 
 void WriteTask::TriggerFileGC() const
 {
+#ifdef ELOQ_MODULE_ENABLED
+    Shard::TriggerGcRecorder recorder(::eloqstore::shard);
+#endif
     assert(Options()->data_append_mode);
 
     auto [meta, err] = shard->IndexManager()->FindRoot(tbl_ident_);

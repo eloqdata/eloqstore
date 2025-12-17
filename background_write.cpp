@@ -46,6 +46,9 @@ private:
 
 KvError BackgroundWrite::CompactDataFile()
 {
+#ifdef ELOQ_MODULE_ENABLED
+    Shard::CompactDataFileRecorder recorder(::eloqstore::shard);
+#endif
     LOG(INFO) << "start CompactDataFile on " << this->tbl_ident_;
     const KvOptions *opts = Options();
     assert(opts->data_append_mode);
@@ -80,7 +83,6 @@ KvError BackgroundWrite::CompactDataFile()
     if (space_size < pages_per_file ||
         double(space_size) / double(mapping_cnt) <= file_saf_limit)
     {
-        DLOG(INFO) << "CompactDataFile: no compaction required";
         // No compaction required.
         return KvError::NoError;
     }

@@ -5,6 +5,7 @@
 
 #include "list_object_task.h"
 #include "read_task.h"
+#include "shard.h"
 #include "task.h"
 
 using namespace boost::context;

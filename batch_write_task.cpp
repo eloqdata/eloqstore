@@ -254,16 +254,52 @@ void BatchWriteTask::Abort()
 
 KvError BatchWriteTask::Apply()
 {
-    KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
-    cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
+#ifdef ELOQ_MODULE_ENABLED
+    Shard::ApplyHeapRecorder recorder(::eloqstore::shard);
+#endif
+    // LOG(INFO) << "Execute BatchWrite on " << tbl_ident_
+    // << " pin pages: " << shard->IndexManager()->GetNumPages();
+    KvError err;
+    {
+#ifdef ELOQ_MODULE_ENABLED
+        Shard::ApplyPhaseRecorder phase_recorder(
+            ::eloqstore::shard, Shard::ApplyPhase::MakeCowRoot);
+#endif
+        err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
+        cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
+    }
     CHECK_KV_ERR(err);
-    err = ApplyBatch(cow_meta_.root_id_, true);
+    {
+#ifdef ELOQ_MODULE_ENABLED
+        Shard::ApplyPhaseRecorder phase_recorder(::eloqstore::shard,
+                                                 Shard::ApplyPhase::ApplyBatch);
+#endif
+        err = ApplyBatch(cow_meta_.root_id_, true);
+    }
     CHECK_KV_ERR(err);
-    err = ApplyTTLBatch();
+    {
+#ifdef ELOQ_MODULE_ENABLED
+        Shard::ApplyPhaseRecorder phase_recorder(
+            ::eloqstore::shard, Shard::ApplyPhase::ApplyTTLBatch);
+#endif
+        err = ApplyTTLBatch();
+    }
     CHECK_KV_ERR(err);
-    err = UpdateMeta();
+    {
+#ifdef ELOQ_MODULE_ENABLED
+        Shard::ApplyPhaseRecorder phase_recorder(::eloqstore::shard,
+                                                 Shard::ApplyPhase::UpdateMeta);
+#endif
+        err = UpdateMeta();
+    }
     CHECK_KV_ERR(err);
-    TriggerTTL();
+    {
+#ifdef ELOQ_MODULE_ENABLED
+        Shard::ApplyPhaseRecorder phase_recorder(::eloqstore::shard,
+                                                 Shard::ApplyPhase::TriggerTTL);
+#endif
+        TriggerTTL();
+    }
     return KvError::NoError;
 }
 
@@ -332,7 +368,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         err = ApplyOnePage(cidx, now_ms);
         CHECK_KV_ERR(err);
     }
-    // Flush all dirty leaf data pages in leaf_triple_ .
+    // Flush all dirty leaf data pages in leaf_triple_.
     assert(TripleElement(2) == nullptr);
     err = ShiftLeafLink();
     CHECK_KV_ERR(err);
@@ -494,6 +530,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
                 // Finishes the current page.
                 KvError err = FinishDataPage(std::move(curr_page_key), page_id);
                 CHECK_KV_ERR(err);
+                // YieldToNextRound();
                 // Starts a new page.
                 curr_page_key = cmp->FindShortestSeparator(
                     {prev_key.data(), prev_key.size()}, key);
@@ -508,7 +545,6 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             prev_key = key;
             return KvError::NoError;
         });
-
     while (is_base_iter_valid && change_it != change_end_it)
     {
         std::string_view base_key = base_page_iter.Key();
@@ -722,6 +758,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     else
     {
         err = FinishDataPage(std::move(curr_page_key), page_id);
+        // YieldToNextRound();
         CHECK_KV_ERR(err);
     }
     assert(!TripleElement(1));
@@ -791,6 +828,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         {
             err = FinishIndexPage(prev_page, std::move(curr_page_key));
             CHECK_KV_ERR(err);
+            // YieldToNextRound();
             curr_page_key = new_key;
             idx_page_builder_.Reset();
             // The first index entry is the leftmost pointer w/o the key.
@@ -1371,6 +1409,7 @@ KvError BatchWriteTask::WriteOverflowValue(std::string_view value)
             err =
                 WritePage(OverflowPage(end_page_id, opts, page_val, pointers));
             CHECK_KV_ERR(err);
+            // YieldToNextRound();
         }
 
         // Write the next overflow pages group.
@@ -1395,6 +1434,7 @@ KvError BatchWriteTask::WriteOverflowValue(std::string_view value)
             value = value.substr(page_val_size);
             err = WritePage(OverflowPage(pg_id, opts, page_val));
             CHECK_KV_ERR(err);
+            // YieldToNextRound();
         }
         assert(i == pointers.size());
     }
@@ -1462,6 +1502,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::TruncateIndexPage(
             ret = TruncateIndexPage(sub_node_id, trunc_pos);
         }
         CHECK_KV_ERR(ret.second);
+        // YieldToNextRound();
         if (ret.first)
         {
             // This sub-node is partially truncated
@@ -1571,6 +1612,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::TruncateIndexPage(
     std::string_view page_view = builder.Finish();
     memcpy(new_page->PagePtr(), page_view.data(), page_view.size());
     new_page->SetPageId(page_id);
+    LOG(INFO) << "TruncateIndexPage new page " << page_id;
     err = WritePage(new_page);
     if (err != KvError::NoError)
     {
@@ -1733,6 +1775,7 @@ KvError BatchWriteTask::CleanExpiredKeys()
     const uint64_t now_ts_ms = utils::UnixTs<chrono::milliseconds>();
     const uint64_t now_ts_us = utils::UnixTs<chrono::microseconds>();
     uint64_t next_expire_ts = 0;
+    size_t collected = 0;
     do
     {
         std::string_view ttl_key = iter.Key();
@@ -1746,6 +1789,10 @@ KvError BatchWriteTask::CleanExpiredKeys()
         std::string key(ttl_key.substr(8));
         data_batch.emplace_back(
             std::move(key), "", now_ts_us, WriteOp::Delete, expire_ts);
+        if (++collected % 64 == 0)
+        {
+            // YieldToNextRound();
+        }
     } while (iter.Next() == KvError::NoError);
 
     if (ttl_batch.empty())

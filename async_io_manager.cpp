@@ -220,7 +220,7 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
     if (!options_->skip_verify_checksum &&
         !ValidateChecksum({page.Ptr(), options_->data_page_size}))
     {
-        LOG(ERROR) << "corrupted " << tbl_id << " page " << fp_id;
+        LOG(FATAL) << "corrupted " << tbl_id << " page " << fp_id;
         return {std::move(page), KvError::Corrupted};
     }
     return {std::move(page), KvError::NoError};
@@ -405,13 +405,16 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
                                FilePageId first_fp_id)
 {
     auto [file_id, offset] = ConvFilePageId(first_fp_id);
+    std::string page_list = tbl_id.ToString() + " write from " +
+                            std::to_string(first_fp_id) +
+                            ", page count: " + std::to_string(pages.size());
     auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id);
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;
 
-    auto writev = [this, &fd_ref](std::span<VarPage> pages,
-                                  uint32_t offset,
-                                  std::span<iovec> iov)
+    auto writev = [this, &fd_ref, &page_list, &tbl_id](std::span<VarPage> pages,
+                                                       uint32_t offset,
+                                                       std::span<iovec> iov)
     {
         auto [fd, registered] = fd_ref.FdPair();
         io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
@@ -2416,6 +2419,19 @@ KvError CloudStoreMgr::ReadFiles(const TableIdent &tbl_id,
     {
         return KvError::NoError;
     }
+    std::string filename_list;
+    size_t length = filenames.size();
+    for (const std::string &filename : filenames)
+    {
+        length += filename.length();
+    }
+    filename_list.reserve(length);
+    for (const std::string &filename : filenames)
+    {
+        filename_list += filename;
+        filename_list += " ";
+    }
+    LOG(INFO) << "Uploading files to " << tbl_id << ":" << filename_list;
 
     struct UploadFileCtx
     {
@@ -2779,6 +2795,12 @@ KvError CloudStoreMgr::ReadFiles(const TableIdent &tbl_id,
 KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
                                    std::vector<std::string> filenames)
 {
+    std::string filename_list;
+    for (auto file_name : filenames)
+    {
+        filename_list += " ";
+        filename_list += file_name;
+    }
     if (filenames.empty())
     {
         return KvError::NoError;
