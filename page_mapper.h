@@ -30,6 +30,9 @@ private:
     std::vector<std::vector<uint64_t>> pool_;
 };
 
+std::vector<uint64_t> CloneMappingTable(const std::vector<uint64_t> &src,
+                                        MappingArena *arena);
+
 struct MappingSnapshot
 {
     MappingSnapshot(IndexPageManager *idx_mgr,
@@ -208,6 +211,7 @@ public:
         : mapping_(std::move(mapping)) {};
     PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident);
     PageMapper(const PageMapper &rhs);
+    PageMapper(const PageMapper &rhs, std::vector<uint64_t> mapping_tbl);
 
     PageId GetPage();
     void FreePage(PageId page_id);

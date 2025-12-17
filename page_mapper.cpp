@@ -46,6 +46,32 @@ void EnsureCapacity(std::vector<uint64_t> &tbl, size_t desired)
 }
 }  // namespace
 
+std::vector<uint64_t> CloneMappingTable(const std::vector<uint64_t> &src,
+                                        MappingArena *arena)
+{
+    std::vector<uint64_t> tbl =
+        arena == nullptr ? std::vector<uint64_t>() : arena->Get();
+    EnsureCapacity(tbl, src.size());
+    tbl.clear();
+    size_t copied = 0;
+
+    while (copied < src.size())
+    {
+        static constexpr size_t kChunkSize = 512;
+        size_t n = std::min(kChunkSize, src.size() - copied);
+        tbl.insert(tbl.end(),
+                   src.begin() + copied,
+                   src.begin() + copied + n);
+        copied += n;
+        if (copied < src.size())
+        {
+            ThdTask()->YieldToNextRound();
+        }
+    }
+
+    return tbl;
+}
+
 PageMapper::PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident)
     : mapping_(nullptr), file_page_allocator_(nullptr)
 {
@@ -59,35 +85,24 @@ PageMapper::PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident)
 }
 
 PageMapper::PageMapper(const PageMapper &rhs)
-    : mapping_(std::make_shared<MappingSnapshot>(
-          rhs.mapping_->idx_mgr_,
-          rhs.mapping_->tbl_ident_,
-          rhs.mapping_->arena_ == nullptr ? std::vector<uint64_t>()
-                                          : rhs.mapping_->arena_->Get(),
-          rhs.mapping_->arena_)),
-      free_page_head_(rhs.free_page_head_),
+    : PageMapper(rhs,
+                 CloneMappingTable(rhs.mapping_->mapping_tbl_,
+                                   rhs.mapping_->arena_))
+{
+}
+
+PageMapper::PageMapper(const PageMapper &rhs,
+                       std::vector<uint64_t> mapping_tbl)
+    : free_page_head_(rhs.free_page_head_),
       free_page_cnt_(rhs.free_page_cnt_),
       file_page_allocator_(rhs.file_page_allocator_->Clone())
 {
-    const auto &src_tbl = rhs.mapping_->mapping_tbl_;
-    auto &dst_tbl = mapping_->mapping_tbl_;
-    EnsureCapacity(dst_tbl, src_tbl.size());
-    dst_tbl.clear();
-    size_t copied = 0;
+    auto *arena = rhs.mapping_->arena_;
+    mapping_ = std::make_shared<MappingSnapshot>(rhs.mapping_->idx_mgr_,
+                                                 rhs.mapping_->tbl_ident_,
+                                                 std::move(mapping_tbl),
+                                                 arena);
 
-    while (copied < src_tbl.size())
-    {
-        static constexpr size_t kChunkSize = 512;
-        size_t n = std::min(kChunkSize, src_tbl.size() - copied);
-        dst_tbl.insert(dst_tbl.end(),
-                       src_tbl.begin() + copied,
-                       src_tbl.begin() + copied + n);
-        copied += n;
-        if (copied < src_tbl.size())
-        {
-            ThdTask()->YieldToNextRound();
-        }
-    }
     assert(file_page_allocator_->MaxFilePageId() ==
            rhs.file_page_allocator_->MaxFilePageId());
 }

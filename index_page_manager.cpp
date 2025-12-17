@@ -180,7 +180,11 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
     {
         meta->Pin();  // Referenced by new MappingSnapshot.
         // Makes a copy of the mapper.
-        auto new_mapper = std::make_unique<PageMapper>(*meta->mapper_);
+        MappingSnapshot *mapping = meta->mapper_->GetMapping();
+        auto mapping_tbl =
+            CloneMappingTable(mapping->mapping_tbl_, mapping->arena_);
+        auto new_mapper = std::make_unique<PageMapper>(*meta->mapper_,
+                                                       std::move(mapping_tbl));
         cow_meta.root_id_ = meta->root_id_;
         cow_meta.ttl_root_id_ = meta->ttl_root_id_;
         cow_meta.mapper_ = std::move(new_mapper);
