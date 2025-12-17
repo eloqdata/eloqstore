@@ -73,6 +73,7 @@ std::vector<uint64_t> CloneMappingTable(const std::vector<uint64_t> &src,
     {
         CHECK(i != 0);
     }
+    CHECK(ans == src);
     CHECK(ans == tbl);
 
     return tbl;
