@@ -42,10 +42,10 @@ std::vector<uint64_t> CloneMappingTable(const std::vector<uint64_t> &src,
         arena == nullptr ? std::vector<uint64_t>() : arena->Get();
     tbl.resize(src.size());
     size_t copied = 0;
-    auto* s = src.data();
-    auto  sz = src.size();
-    auto* d = tbl.data();
-    auto  dz = tbl.size();
+    auto *s = src.data();
+    auto sz = src.size();
+    auto *d = tbl.data();
+    auto dz = tbl.size();
     CHECK(sz == dz);
     CHECK(!(d <= s + sz && s <= d + dz));
 
@@ -73,8 +73,29 @@ std::vector<uint64_t> CloneMappingTable(const std::vector<uint64_t> &src,
     {
         CHECK(i != 0);
     }
-    CHECK(ans == src);
-    CHECK(ans == tbl);
+    for (int i = 0; i < tbl.size(); ++i)
+    {
+        bool ok = true;
+        if (ans[i] != src[i])
+        {
+            ok = false;
+            LOG(INFO) << "i1 = " << i << "," << ans[i] << "," << src[i];
+        }
+        if (src[i] != tbl[i])
+        {
+            ok = false;
+            LOG(INFO) << "i2 = " << i << "," << src[i] << "," << tbl[i];
+        }
+        if (ans[i] != tbl[i])
+        {
+            ok = false;
+            LOG(INFO) << "i3 = " << i << "," << ans[i] << "," << tbl[i];
+        }
+        if (!ok)
+        {
+            std::abort();
+        }
+    }
 
     return tbl;
 }
