@@ -475,20 +475,26 @@ KvError IndexPageManager::SeekIndex(MappingSnapshot *mapping,
                                     std::string_view key,
                                     PageId &result)
 {
-    auto [node, err] = FindPage(mapping, page_id);
-    CHECK_KV_ERR(err);
-    IndexPageIter idx_it{node, Options()};
-    idx_it.Seek(key);
-    PageId child_id = idx_it.GetPageId();
-    if (node->IsPointingToLeaf())
+    PageId current_id = page_id;
+    while (true)
     {
-        result = child_id;
-        return KvError::NoError;
-    }
-    else
-    {
-        ThdTask()->YieldToNextRound();
-        return SeekIndex(mapping, child_id, key, result);
+        auto [node, err] = FindPage(mapping, current_id);
+        CHECK_KV_ERR(err);
+        node->Pin();
+
+        IndexPageIter idx_it{node, Options()};
+        idx_it.Seek(key);
+        PageId child_id = idx_it.GetPageId();
+
+        if (node->IsPointingToLeaf())
+        {
+            result = child_id;
+            node->Unpin();
+            return KvError::NoError;
+        }
+
+        node->Unpin();
+        current_id = child_id;
     }
 }
 
