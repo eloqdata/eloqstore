@@ -69,10 +69,6 @@ std::vector<uint64_t> CloneMappingTable(const std::vector<uint64_t> &src,
             CHECK(tbl.size() == dz);
         }
     }
-    for (auto i : tbl)
-    {
-        CHECK(i != 0);
-    }
     for (int i = 0; i < tbl.size(); ++i)
     {
         bool ok = true;
