@@ -39,8 +39,6 @@ void Prewarmer::Run()
     {
         if (!registered_active)
         {
-            LOG(INFO) << "Shard " << shard->shard_id_
-                      << " continue prewarm task";
             shard->TaskMgr()->AddExternalTask();
             io_mgr_->RegisterPrewarmActive();
             registered_active = true;
@@ -50,7 +48,6 @@ void Prewarmer::Run()
     {
         if (registered_active)
         {
-            LOG(INFO) << "Shard " << shard->shard_id_ << " stop prewarm task";
             io_mgr_->UnregisterPrewarmActive();
             shard->TaskMgr()->FinishExternalTask();
             registered_active = false;
@@ -221,6 +218,7 @@ void Prewarmer::Run()
         if (shard->HasPendingRequests() ||
             shard->TaskMgr()->NumActive() > io_mgr_->ActivePrewarmTasks())
         {
+            LOG(INFO) << "Shard " << shard->shard_id_ << " prewarm task blocked by pending requests or active tasks" << shard->TaskMgr()->NumActive() << " > " << io_mgr_->ActivePrewarmTasks() << ", Has pending requests: " << shard->HasPendingRequests();
             unregister_active();
             status_ = TaskStatus::BlockedIO;
             Yield();
@@ -572,19 +570,6 @@ listing_done:
               << ", Files pulled: " << total_pulled
               << ", Shards: " << store_->shards_.size();
 
-    // Log per-shard breakdown if helpful
-    if (store_->shards_.size() > 1)
-    {
-        for (size_t i = 0; i < store_->shards_.size(); ++i)
-        {
-            auto *cloud_mgr =
-                static_cast<CloudStoreMgr *>(store_->shards_[i]->IoManager());
-            const auto &stats = cloud_mgr->GetPrewarmStats();
-            DLOG(INFO) << "Shard " << i
-                       << " prewarm: " << "listed=" << stats.total_files_listed
-                       << " pulled=" << stats.total_files_pulled;
-        }
-    }
 }
 
 bool PrewarmService::ExtractPartition(const std::string &path,

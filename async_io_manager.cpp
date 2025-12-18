@@ -2016,12 +2016,23 @@ bool CloudStoreMgr::PopPrewarmFile(PrewarmFile &file)
 
     // Update counters atomically
     prewarm_files_pulled_.fetch_add(1, std::memory_order_relaxed);
-    size_t prev_size =
-        prewarm_queue_size_.fetch_sub(1, std::memory_order_acq_rel);
+    
+    // Decrement size counter, but prevent underflow using compare-exchange
+    size_t old_size = prewarm_queue_size_.load(std::memory_order_acquire);
+    while (old_size > 0)
+    {
+        if (prewarm_queue_size_.compare_exchange_weak(
+                old_size, old_size - 1, 
+                std::memory_order_acq_rel,
+                std::memory_order_acquire))
+        {
+            break;
+        }
+    }
 
     // Notify producer if we've drained back to the limit
-    // Check prev_size - 1 because we just decremented
-    if (prev_size - 1 == kMaxPrewarmPendingFiles)
+    // Check old_size - 1 because we just decremented
+    if (old_size > 0 && old_size - 1 == kMaxPrewarmPendingFiles)
     {
         std::unique_lock<std::mutex> lock(prewarm_producer_mutex_);
         prewarm_producer_cv_.notify_one();
@@ -2068,32 +2079,29 @@ bool CloudStoreMgr::AppendPrewarmFiles(std::vector<PrewarmFile> &files)
 #endif
 
     // Wait until queue has space (only place we use mutex/CV)
+    while (!prewarm_listing_complete_.load(std::memory_order_acquire))
     {
+        size_t current_size =
+            prewarm_queue_size_.load(std::memory_order_acquire);
+        if (current_size < kMaxPrewarmPendingFiles)
+        {
+            break;
+        }
+
+        // Debug log
+        DLOG(INFO) << "Producer waiting: queue full with " << current_size
+                   << " pending files";
+
         std::unique_lock<std::mutex> lock(prewarm_producer_mutex_);
+        // Wait for consumer to drain some files
+        prewarm_producer_cv_.wait(lock);
+    }
 
-        while (!prewarm_listing_complete_.load(std::memory_order_acquire))
-        {
-            size_t current_size =
-                prewarm_queue_size_.load(std::memory_order_acquire);
-            if (current_size < kMaxPrewarmPendingFiles)
-            {
-                break;
-            }
-
-            // Debug log
-            DLOG(INFO) << "Producer waiting: queue full with " << current_size
-                       << " pending files";
-
-            // Wait for consumer to drain some files
-            prewarm_producer_cv_.wait(lock);
-        }
-
-        // Check if we were aborted
-        if (prewarm_listing_complete_.load(std::memory_order_acquire))
-        {
-            DLOG(INFO) << "Producer aborted: listing marked complete";
-            return false;  // Abort requested
-        }
+    // Check if we were aborted
+    if (prewarm_listing_complete_.load(std::memory_order_acquire))
+    {
+        DLOG(INFO) << "Producer aborted: listing marked complete";
+        return false;  // Abort requested
     }
 
     // Enqueue files (lock-free operation)
