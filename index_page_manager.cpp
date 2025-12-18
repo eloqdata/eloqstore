@@ -521,4 +521,9 @@ AsyncIoManager *IndexPageManager::IoMgr() const
 {
     return io_manager_;
 }
+
+MappingArena *IndexPageManager::MapperArena()
+{
+    return &mapping_arena_;
+}
 }  // namespace eloqstore
