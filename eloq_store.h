@@ -10,6 +10,7 @@
 #include "error.h"
 #include "kv_options.h"
 #include "types.h"
+#include "utils.h"
 
 namespace utils
 {
@@ -383,6 +384,7 @@ private:
     std::vector<int> root_fds_;
     std::vector<std::unique_ptr<Shard>> shards_;
     std::atomic<bool> stopped_{true};
+    Clock clock_;
 
     std::unique_ptr<ArchiveCrond> archive_crond_{nullptr};
     std::unique_ptr<PrewarmService> prewarm_service_{nullptr};
