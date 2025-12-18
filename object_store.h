@@ -48,7 +48,8 @@ public:
         const std::string &payload,
         const std::string &strip_prefix,
         std::vector<std::string> *objects,
-        std::vector<utils::CloudObjectInfo> *infos) const;
+        std::vector<utils::CloudObjectInfo> *infos,
+        std::string *next_continuation_token = nullptr) const;
 
     class Task
     {
@@ -129,12 +130,17 @@ public:
         {
             return recurse_;
         }
+        void SetContinuationToken(std::string token)
+        {
+            continuation_token_ = std::move(token);
+        }
         Type TaskType() override
         {
             return Type::AsyncList;
         }
         std::string remote_path_;
         bool recurse_{false};
+        std::string continuation_token_;
     };
 
     class DeleteTask : public Task
@@ -188,7 +194,8 @@ public:
         const std::string &payload,
         const std::string &strip_prefix,
         std::vector<std::string> *objects,
-        std::vector<utils::CloudObjectInfo> *infos) const = 0;
+        std::vector<utils::CloudObjectInfo> *infos,
+        std::string *next_continuation_token = nullptr) const = 0;
 };
 
 class AsyncHttpManager
@@ -215,7 +222,8 @@ public:
         const std::string &payload,
         const std::string &strip_prefix,
         std::vector<std::string> *objects,
-        std::vector<utils::CloudObjectInfo> *infos) const;
+        std::vector<utils::CloudObjectInfo> *infos,
+        std::string *next_continuation_token = nullptr) const;
 
 private:
     void CleanupTaskResources(ObjectStore::Task *task);

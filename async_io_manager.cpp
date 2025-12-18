@@ -29,6 +29,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef ELOQ_MODULE_ENABLED
+#include <bthread/eloq_module.h>
+#endif
+
 #include "common.h"
 #include "eloq_store.h"
 #include "kill_point.h"
@@ -1935,6 +1939,12 @@ CloudStoreMgr::CloudStoreMgr(const KvOptions *opts, uint32_t fd_limit)
     }
 }
 
+KvError CloudStoreMgr::Init(Shard *shard)
+{
+    shard_id_ = shard->shard_id_;  // Store for NotifyWorker calls
+    return IouringMgr::Init(shard);
+}
+
 bool CloudStoreMgr::IsIdle()
 {
     return file_cleaner_.status_ == TaskStatus::Idle;
@@ -1993,24 +2003,43 @@ void CloudStoreMgr::UnregisterPrewarmActive()
 
 bool CloudStoreMgr::HasPrewarmPending() const
 {
-    return prewarm_next_index_ < prewarm_files_.size();
+    return prewarm_queue_size_.load(std::memory_order_acquire) > 0;
 }
 
 bool CloudStoreMgr::PopPrewarmFile(PrewarmFile &file)
 {
-    if (prewarm_next_index_ >= prewarm_files_.size())
+    // Lock-free dequeue from concurrent queue
+    if (!prewarm_queue_.try_dequeue(file))
     {
         return false;
     }
-    file = std::move(prewarm_files_[prewarm_next_index_++]);
+
+    // Update counters atomically
+    prewarm_files_pulled_.fetch_add(1, std::memory_order_relaxed);
+    size_t prev_size = prewarm_queue_size_.fetch_sub(1, std::memory_order_acq_rel);
+    
+    // Notify producer if we've drained back to the limit
+    // Check prev_size - 1 because we just decremented
+    if (prev_size - 1 == kMaxPrewarmPendingFiles)
+    {
+        std::unique_lock<std::mutex> lock(prewarm_producer_mutex_);
+        prewarm_producer_cv_.notify_one();
+    }
+    
     return true;
 }
 
 void CloudStoreMgr::ResetPrewarmFiles(std::vector<PrewarmFile> files)
 {
-    prewarm_files_ = std::move(files);
-    prewarm_next_index_ = 0;
-    bool stop = prewarm_files_.empty();
+    // Bulk enqueue - concurrent queue handles this efficiently
+    size_t enqueued = prewarm_queue_.enqueue_bulk(
+        std::make_move_iterator(files.begin()), files.size());
+    
+    // Update size counter
+    prewarm_queue_size_.fetch_add(enqueued, std::memory_order_release);
+    
+    bool stop = (enqueued == 0);
+    
     for (auto &prewarmer : prewarmers_)
     {
         prewarmer->stop_.store(stop, std::memory_order_release);
@@ -2019,8 +2048,16 @@ void CloudStoreMgr::ResetPrewarmFiles(std::vector<PrewarmFile> files)
 
 void CloudStoreMgr::ClearPrewarmFiles()
 {
-    prewarm_files_.clear();
-    prewarm_next_index_ = 0;
+    // Drain all items from queue
+    PrewarmFile dummy;
+    size_t drained = 0;
+    while (prewarm_queue_.try_dequeue(dummy))
+    {
+        ++drained;
+    }
+    
+    // Reset size counter
+    prewarm_queue_size_.store(0, std::memory_order_release);
 }
 
 void CloudStoreMgr::StopAllPrewarmTasks()
@@ -2029,6 +2066,98 @@ void CloudStoreMgr::StopAllPrewarmTasks()
     {
         prewarmer->stop_.store(true, std::memory_order_release);
     }
+}
+
+bool CloudStoreMgr::AppendPrewarmFiles(std::vector<PrewarmFile> &files)
+{
+    if (files.empty())
+    {
+        return true;
+    }
+    
+    size_t num_files = files.size();
+    
+    // Wake up worker before potentially blocking
+    // This ensures worker is actively draining queue if it was idle
+#ifdef ELOQ_MODULE_ENABLED
+    eloq::EloqModule::NotifyWorker(shard_id_);
+#endif
+    
+    // Wait until queue has space (only place we use mutex/CV)
+    {
+        std::unique_lock<std::mutex> lock(prewarm_producer_mutex_);
+        
+        while (!prewarm_listing_complete_.load(std::memory_order_acquire))
+        {
+            size_t current_size = prewarm_queue_size_.load(std::memory_order_acquire);
+            if (current_size < kMaxPrewarmPendingFiles)
+            {
+                break;
+            }
+            
+            // Debug log
+            DLOG(INFO) << "Producer waiting: queue full with " << current_size 
+                       << " pending files";
+            
+            // Wait for consumer to drain some files
+            prewarm_producer_cv_.wait(lock);
+        }
+        
+        // Check if we were aborted
+        if (prewarm_listing_complete_.load(std::memory_order_acquire))
+        {
+            DLOG(INFO) << "Producer aborted: listing marked complete";
+            return false;  // Abort requested
+        }
+    }
+    
+    // Enqueue files (lock-free operation)
+    size_t enqueued = prewarm_queue_.enqueue_bulk(
+        std::make_move_iterator(files.begin()), num_files);
+    
+    // Update size counter
+    size_t prev_size = prewarm_queue_size_.fetch_add(enqueued, std::memory_order_release);
+    
+    files.clear();
+    
+    // Debug log
+    DLOG(INFO) << "Producer appended " << enqueued 
+               << " files, pending now: " << (prev_size + enqueued);
+    
+    // Wake up prewarmers if queue was empty
+    if (prev_size == 0)
+    {
+        for (auto &prewarmer : prewarmers_)
+        {
+            prewarmer->stop_.store(false, std::memory_order_release);
+        }
+    }
+    
+    return true;
+}
+
+size_t CloudStoreMgr::GetPrewarmPendingCount() const
+{
+    return prewarm_queue_size_.load(std::memory_order_acquire);
+}
+
+void CloudStoreMgr::MarkPrewarmListingComplete()
+{
+    prewarm_listing_complete_.store(true, std::memory_order_release);
+    
+    // Wake any waiting producer threads
+    std::unique_lock<std::mutex> lock(prewarm_producer_mutex_);
+    prewarm_producer_cv_.notify_all();
+}
+
+bool CloudStoreMgr::IsPrewarmListingComplete() const
+{
+    return prewarm_listing_complete_.load(std::memory_order_acquire);
+}
+
+size_t CloudStoreMgr::GetPrewarmFilesPulled() const
+{
+    return prewarm_files_pulled_.load(std::memory_order_relaxed);
 }
 
 KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
@@ -2374,6 +2503,10 @@ int CloudStoreMgr::ReserveCacheSpace(size_t size)
     {
         if (!HasEvictableFile())
         {
+            LOG(WARNING) << "Cannot reserve " << size 
+                         << " bytes: used=" << used_local_space_
+                         << " limit=" << shard_local_space_limit_
+                         << " no evictable files";
             return -ENOSPC;
         }
 

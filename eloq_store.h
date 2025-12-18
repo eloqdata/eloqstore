@@ -237,11 +237,33 @@ public:
         return recursive_;
     }
 
+    void SetContinuationToken(std::string token)
+    {
+        continuation_token_ = std::move(token);
+    }
+
+    const std::string &GetContinuationToken() const
+    {
+        return continuation_token_;
+    }
+
+    std::string *GetNextContinuationToken()
+    {
+        return &next_continuation_token_;
+    }
+
+    bool HasMoreResults() const
+    {
+        return !next_continuation_token_.empty();
+    }
+
 private:
     std::vector<std::string> *objects_;
     std::vector<utils::CloudObjectInfo> *details_{nullptr};
     std::string remote_path_;
     bool recursive_{false};
+    std::string continuation_token_;        // input token
+    std::string next_continuation_token_;   // output token
 };
 
 class WriteRequest : public KvRequest

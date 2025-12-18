@@ -4,10 +4,13 @@
 #include <liburing.h>
 #include <sys/types.h>
 
+#include <atomic>
 #include <cmath>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <span>
 #include <string>
 #include <string_view>
@@ -16,6 +19,10 @@
 #include <variant>
 #include <vector>
 
+// https://github.com/cameron314/concurrentqueue/issues/280
+#undef BLOCK_SIZE
+
+#include "concurrentqueue/concurrentqueue.h"
 #include "error.h"
 #include "kv_options.h"
 #include "object_store.h"
@@ -400,6 +407,7 @@ public:
     {
         return LruFD::kManifest;
     }
+    KvError Init(Shard *shard) override;
     bool IsIdle() override;
     void Stop() override;
     void Submit() override;
@@ -440,6 +448,13 @@ public:
     void ResetPrewarmFiles(std::vector<PrewarmFile> files);
     void ClearPrewarmFiles();
     void StopAllPrewarmTasks();
+    bool AppendPrewarmFiles(std::vector<PrewarmFile> &files);
+    size_t GetPrewarmPendingCount() const;
+    void MarkPrewarmListingComplete();
+    bool IsPrewarmListingComplete() const;
+    size_t GetPrewarmFilesPulled() const;
+    PrewarmStats& GetPrewarmStats() { return prewarm_stats_; }
+    const PrewarmStats& GetPrewarmStats() const { return prewarm_stats_; }
 
 private:
     int CreateFile(LruFD::Ref dir_fd, FileId file_id) override;
@@ -526,8 +541,23 @@ private:
     FileCleaner file_cleaner_;
     std::vector<std::unique_ptr<Prewarmer>> prewarmers_;
     size_t active_prewarm_tasks_{0};
-    std::vector<PrewarmFile> prewarm_files_;
-    size_t prewarm_next_index_{0};
+    
+    // Prewarm queue management
+    moodycamel::ConcurrentQueue<PrewarmFile> prewarm_queue_;
+    static constexpr size_t kMaxPrewarmPendingFiles = 1000;
+    std::atomic<bool> prewarm_listing_complete_{false};
+    std::atomic<size_t> prewarm_queue_size_{0};      // Accurate size tracking
+    std::atomic<size_t> prewarm_files_pulled_{0};    // Track files consumed
+    
+    // Mutex/CV only for producer blocking when queue full
+    std::mutex prewarm_producer_mutex_;
+    std::condition_variable prewarm_producer_cv_;
+    
+    // Store shard ID for worker notification
+    size_t shard_id_{0};
+    
+    // Prewarm statistics
+    PrewarmStats prewarm_stats_;
 
     ObjectStore obj_store_;
 

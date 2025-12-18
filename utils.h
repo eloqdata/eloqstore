@@ -19,6 +19,7 @@ struct CloudObjectInfo
     uint64_t size{0};
     bool is_dir{false};
     std::string mod_time;
+    std::string continuation_token;  // For pagination
 };
 
 template <typename T>
