@@ -61,7 +61,7 @@ class EloqStore;
 class AsyncIoManager
 {
 public:
-    explicit AsyncIoManager(const KvOptions *opts) : options_(opts) {};
+    explicit AsyncIoManager(const KvOptions *opts) : options_(opts){};
     virtual ~AsyncIoManager() = default;
     static std::unique_ptr<AsyncIoManager> Instance(const EloqStore *store,
                                                     uint32_t fd_limit);
@@ -251,7 +251,7 @@ public:
 
     struct BaseReq
     {
-        explicit BaseReq(KvTask *task = nullptr) : task_(task) {};
+        explicit BaseReq(KvTask *task = nullptr) : task_(task){};
         KvTask *task_;
         int res_{0};
         uint32_t flags_{0};
@@ -445,7 +445,6 @@ public:
     void UnregisterPrewarmActive();
     bool HasPrewarmPending() const;
     bool PopPrewarmFile(PrewarmFile &file);
-    void ResetPrewarmFiles(std::vector<PrewarmFile> files);
     void ClearPrewarmFiles();
     void StopAllPrewarmTasks();
     bool AppendPrewarmFiles(std::vector<PrewarmFile> &files);
@@ -453,8 +452,14 @@ public:
     void MarkPrewarmListingComplete();
     bool IsPrewarmListingComplete() const;
     size_t GetPrewarmFilesPulled() const;
-    PrewarmStats& GetPrewarmStats() { return prewarm_stats_; }
-    const PrewarmStats& GetPrewarmStats() const { return prewarm_stats_; }
+    PrewarmStats &GetPrewarmStats()
+    {
+        return prewarm_stats_;
+    }
+    const PrewarmStats &GetPrewarmStats() const
+    {
+        return prewarm_stats_;
+    }
 
 private:
     int CreateFile(LruFD::Ref dir_fd, FileId file_id) override;
@@ -525,7 +530,7 @@ private:
     class FileCleaner : public KvTask
     {
     public:
-        explicit FileCleaner(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr) {};
+        explicit FileCleaner(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr){};
         TaskType Type() const override;
         void Run();
         void Shutdown();
@@ -541,21 +546,21 @@ private:
     FileCleaner file_cleaner_;
     std::vector<std::unique_ptr<Prewarmer>> prewarmers_;
     size_t active_prewarm_tasks_{0};
-    
+
     // Prewarm queue management
     moodycamel::ConcurrentQueue<PrewarmFile> prewarm_queue_;
     static constexpr size_t kMaxPrewarmPendingFiles = 1000;
     std::atomic<bool> prewarm_listing_complete_{false};
-    std::atomic<size_t> prewarm_queue_size_{0};      // Accurate size tracking
-    std::atomic<size_t> prewarm_files_pulled_{0};    // Track files consumed
-    
+    std::atomic<size_t> prewarm_queue_size_{0};    // Accurate size tracking
+    std::atomic<size_t> prewarm_files_pulled_{0};  // Track files consumed
+
     // Mutex/CV only for producer blocking when queue full
     std::mutex prewarm_producer_mutex_;
     std::condition_variable prewarm_producer_cv_;
-    
+
     // Store shard ID for worker notification
     size_t shard_id_{0};
-    
+
     // Prewarm statistics
     PrewarmStats prewarm_stats_;
 
@@ -608,7 +613,7 @@ public:
     class Manifest : public ManifestFile
     {
     public:
-        explicit Manifest(std::string_view content) : content_(content) {};
+        explicit Manifest(std::string_view content) : content_(content){};
         KvError Read(char *dst, size_t n) override;
         void Skip(size_t n);
 

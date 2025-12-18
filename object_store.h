@@ -91,7 +91,7 @@ public:
     {
     public:
         DownloadTask(const TableIdent *tbl_id, std::string_view filename)
-            : tbl_id_(tbl_id), filename_(filename) {};
+            : tbl_id_(tbl_id), filename_(filename){};
         Type TaskType() override
         {
             return Type::AsyncDownload;
@@ -104,7 +104,7 @@ public:
     {
     public:
         UploadTask(const TableIdent *tbl_id, std::string filename)
-            : tbl_id_(tbl_id), filename_(std::move(filename)) {};
+            : tbl_id_(tbl_id), filename_(std::move(filename)){};
         Type TaskType() override
         {
             return Type::AsyncUpload;
@@ -121,7 +121,7 @@ public:
     {
     public:
         explicit ListTask(std::string_view remote_path)
-            : remote_path_(remote_path) {};
+            : remote_path_(remote_path){};
         void SetRecursive(bool recurse)
         {
             recurse_ = recurse;
@@ -147,7 +147,7 @@ public:
     {
     public:
         explicit DeleteTask(std::string remote_path)
-            : remote_path_(std::move(remote_path)) {};
+            : remote_path_(std::move(remote_path)){};
         Type TaskType() override
         {
             return Type::AsyncDelete;

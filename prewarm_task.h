@@ -29,13 +29,13 @@ struct PrewarmStats
     std::chrono::steady_clock::time_point end_time;
     enum class CompletionReason
     {
-        Success,           // All files processed
-        DiskFull,          // Ran out of disk space
-        ListingError,      // Failed to list cloud objects
-        DownloadError,     // Persistent download errors
-        Shutdown           // System shutting down
+        Success,        // All files processed
+        DiskFull,       // Ran out of disk space
+        ListingError,   // Failed to list cloud objects
+        DownloadError,  // Persistent download errors
+        Shutdown        // System shutting down
     } completion_reason{CompletionReason::Success};
-    
+
     std::string CompletionReasonString() const
     {
         switch (completion_reason)
@@ -54,7 +54,7 @@ struct PrewarmStats
             return "unknown";
         }
     }
-    
+
     double DurationSeconds() const
     {
         auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(

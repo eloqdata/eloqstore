@@ -262,8 +262,8 @@ private:
     std::vector<utils::CloudObjectInfo> *details_{nullptr};
     std::string remote_path_;
     bool recursive_{false};
-    std::string continuation_token_;        // input token
-    std::string next_continuation_token_;   // output token
+    std::string continuation_token_;       // input token
+    std::string next_continuation_token_;  // output token
 };
 
 class WriteRequest : public KvRequest

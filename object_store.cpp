@@ -387,7 +387,8 @@ bool ParseS3XmlListResponse(const std::string &payload,
         std::string is_truncated = ExtractTagValue(payload, "IsTruncated");
         if (is_truncated == "true")
         {
-            *next_continuation_token = ExtractTagValue(payload, "NextContinuationToken");
+            *next_continuation_token =
+                ExtractTagValue(payload, "NextContinuationToken");
         }
         else
         {
@@ -521,8 +522,8 @@ public:
             }
             return true;
         }
-        return ParseS3XmlListResponse(payload, strip_prefix, objects, infos,
-                                      next_continuation_token);
+        return ParseS3XmlListResponse(
+            payload, strip_prefix, objects, infos, next_continuation_token);
     }
 
 protected:
@@ -728,8 +729,8 @@ public:
             }
             return true;
         }
-        return ParseS3XmlListResponse(payload, strip_prefix, objects, infos,
-                                      next_continuation_token);
+        return ParseS3XmlListResponse(
+            payload, strip_prefix, objects, infos, next_continuation_token);
     }
 
 protected:
@@ -1089,8 +1090,10 @@ bool AsyncHttpManager::SetupListRequest(ObjectStore::ListTask *task, CURL *easy)
     task->json_data_ = prefix;
 
     SignedRequestInfo request_info;
-    if (!backend_->BuildListRequest(
-            prefix, task->Recursive(), task->continuation_token_, &request_info))
+    if (!backend_->BuildListRequest(prefix,
+                                    task->Recursive(),
+                                    task->continuation_token_,
+                                    &request_info))
     {
         task->error_ = KvError::CloudErr;
         return false;

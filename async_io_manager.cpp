@@ -243,7 +243,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               fd_ref_(std::move(fd)),
               offset_(offset),
-              page_(true) {};
+              page_(true){};
 
         LruFD::Ref fd_ref_;
         uint32_t offset_;
@@ -1011,7 +1011,7 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
     };
 
@@ -1057,7 +1057,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     struct CloseReq : BaseReq
     {
         CloseReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
         int fd_{LruFD::FdEmpty};
     };
@@ -1132,7 +1132,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     struct UnregisterReq : BaseReq
     {
         UnregisterReq(KvTask *task, PendingClose *pending)
-            : BaseReq(task), pending_(pending) {};
+            : BaseReq(task), pending_(pending){};
         PendingClose *pending_;
         int placeholder_{-1};
     };
@@ -2016,8 +2016,9 @@ bool CloudStoreMgr::PopPrewarmFile(PrewarmFile &file)
 
     // Update counters atomically
     prewarm_files_pulled_.fetch_add(1, std::memory_order_relaxed);
-    size_t prev_size = prewarm_queue_size_.fetch_sub(1, std::memory_order_acq_rel);
-    
+    size_t prev_size =
+        prewarm_queue_size_.fetch_sub(1, std::memory_order_acq_rel);
+
     // Notify producer if we've drained back to the limit
     // Check prev_size - 1 because we just decremented
     if (prev_size - 1 == kMaxPrewarmPendingFiles)
@@ -2025,25 +2026,8 @@ bool CloudStoreMgr::PopPrewarmFile(PrewarmFile &file)
         std::unique_lock<std::mutex> lock(prewarm_producer_mutex_);
         prewarm_producer_cv_.notify_one();
     }
-    
-    return true;
-}
 
-void CloudStoreMgr::ResetPrewarmFiles(std::vector<PrewarmFile> files)
-{
-    // Bulk enqueue - concurrent queue handles this efficiently
-    size_t enqueued = prewarm_queue_.enqueue_bulk(
-        std::make_move_iterator(files.begin()), files.size());
-    
-    // Update size counter
-    prewarm_queue_size_.fetch_add(enqueued, std::memory_order_release);
-    
-    bool stop = (enqueued == 0);
-    
-    for (auto &prewarmer : prewarmers_)
-    {
-        prewarmer->stop_.store(stop, std::memory_order_release);
-    }
+    return true;
 }
 
 void CloudStoreMgr::ClearPrewarmFiles()
@@ -2055,7 +2039,7 @@ void CloudStoreMgr::ClearPrewarmFiles()
     {
         ++drained;
     }
-    
+
     // Reset size counter
     prewarm_queue_size_.store(0, std::memory_order_release);
 }
@@ -2074,35 +2058,36 @@ bool CloudStoreMgr::AppendPrewarmFiles(std::vector<PrewarmFile> &files)
     {
         return true;
     }
-    
+
     size_t num_files = files.size();
-    
+
     // Wake up worker before potentially blocking
     // This ensures worker is actively draining queue if it was idle
 #ifdef ELOQ_MODULE_ENABLED
     eloq::EloqModule::NotifyWorker(shard_id_);
 #endif
-    
+
     // Wait until queue has space (only place we use mutex/CV)
     {
         std::unique_lock<std::mutex> lock(prewarm_producer_mutex_);
-        
+
         while (!prewarm_listing_complete_.load(std::memory_order_acquire))
         {
-            size_t current_size = prewarm_queue_size_.load(std::memory_order_acquire);
+            size_t current_size =
+                prewarm_queue_size_.load(std::memory_order_acquire);
             if (current_size < kMaxPrewarmPendingFiles)
             {
                 break;
             }
-            
+
             // Debug log
-            DLOG(INFO) << "Producer waiting: queue full with " << current_size 
+            DLOG(INFO) << "Producer waiting: queue full with " << current_size
                        << " pending files";
-            
+
             // Wait for consumer to drain some files
             prewarm_producer_cv_.wait(lock);
         }
-        
+
         // Check if we were aborted
         if (prewarm_listing_complete_.load(std::memory_order_acquire))
         {
@@ -2110,20 +2095,21 @@ bool CloudStoreMgr::AppendPrewarmFiles(std::vector<PrewarmFile> &files)
             return false;  // Abort requested
         }
     }
-    
+
     // Enqueue files (lock-free operation)
     size_t enqueued = prewarm_queue_.enqueue_bulk(
         std::make_move_iterator(files.begin()), num_files);
-    
+
     // Update size counter
-    size_t prev_size = prewarm_queue_size_.fetch_add(enqueued, std::memory_order_release);
-    
+    size_t prev_size =
+        prewarm_queue_size_.fetch_add(enqueued, std::memory_order_release);
+
     files.clear();
-    
+
     // Debug log
-    DLOG(INFO) << "Producer appended " << enqueued 
+    DLOG(INFO) << "Producer appended " << enqueued
                << " files, pending now: " << (prev_size + enqueued);
-    
+
     // Wake up prewarmers if queue was empty
     if (prev_size == 0)
     {
@@ -2132,7 +2118,7 @@ bool CloudStoreMgr::AppendPrewarmFiles(std::vector<PrewarmFile> &files)
             prewarmer->stop_.store(false, std::memory_order_release);
         }
     }
-    
+
     return true;
 }
 
@@ -2144,7 +2130,7 @@ size_t CloudStoreMgr::GetPrewarmPendingCount() const
 void CloudStoreMgr::MarkPrewarmListingComplete()
 {
     prewarm_listing_complete_.store(true, std::memory_order_release);
-    
+
     // Wake any waiting producer threads
     std::unique_lock<std::mutex> lock(prewarm_producer_mutex_);
     prewarm_producer_cv_.notify_all();
@@ -2503,7 +2489,7 @@ int CloudStoreMgr::ReserveCacheSpace(size_t size)
     {
         if (!HasEvictableFile())
         {
-            LOG(WARNING) << "Cannot reserve " << size 
+            LOG(WARNING) << "Cannot reserve " << size
                          << " bytes: used=" << used_local_space_
                          << " limit=" << shard_local_space_limit_
                          << " no evictable files";

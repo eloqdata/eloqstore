@@ -237,53 +237,52 @@ TEST_CASE("cloud prewarm honors partition filter", "[cloud][prewarm]")
     }
 }
 
-TEST_CASE("cloud prewarm handles pagination with 2000+ files", "[cloud][prewarm][pagination]")
+TEST_CASE("cloud prewarm handles pagination with 2000+ files",
+          "[cloud][prewarm][pagination]")
 {
     using namespace std::chrono_literals;
     namespace fs = std::filesystem;
-    
+
     eloqstore::KvOptions options = cloud_options;
     options.prewarm_cloud_cache = true;
-    options.pages_per_file_shift = 1;  // Small files: 2 pages per file
+    options.pages_per_file_shift = 1;          // Small files: 2 pages per file
     options.local_space_limit = 100ULL << 20;  // 100MB cache
-    options.num_threads = 1;  // Single shard for simplicity
-    
+    options.num_threads = 1;                   // Single shard for simplicity
+
     eloqstore::EloqStore *store = InitStore(options);
-    
+
     // Create 2000 small records to generate many data files
     eloqstore::TableIdent tbl_id{"pagination_test", 0};
     MapVerifier writer(tbl_id, store);
     writer.SetAutoClean(false);
     writer.SetValueSize(10024);  // 10KB values
-    
+
     // Write 2000 records with small page size = many files
     // With pages_per_file_shift=1 and small writes, this creates 1000+ files
     writer.Upsert(0, 2000);
     writer.Validate();
-    
+
     // Count cloud files before restart
-    auto cloud_files_before = ListCloudFiles(
-        options, 
-        options.cloud_store_path,
-        tbl_id.ToString());
-    
-    LOG(INFO) << "Created " << cloud_files_before.size() 
+    auto cloud_files_before =
+        ListCloudFiles(options, options.cloud_store_path, tbl_id.ToString());
+
+    LOG(INFO) << "Created " << cloud_files_before.size()
               << " files in cloud storage";
-    
+
     // Require at least 1000 files to properly test pagination
     // (S3 ListObjectsV2 default max-keys is 1000)
     REQUIRE(cloud_files_before.size() >= 1000);
-    
+
     store->Stop();
     CleanupLocalStore(options);
-    
+
     // Restart with prewarm enabled
     REQUIRE(store->Start() == eloqstore::KvError::NoError);
     writer.SetStore(store);
-    
+
     const fs::path partition_path =
         fs::path(options.store_path[0]) / tbl_id.ToString();
-    
+
     // Wait for prewarm to download files
     // With 2000+ files, this tests pagination robustness
     REQUIRE(WaitForCondition(
@@ -295,7 +294,7 @@ TEST_CASE("cloud prewarm handles pagination with 2000+ files", "[cloud][prewarm]
             {
                 return false;
             }
-            
+
             // Count local files
             size_t local_file_count = 0;
             for (const auto &entry : fs::directory_iterator(partition_path))
@@ -305,15 +304,15 @@ TEST_CASE("cloud prewarm handles pagination with 2000+ files", "[cloud][prewarm]
                     local_file_count++;
                 }
             }
-            
+
             // Check if we've downloaded most files
             // Allow some margin since manifests/metadata files differ
             return local_file_count >= (cloud_files_before.size() * 0.9);
         }));
-    
+
     // Verify data integrity after prewarm
     writer.Validate();
-    
+
     // Verify no files were missed due to pagination
     size_t final_local_count = 0;
     for (const auto &entry : fs::directory_iterator(partition_path))
@@ -323,14 +322,13 @@ TEST_CASE("cloud prewarm handles pagination with 2000+ files", "[cloud][prewarm]
             final_local_count++;
         }
     }
-    
-    LOG(INFO) << "Prewarmed " << final_local_count 
-              << " files from " << cloud_files_before.size() 
-              << " cloud files";
-    
+
+    LOG(INFO) << "Prewarmed " << final_local_count << " files from "
+              << cloud_files_before.size() << " cloud files";
+
     // Should have downloaded nearly all files
     REQUIRE(final_local_count >= (cloud_files_before.size() * 0.9));
-    
+
     store->Stop();
 }
 
@@ -339,16 +337,16 @@ TEST_CASE("cloud prewarm queue management with producer blocking",
 {
     using namespace std::chrono_literals;
     namespace fs = std::filesystem;
-    
+
     eloqstore::KvOptions options = cloud_options;
     options.prewarm_cloud_cache = true;
-    options.pages_per_file_shift = 1;  // Small files
+    options.pages_per_file_shift = 1;          // Small files
     options.local_space_limit = 200ULL << 20;  // 200MB cache
-    options.num_threads = 1;  // Single shard
+    options.num_threads = 1;                   // Single shard
     options.prewarm_task_count = 1;  // Single consumer for controlled draining
-    
+
     eloqstore::EloqStore *store = InitStore(options);
-    
+
     // Create 3000 records to generate ~1500+ files
     // This forces multiple producer blocking cycles
     eloqstore::TableIdent tbl_id{"queue_test", 0};
@@ -357,32 +355,30 @@ TEST_CASE("cloud prewarm queue management with producer blocking",
     writer.SetValueSize(10024);
     writer.Upsert(0, 3000);
     writer.Validate();
-    
-    auto cloud_files = ListCloudFiles(
-        options,
-        options.cloud_store_path,
-        tbl_id.ToString());
-    
-    LOG(INFO) << "Created " << cloud_files.size() 
+
+    auto cloud_files =
+        ListCloudFiles(options, options.cloud_store_path, tbl_id.ToString());
+
+    LOG(INFO) << "Created " << cloud_files.size()
               << " files for queue management test";
     REQUIRE(cloud_files.size() >= 1500);
-    
+
     store->Stop();
     CleanupLocalStore(options);
-    
+
     // Enable debug logging if available
     // export GLOG_v=1 before running to see queue state logs
-    
+
     REQUIRE(store->Start() == eloqstore::KvError::NoError);
     writer.SetStore(store);
-    
+
     const fs::path partition_path =
         fs::path(options.store_path[0]) / tbl_id.ToString();
-    
+
     // Monitor prewarm progress
     size_t prev_size = 0;
     size_t stuck_count = 0;
-    
+
     bool completed = WaitForCondition(
         120s,  // Longer timeout for large dataset
         500ms,
@@ -392,13 +388,13 @@ TEST_CASE("cloud prewarm queue management with producer blocking",
             {
                 return false;
             }
-            
+
             size_t current_size = DirectorySize(partition_path);
-            
+
             // Check for progress
             if (current_size > prev_size)
             {
-                LOG(INFO) << "Prewarm progress: " << current_size 
+                LOG(INFO) << "Prewarm progress: " << current_size
                           << " bytes downloaded";
                 prev_size = current_size;
                 stuck_count = 0;
@@ -410,25 +406,25 @@ TEST_CASE("cloud prewarm queue management with producer blocking",
                 // Producer blocking is normal, but should resume
                 if (stuck_count > 10)
                 {
-                    LOG(WARNING) << "Prewarm appears stuck at " 
-                                 << current_size << " bytes";
+                    LOG(WARNING) << "Prewarm appears stuck at " << current_size
+                                 << " bytes";
                 }
             }
-            
+
             // Check if we've downloaded enough data
             // 3000 records * 512 bytes = ~1.5MB minimum
             return current_size >= (1ULL << 20);  // 1MB
         });
-    
+
     REQUIRE(completed);
-    
+
     // Verify data integrity
     writer.Validate();
-    
+
     // Check completion logs
     // Should see "Prewarm completed successfully" in logs
     // Should show file counts matching cloud files
-    
+
     store->Stop();
 }
 
@@ -437,7 +433,7 @@ TEST_CASE("cloud prewarm aborts gracefully when disk fills",
 {
     using namespace std::chrono_literals;
     namespace fs = std::filesystem;
-    
+
     eloqstore::KvOptions options = cloud_options;
     options.prewarm_cloud_cache = true;
     options.pages_per_file_shift = 1;  // Small files
@@ -445,46 +441,44 @@ TEST_CASE("cloud prewarm aborts gracefully when disk fills",
     options.local_space_limit = 5ULL << 20;  // Only 5MB cache
     options.num_threads = 1;
     options.prewarm_task_count = 2;  // Multiple consumers
-    
+
     eloqstore::EloqStore *store = InitStore(options);
-    
+
     // Create enough data to exceed cache limit
     eloqstore::TableIdent tbl_id{"disk_abort_test", 0};
     MapVerifier writer(tbl_id, store);
     writer.SetAutoClean(false);
     writer.SetValueSize(10024);  // 10KB values
-    writer.Upsert(0, 2000);  // ~20MB of data
+    writer.Upsert(0, 2000);      // ~20MB of data
     writer.Validate();
-    
-    auto cloud_files = ListCloudFiles(
-        options,
-        options.cloud_store_path,
-        tbl_id.ToString());
-    
-    LOG(INFO) << "Created " << cloud_files.size() 
+
+    auto cloud_files =
+        ListCloudFiles(options, options.cloud_store_path, tbl_id.ToString());
+
+    LOG(INFO) << "Created " << cloud_files.size()
               << " files for disk abort test";
-    
+
     auto cloud_size_opt = GetCloudSize(options, options.cloud_store_path);
     REQUIRE(cloud_size_opt.has_value());
     uint64_t cloud_size = cloud_size_opt.value();
-    
-    LOG(INFO) << "Cloud storage size: " << cloud_size 
-              << " bytes, local limit: " << options.local_space_limit 
+
+    LOG(INFO) << "Cloud storage size: " << cloud_size
+              << " bytes, local limit: " << options.local_space_limit
               << " bytes";
-    
+
     // Ensure cloud data exceeds local cache limit
     REQUIRE(cloud_size > options.local_space_limit);
-    
+
     store->Stop();
     CleanupLocalStore(options);
-    
+
     // Restart with prewarm - should abort due to disk full
     REQUIRE(store->Start() == eloqstore::KvError::NoError);
     writer.SetStore(store);
-    
+
     const fs::path partition_path =
         fs::path(options.store_path[0]) / tbl_id.ToString();
-    
+
     // Wait for prewarm to hit disk limit and abort
     bool hit_limit = WaitForCondition(
         30s,
@@ -495,37 +489,37 @@ TEST_CASE("cloud prewarm aborts gracefully when disk fills",
             {
                 return false;
             }
-            
+
             uint64_t local_size = DirectorySize(partition_path);
-            
+
             // Check if we've hit the cache limit
             // Prewarm should abort around the limit
             return local_size >= (options.local_space_limit * 0.8);
         });
-    
+
     // Should hit disk limit (not just complete normally)
     REQUIRE(hit_limit);
-    
+
     // Wait a bit more to ensure prewarm has fully aborted
     std::this_thread::sleep_for(2s);
-    
+
     uint64_t final_size = DirectorySize(partition_path);
-    
-    LOG(INFO) << "Final cache size after abort: " << final_size 
+
+    LOG(INFO) << "Final cache size after abort: " << final_size
               << " bytes (limit: " << options.local_space_limit << ")";
-    
+
     // Verify cache didn't exceed limit significantly
     // Allow 20% margin for in-flight downloads
     REQUIRE(final_size <= (options.local_space_limit * 1.2));
-    
+
     // Check logs for abort message
     // Should see "out of local disk space during prewarm" in INFO logs
     // Should show "Pulled X files in Y seconds before running out of space"
-    
+
     // Store should still be functional
     // Validate with whatever data was prewarmed
     writer.Validate();
-    
+
     store->Stop();
 }
 
@@ -534,7 +528,7 @@ TEST_CASE("cloud prewarm logs accurate completion statistics",
 {
     using namespace std::chrono_literals;
     namespace fs = std::filesystem;
-    
+
     // Test successful completion logging
     SECTION("successful completion")
     {
@@ -543,36 +537,34 @@ TEST_CASE("cloud prewarm logs accurate completion statistics",
         options.pages_per_file_shift = 1;
         options.local_space_limit = 50ULL << 20;  // 50MB
         options.num_threads = 1;
-        
+
         eloqstore::EloqStore *store = InitStore(options);
-        
+
         eloqstore::TableIdent tbl_id{"logging_success", 0};
         MapVerifier writer(tbl_id, store);
         writer.SetAutoClean(false);
         writer.SetValueSize(1024);
         writer.Upsert(0, 1000);
         writer.Validate();
-        
+
         auto cloud_files = ListCloudFiles(
-            options,
-            options.cloud_store_path,
-            tbl_id.ToString());
-        
+            options, options.cloud_store_path, tbl_id.ToString());
+
         size_t expected_files = cloud_files.size();
         LOG(INFO) << "Created " << expected_files << " files for logging test";
-        
+
         store->Stop();
         CleanupLocalStore(options);
-        
+
         // Capture start time for duration verification
         auto start_time = std::chrono::steady_clock::now();
-        
+
         REQUIRE(store->Start() == eloqstore::KvError::NoError);
         writer.SetStore(store);
-        
+
         const fs::path partition_path =
             fs::path(options.store_path[0]) / tbl_id.ToString();
-        
+
         // Wait for prewarm completion
         REQUIRE(WaitForCondition(
             30s,
@@ -583,7 +575,7 @@ TEST_CASE("cloud prewarm logs accurate completion statistics",
                 {
                     return false;
                 }
-                
+
                 size_t local_count = 0;
                 for (const auto &entry : fs::directory_iterator(partition_path))
                 {
@@ -592,18 +584,19 @@ TEST_CASE("cloud prewarm logs accurate completion statistics",
                         local_count++;
                     }
                 }
-                
+
                 return local_count >= (expected_files * 0.9);
             }));
-        
+
         auto end_time = std::chrono::steady_clock::now();
         auto duration_sec = std::chrono::duration_cast<std::chrono::seconds>(
-            end_time - start_time).count();
-        
+                                end_time - start_time)
+                                .count();
+
         LOG(INFO) << "Prewarm took " << duration_sec << " seconds";
-        
+
         writer.Validate();
-        
+
         // Verify the actual number of files pulled matches expectations
         size_t final_local_count = 0;
         for (const auto &entry : fs::directory_iterator(partition_path))
@@ -613,24 +606,25 @@ TEST_CASE("cloud prewarm logs accurate completion statistics",
                 final_local_count++;
             }
         }
-        
-        LOG(INFO) << "Verified " << final_local_count 
-                  << " files locally from " << expected_files 
-                  << " cloud files";
-        
+
+        LOG(INFO) << "Verified " << final_local_count << " files locally from "
+                  << expected_files << " cloud files";
+
         // Should have pulled nearly all files (allowing for manifests/metadata)
         REQUIRE(final_local_count >= (expected_files * 0.9));
         REQUIRE(final_local_count <= expected_files);
-        
+
         // Check logs for completion message
-        // Should see: "Prewarm completed successfully. Duration: Xs, API calls: Y, 
-        //              Files listed: Z, Files skipped: W, Files pulled: V, Shards: 1"
-        // Should see: "Shard 0 prewarm completed successfully. Pulled X files in Ys"
-        // The reported "Files pulled" should match final_local_count
-        
+        // Should see: "Prewarm completed successfully. Duration: Xs, API calls:
+        // Y,
+        //              Files listed: Z, Files skipped: W, Files pulled: V,
+        //              Shards: 1"
+        // Should see: "Shard 0 prewarm completed successfully. Pulled X files
+        // in Ys" The reported "Files pulled" should match final_local_count
+
         store->Stop();
     }
-    
+
     // Test abort logging (disk full)
     SECTION("abort with disk full")
     {
@@ -639,25 +633,25 @@ TEST_CASE("cloud prewarm logs accurate completion statistics",
         options.pages_per_file_shift = 1;
         options.local_space_limit = 3ULL << 20;  // Only 3MB
         options.num_threads = 1;
-        
+
         eloqstore::EloqStore *store = InitStore(options);
-        
+
         eloqstore::TableIdent tbl_id{"logging_abort", 0};
         MapVerifier writer(tbl_id, store);
         writer.SetAutoClean(false);
         writer.SetValueSize(2048);
         writer.Upsert(0, 3000);  // Create more data than cache can hold
         writer.Validate();
-        
+
         store->Stop();
         CleanupLocalStore(options);
-        
+
         REQUIRE(store->Start() == eloqstore::KvError::NoError);
         writer.SetStore(store);
-        
+
         const fs::path partition_path =
             fs::path(options.store_path[0]) / tbl_id.ToString();
-        
+
         // Wait for prewarm to hit disk limit
         bool hit_limit = WaitForCondition(
             30s,
@@ -671,12 +665,12 @@ TEST_CASE("cloud prewarm logs accurate completion statistics",
                 uint64_t local_size = DirectorySize(partition_path);
                 return local_size >= (options.local_space_limit * 0.8);
             });
-        
+
         REQUIRE(hit_limit);
-        
+
         // Wait a bit more to ensure prewarm has fully aborted
         std::this_thread::sleep_for(2s);
-        
+
         // Verify the number of files pulled before abort
         size_t files_pulled = 0;
         if (fs::exists(partition_path))
@@ -689,24 +683,26 @@ TEST_CASE("cloud prewarm logs accurate completion statistics",
                 }
             }
         }
-        
+
         uint64_t final_size = DirectorySize(partition_path);
-        
-        LOG(INFO) << "Aborted prewarm pulled " << files_pulled 
+
+        LOG(INFO) << "Aborted prewarm pulled " << files_pulled
                   << " files, using " << final_size << " bytes "
                   << "(limit: " << options.local_space_limit << ")";
-        
+
         // Should have pulled some files before hitting limit
         REQUIRE(files_pulled > 0);
         REQUIRE(final_size <= (options.local_space_limit * 1.2));
-        
+
         // Check logs for abort messages
-        // Should see: "Shard 0 out of local disk space during prewarm. 
+        // Should see: "Shard 0 out of local disk space during prewarm.
         //              Pulled X files in Ys before running out of space."
-        // Should see: "Prewarm aborted due to insufficient disk space. Duration: Xs, 
-        //              API calls: Y, Files listed: Z, Files skipped: W, Files pulled: V"
+        // Should see: "Prewarm aborted due to insufficient disk space.
+        // Duration: Xs,
+        //              API calls: Y, Files listed: Z, Files skipped: W, Files
+        //              pulled: V"
         // The reported "Files pulled" should match files_pulled count
-        
+
         writer.Validate();
         store->Stop();
     }
