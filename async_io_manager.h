@@ -61,7 +61,7 @@ class EloqStore;
 class AsyncIoManager
 {
 public:
-    explicit AsyncIoManager(const KvOptions *opts) : options_(opts){};
+    explicit AsyncIoManager(const KvOptions *opts) : options_(opts) {};
     virtual ~AsyncIoManager() = default;
     static std::unique_ptr<AsyncIoManager> Instance(const EloqStore *store,
                                                     uint32_t fd_limit);
@@ -251,7 +251,7 @@ public:
 
     struct BaseReq
     {
-        explicit BaseReq(KvTask *task = nullptr) : task_(task){};
+        explicit BaseReq(KvTask *task = nullptr) : task_(task) {};
         KvTask *task_;
         int res_{0};
         uint32_t flags_{0};
@@ -530,7 +530,7 @@ private:
     class FileCleaner : public KvTask
     {
     public:
-        explicit FileCleaner(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr){};
+        explicit FileCleaner(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr) {}
         TaskType Type() const override;
         void Run();
         void Shutdown();
@@ -609,7 +609,7 @@ public:
     class Manifest : public ManifestFile
     {
     public:
-        explicit Manifest(std::string_view content) : content_(content){};
+        explicit Manifest(std::string_view content) : content_(content) {};
         KvError Read(char *dst, size_t n) override;
         void Skip(size_t n);
 

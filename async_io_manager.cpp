@@ -243,7 +243,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               fd_ref_(std::move(fd)),
               offset_(offset),
-              page_(true){};
+              page_(true) {};
 
         LruFD::Ref fd_ref_;
         uint32_t offset_;
@@ -1011,7 +1011,7 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)){};
+            : BaseReq(task), fd_ref_(std::move(fd)) {};
         LruFD::Ref fd_ref_;
     };
 
@@ -1057,7 +1057,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     struct CloseReq : BaseReq
     {
         CloseReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)){};
+            : BaseReq(task), fd_ref_(std::move(fd)) {};
         LruFD::Ref fd_ref_;
         int fd_{LruFD::FdEmpty};
     };
@@ -1132,7 +1132,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     struct UnregisterReq : BaseReq
     {
         UnregisterReq(KvTask *task, PendingClose *pending)
-            : BaseReq(task), pending_(pending){};
+            : BaseReq(task), pending_(pending) {};
         PendingClose *pending_;
         int placeholder_{-1};
     };
