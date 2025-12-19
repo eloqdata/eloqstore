@@ -82,12 +82,15 @@ void Prewarmer::Run()
 
                 const auto &stats = io_mgr_->GetPrewarmStats();
                 size_t files_pulled = io_mgr_->GetPrewarmFilesPulled();
-                LOG(INFO) << "Shard " << shard->shard_id_ << " prewarm "
-                          << stats.CompletionReasonString() << ". Pulled "
-                          << files_pulled << " files in "
-                          << stats.DurationSeconds() << "s";
                 unregister_active();
                 status_ = TaskStatus::Idle;
+                if (io_mgr_->ActivePrewarmTasks() == 0)
+                {
+                    LOG(INFO) << "Shard " << shard->shard_id_ << " prewarm "
+                              << stats.CompletionReasonString() << ". Pulled "
+                              << files_pulled << " files in "
+                              << stats.DurationSeconds() << "s";
+                }
                 Yield();
                 continue;
             }
@@ -119,16 +122,6 @@ void Prewarmer::Run()
             else
             {
                 // Listing complete and queue empty, we're done
-                // Set end_time before calculating duration
-                io_mgr_->GetPrewarmStats().end_time =
-                    std::chrono::steady_clock::now();
-
-                const auto &stats = io_mgr_->GetPrewarmStats();
-                size_t files_pulled = io_mgr_->GetPrewarmFilesPulled();
-                LOG(INFO) << "Shard " << shard->shard_id_ << " prewarm "
-                          << stats.CompletionReasonString() << ". Pulled "
-                          << files_pulled << " files in "
-                          << stats.DurationSeconds() << "s";
                 io_mgr_->ClearPrewarmFiles();
                 io_mgr_->StopAllPrewarmTasks();
                 continue;
@@ -218,7 +211,6 @@ void Prewarmer::Run()
         if (shard->HasPendingRequests() ||
             shard->TaskMgr()->NumActive() > io_mgr_->ActivePrewarmTasks())
         {
-            LOG(INFO) << "Shard " << shard->shard_id_ << " prewarm task blocked by pending requests or active tasks" << shard->TaskMgr()->NumActive() << " > " << io_mgr_->ActivePrewarmTasks() << ", Has pending requests: " << shard->HasPendingRequests();
             unregister_active();
             status_ = TaskStatus::BlockedIO;
             Yield();
@@ -284,7 +276,9 @@ bool PrewarmService::ListCloudObjects(
     request.done_.store(false, std::memory_order_relaxed);
     request.callback_ = nullptr;
 
-    if (!store_->shards_[0]->AddKvRequest(&request))
+    // send request to a random shard
+    size_t random_shard = std::rand() % store_->shards_.size();
+    if (!store_->shards_[random_shard]->AddKvRequest(&request))
     {
         return false;
     }
@@ -344,10 +338,8 @@ void PrewarmService::PrewarmCloudCache()
 
     do
     {
-        api_call_count++;
-
         // Log progress periodically
-        if (api_call_count % 10 == 0)
+        if (api_call_count > 0 && api_call_count % 10 == 0)
         {
             LOG(INFO) << "Prewarm listing progress: " << total_files_listed
                       << " files across " << api_call_count << " API calls";
@@ -375,6 +367,8 @@ void PrewarmService::PrewarmCloudCache()
             }
             goto listing_done;
         }
+
+        api_call_count++;
 
         // Convert to PrewarmFile and distribute to shards
         std::vector<std::vector<PrewarmFile>> shard_files(
@@ -562,14 +556,13 @@ listing_done:
     PrewarmStats temp_stats;
     temp_stats.completion_reason = completion_reason;
 
-    LOG(INFO) << "Prewarm " << temp_stats.CompletionReasonString()
+    LOG(INFO) << "Prewarm listing " << temp_stats.CompletionReasonString()
               << ". Duration: " << duration << "s"
               << ", API calls: " << api_call_count
               << ", Files listed: " << total_files_listed
               << ", Files skipped: " << total_files_skipped
               << ", Files pulled: " << total_pulled
               << ", Shards: " << store_->shards_.size();
-
 }
 
 bool PrewarmService::ExtractPartition(const std::string &path,

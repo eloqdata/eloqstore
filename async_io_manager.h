@@ -554,10 +554,6 @@ private:
     std::atomic<size_t> prewarm_queue_size_{0};    // Accurate size tracking
     std::atomic<size_t> prewarm_files_pulled_{0};  // Track files consumed
 
-    // Mutex/CV only for producer blocking when queue full
-    std::mutex prewarm_producer_mutex_;
-    std::condition_variable prewarm_producer_cv_;
-
     // Store shard ID for worker notification
     size_t shard_id_{0};
 

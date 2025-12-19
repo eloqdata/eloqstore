@@ -2016,26 +2016,19 @@ bool CloudStoreMgr::PopPrewarmFile(PrewarmFile &file)
 
     // Update counters atomically
     prewarm_files_pulled_.fetch_add(1, std::memory_order_relaxed);
-    
+
     // Decrement size counter, but prevent underflow using compare-exchange
     size_t old_size = prewarm_queue_size_.load(std::memory_order_acquire);
     while (old_size > 0)
     {
         if (prewarm_queue_size_.compare_exchange_weak(
-                old_size, old_size - 1, 
+                old_size,
+                old_size - 1,
                 std::memory_order_acq_rel,
                 std::memory_order_acquire))
         {
             break;
         }
-    }
-
-    // Notify producer if we've drained back to the limit
-    // Check old_size - 1 because we just decremented
-    if (old_size > 0 && old_size - 1 == kMaxPrewarmPendingFiles)
-    {
-        std::unique_lock<std::mutex> lock(prewarm_producer_mutex_);
-        prewarm_producer_cv_.notify_one();
     }
 
     return true;
@@ -2090,11 +2083,9 @@ bool CloudStoreMgr::AppendPrewarmFiles(std::vector<PrewarmFile> &files)
 
         // Debug log
         DLOG(INFO) << "Producer waiting: queue full with " << current_size
-                   << " pending files";
+                   << " pending files on shard " << shard_id_;
 
-        std::unique_lock<std::mutex> lock(prewarm_producer_mutex_);
-        // Wait for consumer to drain some files
-        prewarm_producer_cv_.wait(lock);
+        std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
     // Check if we were aborted
@@ -2105,18 +2096,17 @@ bool CloudStoreMgr::AppendPrewarmFiles(std::vector<PrewarmFile> &files)
     }
 
     // Enqueue files (lock-free operation)
-    size_t enqueued = prewarm_queue_.enqueue_bulk(
-        std::make_move_iterator(files.begin()), num_files);
+    prewarm_queue_.enqueue_bulk(std::make_move_iterator(files.begin()),
+                                num_files);
 
     // Update size counter
     size_t prev_size =
-        prewarm_queue_size_.fetch_add(enqueued, std::memory_order_release);
+        prewarm_queue_size_.fetch_add(num_files, std::memory_order_release);
 
     files.clear();
 
-    // Debug log
-    DLOG(INFO) << "Producer appended " << enqueued
-               << " files, pending now: " << (prev_size + enqueued);
+    DLOG(INFO) << "Producer appended " << num_files << " to shard " << shard_id_
+               << " prewarm queue, current size: " << (prev_size + num_files);
 
     // Wake up prewarmers if queue was empty
     if (prev_size == 0)
@@ -2138,10 +2128,6 @@ size_t CloudStoreMgr::GetPrewarmPendingCount() const
 void CloudStoreMgr::MarkPrewarmListingComplete()
 {
     prewarm_listing_complete_.store(true, std::memory_order_release);
-
-    // Wake any waiting producer threads
-    std::unique_lock<std::mutex> lock(prewarm_producer_mutex_);
-    prewarm_producer_cv_.notify_all();
 }
 
 bool CloudStoreMgr::IsPrewarmListingComplete() const

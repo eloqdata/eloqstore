@@ -263,7 +263,8 @@ void Shard::ProcessReq(KvRequest *req)
             auto list_object_req = static_cast<ListObjectRequest *>(req);
             ObjectStore::ListTask list_task(list_object_req->RemotePath());
             list_task.SetRecursive(list_object_req->Recursive());
-            list_task.SetContinuationToken(list_object_req->GetContinuationToken());
+            list_task.SetContinuationToken(
+                list_object_req->GetContinuationToken());
 
             list_task.SetKvTask(task);
             auto cloud_mgr = static_cast<CloudStoreMgr *>(shard->io_mgr_.get());
@@ -291,8 +292,8 @@ void Shard::ProcessReq(KvRequest *req)
             }
 
             // Store next token in request
-            *list_object_req->GetNextContinuationToken() = std::move(next_token);
-
+            *list_object_req->GetNextContinuationToken() =
+                std::move(next_token);
             return KvError::NoError;
         };
         StartTask(task, req, lbd);
