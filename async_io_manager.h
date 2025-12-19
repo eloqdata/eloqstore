@@ -530,7 +530,9 @@ private:
     class FileCleaner : public KvTask
     {
     public:
-        explicit FileCleaner(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr) {}
+        explicit FileCleaner(CloudStoreMgr *io_mgr) : io_mgr_(io_mgr)
+        {
+        }
         TaskType Type() const override;
         void Run();
         void Shutdown();
