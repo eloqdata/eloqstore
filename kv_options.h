@@ -73,7 +73,7 @@ struct KvOptions
      * @brief Size of coroutine stack.
      * According to the latest test results, at least 16KB is required.
      */
-    uint32_t coroutine_stack_size = 256 * KB;
+    uint32_t coroutine_stack_size = 4096 * KB;
     /**
      * @brief Limit number of retained archives.
      * Only take effect when data_append_mode is enabled.
