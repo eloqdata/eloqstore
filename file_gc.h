@@ -67,7 +67,8 @@ KvError DownloadArchiveFile(const TableIdent &tbl_id,
                             CloudStoreMgr *cloud_mgr,
                             const KvOptions *options);
 
-FileId ParseArchiveForMaxFileId(const std::string &archive_content);
+FileId ParseArchiveForMaxFileId(const std::string &archive_filename,
+                                const std::string &archive_content);
 
 KvError DeleteUnreferencedCloudFiles(
     const TableIdent &tbl_id,

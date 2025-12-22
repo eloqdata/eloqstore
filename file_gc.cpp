@@ -174,14 +174,21 @@ void ClassifyFiles(const std::vector<std::string> &files,
 
         if (ret.first == FileNameManifest)
         {
-            // archive file: manifest_<timestamp>
-            // Only manifest files with timestamp are archive files.
-            std::string_view ts_str = ret.second;
-            if (!ts_str.empty())
+            // Only support term-aware archive format:
+            // manifest_<term>_<ts> Legacy format manifest_<ts> is no longer
+            // supported.
+            uint64_t term = 0;
+            std::optional<uint64_t> timestamp;
+            if (!ParseManifestFileSuffix(ret.second, term, timestamp))
             {
-                uint64_t timestamp = std::stoull(std::string(ts_str));
+                continue;
+            }
+            // Only recognize term-aware archives (both term and timestamp must
+            // be present).
+            if (timestamp.has_value())
+            {
                 archive_files.push_back(file_name);
-                archive_timestamps.push_back(timestamp);
+                archive_timestamps.push_back(timestamp.value());
             }
             // Manifest files without timestamp are current manifest, ignore.
         }
@@ -244,10 +251,23 @@ KvError DownloadArchiveFile(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-FileId ParseArchiveForMaxFileId(const std::string &archive_content)
+FileId ParseArchiveForMaxFileId(const std::string &archive_filename,
+                                const std::string &archive_content)
 {
     MemStoreMgr::Manifest manifest(archive_content);
     Replayer replayer(Options());
+
+    // Extract manifest term from archive filename if present.
+    uint64_t manifest_term = ManifestTermFromFilename(archive_filename);
+    if (manifest_term != 0)
+    {
+        if (!replayer.file_id_term_mapping_)
+        {
+            replayer.file_id_term_mapping_ = std::make_shared<FileIdTermMapping>();
+        }
+        replayer.file_id_term_mapping_->insert_or_assign(
+            IouringMgr::LruFD::kManifest, manifest_term);
+    }
 
     KvError err = replayer.Replay(&manifest);
     if (err != KvError::NoError)
@@ -351,7 +371,8 @@ KvError GetOrUpdateArchivedMaxFileId(
     }
 
     // 4. parse the archive file to get the maximum file ID.
-    least_not_archived_file_id = ParseArchiveForMaxFileId(archive_content) + 1;
+    least_not_archived_file_id =
+        ParseArchiveForMaxFileId(latest_archive, archive_content) + 1;
 
     // 5. cache the result.
     cached_max_ids[tbl_id] = least_not_archived_file_id;
@@ -376,7 +397,12 @@ KvError DeleteUnreferencedCloudFiles(
             continue;
         }
 
-        FileId file_id = std::stoull(std::string(ret.second));
+        FileId file_id = 0;
+        [[maybe_unused]] uint64_t term = 0;
+        if (!ParseDataFileSuffix(ret.second, file_id, term))
+        {
+            continue;
+        }
 
         // Only delete files that meet the following conditions:
         // 1. File ID >= least_not_archived_file_id (greater than the archived
@@ -405,8 +431,13 @@ KvError DeleteUnreferencedCloudFiles(
     auto *http_mgr = cloud_mgr->GetObjectStore().GetHttpManager();
     if (files_to_delete.size() == data_files.size())
     {
+        // If we're deleting all data files, also delete current manifest file.
+        uint64_t manifest_term =
+            cloud_mgr->GetFileIdTerm(tbl_id, IouringMgr::LruFD::kManifest)
+                .value_or(cloud_mgr->ProcessTerm());
+        // TODO(lzx): need delete all manifest files and archive files?
         files_to_delete.emplace_back(tbl_id.ToString() + "/" +
-                                     FileNameManifest);
+                                     ManifestFileName(manifest_term));
     }
 
     // If we're deleting every file in the directory, issue a single purge
@@ -461,7 +492,12 @@ KvError DeleteUnreferencedLocalFiles(
             continue;
         }
 
-        FileId file_id = std::stoull(std::string(ret.second));
+        FileId file_id = 0;
+        [[maybe_unused]] uint64_t term = 0;
+        if (!ParseDataFileSuffix(ret.second, file_id, term))
+        {
+            continue;
+        }
 
         // Only delete files that meet the following conditions:
         // 1. File ID >= least_not_archived_file_id (greater than or equal to

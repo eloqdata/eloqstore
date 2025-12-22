@@ -233,7 +233,7 @@ TEST_CASE("detect corrupted page", "[persist][checksum]")
 
     // corrupt it
     std::string datafile = std::string(test_path) + '/' + tbl_id.ToString() +
-                           '/' + eloqstore::DataFileName(0);
+                           '/' + eloqstore::DataFileName(0, 0);
     std::fstream file(datafile,
                       std::ios::binary | std::ios::out | std::ios::in);
     REQUIRE(file);

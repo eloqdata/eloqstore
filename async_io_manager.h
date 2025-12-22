@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -16,6 +17,7 @@
 #include <variant>
 #include <vector>
 
+#include "common.h"
 #include "error.h"
 #include "kv_options.h"
 #include "object_store.h"
@@ -125,6 +127,46 @@ public:
     }
     virtual void CleanManifest(const TableIdent &tbl_id) = 0;
 
+    // Get or create FileIdTermMapping for a table (default: nullptr, concrete
+    // implementations can override).
+    virtual std::shared_ptr<FileIdTermMapping> GetOrCreateFileIdTermMapping(
+        const TableIdent &tbl_id)
+    {
+        return std::make_shared<FileIdTermMapping>();
+    }
+
+    virtual void SetFileIdTermMapping(
+        const TableIdent &tbl_id, std::shared_ptr<FileIdTermMapping> mapping)
+    {
+        DLOG(INFO) << "SetFileIdTermMapping tbl_id=" << tbl_id.ToString()
+                   << " size=" << mapping->size()
+                   << ", no need to set store term info";
+    }
+
+    // Get term for a specific file_id in a table (default: nullopt, concrete
+    // implementations can override).
+    virtual std::optional<uint64_t> GetFileIdTerm(const TableIdent &tbl_id,
+                                                  FileId file_id)
+    {
+        return 0;
+    }
+
+    // Update term for a specific file_id in a table (default no-op; concrete
+    // implementations can override for efficient updates).
+    virtual void SetFileIdTerm(const TableIdent &tbl_id,
+                               FileId file_id,
+                               uint64_t term)
+    {
+        (void) tbl_id;
+        (void) file_id;
+        (void) term;
+    }
+
+    virtual uint64_t ProcessTerm() const
+    {
+        return 0;
+    }
+
     const KvOptions *options_;
 
     std::unordered_map<TableIdent, FileId> least_not_archived_file_ids_;
@@ -168,6 +210,31 @@ public:
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
 
+    // Get or create FileIdTermMapping for a table.
+    std::shared_ptr<FileIdTermMapping> GetOrCreateFileIdTermMapping(
+        const TableIdent &tbl_id) override;
+
+    void SetFileIdTermMapping(
+        const TableIdent &tbl_id,
+        std::shared_ptr<FileIdTermMapping> mapping) override;
+
+    // Get term for a specific file_id in a table (returns nullopt if not
+    // found).
+    std::optional<uint64_t> GetFileIdTerm(const TableIdent &tbl_id,
+                                          FileId file_id) override;
+
+    // Update term for a specific file_id in a table.
+    void SetFileIdTerm(const TableIdent &tbl_id,
+                       FileId file_id,
+                       uint64_t term) override;
+
+    // Phase 8: Process term management for term-aware archive naming.
+    // Local mode always returns 0 (no term support).
+    virtual uint64_t ProcessTerm() const
+    {
+        return 0;
+    }
+
     KvError ReadFile(const TableIdent &tbl_id,
                      std::string_view filename,
                      std::string &content) override;
@@ -207,7 +274,7 @@ public:
             IouringMgr *io_mgr_ = nullptr;
         };
 
-        LruFD(PartitionFiles *tbl, FileId file_id);
+        LruFD(PartitionFiles *tbl, FileId file_id, uint64_t term = 0);
         FdIdx FdPair() const;
         void Deque();
         LruFD *DequeNext();
@@ -233,6 +300,7 @@ public:
         uint32_t ref_count_{0};
         LruFD *prev_{nullptr};
         LruFD *next_{nullptr};
+        uint64_t term_{0};  // Term of the file this FD represents
     };
 
     enum class UserDataType : uint8_t
@@ -323,8 +391,13 @@ public:
     virtual int WriteSnapshot(LruFD::Ref dir_fd,
                               std::string_view name,
                               std::string_view content);
-    virtual int CreateFile(LruFD::Ref dir_fd, FileId file_id);
-    virtual int OpenFile(const TableIdent &tbl_id, FileId file_id, bool direct);
+    virtual int CreateFile(LruFD::Ref dir_fd,
+                           FileId file_id,
+                           uint64_t term = 0);
+    virtual int OpenFile(const TableIdent &tbl_id,
+                         FileId file_id,
+                         bool direct,
+                         uint64_t term = 0);
     virtual KvError SyncFile(LruFD::Ref fd);
     virtual KvError SyncFiles(const TableIdent &tbl_id,
                               std::span<LruFD::Ref> fds);
@@ -343,7 +416,8 @@ public:
      */
     std::pair<LruFD::Ref, KvError> OpenFD(const TableIdent &tbl_id,
                                           FileId file_id,
-                                          bool direct = false);
+                                          bool direct = false,
+                                          uint64_t term = 0);
     /**
      * @brief Open file or create it if not exists. This method can be used to
      * open data-file/manifest or create data-file, but not create manifest.
@@ -353,7 +427,8 @@ public:
     std::pair<LruFD::Ref, KvError> OpenOrCreateFD(const TableIdent &tbl_id,
                                                   FileId file_id,
                                                   bool direct = false,
-                                                  bool create = true);
+                                                  bool create = true,
+                                                  uint64_t term = 0);
     bool EvictFD();
 
     class WriteReqPool
@@ -375,6 +450,10 @@ public:
     std::unique_ptr<WriteReqPool> write_req_pool_{nullptr};
 
     std::unordered_map<TableIdent, PartitionFiles> tables_;
+    // Per-table FileIdTermMapping storage. Mapping is shared between
+    // components via shared_ptr and keyed by TableIdent.
+    std::unordered_map<TableIdent, std::shared_ptr<FileIdTermMapping>>
+        file_terms_;
     LruFD lru_fd_head_{nullptr, MaxFileId};
     LruFD lru_fd_tail_{nullptr, MaxFileId};
     uint32_t lru_fd_count_{0};
@@ -441,11 +520,26 @@ public:
     void ClearPrewarmFiles();
     void StopAllPrewarmTasks();
 
+    void SetProcessTerm(uint64_t term)
+    {
+        process_term_ = term;
+    }
+    uint64_t ProcessTerm() const override
+    {
+        return process_term_;
+    }
+
+    std::pair<ManifestFilePtr, KvError> GetManifest(
+        const TableIdent &tbl_id) override;
+
 private:
-    int CreateFile(LruFD::Ref dir_fd, FileId file_id) override;
+    int CreateFile(LruFD::Ref dir_fd,
+                   FileId file_id,
+                   uint64_t term = 0) override;
     int OpenFile(const TableIdent &tbl_id,
                  FileId file_id,
-                 bool direct) override;
+                 bool direct,
+                 uint64_t term = 0) override;
     KvError SyncFile(LruFD::Ref fd) override;
     KvError SyncFiles(const TableIdent &tbl_id,
                       std::span<LruFD::Ref> fds) override;
@@ -453,7 +547,9 @@ private:
 
     static constexpr size_t kMaxUploadBatch = 10;
 
-    KvError DownloadFile(const TableIdent &tbl_id, FileId file_id);
+    KvError DownloadFile(const TableIdent &tbl_id,
+                         FileId file_id,
+                         uint64_t term = 0);
     KvError UploadFiles(const TableIdent &tbl_id,
                         std::vector<std::string> filenames);
     KvError ReadFiles(const TableIdent &tbl_id,
@@ -464,7 +560,9 @@ private:
     void EnqueClosedFile(FileKey key);
     bool HasEvictableFile() const;
     int ReserveCacheSpace(size_t size);
-    static std::string ToFilename(FileId file_id);
+    static std::string ToFilename(const TableIdent &tbl_id,
+                                  FileId file_id,
+                                  uint64_t term = 0);
     size_t EstimateFileSize(FileId file_id) const;
     size_t EstimateFileSize(std::string_view filename) const;
     bool BackgroundJobInited() override;
@@ -530,6 +628,11 @@ private:
     size_t prewarm_next_index_{0};
 
     ObjectStore obj_store_;
+
+    // Expected process term for this shard in cloud mode.
+    // 0 means unspecified/legacy; in that case term validation in GetManifest
+    // will be skipped and the latest manifest term will be used.
+    uint64_t process_term_{0};
 
     size_t inflight_upload_files_{0};
     WaitingZone upload_slots_waiting_;

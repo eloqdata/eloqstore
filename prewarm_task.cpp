@@ -86,8 +86,8 @@ void Prewarmer::Run()
             io_mgr_->StopAllPrewarmTasks();
             continue;
         }
-        DLOG(INFO) << "prewarm file id:" << file.file_id;
-        auto [fd_ref, err] = io_mgr_->OpenFD(file.tbl_id, file.file_id);
+        auto [fd_ref, err] =
+            io_mgr_->OpenFD(file.tbl_id, file.file_id, false, file.term);
         if (err == KvError::NoError)
         {
             fd_ref = nullptr;
@@ -230,30 +230,35 @@ void PrewarmService::PrewarmCloudCache()
         PrewarmFile file;
         file.tbl_id = tbl_id;
         file.mod_time = info.mod_time;
-        if (filename == FileNameManifest)
+        auto [type, suffix] = ParseFileName(filename);
+        if (type == FileNameManifest)
         {
+            uint64_t term = 0;
+            std::optional<uint64_t> ts;
+            if (!ParseManifestFileSuffix(suffix, term, ts))
+            {
+                continue;
+            }
+            if (ts.has_value())
+            {
+                // Skip archives in prewarm.
+                continue;
+            }
             file.file_id = CloudStoreMgr::ManifestFileId();
             file.is_manifest = true;
+            file.term = term;
         }
-        else if (filename.rfind(FileNameData, 0) == 0)
+        else if (type == FileNameData)
         {
-            size_t underscore = filename.find_first_of(FileNameSeparator);
-            if (underscore == std::string::npos ||
-                underscore + 1 >= filename.size())
+            FileId file_id = 0;
+            uint64_t term = 0;
+            if (!ParseDataFileSuffix(suffix, file_id, term))
             {
                 continue;
             }
-            std::string id_str = filename.substr(underscore + 1);
-            try
-            {
-                file.file_id = std::stoull(id_str);
-            }
-            catch (const std::exception &)
-            {
-                continue;
-            }
-
+            file.file_id = file_id;
             file.is_manifest = false;
+            file.term = term;
         }
         else
         {

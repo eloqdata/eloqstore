@@ -3,11 +3,13 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <memory>
 #include <vector>
 
 #include "async_io_manager.h"
 #include "error.h"
 #include "page_mapper.h"
+#include "common.h"
 
 namespace eloqstore
 {
@@ -17,7 +19,8 @@ public:
     Replayer(const KvOptions *opts);
     KvError Replay(ManifestFile *file);
     std::unique_ptr<PageMapper> GetMapper(IndexPageManager *idx_mgr,
-                                          const TableIdent *tbl_ident);
+                                          const TableIdent *tbl_ident,
+                                          uint64_t expect_term = 0);
 
     PageId root_;
     PageId ttl_root_;
@@ -25,6 +28,7 @@ public:
     FilePageId max_fp_id_;
     uint64_t file_size_;
     std::string dict_bytes_;
+    std::shared_ptr<FileIdTermMapping> file_id_term_mapping_;
 
 private:
     KvError ParseNextRecord(ManifestFile *file);

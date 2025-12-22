@@ -988,7 +988,8 @@ void ManifestVerifier::Snapshot()
                                             eloqstore::MaxPageId,
                                             answer_.GetMapping(),
                                             max_fp_id,
-                                            std::string_view{});
+                                            std::string_view{},
+                                            term_mapping_);
     file_ = sv;
     builder_.Reset();
 }

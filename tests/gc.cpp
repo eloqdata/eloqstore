@@ -268,7 +268,7 @@ TEST_CASE("archive prevents data deletion after truncate", "[gc][archive]")
         bool has_archive = false;
         for (const auto &file : remaining_files)
         {
-            if (file.find("manifest_") == 0)
+            if (eloqstore::IsArchiveFile(file))
             {
                 has_archive = true;
                 break;
@@ -294,7 +294,7 @@ TEST_CASE("archive prevents data deletion after truncate", "[gc][archive]")
                 if (entry.is_regular_file())
                 {
                     std::string filename = entry.path().filename().string();
-                    if (filename.find("manifest_") == 0)
+                    if (eloqstore::IsArchiveFile(filename))
                     {
                         archive_found = true;
                         break;

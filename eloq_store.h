@@ -348,10 +348,15 @@ public:
     EloqStore(const EloqStore &) = delete;
     EloqStore(EloqStore &&) = delete;
     ~EloqStore();
-    KvError Start();
+    // Phase 10: Term injected at startup (default 0 for backward compatibility).
+    KvError Start(uint64_t term = 0);
     void Stop();
     bool IsStopped() const;
     const KvOptions &Options() const;
+    uint64_t Term() const
+    {
+        return term_;
+    }
 
     /**
      * @brief Validate KvOptions configuration.
@@ -383,6 +388,7 @@ private:
     std::vector<int> root_fds_;
     std::vector<std::unique_ptr<Shard>> shards_;
     std::atomic<bool> stopped_{true};
+    uint64_t term_{0};
 
     std::unique_ptr<ArchiveCrond> archive_crond_{nullptr};
     std::unique_ptr<PrewarmService> prewarm_service_{nullptr};

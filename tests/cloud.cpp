@@ -269,7 +269,7 @@ TEST_CASE("cloud gc preserves archived data after truncate",
     std::string protected_data_file;
     for (const std::string &filename : cloud_files)
     {
-        if (filename.rfind("manifest_", 0) == 0)
+        if (eloqstore::IsArchiveFile(filename))
         {
             archive_name = filename;
         }
@@ -305,14 +305,20 @@ TEST_CASE("cloud gc preserves archived data after truncate",
     store->Stop();
 
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
-    std::string backup_name = "manifest_" + std::to_string(backup_ts);
+    // Use ArchiveName to generate a valid archive-like filename. This ensures
+    // it won't be treated as a current manifest during selection.
+    std::string backup_name = eloqstore::ArchiveName(0, backup_ts);
 
-    bool backup_ok = MoveCloudFile(
-        cloud_archive_opts, partition_remote, "manifest", backup_name);
+    bool backup_ok = MoveCloudFile(cloud_archive_opts,
+                                   partition_remote,
+                                   eloqstore::ManifestFileName(0),
+                                   backup_name);
     REQUIRE(backup_ok);
 
-    bool rollback_ok = MoveCloudFile(
-        cloud_archive_opts, partition_remote, archive_name, "manifest");
+    bool rollback_ok = MoveCloudFile(cloud_archive_opts,
+                                     partition_remote,
+                                     archive_name,
+                                     eloqstore::ManifestFileName(0));
     REQUIRE(rollback_ok);
 
     CleanupLocalStore(cloud_archive_opts);
@@ -322,12 +328,16 @@ TEST_CASE("cloud gc preserves archived data after truncate",
     tester.Validate();
     store->Stop();
 
-    bool restore_archive = MoveCloudFile(
-        cloud_archive_opts, partition_remote, "manifest", archive_name);
+    bool restore_archive = MoveCloudFile(cloud_archive_opts,
+                                         partition_remote,
+                                         eloqstore::ManifestFileName(0),
+                                         archive_name);
     REQUIRE(restore_archive);
 
-    bool restore_manifest = MoveCloudFile(
-        cloud_archive_opts, partition_remote, backup_name, "manifest");
+    bool restore_manifest = MoveCloudFile(cloud_archive_opts,
+                                          partition_remote,
+                                          backup_name,
+                                          eloqstore::ManifestFileName(0));
     REQUIRE(restore_manifest);
 
     CleanupLocalStore(cloud_archive_opts);
@@ -451,7 +461,7 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
     std::string archive_name;
     for (const auto &filename : cloud_files)
     {
-        if (filename.find("manifest_") == 0)
+        if (eloqstore::IsArchiveFile(filename))
         {
             archive_name = filename;
             break;
@@ -471,13 +481,13 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
 
     // Create backup with timestamp
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
-    std::string backup_name = "manifest_" + std::to_string(backup_ts);
+    std::string backup_name = eloqstore::ArchiveName(0, backup_ts);
 
     // Move current manifest to backup
     bool backup_success = MoveCloudFile(
         cloud_archive_opts,
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString(),
-        "manifest",
+        eloqstore::ManifestFileName(0),
         backup_name);
     REQUIRE(backup_success);
 
@@ -486,7 +496,7 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
         cloud_archive_opts,
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString(),
         archive_name,
-        "manifest");
+        eloqstore::ManifestFileName(0));
     REQUIRE(rollback_success);
 
     // Clean local cache and restart store
@@ -506,7 +516,7 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
         cloud_archive_opts,
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString(),
         backup_name,
-        "manifest");
+        eloqstore::ManifestFileName(0));
     REQUIRE(restore_success);
 
     CleanupLocalStore(cloud_archive_opts);
@@ -575,11 +585,13 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
 
     // Create backup with timestamp
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
-    std::string backup_name = "manifest_" + std::to_string(backup_ts);
+    std::string backup_name = eloqstore::ArchiveName(0, backup_ts);
 
     // Backup current manifest
-    bool backup_ok =
-        MoveCloudFile(cloud_archive_opts, cloud_path, "manifest", backup_name);
+    bool backup_ok = MoveCloudFile(cloud_archive_opts,
+                                   cloud_path,
+                                   eloqstore::ManifestFileName(0),
+                                   backup_name);
     REQUIRE(backup_ok);
 
     // List cloud files to find the archive file
@@ -601,8 +613,10 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
     bool rollback_ok = false;
     if (!archive_name.empty())
     {
-        rollback_ok = MoveCloudFile(
-            cloud_archive_opts, cloud_path, archive_name, "manifest");
+        rollback_ok = MoveCloudFile(cloud_archive_opts,
+                                    cloud_path,
+                                    archive_name,
+                                    eloqstore::ManifestFileName(0));
     }
 
     // Clean up local store
@@ -620,8 +634,10 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
         store->Stop();
 
         // Restore backup to get back to phase 2 dataset
-        bool restore_ok = MoveCloudFile(
-            cloud_archive_opts, cloud_path, backup_name, "manifest");
+        bool restore_ok = MoveCloudFile(cloud_archive_opts,
+                                        cloud_path,
+                                        backup_name,
+                                        eloqstore::ManifestFileName(0));
         REQUIRE(restore_ok);
 
         CleanupLocalStore(cloud_archive_opts);

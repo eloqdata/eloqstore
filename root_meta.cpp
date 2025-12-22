@@ -9,6 +9,7 @@
 
 #include "coding.h"
 #include "page_mapper.h"
+#include "common.h"
 
 namespace eloqstore
 {
@@ -30,17 +31,24 @@ void ManifestBuilder::DeleteMapping(PageId page_id)
     PutVarint64(&buff_, MappingSnapshot::InvalidValue);
 }
 
-std::string_view ManifestBuilder::Snapshot(PageId root_id,
-                                           PageId ttl_root,
-                                           const MappingSnapshot *mapping,
-                                           FilePageId max_fp_id,
-                                           std::string_view dict_bytes)
+std::string_view ManifestBuilder::Snapshot(
+    PageId root_id,
+    PageId ttl_root,
+    const MappingSnapshot *mapping,
+    FilePageId max_fp_id,
+    std::string_view dict_bytes,
+    const FileIdTermMapping &file_id_mapping)
 {
     Reset();
-    buff_.reserve(4 + 8 * (mapping->mapping_tbl_.size() + 1));
+    // Reserve some space: max_fp_id + dict header + fileid_term_mapping count +
+    // fileid_term_mapping pairs + mapping
+    buff_.reserve(4 + 8 * (mapping->mapping_tbl_.size() + 1) + 8 +
+                  16 * file_id_mapping.size());
     PutVarint64(&buff_, max_fp_id);
     PutVarint32(&buff_, dict_bytes.size());
     buff_.append(dict_bytes.data(), dict_bytes.size());
+    // Serialize FileIdTermMapping before mapping table
+    SerializeFileIdTermMapping(file_id_mapping, buff_);
     mapping->Serialize(buff_);
     return Finalize(root_id, ttl_root);
 }

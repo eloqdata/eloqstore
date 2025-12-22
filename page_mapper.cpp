@@ -153,6 +153,13 @@ MappingSnapshot::MappingSnapshot(IndexPageManager *idx_mgr,
 
 MappingSnapshot::~MappingSnapshot()
 {
+#ifndef NDEBUG
+    // In unit tests, idx_mgr_ set to nullptr.
+    if (idx_mgr_ == nullptr)
+    {
+        return;
+    }
+#endif
     idx_mgr_->FreeMappingSnapshot(this);
 }
 

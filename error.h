@@ -2,10 +2,11 @@
 
 #include <cstdint>
 
-#define CHECK_KV_ERR(err)          \
-    if ((err) != KvError::NoError) \
-    {                              \
-        return err;                \
+#define CHECK_KV_ERR(err)                                    \
+    if ((err) != KvError::NoError)                           \
+    {                                                        \
+        DLOG(ERROR) << "CHECK_KV_ERR: " << ErrorString(err); \
+        return err;                                          \
     }
 
 namespace eloqstore
