@@ -181,5 +181,6 @@ private:
 
     eloqstore::ManifestBuilder builder_;
     std::string file_;
+    eloqstore::FileIdTermMapping term_mapping_;
 };
 }  // namespace test_util

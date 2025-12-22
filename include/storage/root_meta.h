@@ -7,6 +7,7 @@
 #include <string_view>
 #include <unordered_set>
 
+#include "common.h"
 #include "compression.h"
 #include "manifest_buffer.h"
 #include "storage/mem_index_page.h"
@@ -25,7 +26,8 @@ public:
                               PageId ttl_root,
                               const MappingSnapshot *mapping,
                               FilePageId max_fp_id,
-                              std::string_view dict_bytes);
+                              std::string_view dict_bytes,
+                              const FileIdTermMapping &file_term_mapping);
 
     std::string_view Finalize(PageId new_root, PageId ttl_root);
     static bool ValidateChecksum(std::string_view record);

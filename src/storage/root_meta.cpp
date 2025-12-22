@@ -28,17 +28,21 @@ void ManifestBuilder::DeleteMapping(PageId page_id)
     buff_.AppendVarint64(MappingSnapshot::InvalidValue);
 }
 
-std::string_view ManifestBuilder::Snapshot(PageId root_id,
-                                           PageId ttl_root,
-                                           const MappingSnapshot *mapping,
-                                           FilePageId max_fp_id,
-                                           std::string_view dict_bytes)
+std::string_view ManifestBuilder::Snapshot(
+    PageId root_id,
+    PageId ttl_root,
+    const MappingSnapshot *mapping,
+    FilePageId max_fp_id,
+    std::string_view dict_bytes,
+    const FileIdTermMapping &file_term_mapping)
 {
     Reset();
     buff_.reserve(4 + 8 * (mapping->mapping_tbl_.size() + 1));
     buff_.AppendVarint64(max_fp_id);
     buff_.AppendVarint32(dict_bytes.size());
     buff_.append(dict_bytes.data(), dict_bytes.size());
+    // Serialize FileIdTermMapping before mapping table
+    SerializeFileIdTermMapping(file_term_mapping, buff_);
     mapping->Serialize(buff_);
     return Finalize(root_id, ttl_root);
 }
