@@ -1098,6 +1098,8 @@ void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
     curl_easy_setopt(easy, CURLOPT_NOPROXY, "*");
     curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, WriteCallback);
     curl_easy_setopt(easy, CURLOPT_WRITEDATA, task);
+    curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, HeaderCallback);
+    curl_easy_setopt(easy, CURLOPT_HEADERDATA, task);
     curl_easy_setopt(easy, CURLOPT_PRIVATE, task);
     curl_easy_setopt(easy, CURLOPT_TIMEOUT, 300L);
 
@@ -1256,6 +1258,19 @@ bool AsyncHttpManager::SetupUploadRequest(ObjectStore::UploadTask *task,
                      static_cast<curl_off_t>(task->file_size_));
     task->headers_ = nullptr;
     task->headers_ = curl_slist_append(task->headers_, "Expect:");
+
+    // Add conditional headers if provided
+    if (!task->if_match_.empty())
+    {
+        std::string header = "If-Match: " + task->if_match_;
+        task->headers_ = curl_slist_append(task->headers_, header.c_str());
+    }
+    else if (!task->if_none_match_.empty())
+    {
+        std::string header = "If-None-Match: " + task->if_none_match_;
+        task->headers_ = curl_slist_append(task->headers_, header.c_str());
+    }
+
     if (task->headers_)
     {
         curl_easy_setopt(easy, CURLOPT_HTTPHEADER, task->headers_);
@@ -1287,16 +1302,13 @@ bool AsyncHttpManager::SetupDeleteRequest(ObjectStore::DeleteTask *task,
 
 bool AsyncHttpManager::SetupListRequest(ObjectStore::ListTask *task, CURL *easy)
 {
-    std::string strip_prefix = ComposeKeyFromRemote(task->remote_path_, false);
-    std::string prefix = strip_prefix;
-    if (!prefix.empty())
-    {
-        prefix.push_back('/');
-    }
-    task->json_data_ = prefix;
+    std::string strip_prefix =
+        ComposeKeyFromRemote(task->remote_path_, task->ensure_trailing_slash_);
+
+    task->json_data_ = strip_prefix;
 
     SignedRequestInfo request_info;
-    if (!backend_->BuildListRequest(prefix,
+    if (!backend_->BuildListRequest(strip_prefix,
                                     task->Recursive(),
                                     task->continuation_token_,
                                     &request_info))
@@ -1339,6 +1351,57 @@ size_t AsyncHttpManager::WriteCallback(void *contents,
     return total;
 }
 
+size_t AsyncHttpManager::HeaderCallback(char *buffer,
+                                        size_t size,
+                                        size_t nitems,
+                                        void *userdata)
+{
+    ObjectStore::Task *task = static_cast<ObjectStore::Task *>(userdata);
+    if (!task)
+    {
+        return size * nitems;
+    }
+
+    // Extract ETag header: "ETag: "value"\r\n"
+    std::string_view header_line(buffer, size * nitems);
+    constexpr std::string_view etag_prefix = "ETag:";
+    if (header_line.size() >= etag_prefix.size() &&
+        header_line.substr(0, etag_prefix.size()) == etag_prefix)
+    {
+        // Find the value after "ETag: "
+        size_t value_start = etag_prefix.size();
+        while (value_start < header_line.size() &&
+               (header_line[value_start] == ' ' ||
+                header_line[value_start] == '\t'))
+        {
+            ++value_start;
+        }
+
+        // Extract value (may be quoted)
+        size_t value_end = value_start;
+        while (value_end < header_line.size() &&
+               header_line[value_end] != '\r' && header_line[value_end] != '\n')
+        {
+            ++value_end;
+        }
+
+        if (value_end > value_start)
+        {
+            std::string_view etag_value =
+                header_line.substr(value_start, value_end - value_start);
+            // Remove quotes if present
+            if (etag_value.size() >= 2 && etag_value.front() == '"' &&
+                etag_value.back() == '"')
+            {
+                etag_value = etag_value.substr(1, etag_value.size() - 2);
+            }
+            task->etag_ = std::string(etag_value);
+        }
+    }
+
+    return size * nitems;
+}
+
 void AsyncHttpManager::ProcessCompletedRequests()
 {
     if (IsIdle())
@@ -1367,6 +1430,8 @@ void AsyncHttpManager::ProcessCompletedRequests()
 
             int64_t response_code = 0;
             curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &response_code);
+            task->response_code_ = response_code;  // Store response code for
+                                                   // CAS conflict detection
 
             bool schedule_retry = false;
             uint32_t retry_delay_ms = 0;
@@ -1565,6 +1630,12 @@ bool AsyncHttpManager::IsHttpRetryable(int64_t response_code) const
     default:
         return false;
     }
+}
+
+bool AsyncHttpManager::IsCasRetryable(int64_t response_code) const
+{
+    // Precondition Failed or Conflict
+    return response_code == 412 || response_code == 409 || response_code == 404;
 }
 
 KvError AsyncHttpManager::ClassifyHttpError(int64_t response_code) const

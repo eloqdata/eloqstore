@@ -72,7 +72,7 @@ bool ValidateFileSizes(const eloqstore::KvOptions &opts)
                                   << (file_size / 1024 / 1024) << " MB)";
                     }
                 }
-                else if (filename == "manifest")
+                else if (eloqstore::IsArchiveFile(filename))
                 {
                     if (file_size > max_manifest_size)
                     {

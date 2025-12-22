@@ -4,6 +4,7 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <filesystem>
+#include <memory>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -74,7 +75,14 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
     std::vector<std::string> archive_files;
     std::vector<uint64_t> archive_timestamps;
     std::vector<std::string> data_files;
-    ClassifyFiles(local_files, archive_files, archive_timestamps, data_files);
+    std::vector<uint64_t> manifest_terms;
+    ClassifyFiles(local_files,
+                  archive_files,
+                  archive_timestamps,
+                  data_files,
+                  manifest_terms);
+
+    // No need to check term expired for local mode.
 
     // 3. get archived max file id.
     FileId least_not_archived_file_id = 0;
@@ -170,11 +178,13 @@ KvError ListCloudFiles(const TableIdent &tbl_id,
 void ClassifyFiles(const std::vector<std::string> &files,
                    std::vector<std::string> &archive_files,
                    std::vector<uint64_t> &archive_timestamps,
-                   std::vector<std::string> &data_files)
+                   std::vector<std::string> &data_files,
+                   std::vector<uint64_t> &manifest_terms)
 {
     archive_files.clear();
     archive_timestamps.clear();
     data_files.clear();
+    manifest_terms.clear();
 
     for (const std::string &file_name : files)
     {
@@ -190,16 +200,26 @@ void ClassifyFiles(const std::vector<std::string> &files,
 
         if (ret.first == FileNameManifest)
         {
-            // archive file: manifest_<timestamp>
-            // Only manifest files with timestamp are archive files.
-            std::string_view ts_str = ret.second;
-            if (!ts_str.empty())
+            // Only support term-aware archive format:
+            // manifest_<term>_<ts> Legacy format manifest_<ts> is no longer
+            // supported.
+            uint64_t term = 0;
+            std::optional<uint64_t> timestamp;
+            if (!ParseManifestFileSuffix(ret.second, term, timestamp))
             {
-                uint64_t timestamp = std::stoull(std::string(ts_str));
-                archive_files.push_back(file_name);
-                archive_timestamps.push_back(timestamp);
+                continue;
             }
-            // Manifest files without timestamp are current manifest, ignore.
+            // Only recognize term-aware archives (both term and timestamp must
+            // be present).
+            if (timestamp.has_value())
+            {
+                archive_files.push_back(file_name);
+                archive_timestamps.push_back(timestamp.value());
+            }
+            else
+            {
+                manifest_terms.push_back(term);
+            }
         }
         else if (ret.first == FileNameData)
         {
@@ -261,10 +281,24 @@ KvError DownloadArchiveFile(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-FileId ParseArchiveForMaxFileId(std::string_view archive_content)
+FileId ParseArchiveForMaxFileId(const std::string &archive_filename,
+                                std::string_view archive_content)
 {
     MemStoreMgr::Manifest manifest(archive_content);
     Replayer replayer(Options());
+
+    // Extract manifest term from archive filename if present.
+    uint64_t manifest_term = ManifestTermFromFilename(archive_filename);
+    if (manifest_term != 0)
+    {
+        if (!replayer.file_id_term_mapping_)
+        {
+            replayer.file_id_term_mapping_ =
+                std::make_shared<FileIdTermMapping>();
+        }
+        replayer.file_id_term_mapping_->insert_or_assign(
+            IouringMgr::LruFD::kManifest, manifest_term);
+    }
 
     KvError err = replayer.Replay(&manifest);
     if (err != KvError::NoError)
@@ -369,7 +403,7 @@ KvError GetOrUpdateArchivedMaxFileId(
 
     // 4. parse the archive file to get the maximum file ID.
     least_not_archived_file_id =
-        ParseArchiveForMaxFileId(archive_content.view()) + 1;
+        ParseArchiveForMaxFileId(latest_archive, archive_content.view()) + 1;
 
     // 5. cache the result.
     cached_max_ids[tbl_id] = least_not_archived_file_id;
@@ -380,11 +414,13 @@ KvError GetOrUpdateArchivedMaxFileId(
 KvError DeleteUnreferencedCloudFiles(
     const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
+    const std::vector<uint64_t> &manifest_terms,
     const absl::flat_hash_set<FileId> &retained_files,
     FileId least_not_archived_file_id,
     CloudStoreMgr *cloud_mgr)
 {
     std::vector<std::string> files_to_delete;
+    auto process_term = cloud_mgr->ProcessTerm();
 
     for (const std::string &file_name : data_files)
     {
@@ -394,7 +430,20 @@ KvError DeleteUnreferencedCloudFiles(
             continue;
         }
 
-        FileId file_id = std::stoull(std::string(ret.second));
+        FileId file_id = 0;
+        [[maybe_unused]] uint64_t term = 0;
+        if (!ParseDataFileSuffix(ret.second, file_id, term))
+        {
+            LOG(ERROR) << "Failed to parse data file suffix: " << file_name
+                       << ", skipping";
+            continue;
+        }
+
+        if (term > process_term)
+        {
+            // Skip files with term greater than process term.
+            continue;
+        }
 
         // Only delete files that meet the following conditions:
         // 1. File ID >= least_not_archived_file_id (greater than the archived
@@ -414,17 +463,28 @@ KvError DeleteUnreferencedCloudFiles(
         }
     }
 
+    if (files_to_delete.size() == data_files.size())
+    {
+        files_to_delete.emplace_back(tbl_id.ToString() + "/" +
+                                     ManifestFileName(process_term));
+    }
+
+    // delete expired manifest files.
+    for (const uint64_t term : manifest_terms)
+    {
+        if (term < process_term)
+        {
+            files_to_delete.emplace_back(tbl_id.ToString() + "/" +
+                                         ManifestFileName(term));
+        }
+    }
+
     if (files_to_delete.empty())
     {
         return KvError::NoError;
     }
 
     KvTask *current_task = ThdTask();
-    if (files_to_delete.size() == data_files.size())
-    {
-        files_to_delete.emplace_back(tbl_id.ToString() + "/" +
-                                     FileNameManifest);
-    }
 
     // If we're deleting every file in the directory, issue a single purge
     // request for the table path.
@@ -479,7 +539,12 @@ KvError DeleteUnreferencedLocalFiles(
             continue;
         }
 
-        FileId file_id = std::stoull(std::string(ret.second));
+        FileId file_id = 0;
+        [[maybe_unused]] uint64_t term = 0;
+        if (!ParseDataFileSuffix(ret.second, file_id, term))
+        {
+            continue;
+        }
 
         // Only delete files that meet the following conditions:
         // 1. File ID >= least_not_archived_file_id (greater than or equal to
@@ -539,9 +604,39 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
                        const absl::flat_hash_set<FileId> &retained_files,
                        CloudStoreMgr *cloud_mgr)
 {
+    // Check term file before proceeding
+    uint64_t process_term = cloud_mgr->ProcessTerm();
+    auto [term_file_term, etag, err] = cloud_mgr->ReadTermFile(tbl_id);
+
+    if (err == KvError::NotFound)
+    {
+        // Legacy table - proceed with existing manifest term validation
+        // (backward compatible behavior)
+        LOG(INFO) << "ExecuteCloudGC: term file not found for table " << tbl_id;
+        return KvError::NoError;
+    }
+    else if (err != KvError::NoError)
+    {
+        LOG(ERROR) << "ExecuteCloudGC: failed to read term file for table "
+                   << tbl_id << " : " << ErrorString(err);
+        return err;
+    }
+    else
+    {
+        // Term file exists - validate
+        if (term_file_term != process_term)
+        {
+            LOG(WARNING) << "ExecuteCloudGC: term file term " << term_file_term
+                         << " != process_term " << process_term << " for table "
+                         << tbl_id << ", skipping GC";
+            return KvError::ExpiredTerm;
+        }
+        // term_file_term == process_term, proceed with GC
+    }
+
     // 1. list all files in cloud.
     std::vector<std::string> cloud_files;
-    KvError err = ListCloudFiles(tbl_id, cloud_files, cloud_mgr);
+    err = ListCloudFiles(tbl_id, cloud_files, cloud_mgr);
     DLOG(INFO) << "ListCloudFiles got " << cloud_files.size() << " files";
     if (err != KvError::NoError)
     {
@@ -552,9 +647,23 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
     std::vector<std::string> archive_files;
     std::vector<uint64_t> archive_timestamps;
     std::vector<std::string> data_files;
-    ClassifyFiles(cloud_files, archive_files, archive_timestamps, data_files);
+    std::vector<uint64_t> manifest_terms;
+    ClassifyFiles(cloud_files,
+                  archive_files,
+                  archive_timestamps,
+                  data_files,
+                  manifest_terms);
 
-    // 3. get or update archived max file id.
+    // 3. check if term expired to avoid deleting invisible files.
+    for (auto term : manifest_terms)
+    {
+        if (term > process_term)
+        {
+            return KvError::ExpiredTerm;
+        }
+    }
+
+    // 4. get or update archived max file id.
     FileId least_not_archived_file_id = 0;
     err = GetOrUpdateArchivedMaxFileId(tbl_id,
                                        archive_files,
@@ -566,9 +675,10 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
         return err;
     }
 
-    // 4. delete unreferenced data files.
+    // 5. delete unreferenced data files.
     err = DeleteUnreferencedCloudFiles(tbl_id,
                                        data_files,
+                                       manifest_terms,
                                        retained_files,
                                        least_not_archived_file_id,
                                        cloud_mgr);

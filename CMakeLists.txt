@@ -141,7 +141,7 @@ target_link_libraries(page_checksum_tool PRIVATE eloqstore)
 
 
 add_library(test_util STATIC src/test_utils.cpp)
-target_link_libraries(test_util PUBLIC eloqstore)
+target_link_libraries(test_util PUBLIC eloqstore absl::flat_hash_map)
 
 option(WITH_UNIT_TESTS "build with unit tests" ON)
 if (WITH_UNIT_TESTS)

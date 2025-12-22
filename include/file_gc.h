@@ -60,7 +60,8 @@ KvError ListCloudFiles(const TableIdent &tbl_id,
 void ClassifyFiles(const std::vector<std::string> &files,
                    std::vector<std::string> &archive_files,
                    std::vector<uint64_t> &archive_timestamps,
-                   std::vector<std::string> &data_files);
+                   std::vector<std::string> &data_files,
+                   std::vector<uint64_t> &manifest_terms);
 
 KvError DownloadArchiveFile(const TableIdent &tbl_id,
                             const std::string &archive_file,
@@ -68,11 +69,13 @@ KvError DownloadArchiveFile(const TableIdent &tbl_id,
                             CloudStoreMgr *cloud_mgr,
                             const KvOptions *options);
 
-FileId ParseArchiveForMaxFileId(std::string_view archive_content);
+FileId ParseArchiveForMaxFileId(const std::string &archive_filename,
+                                std::string_view archive_content);
 
 KvError DeleteUnreferencedCloudFiles(
     const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
+    const std::vector<uint64_t> &manifest_terms,
     const absl::flat_hash_set<FileId> &retained_files,
     FileId least_not_archived_file_id,
     CloudStoreMgr *cloud_mgr);

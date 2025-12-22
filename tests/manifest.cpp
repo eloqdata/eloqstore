@@ -105,7 +105,7 @@ TEST_CASE("create archives", "[archive]")
         if (entry.is_regular_file())
         {
             std::string filename = entry.path().filename().string();
-            if (filename.find("manifest_") == 0)
+            if (eloqstore::IsArchiveFile(filename))
             {
                 archive_found = true;
                 break;
@@ -139,7 +139,7 @@ TEST_CASE("create archives", "[archive]")
         if (entry.is_regular_file())
         {
             std::string filename = entry.path().filename().string();
-            if (filename.find("manifest_") == 0)
+            if (eloqstore::IsArchiveFile(filename))
             {
                 archive_count++;
             }
@@ -184,14 +184,15 @@ TEST_CASE("easy rollback to archive", "[archive]")
     std::string archive_file;
     const fs::path partition_path =
         fs::path(test_path) / test_tbl_id.ToString();
-    std::string manifest_path = (partition_path / "manifest").string();
+    std::string manifest_path =
+        (partition_path / eloqstore::ManifestFileName(0)).string();
 
     for (const auto &entry : fs::directory_iterator(partition_path))
     {
         if (entry.is_regular_file())
         {
             std::string filename = entry.path().filename().string();
-            if (filename.find("manifest_") == 0)
+            if (eloqstore::IsArchiveFile(filename))
             {
                 archive_file = entry.path().string();
                 break;
@@ -283,14 +284,15 @@ TEST_CASE("enhanced rollback with mix operations", "[archive]")
     std::string archive_file;
     const fs::path partition_path =
         fs::path(test_path) / test_tbl_id.ToString();
-    std::string manifest_path = (partition_path / "manifest").string();
+    std::string manifest_path =
+        (partition_path / eloqstore::ManifestFileName(0)).string();
 
     for (const auto &entry : fs::directory_iterator(partition_path))
     {
         if (entry.is_regular_file())
         {
             std::string filename = entry.path().filename().string();
-            if (filename.find("manifest_") == 0)
+            if (eloqstore::IsArchiveFile(filename))
             {
                 archive_file = entry.path().string();
                 break;
@@ -357,7 +359,8 @@ TEST_CASE("manifest deletion on rootmeta eviction", "[manifest][eviction]")
                                           : case_opts.store_path[0];
         const fs::path partition_a_path =
             fs::path(base_path) / partition_a.ToString();
-        const fs::path manifest_path = partition_a_path / "manifest";
+        const fs::path manifest_path =
+            partition_a_path / eloqstore::ManifestFileName(0);
 
         verifier_a.Upsert(0, 100);
         verifier_a.Validate();
@@ -366,7 +369,7 @@ TEST_CASE("manifest deletion on rootmeta eviction", "[manifest][eviction]")
         fs::path archive_path;
         if (has_archive)
         {
-            archive_path = partition_a_path / ArchiveName(123456789);
+            archive_path = partition_a_path / ArchiveName(0, 123456789);
             fs::copy_file(manifest_path,
                           archive_path,
                           fs::copy_options::overwrite_existing);

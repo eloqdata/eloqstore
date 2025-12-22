@@ -410,13 +410,17 @@ public:
     EloqStore(const EloqStore &) = delete;
     EloqStore(EloqStore &&) = delete;
     ~EloqStore();
-    KvError Start();
+    KvError Start(uint64_t term = 0);
     void Stop();
     bool IsStopped() const;
     const KvOptions &Options() const;
     CloudStorageService *CloudService() const
     {
         return cloud_service_.get();
+    }
+    uint64_t Term() const
+    {
+        return term_;
     }
 
     /**
@@ -470,6 +474,7 @@ private:
     std::vector<std::unique_ptr<metrics::Meter>> metrics_meters_;
 #endif
     std::atomic<bool> stopped_{true};
+    uint64_t term_{0};
 
     std::unique_ptr<CloudStorageService> cloud_service_;
     std::unique_ptr<ArchiveCrond> archive_crond_{nullptr};
