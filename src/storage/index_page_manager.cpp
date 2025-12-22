@@ -115,7 +115,7 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
 
         meta->root_id_ = replayer.root_;
         meta->ttl_root_id_ = replayer.ttl_root_;
-        auto mapper = replayer.GetMapper(this, &tbl_id);
+        auto mapper = replayer.GetMapper(this, &tbl_id, IoMgr()->ProcessTerm());
         MappingSnapshot *mapping = mapper->GetMapping();
         meta->mapper_ = std::move(mapper);
         meta->mapping_snapshots_.insert(mapping);
@@ -132,6 +132,9 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
             // ensuring the next write operation will trigger a TTL check.
             meta->next_expire_ts_ = 1;
         }
+        replayer.file_id_term_mapping_->insert_or_assign(
+            IouringMgr::LruFD::kManifest, IoMgr()->ProcessTerm());
+        IoMgr()->SetFileIdTermMapping(tbl_id, replayer.file_id_term_mapping_);
         return KvError::NoError;
     };
 

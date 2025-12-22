@@ -80,6 +80,9 @@ public:
         std::string json_data_{};
         curl_slist *headers_{nullptr};
         bool cloud_slot_acquired_{false};
+        std::string etag_{};  // ETag from response headers for CAS operations
+        int64_t response_code_{
+            0};  // HTTP response code for CAS conflict detection
 
         uint8_t retry_count_ = 0;
         uint8_t max_retries_ = 5;
@@ -139,13 +142,19 @@ public:
         size_t file_size_{0};
         DirectIoBuffer data_buffer_;
         size_t buffer_offset_{0};
+        // For If-Match header
+        std::string if_match_{};
+        // For If-None-Match header (use "*" for create)
+        std::string if_none_match_{};
     };
 
     class ListTask : public Task
     {
     public:
-        explicit ListTask(std::string_view remote_path)
-            : remote_path_(remote_path)
+        explicit ListTask(std::string_view remote_path,
+                          bool ensure_trailing_slash = true)
+            : remote_path_(remote_path),
+              ensure_trailing_slash_(ensure_trailing_slash)
         {
         }
         void SetRecursive(bool recurse)
@@ -168,6 +177,11 @@ public:
         {
             return std::string("List(") + remote_path_ + ')';
         }
+
+        // Add trailing slash to remote path if ensure_trailing_slash_ is true
+        // and remote path does not end with '/'. This is used to ensure the
+        // remote path is a directory.
+        bool ensure_trailing_slash_{true};
         std::string remote_path_;
         bool recurse_{false};
         std::string continuation_token_;
@@ -244,6 +258,7 @@ public:
 
     void SubmitRequest(ObjectStore::Task *task);
     void PerformRequests();
+    bool IsCasRetryable(int64_t response_code) const;
     void ProcessCompletedRequests();
 
     KvError EnsureBucketExists();
@@ -284,6 +299,11 @@ private:
                                 size_t size,
                                 size_t nmemb,
                                 void *userp);
+
+    static size_t HeaderCallback(char *buffer,
+                                 size_t size,
+                                 size_t nitems,
+                                 void *userdata);
 
     static constexpr uint32_t kInitialRetryDelayMs = 10'000;
     static constexpr uint32_t kMaxRetryDelayMs = 40'000;

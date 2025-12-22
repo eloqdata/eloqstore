@@ -30,6 +30,17 @@ Shard::Shard(const EloqStore *store, size_t shard_id, uint32_t fd_limit)
 
 KvError Shard::Init()
 {
+    // Inject process term into IO manager before any file operations.
+    // Only CloudStoreMgr needs term support; IouringMgr always uses term=0.
+    if (io_mgr_ != nullptr)
+    {
+        uint64_t term = store_ != nullptr ? store_->Term() : 0;
+        if (auto *cloud_mgr = dynamic_cast<CloudStoreMgr *>(io_mgr_.get());
+            cloud_mgr != nullptr)
+        {
+            cloud_mgr->SetProcessTerm(term);
+        }
+    }
     KvError res = io_mgr_->Init(this);
     return res;
 }

@@ -141,13 +141,15 @@ EloqStore::~EloqStore()
     }
 }
 
-KvError EloqStore::Start()
+KvError EloqStore::Start(uint64_t term)
 {
+    DLOG(INFO) << "===Start eloqstore, term: " << term;
     if (!IsStopped())
     {
         LOG(ERROR) << "EloqStore started , do not start again";
         return KvError::NoError;
     }
+    term_ = term;
     eloq_store = this;
     // Initialize
     if (!options_.store_path.empty())

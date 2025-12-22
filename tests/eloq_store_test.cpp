@@ -166,8 +166,9 @@ TEST_CASE("EloqStore basic lifecycle management", "[eloq_store]")
 
     REQUIRE(store.IsStopped());
 
-    auto err = store.Start();
+    auto err = store.Start(123);
     REQUIRE(err == eloqstore::KvError::NoError);
+    REQUIRE(store.Term() == 123);
     REQUIRE_FALSE(store.IsStopped());
 
     store.Stop();

@@ -165,7 +165,8 @@ void Prewarmer::Run()
                    << (file.is_manifest
                            ? "manifest"
                            : "data_" + std::to_string(file.file_id));
-        auto [fd_ref, err] = io_mgr_->OpenFD(file.tbl_id, file.file_id, true);
+        auto [fd_ref, err] =
+            io_mgr_->OpenFD(file.tbl_id, file.file_id, true, file.term);
         if (err == KvError::NoError)
         {
             fd_ref = nullptr;

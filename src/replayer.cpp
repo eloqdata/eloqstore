@@ -18,7 +18,8 @@
 namespace eloqstore
 {
 
-Replayer::Replayer(const KvOptions *opts) : opts_(opts)
+Replayer::Replayer(const KvOptions *opts)
+    : opts_(opts), file_id_term_mapping_(std::make_shared<FileIdTermMapping>())
 {
     log_buf_.resize(ManifestBuilder::header_bytes);
 }
@@ -118,6 +119,13 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
         dict_bytes_.clear();
     }
 
+    // Deserialize FileIdTermMapping section (always present: count then pairs)
+    if (!DeserializeFileIdTermMapping(snapshot, *file_id_term_mapping_))
+    {
+        LOG(FATAL) << "Failed to deserialize FileIdTermMapping from snapshot, "
+                      "treating mapping as empty.";
+    }
+
     mapping_tbl_.reserve(opts_->init_page_count);
     while (!snapshot.empty())
     {
@@ -152,7 +160,8 @@ void Replayer::ReplayLog()
 }
 
 std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
-                                                const TableIdent *tbl_ident)
+                                                const TableIdent *tbl_ident,
+                                                uint64_t expect_term)
 {
     auto mapping = std::make_shared<MappingSnapshot>(
         idx_mgr,
@@ -197,6 +206,23 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
 
     if (opts_->data_append_mode)
     {
+        // In cloud mode, when manifest term differs from process term, bump
+        // the allocator to the next file boundary to avoid cross-term
+        // collisions.
+        uint64_t manifest_term = 0;
+        auto it = file_id_term_mapping_->find(IouringMgr::LruFD::kManifest);
+        if (it != file_id_term_mapping_->end())
+        {
+            manifest_term = it->second;
+        }
+        const bool cloud_mode = !opts_->cloud_store_path.empty();
+        if (cloud_mode && manifest_term != expect_term)
+        {
+            FileId next_file_id =
+                (max_fp_id_ >> opts_->pages_per_file_shift) + 1;
+            max_fp_id_ = next_file_id << opts_->pages_per_file_shift;
+        }
+
         if (using_fp_ids.empty())
         {
             FileId min_file_id = max_fp_id_ >> opts_->pages_per_file_shift;
@@ -220,6 +246,7 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
                 }
                 cur_file_id = file_id;
             }
+
             assert(using_fp_ids.back() < max_fp_id_);
             mapper->file_page_allocator_ = std::make_unique<AppendAllocator>(
                 opts_, min_file_id, max_fp_id_, hole_cnt);
