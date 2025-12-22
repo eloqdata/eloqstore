@@ -332,7 +332,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         err = ApplyOnePage(cidx, now_ms);
         CHECK_KV_ERR(err);
     }
-    // Flush all dirty leaf data pages in leaf_triple_ .
+    // Flush all dirty leaf data pages in leaf_triple_.
     assert(TripleElement(2) == nullptr);
     err = ShiftLeafLink();
     CHECK_KV_ERR(err);
@@ -508,7 +508,6 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             prev_key = key;
             return KvError::NoError;
         });
-
     while (is_base_iter_valid && change_it != change_end_it)
     {
         std::string_view base_key = base_page_iter.Key();

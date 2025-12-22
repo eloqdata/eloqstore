@@ -15,7 +15,6 @@
 
 #ifdef ELOQ_MODULE_ENABLED
 #include <bthread/eloq_module.h>
-#include <bvar/latency_recorder.h>
 #endif
 namespace eloqstore
 {
@@ -359,16 +358,26 @@ void Shard::ProcessReq(KvRequest *req)
 bool Shard::ExecuteReadyTasks()
 {
     bool busy = ready_tasks_.Size() > 0;
-    while (ready_tasks_.Size() > 0)
+    size_t task_num = ready_tasks_.Size();
+    while (task_num-- > 0)
     {
         KvTask *task = ready_tasks_.Peek();
         ready_tasks_.Dequeue();
-        assert(task->status_ == TaskStatus::Ongoing);
-        running_ = task;
-        task->coro_ = task->coro_.resume();
-        if (task->status_ == TaskStatus::Finished)
+        assert(task->status_ == TaskStatus::Ongoing ||
+               task->status_ == TaskStatus::RunNextRound);
+        if (task->status_ == TaskStatus::Ongoing)
         {
-            OnTaskFinished(task);
+            running_ = task;
+            task->coro_ = task->coro_.resume();
+            if (task->status_ == TaskStatus::Finished)
+            {
+                OnTaskFinished(task);
+            }
+        }
+        else
+        {
+            task->status_ = TaskStatus::Ongoing;
+            ready_tasks_.Enqueue(task);
         }
     }
     running_ = nullptr;

@@ -8,6 +8,7 @@
 
 #include "circular_queue.h"
 #include "eloq_store.h"
+#include "page_mapper.h"
 #include "task_manager.h"
 
 // https://github.com/cameron314/concurrentqueue/issues/280
