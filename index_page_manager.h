@@ -54,8 +54,6 @@ public:
 
     void FreeMappingSnapshot(MappingSnapshot *mapping);
 
-    void Unswizzling(MemIndexPage *page);
-
     void FinishIo(MappingSnapshot *mapping, MemIndexPage *idx_page);
 
     // Given the table id, tree root and the input key, returns the logical page

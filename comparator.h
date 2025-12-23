@@ -56,8 +56,5 @@ public:
     virtual void FindShortSuccessor(std::string *key) const = 0;
 
     static const Comparator *DefaultComparator();
-
-    static std::string_view NegativeInf();
-    static std::string_view PositiveInf();
 };
 }  // namespace eloqstore

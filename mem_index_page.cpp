@@ -59,23 +59,6 @@ MemIndexPage *MemIndexPage::DequeNext()
     return target;
 }
 
-MemIndexPage *MemIndexPage::DequePrev()
-{
-    MemIndexPage *target = prev_;
-    if (target != nullptr)
-    {
-        prev_ = target->prev_;
-        if (prev_ != nullptr)
-        {
-            prev_->next_ = this;
-        }
-        target->prev_ = nullptr;
-        target->next_ = nullptr;
-    }
-
-    return target;
-}
-
 void MemIndexPage::EnqueNext(MemIndexPage *new_page)
 {
     MemIndexPage *old_next = next_;
@@ -398,29 +381,6 @@ void IndexPageIter::Seek(std::string_view search_key)
         curr_offset_ = prev_offset;
         key_ = prev_key;
         page_id_ = prev_page_id;
-    }
-}
-
-void IndexPageIter::Reset()
-{
-    curr_offset_ = MemIndexPage::leftmost_ptr_offset;
-    curr_restart_idx_ = 0;
-    key_.clear();
-    page_id_ = MaxPageId;
-}
-
-void IndexPageIter::Advance(std::string_view &key, uint32_t &page_id)
-{
-    if (HasNext())
-    {
-        Next();
-        key = Key();
-        page_id = GetPageId();
-    }
-    else
-    {
-        key = std::string_view{};
-        page_id = MaxPageId;
     }
 }
 }  // namespace eloqstore

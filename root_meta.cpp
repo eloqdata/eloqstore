@@ -72,11 +72,6 @@ std::string_view ManifestBuilder::Finalize(PageId new_root, PageId ttl_root)
     return buff_;
 }
 
-std::string_view ManifestBuilder::BuffView() const
-{
-    return buff_;
-}
-
 void RootMeta::Pin()
 {
     ref_cnt_++;

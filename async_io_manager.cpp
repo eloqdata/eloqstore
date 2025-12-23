@@ -1719,41 +1719,6 @@ void IouringMgr::LruFD::Deque()
     next_ = nullptr;
 }
 
-IouringMgr::LruFD *IouringMgr::LruFD::DequeNext()
-{
-    LruFD *target = next_;
-    if (target != nullptr)
-    {
-        next_ = target->next_;
-        if (next_ != nullptr)
-        {
-            next_->prev_ = this;
-        }
-
-        target->prev_ = nullptr;
-        target->next_ = nullptr;
-    }
-
-    return target;
-}
-
-IouringMgr::LruFD *IouringMgr::LruFD::DequePrev()
-{
-    LruFD *target = prev_;
-    if (target != nullptr)
-    {
-        prev_ = target->prev_;
-        if (prev_ != nullptr)
-        {
-            prev_->next_ = this;
-        }
-        target->prev_ = nullptr;
-        target->next_ = nullptr;
-    }
-
-    return target;
-}
-
 void IouringMgr::LruFD::EnqueNext(LruFD *new_fd)
 {
     LruFD *old_next = next_;
@@ -2076,8 +2041,8 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
         }
 
         auto [prefix, suffix] = ParseFileName(filename);
-        const bool is_data_file = prefix == FileNameData;
-        const bool is_manifest_file = prefix == FileNameManifest;
+        bool is_data_file = prefix == FileNameData;
+        bool is_manifest_file = prefix == FileNameManifest;
         if (!is_data_file && !is_manifest_file)
         {
             LOG(ERROR) << "Unknown cached file type " << file_it->path() << " ("
@@ -2085,41 +2050,7 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
             return KvError::InvalidArgs;
         }
 
-        if (is_data_file)
-        {
-            if (suffix.empty())
-            {
-                continue;
-            }
-            uint64_t ignored_file_id = 0;
-            std::from_chars_result parse_res = std::from_chars(
-                suffix.data(), suffix.data() + suffix.size(), ignored_file_id);
-            if (parse_res.ec != std::errc{})
-            {
-                continue;
-            }
-        }
-
         size_t expected_size = EstimateFileSize(filename);
-        if (is_data_file)
-        {
-            std::error_code size_ec;
-            uintmax_t actual_size = file_it->file_size(size_ec);
-            if (size_ec)
-            {
-                LOG(WARNING) << "Skip cached file " << file_it->path()
-                             << ": failed to stat size: " << size_ec.message();
-                continue;
-            }
-            if (actual_size < expected_size)
-            {
-                LOG(WARNING) << "Skip cached file " << file_it->path()
-                             << ": expected >= " << expected_size
-                             << " bytes but found " << actual_size;
-                continue;
-            }
-        }
-
         EnqueClosedFile(FileKey{tbl_id, std::move(filename)});
         used_local_space_ += expected_size;
         ++restored_files;
@@ -3465,18 +3396,6 @@ KvError MemStoreMgr::Manifest::Read(char *dst, size_t n)
     memcpy(dst, content_.data(), n);
     content_ = content_.substr(n);
     return KvError::NoError;
-}
-
-void MemStoreMgr::Manifest::Skip(size_t n)
-{
-    if (content_.length() < n)
-    {
-        content_ = {};
-    }
-    else
-    {
-        content_ = content_.substr(n);
-    }
 }
 
 KvError IouringMgr::ReadFile(const TableIdent &tbl_id,

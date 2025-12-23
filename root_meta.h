@@ -26,7 +26,6 @@ public:
                               std::string_view dict_bytes);
 
     std::string_view Finalize(PageId new_root, PageId ttl_root);
-    std::string_view BuffView() const;
     void Reset();
     bool Empty() const;
     uint32_t CurrentSize() const;

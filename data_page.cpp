@@ -568,11 +568,6 @@ std::string_view OverflowPage::GetValue() const
     return {page_.Ptr() + value_offset, ValueSize()};
 }
 
-void OverflowPage::SetPageId(PageId page_id)
-{
-    page_id_ = page_id;
-}
-
 PageId OverflowPage::GetPageId() const
 {
     return page_id_;

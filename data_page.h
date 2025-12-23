@@ -181,7 +181,6 @@ public:
                  std::span<PageId> pointers = {});
     OverflowPage(const OverflowPage &) = delete;
     OverflowPage(OverflowPage &&rhs);
-    void SetPageId(PageId page_id);
     PageId GetPageId() const;
     char *PagePtr() const;
     uint16_t ValueSize() const;

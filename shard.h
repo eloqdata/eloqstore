@@ -36,7 +36,6 @@ public:
 
     bool HasPendingRequests() const;
 
-    const KvOptions *Options() const;
     AsyncIoManager *IoManager();
     IndexPageManager *IndexManager();
     TaskManager *TaskMgr();

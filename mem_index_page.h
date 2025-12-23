@@ -42,7 +42,6 @@ public:
 
     void Deque();
     MemIndexPage *DequeNext();
-    MemIndexPage *DequePrev();
     void EnqueNext(MemIndexPage *new_page);
 
     bool IsPointingToLeaf() const;
@@ -160,10 +159,6 @@ public:
     {
         return page_id_;
     }
-
-    void Reset();
-
-    void Advance(std::string_view &key, uint32_t &page_id);
 
     void SeekToRestart(uint16_t restart_idx)
     {

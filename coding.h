@@ -14,13 +14,11 @@ void PutFixed32(std::string *dst, uint32_t value);
 void PutFixed64(std::string *dst, uint64_t value);
 void PutVarint32(std::string *dst, uint32_t value);
 void PutVarint64(std::string *dst, uint64_t value);
-void PutLengthPrefixedSlice(std::string *dst, std::string_view value);
 
 // Standard Get... routines parse a value from the beginning of a Slice
 // and advance the slice past the parsed value.
 bool GetVarint32(std::string_view *input, uint32_t *value);
 bool GetVarint64(std::string_view *input, uint64_t *value);
-bool GetLengthPrefixedSlice(std::string_view *input, std::string_view *result);
 
 // Pointer-based variants of GetVarint...  These either store a value
 // in *v and return a pointer just past the parsed value, or return

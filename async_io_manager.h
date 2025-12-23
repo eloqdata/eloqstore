@@ -217,8 +217,6 @@ public:
         LruFD(PartitionFiles *tbl, FileId file_id);
         FdIdx FdPair() const;
         void Deque();
-        LruFD *DequeNext();
-        LruFD *DequePrev();
         void EnqueNext(LruFD *new_fd);
 
         static constexpr FileId kDirectory = MaxFileId;
@@ -619,7 +617,6 @@ public:
     public:
         explicit Manifest(std::string_view content) : content_(content) {};
         KvError Read(char *dst, size_t n) override;
-        void Skip(size_t n);
 
     private:
         std::string_view content_;

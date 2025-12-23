@@ -189,11 +189,6 @@ PagesPool *Shard::PagePool()
     return &page_pool_;
 }
 
-const KvOptions *Shard::Options() const
-{
-    return &store_->Options();
-}
-
 void Shard::OnReceivedReq(KvRequest *req)
 {
     if (auto wreq = dynamic_cast<WriteRequest *>(req); wreq != nullptr)

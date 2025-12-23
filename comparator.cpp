@@ -110,17 +110,4 @@ const Comparator *Comparator::DefaultComparator()
     static BytewiseComparatorImpl byte_cmp;
     return &byte_cmp;
 }
-
-std::string_view Comparator::NegativeInf()
-{
-    static std::string_view neg{};
-    return neg;
-}
-
-std::string_view Comparator::PositiveInf()
-{
-    static std::string pos_str{};
-    return {pos_str.data(), UINT64_MAX};
-}
-
 }  // namespace eloqstore

@@ -316,18 +316,6 @@ void IndexPageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
     EvictRootIfEmpty(tbl_it);
 }
 
-void IndexPageManager::Unswizzling(MemIndexPage *page)
-{
-    auto tbl_it = tbl_roots_.find(*page->tbl_ident_);
-    assert(tbl_it != tbl_roots_.end());
-
-    auto &mappings = tbl_it->second.mapping_snapshots_;
-    for (auto &mapping : mappings)
-    {
-        mapping->Unswizzling(page);
-    }
-}
-
 bool IndexPageManager::Evict()
 {
     MemIndexPage *node = &active_tail_;
