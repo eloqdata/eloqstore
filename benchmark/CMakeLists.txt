@@ -18,6 +18,14 @@ if (WITH_ROCKSDB)
     add_compile_definitions(WITH_ROCKSDB)
 endif()
 
+find_path(BRPC_INCLUDE_PATH NAMES brpc/server.h)
+find_library(BRPC_LIB NAMES brpc)
+if ((NOT BRPC_INCLUDE_PATH) OR (NOT BRPC_LIB))
+    message(FATAL_ERROR "Fail to find brpc")
+endif ()
+include_directories(${BRPC_INCLUDE_PATH})
+set(DYNAMIC_LIB ${DYNAMIC_LIB} ${BRPC_LIB})
+
 
 option(HAVE_RANDOM_R "Whether have random_r" ON)
 if(HAVE_RANDOM_R)
@@ -39,13 +47,13 @@ add_executable(eloqstore_benchmark main.cpp ${ELOQ_STORE_BM_SOURCES})
 target_link_libraries(eloqstore_benchmark ${DYNAMIC_LIB} eloqstore)
 
 add_executable(load_bench load_bench.cpp)
-target_link_libraries(load_bench eloqstore)
+target_link_libraries(load_bench eloqstore ${BRPC_LIB})
 
 add_executable(simple_bench simple_bench.cpp)
-target_link_libraries(simple_bench eloqstore)
+target_link_libraries(simple_bench eloqstore ${BRPC_LIB})
 
 add_executable(simple_test simple_test.cpp)
-target_link_libraries(simple_test eloqstore)
+target_link_libraries(simple_test eloqstore ${BRPC_LIB})
 
 include(CTest)
 enable_testing()
