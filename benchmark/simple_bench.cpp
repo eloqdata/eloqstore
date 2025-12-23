@@ -35,6 +35,9 @@ DEFINE_bool(load,
 DEFINE_double(write_stats_interval_sec,
               1.0,
               "minimum seconds between periodic write performance logs");
+DEFINE_uint32(read_latency_window,
+              100000,
+              "number of read latency samples per stats window");
 DEFINE_uint64(scan_bytes, 0, "bytes to scan per request; 0 scans to the end");
 DEFINE_bool(show_write_perf,
             false,
@@ -88,7 +91,6 @@ LatencyMetrics CalculateLatencyMetrics(const std::vector<uint64_t> &samples)
     return metrics;
 }
 
-static constexpr size_t kReadLatencyWindow = 500000;
 static constexpr size_t kScanLatencyWindow = 50000;
 
 void EncodeKey(char *dst, uint64_t key)
@@ -338,7 +340,7 @@ void ReadLoop(eloqstore::EloqStore *store, uint32_t thd_id)
     };
 
     std::vector<uint64_t> latencies;
-    latencies.reserve(kReadLatencyWindow);
+    latencies.reserve(FLAGS_read_latency_window);
     const auto start = high_resolution_clock::now();
     auto last_time = high_resolution_clock::now();
     for (auto &reader : readers)
@@ -353,7 +355,7 @@ void ReadLoop(eloqstore::EloqStore *store, uint32_t thd_id)
 
         send_req(reader);
 
-        if (latencies.size() == kReadLatencyWindow)
+        if (latencies.size() == FLAGS_read_latency_window)
         {
             auto now = high_resolution_clock::now();
             double cost_ms =
