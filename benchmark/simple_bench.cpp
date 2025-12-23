@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <numeric>
 #include <random>
 #include <utility>
@@ -28,10 +29,16 @@ DEFINE_uint32(write_interval, 0, "interval seconds between writes");
 DEFINE_uint32(read_per_part, 1, "concurrent read/scan requests per partition");
 DEFINE_uint32(test_secs, 60, "read/scan test time");
 DEFINE_uint32(read_thds, 1, "number of client threads send read/scan requests");
-DEFINE_bool(strict_seq_write,
+DEFINE_bool(load,
             false,
-            "strict sequential writes: step=1 and upsert-only to fill keys");
+            "load data sequentially for later tests (step=1, upsert-only)");
+DEFINE_double(write_stats_interval_sec,
+              1.0,
+              "minimum seconds between periodic write performance logs");
 DEFINE_uint64(scan_bytes, 0, "bytes to scan per request; 0 scans to the end");
+DEFINE_bool(show_write_perf,
+            false,
+            "when true, print periodic and summary write throughput");
 
 using namespace std::chrono;
 
@@ -45,6 +52,7 @@ struct LatencyMetrics
     uint64_t p90{0};
     uint64_t p99{0};
     uint64_t p999{0};
+    uint64_t p9999{0};
     uint64_t max{0};
 };
 
@@ -75,6 +83,7 @@ LatencyMetrics CalculateLatencyMetrics(const std::vector<uint64_t> &samples)
     metrics.p90 = sorted[quantile_index(0.9)];
     metrics.p99 = sorted[quantile_index(0.99)];
     metrics.p999 = sorted[quantile_index(0.999)];
+    metrics.p9999 = sorted[quantile_index(0.9999)];
     metrics.max = sorted.back();
     return metrics;
 }
@@ -122,11 +131,10 @@ Writer::Writer(uint32_t id) : id_(id)
         std::string key;
         key.resize(sizeof(uint64_t));
         EncodeKey(key.data(), writing_key_);
-        writing_key_ +=
-            FLAGS_strict_seq_write ? 1 : ((rand_gen() % key_interval) + 1);
+        writing_key_ += FLAGS_load ? 1 : ((rand_gen() % key_interval) + 1);
         std::string value;
         value.resize(FLAGS_kv_size - sizeof(uint64_t));
-        if (!FLAGS_strict_seq_write && (rand_gen() % del_ratio == 0))
+        if (!FLAGS_load && (rand_gen() % del_ratio == 0))
         {
             entries.emplace_back(std::move(key),
                                  std::move(value),
@@ -153,11 +161,10 @@ void Writer::NextBatch()
     uint64_t ts = utils::UnixTs<milliseconds>();
     for (auto &entry : request_.batch_)
     {
-        writing_key_ +=
-            FLAGS_strict_seq_write ? 1 : ((rand_gen() % key_interval) + 1);
+        writing_key_ += FLAGS_load ? 1 : ((rand_gen() % key_interval) + 1);
         EncodeKey(entry.key_.data(), writing_key_);
         entry.timestamp_ = ts;
-        if (!FLAGS_strict_seq_write && (rand_gen() % del_ratio == 0))
+        if (!FLAGS_load && (rand_gen() % del_ratio == 0))
         {
             entry.op_ = eloqstore::WriteOp::Delete;
         }
@@ -192,6 +199,8 @@ void WriteLoop(eloqstore::EloqStore *store)
     latencies_total.reserve(FLAGS_write_batchs + FLAGS_partitions);
     auto total_start = high_resolution_clock::now();
     auto window_start = total_start;
+    const double min_window_ms =
+        std::max(1.0, FLAGS_write_stats_interval_sec * 1000.0);
     for (auto &writer : writers)
     {
         writer->start_ts_ = utils::UnixTs<microseconds>();
@@ -215,21 +224,25 @@ void WriteLoop(eloqstore::EloqStore *store)
             auto now = high_resolution_clock::now();
             double cost_ms =
                 duration_cast<milliseconds>(now - window_start).count();
-            if (cost_ms <= 0.0)
+            if (cost_ms < min_window_ms)
             {
-                cost_ms = 1.0;
+                continue;
             }
             const uint64_t num_kvs =
                 uint64_t(FLAGS_batch_size) * FLAGS_partitions;
             const uint64_t kvs_per_sec = num_kvs * 1000 / cost_ms;
             const double upsert_ratio_current =
-                FLAGS_strict_seq_write ? 1.0 : upsert_ratio;
+                FLAGS_load ? 1.0 : upsert_ratio;
             const uint64_t mb_per_sec =
                 (static_cast<uint64_t>(kvs_per_sec * upsert_ratio_current) *
                  FLAGS_kv_size) >>
                 20;
-            LOG(INFO) << "write speed " << kvs_per_sec << " kvs/s | cost "
-                      << cost_ms << " ms | " << mb_per_sec << " MiB/s";
+            if (FLAGS_show_write_perf)
+            {
+                LOG(INFO) << "write speed " << kvs_per_sec
+                          << " kvs/s | cost " << cost_ms << " ms | "
+                          << mb_per_sec << " MiB/s";
+            }
 
             if (FLAGS_write_interval > 0)
             {
@@ -252,21 +265,25 @@ void WriteLoop(eloqstore::EloqStore *store)
             static_cast<uint64_t>(FLAGS_batch_size) * FLAGS_write_batchs;
         const uint64_t kvs_per_sec = num_kvs * 1000 / total_cost_ms;
         const double upsert_ratio_current =
-            FLAGS_strict_seq_write ? 1.0 : upsert_ratio;
+            FLAGS_load ? 1.0 : upsert_ratio;
         const uint64_t mb_per_sec =
             (static_cast<uint64_t>(kvs_per_sec * upsert_ratio_current) *
              FLAGS_kv_size) >>
             20;
         LatencyMetrics metrics = CalculateLatencyMetrics(latencies_total);
-        LOG(INFO) << "write summary " << kvs_per_sec << " kvs/s | cost "
-                  << total_cost_ms << " ms | " << mb_per_sec
-                  << " MiB/s | average latency " << metrics.average
-                  << " microseconds | p50 " << metrics.p50
-                  << " microseconds | p90 " << metrics.p90
-                  << " microseconds | p99 " << metrics.p99
-                  << " microseconds | p99.9 " << metrics.p999
-                  << " microseconds | max latency " << metrics.max
-                  << " microseconds";
+        if (FLAGS_show_write_perf)
+        {
+            LOG(INFO) << "write summary " << kvs_per_sec << " kvs/s | cost "
+                      << total_cost_ms << " ms | " << mb_per_sec
+                      << " MiB/s | average latency " << metrics.average
+                      << " microseconds | p50 " << metrics.p50
+                      << " microseconds | p90 " << metrics.p90
+                      << " microseconds | p99 " << metrics.p99
+                      << " microseconds | p99.9 " << metrics.p999
+                      << " microseconds | p99.99 " << metrics.p9999
+                      << " microseconds | max latency " << metrics.max
+                      << " microseconds";
+        }
     }
     for (uint32_t i = 0; i < FLAGS_partitions; i++)
     {
@@ -349,6 +366,7 @@ void ReadLoop(eloqstore::EloqStore *store, uint32_t thd_id)
                       << " microseconds | p90 " << metrics.p90
                       << " microseconds | p99 " << metrics.p99
                       << " microseconds | p99.9 " << metrics.p999
+                      << " microseconds | p99.99 " << metrics.p9999
                       << " microseconds | max latency " << metrics.max
                       << " microseconds";
 
@@ -485,6 +503,7 @@ void ScanLoop(eloqstore::EloqStore *store, uint32_t thd_id)
                       << " microseconds | p90 " << metrics.p90
                       << " microseconds | p99 " << metrics.p99
                       << " microseconds | p99.9 " << metrics.p999
+                      << " microseconds | p99.99 " << metrics.p9999
                       << " microseconds | max latency " << metrics.max
                       << " microseconds";
 
@@ -517,6 +536,30 @@ int main(int argc, char *argv[])
 {
     google::ParseCommandLineFlags(&argc, &argv, true);
     CHECK(FLAGS_kv_size > sizeof(uint64_t));
+    CHECK_GT(FLAGS_batch_size, 0);
+
+    if (FLAGS_load)
+    {
+        const uint64_t batches_per_partition =
+            (static_cast<uint64_t>(FLAGS_max_key) + FLAGS_batch_size - 1) /
+            static_cast<uint64_t>(FLAGS_batch_size);
+        uint64_t desired_batches =
+            std::max<uint64_t>(batches_per_partition, 1) *
+            static_cast<uint64_t>(FLAGS_partitions);
+        if (desired_batches > std::numeric_limits<uint32_t>::max())
+        {
+            LOG(FATAL)
+                << "load requires write_batchs=" << desired_batches
+                << ", which exceeds uint32_t::max. Reduce max_key or batch size.";
+        }
+        FLAGS_write_batchs = static_cast<uint32_t>(desired_batches);
+        FLAGS_show_write_perf = true;
+        FLAGS_workload = "load";
+        LOG(INFO) << "load=1, forcing workload=load and write_batchs set to "
+                  << FLAGS_write_batchs << " (" << batches_per_partition
+                  << " batches per partition to cover keys up to "
+                  << FLAGS_max_key << ")";
+    }
 
     eloqstore::KvOptions options;
     if (int res = options.LoadFromIni(FLAGS_kvoptions.c_str()); res != 0)
@@ -527,7 +570,12 @@ int main(int argc, char *argv[])
     eloqstore::EloqStore store(options);
     store.Start();
 
-    if (FLAGS_workload == "write-read")
+    if (FLAGS_workload == "load")
+    {
+        std::thread load_thd(WriteLoop, &store);
+        load_thd.join();
+    }
+    else if (FLAGS_workload == "write-read")
     {
         // Hybrid write and read.
         std::thread write_thd(WriteLoop, &store);
