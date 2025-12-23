@@ -870,7 +870,18 @@ void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
     bool is_retry = task->waiting_retry_;
     task->waiting_retry_ = false;
 
-    AcquireCloudSlot(task->kv_task_, task);
+    if (!AcquireCloudSlot(task->kv_task_, task, is_retry))
+    {
+        // Slot acquisition failed (likely because we're not in coroutine
+        // context) Reschedule the retry for later
+        // SubmitRequest is only called from coroutine context except for
+        // ProcessPendingRetries. So if slot acquisition fails, it must be a
+        // retry.
+        CHECK(is_retry) << "Slot acquisition failed for non-retry task";
+        uint32_t retry_delay_ms = ComputeBackoffMs(task->retry_count_);
+        ScheduleRetry(task, std::chrono::milliseconds(retry_delay_ms));
+        return;
+    }
 
     CURL *easy = curl_easy_init();
     if (!easy)
@@ -1259,20 +1270,32 @@ void AsyncHttpManager::Cleanup()
     active_requests_.clear();
 }
 
-void AsyncHttpManager::AcquireCloudSlot(KvTask *kv_task,
-                                        ObjectStore::Task *task)
+bool AsyncHttpManager::AcquireCloudSlot(KvTask *kv_task,
+                                        ObjectStore::Task *task,
+                                        bool is_retry)
 {
     if (!task || task->cloud_slot_acquired_)
     {
-        return;
+        return true;  // Already acquired or invalid task
     }
     CHECK(kv_task != nullptr) << "Cloud operations require KvTask";
+
     while (cloud_inflight_ >= kCloudConcurrencyLimit)
     {
+        // Retry call AcquireCloudSlot outside of coroutine context. In this
+        // case we should not try to Yield() because it requires a valid
+        // coroutine context.
+        if (is_retry)
+        {
+            // Not in coroutine context - return false to indicate slot was not
+            // acquired
+            return false;
+        }
         cloud_waiting_.Wait(kv_task);
     }
     cloud_inflight_++;
     task->cloud_slot_acquired_ = true;
+    return true;
 }
 
 void AsyncHttpManager::ReleaseCloudSlot(ObjectStore::Task *task)
@@ -1302,6 +1325,7 @@ void AsyncHttpManager::ProcessPendingRetries()
     {
         ObjectStore::Task *task = it->second;
         it = pending_retries_.erase(it);
+        // SubmitRequest will handle rescheduling if slot acquisition fails
         SubmitRequest(task);
     }
 }

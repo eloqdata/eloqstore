@@ -14,6 +14,15 @@ namespace eloqstore
 {
 void KvTask::Yield()
 {
+    // Check if we're in a valid coroutine context (running_ should be set to
+    // this task) If not, we're being called from external thread context (e.g.,
+    // ProcessPendingRetries) and main_ might be invalid. This is a programming
+    // error.
+    CHECK(shard && shard->running_ == this)
+        << "Yield() called outside coroutine context. running_="
+        << reinterpret_cast<void *>(shard->running_)
+        << ", this=" << reinterpret_cast<void *>(this)
+        << ". Yield() must only be called from within a coroutine.";
     shard->main_ = shard->main_.resume();
 }
 
