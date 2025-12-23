@@ -232,7 +232,8 @@ TEST_CASE("cloud prewarm respects cache budget", "[cloud][prewarm]")
     }
 }
 
-TEST_CASE("cloud reuse cache enforces budgets across restarts", "[cloud][cache]")
+TEST_CASE("cloud reuse cache enforces budgets across restarts",
+          "[cloud][cache]")
 {
     namespace fs = std::filesystem;
 
@@ -265,11 +266,10 @@ TEST_CASE("cloud reuse cache enforces budgets across restarts", "[cloud][cache]"
 
     // Initial fill to create ~32MB of cached data.
     WriteBatches(writer, next_key, entries_per_batch, batches_per_phase);
-    REQUIRE(WaitForCondition(chrono::milliseconds(10000),
-                             chrono::milliseconds(100),
-                             [&]() {
-        return DirectorySize(partition_path) >= (32ULL << 20);
-    }));
+    REQUIRE(WaitForCondition(
+        chrono::milliseconds(10000),
+        chrono::milliseconds(100),
+        [&]() { return DirectorySize(partition_path) >= (32ULL << 20); }));
 
     // Restart with the same budget and ensure writing more data never exceeds
     // the 40MB limit.
@@ -282,8 +282,9 @@ TEST_CASE("cloud reuse cache enforces budgets across restarts", "[cloud][cache]"
     REQUIRE(WaitForCondition(chrono::milliseconds(10000),
                              chrono::milliseconds(100),
                              [&]() {
-        return DirectorySize(partition_path) <= options.local_space_limit;
-    }));
+                                 return DirectorySize(partition_path) <=
+                                        options.local_space_limit;
+                             }));
 
     store->Stop();
 
@@ -299,8 +300,9 @@ TEST_CASE("cloud reuse cache enforces budgets across restarts", "[cloud][cache]"
     REQUIRE(WaitForCondition(chrono::milliseconds(10000),
                              chrono::milliseconds(100),
                              [&]() {
-        return DirectorySize(partition_path) <= options.local_space_limit;
-    }));
+                                 return DirectorySize(partition_path) <=
+                                        options.local_space_limit;
+                             }));
 
     trimmed_store->Stop();
     CleanupStore(options);

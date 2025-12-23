@@ -1987,8 +1987,7 @@ KvError CloudStoreMgr::RestoreLocalCacheState()
 
             TableIdent tbl_id = TableIdent::FromString(
                 partition_it->path().filename().string());
-            if (!tbl_id.IsValid() ||
-                tbl_id.ShardIndex(num_shards) != shard_id_)
+            if (!tbl_id.IsValid() || tbl_id.ShardIndex(num_shards) != shard_id_)
             {
                 continue;
             }
@@ -2000,8 +1999,8 @@ KvError CloudStoreMgr::RestoreLocalCacheState()
 
         if (ec)
         {
-            LOG(ERROR) << "Failed to iterate store path " << root_path
-                       << ": " << ec.message();
+            LOG(ERROR) << "Failed to iterate store path " << root_path << ": "
+                       << ec.message();
             return ToKvError(-ec.value());
         }
     }
@@ -2049,9 +2048,8 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
     {
         if (ec)
         {
-            LOG(ERROR) << "Failed to iterate partition directory "
-                       << table_path << " for table " << tbl_id << ": "
-                       << ec.message();
+            LOG(ERROR) << "Failed to iterate partition directory " << table_path
+                       << " for table " << tbl_id << ": " << ec.message();
             return ToKvError(-ec.value());
         }
 
@@ -2065,7 +2063,8 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
         }
 
         std::string filename = file_it->path().filename().string();
-        if (filename.empty() || boost::algorithm::ends_with(filename, TmpSuffix))
+        if (filename.empty() ||
+            boost::algorithm::ends_with(filename, TmpSuffix))
         {
             LOG(ERROR) << "Unexpected cached file " << file_it->path()
                        << ": temporary files must be cleaned before reuse";
@@ -2077,9 +2076,8 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
         const bool is_manifest_file = prefix == FileNameManifest;
         if (!is_data_file && !is_manifest_file)
         {
-            LOG(ERROR) << "Unknown cached file type " << file_it->path()
-                       << " (" << filename
-                       << ") encountered during cache restore";
+            LOG(ERROR) << "Unknown cached file type " << file_it->path() << " ("
+                       << filename << ") encountered during cache restore";
             return KvError::InvalidArgs;
         }
 

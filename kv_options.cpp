@@ -190,8 +190,8 @@ int KvOptions::LoadFromIni(const char *path)
     }
     if (reader.HasValue(sec_run, "allow_reuse_local_caches"))
     {
-        allow_reuse_local_caches = reader.GetBoolean(
-            sec_run, "allow_reuse_local_caches", false);
+        allow_reuse_local_caches =
+            reader.GetBoolean(sec_run, "allow_reuse_local_caches", false);
     }
     if (reader.HasValue(sec_run, "prewarm_cloud_cache"))
     {
