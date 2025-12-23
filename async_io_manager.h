@@ -489,6 +489,12 @@ private:
     size_t EstimateFileSize(std::string_view filename) const;
     bool BackgroundJobInited() override;
     void InitBackgroundJob() override;
+    KvError RestoreLocalCacheState();
+    KvError RestoreFilesForTable(const TableIdent &tbl_id,
+                                 const fs::path &table_path,
+                                 size_t &restored_files,
+                                 size_t &restored_bytes);
+    std::pair<size_t, size_t> TrimRestoredCacheUsage();
 
     struct CachedFile
     {

@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -45,6 +46,21 @@ bool WaitForCondition(std::chrono::milliseconds timeout,
         std::this_thread::sleep_for(step);
     }
     return pred();
+}
+}  // namespace
+
+namespace
+{
+void WriteBatches(MapVerifier &writer,
+                  uint64_t &next_key,
+                  size_t entries_per_batch,
+                  size_t batches)
+{
+    for (size_t i = 0; i < batches; ++i)
+    {
+        writer.Upsert(next_key, next_key + entries_per_batch);
+        next_key += entries_per_batch;
+    }
 }
 }  // namespace
 
@@ -214,6 +230,82 @@ TEST_CASE("cloud prewarm respects cache budget", "[cloud][prewarm]")
                        static_cast<double>(expected_target);
         REQUIRE(ratio >= 0.9);
     }
+}
+
+TEST_CASE("cloud reuse cache enforces budgets across restarts",
+          "[cloud][cache]")
+{
+    namespace fs = std::filesystem;
+
+    eloqstore::KvOptions options = cloud_options;
+    options.allow_reuse_local_caches = true;
+    options.local_space_limit = 40ULL << 20;
+
+    const std::string suffix = "reuse-cache";
+    const std::string local_base = options.store_path[0];
+    options.store_path = {local_base + std::string("/") + suffix};
+    options.cloud_store_path.push_back('/');
+    options.cloud_store_path += suffix;
+
+    CleanupStore(options);
+
+    auto store = std::make_unique<eloqstore::EloqStore>(options);
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+
+    eloqstore::TableIdent tbl_id{"reuse-cache", 0};
+    MapVerifier writer(tbl_id, store.get());
+    writer.SetAutoClean(false);
+    writer.SetAutoValidate(false);
+    writer.SetValueSize(64 << 10);
+
+    const size_t entries_per_batch = 32;
+    const size_t batches_per_phase = 16;
+    uint64_t next_key = 0;
+    const fs::path partition_path =
+        fs::path(options.store_path[0]) / tbl_id.ToString();
+
+    // Initial fill to create ~32MB of cached data.
+    WriteBatches(writer, next_key, entries_per_batch, batches_per_phase);
+    REQUIRE(WaitForCondition(
+        chrono::milliseconds(10000),
+        chrono::milliseconds(100),
+        [&]() { return DirectorySize(partition_path) >= (32ULL << 20); }));
+
+    // Restart with the same budget and ensure writing more data never exceeds
+    // the 40MB limit.
+    store->Stop();
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    writer.SetStore(store.get());
+
+    WriteBatches(writer, next_key, entries_per_batch, batches_per_phase);
+
+    REQUIRE(WaitForCondition(chrono::milliseconds(10000),
+                             chrono::milliseconds(100),
+                             [&]() {
+                                 return DirectorySize(partition_path) <=
+                                        options.local_space_limit;
+                             }));
+
+    store->Stop();
+
+    // Tighten the budget to 20MB and verify restore trims/existing files and
+    // future writes respect the new limit.
+    options.local_space_limit = 20ULL << 20;
+    auto trimmed_store = std::make_unique<eloqstore::EloqStore>(options);
+    REQUIRE(trimmed_store->Start() == eloqstore::KvError::NoError);
+    writer.SetStore(trimmed_store.get());
+
+    WriteBatches(writer, next_key, entries_per_batch, batches_per_phase / 2);
+
+    REQUIRE(WaitForCondition(chrono::milliseconds(10000),
+                             chrono::milliseconds(100),
+                             [&]() {
+                                 return DirectorySize(partition_path) <=
+                                        options.local_space_limit;
+                             }));
+
+    trimmed_store->Stop();
+    CleanupStore(options);
 }
 
 TEST_CASE("cloud prewarm honors partition filter", "[cloud][prewarm]")

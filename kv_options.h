@@ -107,6 +107,11 @@ struct KvOptions
      * Only take effect when cloud store is enabled.
      */
     uint16_t reserve_space_ratio = 100;
+    /**
+     * @brief Reuse files already present in the local cache directory when the
+     * store starts.
+     */
+    bool allow_reuse_local_caches = false;
 
     /* NOTE:
      * The following options will be persisted in storage, so after the first

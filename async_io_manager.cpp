@@ -2,7 +2,6 @@
 
 #include <dirent.h>
 #include <fcntl.h>
-#include <gflags/gflags_declare.h>
 #include <glog/logging.h>
 #include <liburing.h>
 #include <liburing/io_uring.h>
@@ -42,8 +41,6 @@
 #include "shard.h"
 #include "task.h"
 #include "write_task.h"
-
-DECLARE_bool(allow_reuse_local_files);
 
 namespace eloqstore
 {
@@ -1942,7 +1939,246 @@ CloudStoreMgr::CloudStoreMgr(const KvOptions *opts, uint32_t fd_limit)
 KvError CloudStoreMgr::Init(Shard *shard)
 {
     shard_id_ = shard->shard_id_;  // Store for NotifyWorker calls
-    return IouringMgr::Init(shard);
+    KvError err = IouringMgr::Init(shard);
+    CHECK_KV_ERR(err);
+    if (options_->allow_reuse_local_caches)
+    {
+        err = RestoreLocalCacheState();
+        CHECK_KV_ERR(err);
+    }
+    return KvError::NoError;
+}
+
+KvError CloudStoreMgr::RestoreLocalCacheState()
+{
+    // Scan each shard-owned partition directory and rebuild the closed-file
+    // LRU so that pre-existing files participate in eviction accounting.
+    size_t restored_files = 0;
+    size_t restored_bytes = 0;
+    const uint16_t num_shards = options_->num_threads;
+
+    for (const std::string &root_path_str : options_->store_path)
+    {
+        const fs::path root_path(root_path_str);
+        std::error_code ec;
+        fs::directory_iterator partition_it(root_path, ec);
+        if (ec)
+        {
+            LOG(ERROR) << "Failed to scan store path " << root_path << ": "
+                       << ec.message();
+            return ToKvError(-ec.value());
+        }
+
+        fs::directory_iterator end;
+        for (; partition_it != end; partition_it.increment(ec))
+        {
+            if (ec)
+            {
+                LOG(ERROR) << "Failed to iterate store path " << root_path
+                           << ": " << ec.message();
+                return ToKvError(-ec.value());
+            }
+
+            std::error_code type_ec;
+            if (!partition_it->is_directory(type_ec) || type_ec)
+            {
+                LOG(ERROR) << "Invalid files exist in store path: "
+                           << partition_it->path().filename().string();
+                return KvError::InvalidArgs;
+            }
+
+            TableIdent tbl_id = TableIdent::FromString(
+                partition_it->path().filename().string());
+            if (!tbl_id.IsValid() || tbl_id.ShardIndex(num_shards) != shard_id_)
+            {
+                LOG(ERROR) << "Invalid files exist in store path: "
+                           << partition_it->path().filename().string();
+                return KvError::InvalidArgs;
+            }
+
+            KvError err = RestoreFilesForTable(
+                tbl_id, partition_it->path(), restored_files, restored_bytes);
+            CHECK_KV_ERR(err);
+        }
+
+        if (ec)
+        {
+            LOG(ERROR) << "Failed to iterate store path " << root_path << ": "
+                       << ec.message();
+            return ToKvError(-ec.value());
+        }
+    }
+
+    auto [trimmed_files, trimmed_bytes] = TrimRestoredCacheUsage();
+    if (trimmed_files > 0)
+    {
+        LOG(INFO) << "Shard " << shard_id_ << " evicted " << trimmed_files
+                  << " cached files (" << trimmed_bytes
+                  << " bytes) while honoring the restored cache budget";
+    }
+
+    size_t retained_files =
+        restored_files > trimmed_files ? restored_files - trimmed_files : 0;
+    size_t retained_bytes =
+        restored_bytes > trimmed_bytes ? restored_bytes - trimmed_bytes : 0;
+    if (retained_files > 0)
+    {
+        LOG(INFO) << "Shard " << shard_id_ << " reused " << retained_files
+                  << " local files (" << retained_bytes
+                  << " bytes) when starting";
+    }
+
+    return KvError::NoError;
+}
+
+KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
+                                            const fs::path &table_path,
+                                            size_t &restored_files,
+                                            size_t &restored_bytes)
+{
+    // Register all cacheable files that already exist within one partition
+    // directory and bump the tracked local space usage accordingly.
+    std::error_code ec;
+    fs::directory_iterator file_it(table_path, ec);
+    if (ec)
+    {
+        LOG(ERROR) << "Failed to list partition directory " << table_path
+                   << " for table " << tbl_id << ": " << ec.message();
+        return ToKvError(-ec.value());
+    }
+
+    fs::directory_iterator end;
+    for (; file_it != end; file_it.increment(ec))
+    {
+        if (ec)
+        {
+            LOG(ERROR) << "Failed to iterate partition directory " << table_path
+                       << " for table " << tbl_id << ": " << ec.message();
+            return ToKvError(-ec.value());
+        }
+
+        std::error_code type_ec;
+        if (!file_it->is_regular_file(type_ec) || type_ec)
+        {
+            LOG(ERROR) << "Unexpected entry " << file_it->path()
+                       << " in partition directory " << table_path
+                       << ": not a regular file";
+            return KvError::InvalidArgs;
+        }
+
+        std::string filename = file_it->path().filename().string();
+        if (filename.empty() ||
+            boost::algorithm::ends_with(filename, TmpSuffix))
+        {
+            LOG(ERROR) << "Unexpected cached file " << file_it->path()
+                       << ": temporary files must be cleaned before reuse";
+            return KvError::InvalidArgs;
+        }
+
+        auto [prefix, suffix] = ParseFileName(filename);
+        const bool is_data_file = prefix == FileNameData;
+        const bool is_manifest_file = prefix == FileNameManifest;
+        if (!is_data_file && !is_manifest_file)
+        {
+            LOG(ERROR) << "Unknown cached file type " << file_it->path() << " ("
+                       << filename << ") encountered during cache restore";
+            return KvError::InvalidArgs;
+        }
+
+        if (is_data_file)
+        {
+            if (suffix.empty())
+            {
+                continue;
+            }
+            uint64_t ignored_file_id = 0;
+            std::from_chars_result parse_res = std::from_chars(
+                suffix.data(), suffix.data() + suffix.size(), ignored_file_id);
+            if (parse_res.ec != std::errc{})
+            {
+                continue;
+            }
+        }
+
+        size_t expected_size = EstimateFileSize(filename);
+        if (is_data_file)
+        {
+            std::error_code size_ec;
+            uintmax_t actual_size = file_it->file_size(size_ec);
+            if (size_ec)
+            {
+                LOG(WARNING) << "Skip cached file " << file_it->path()
+                             << ": failed to stat size: " << size_ec.message();
+                continue;
+            }
+            if (actual_size < expected_size)
+            {
+                LOG(WARNING) << "Skip cached file " << file_it->path()
+                             << ": expected >= " << expected_size
+                             << " bytes but found " << actual_size;
+                continue;
+            }
+        }
+
+        EnqueClosedFile(FileKey{tbl_id, std::move(filename)});
+        used_local_space_ += expected_size;
+        ++restored_files;
+        restored_bytes += expected_size;
+    }
+
+    if (ec)
+    {
+        LOG(ERROR) << "Failed to iterate partition directory " << table_path
+                   << " for table " << tbl_id << ": " << ec.message();
+        return ToKvError(-ec.value());
+    }
+
+    return KvError::NoError;
+}
+
+std::pair<size_t, size_t> CloudStoreMgr::TrimRestoredCacheUsage()
+{
+    size_t trimmed_files = 0;
+    size_t trimmed_bytes = 0;
+
+    while (used_local_space_ > shard_local_space_limit_ && HasEvictableFile())
+    {
+        CachedFile *victim = lru_file_tail_.prev_;
+        if (victim == &lru_file_head_)
+        {
+            break;
+        }
+
+        FileKey key_copy = *victim->key_;
+        fs::path file_path = key_copy.tbl_id_.StorePath(options_->store_path);
+        file_path /= key_copy.filename_;
+
+        std::error_code ec;
+        fs::remove(file_path, ec);
+        if (ec)
+        {
+            LOG(WARNING) << "Failed to remove cached file " << file_path
+                         << " during restore: " << ec.message();
+            break;
+        }
+
+        size_t file_size = EstimateFileSize(key_copy.filename_);
+        victim->Deque();
+        closed_files_.erase(key_copy);
+        used_local_space_ =
+            used_local_space_ > file_size ? used_local_space_ - file_size : 0;
+        ++trimmed_files;
+        trimmed_bytes += file_size;
+    }
+
+    if (used_local_space_ > shard_local_space_limit_)
+    {
+        LOG(WARNING) << "Local cache usage " << used_local_space_
+                     << " still exceeds limit " << shard_local_space_limit_
+                     << " after restore";
+    }
+
+    return {trimmed_files, trimmed_bytes};
 }
 
 bool CloudStoreMgr::IsIdle()
@@ -2260,36 +2496,6 @@ int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
     if (res < 0)
     {
         return res;
-    }
-    if (FLAGS_allow_reuse_local_files && file_id != LruFD::kManifest)
-    {
-        fs::path local_path =
-            options_->store_path[tbl_id.DiskIndex(options_->store_path.size())];
-        local_path /= tbl_id.ToString();
-        local_path /= ToFilename(file_id);
-        std::error_code ec;
-        if (fs::exists(local_path, ec) && !ec)
-        {
-            bool reusable = true;
-            if (file_id <= LruFD::kMaxDataFile)
-            {
-                uint64_t file_size = fs::file_size(local_path, ec);
-                reusable = !ec && file_size >= size;
-            }
-            if (reusable)
-            {
-                res = IouringMgr::OpenFile(tbl_id, file_id, direct);
-                if (res >= 0)
-                {
-                    used_local_space_ += size;
-                    return res;
-                }
-                if (res < 0 && res != -ENOENT)
-                {
-                    return res;
-                }
-            }
-        }
     }
     KvError err = DownloadFile(tbl_id, file_id);
     switch (err)

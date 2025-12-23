@@ -28,8 +28,6 @@
 #include "eloqstore_module.h"
 #endif
 
-DEFINE_bool(allow_reuse_local_files, false, "allow using local files");
-
 namespace eloqstore
 {
 
@@ -235,7 +233,7 @@ KvError EloqStore::InitStoreSpace()
                 LOG(ERROR) << "path " << store_path << " is not directory";
                 return KvError::InvalidArgs;
             }
-            if (cloud_store && !FLAGS_allow_reuse_local_files &&
+            if (cloud_store && !options_.allow_reuse_local_caches &&
                 !std::filesystem::is_empty(store_path))
             {
                 LOG(ERROR) << store_path
