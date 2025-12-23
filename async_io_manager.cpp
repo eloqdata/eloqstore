@@ -2444,36 +2444,14 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
 {
     KvTask *current_task = ThdTask();
 
-    uint64_t process_term = ProcessTerm();
-    uint64_t selected_term = 0;
-
-    // If we have an explicit process term, first try to download
-    // manifest_<process_term>. When ProcessTerm() == 0 we skip this step and
-    // fall back to listing latest manifest.
-    if (process_term != 0)
+    // List manifests in cloud and pick the term (ignoring archive files).
+    // If there is manifest term bigger than process_term, return error.
+    // Else select the manifest that term equals or less than process_term.
     {
-        KvError dl_err = DownloadFile(tbl_id, LruFD::kManifest, process_term);
-        if (dl_err == KvError::NoError)
-        {
-            selected_term = process_term;
-        }
-        else if (dl_err != KvError::NotFound)
-        {
-            // Hard error when trying to fetch expected term.
-            LOG(ERROR) << "CloudStoreMgr::GetManifest: failed to download "
-                       << "manifest for term " << process_term << " : "
-                       << ErrorString(dl_err);
-            return {nullptr, dl_err};
-        }
-        // NotFound: fall through to list & pick latest manifest.
-    }
+        uint64_t process_term = ProcessTerm();
+        uint64_t selected_term = 0;
 
-    // If nothing selected yet, list manifests in cloud and pick the highest
-    // term (ignoring archive files with timestamp).
-    if (selected_term == 0)
-    {
         std::vector<std::string> cloud_files;
-
         // List all files under this table prefix.
         ObjectStore::ListTask list_task(tbl_id.ToString());
         list_task.SetKvTask(current_task);
@@ -2498,7 +2476,14 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
             return {nullptr, KvError::Corrupted};
         }
 
+        if (cloud_files.empty())
+        {
+            // No manifest at all in cloud.
+            return {nullptr, KvError::NotFound};
+        }
+
         uint64_t best_term = 0;
+        bool found = false;
         for (const std::string &name : cloud_files)
         {
             auto [type, suffix] = ParseFileName(name);
@@ -2520,33 +2505,34 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
                 continue;
             }
 
-            if (term > best_term)
+            if (term >= best_term)
             {
+                found = true;
                 best_term = term;
             }
         }
 
-        if (best_term == 0 && cloud_files.empty())
+        if (!found)
         {
-            // No manifest at all in cloud.
-            return {nullptr, KvError::NotFound};
+            LOG(ERROR)
+                << "CloudStoreMgr::GetManifest: no manifest found for table "
+                << tbl_id;
+            return {nullptr, KvError::CloudNoManifest};
         }
 
         selected_term = best_term;
-
-        // Term validation: only when ProcessTerm() is explicitly set.
-        if (process_term != 0)
+        // selected_term < process_term: allowed; allocator bump will be
+        // handled by Replayer when it sees term mismatch.
+        if (selected_term > process_term)
         {
-            if (selected_term > process_term)
-            {
-                LOG(ERROR) << "CloudStoreMgr::GetManifest: found manifest term "
-                           << selected_term << " greater than process_term "
-                           << process_term << " for table " << tbl_id;
-                return {nullptr, KvError::ExpiredTerm};
-            }
-            // selected_term < process_term: allowed; allocator bump will be
-            // handled by Replayer when it sees term mismatch.
+            LOG(ERROR) << "CloudStoreMgr::GetManifest: found manifest term "
+                       << selected_term << " greater than process_term "
+                       << process_term << " for table " << tbl_id;
+            return {nullptr, KvError::ExpiredTerm};
         }
+
+        LOG(INFO) << "Selected manifest term: " << selected_term
+                  << " for table " << tbl_id;
 
         // Ensure the selected manifest is downloaded locally.
         KvError dl_err = DownloadFile(tbl_id, LruFD::kManifest, selected_term);
@@ -2563,8 +2549,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
         // process_term, "promote" the manifest: copy its content into a new
         // manifest_<process_term> object (both locally and in cloud), so
         // subsequent readers can consistently use manifest_<process_term>.
-        if (process_term != 0 && selected_term != 0 &&
-            selected_term != process_term)
+        if (selected_term != process_term)
         {
             // 1) Rename the manifest file locally.
             auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);

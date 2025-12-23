@@ -152,6 +152,7 @@ EloqStore::~EloqStore()
 
 KvError EloqStore::Start(uint64_t term)
 {
+    DLOG(INFO) << "===Start eloqstore, term: " << term;
     if (!IsStopped())
     {
         LOG(ERROR) << "EloqStore started , do not start again";
