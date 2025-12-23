@@ -69,17 +69,10 @@ void Shard::WorkLoop()
 
     while (true)
     {
-        while (true)
-        {
-            io_mgr_->Submit();
-            io_mgr_->PollComplete();
-            bool busy = ExecuteReadyTasks();
-            if (!busy)
-            {
-                // CPU is not busy, we can process more requests.
-                break;
-            }
-        }
+        io_mgr_->Submit();
+        io_mgr_->PollComplete();
+        ExecuteReadyTasks();
+
         int nreqs = dequeue_requests();
         if (nreqs < 0)
         {
