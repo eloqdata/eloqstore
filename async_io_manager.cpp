@@ -1982,14 +1982,18 @@ KvError CloudStoreMgr::RestoreLocalCacheState()
             std::error_code type_ec;
             if (!partition_it->is_directory(type_ec) || type_ec)
             {
-                continue;
+                LOG(ERROR) << "Invalid files exist in store path: "
+                           << partition_it->path().filename().string();
+                return KvError::InvalidArgs;
             }
 
             TableIdent tbl_id = TableIdent::FromString(
                 partition_it->path().filename().string());
             if (!tbl_id.IsValid() || tbl_id.ShardIndex(num_shards) != shard_id_)
             {
-                continue;
+                LOG(ERROR) << "Invalid files exist in store path: "
+                           << partition_it->path().filename().string();
+                return KvError::InvalidArgs;
             }
 
             KvError err = RestoreFilesForTable(
