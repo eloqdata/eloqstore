@@ -169,7 +169,7 @@ public:
         (void) term;
     }
 
-    virtual uint64_t ProcessTerm() const override
+    virtual uint64_t ProcessTerm() const
     {
         return 0;
     }

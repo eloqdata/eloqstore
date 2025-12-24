@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "coding.h"
 #include "types.h"
 
@@ -14,7 +15,7 @@ namespace eloqstore
 constexpr uint32_t num_reserved_fd = 100;
 
 // FileId -> term mapping
-using FileIdTermMapping = std::unordered_map<FileId, uint64_t>;
+using FileIdTermMapping = absl::flat_hash_map<FileId, uint64_t>;
 
 // Serialize FileIdTermMapping to dst (appends to dst)
 // Format: varint64(count) followed by count pairs of varint64(file_id)

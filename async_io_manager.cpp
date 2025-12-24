@@ -174,10 +174,8 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
 {
     auto [file_id, offset] = ConvFilePageId(fp_id);
     auto term = GetFileIdTerm(tbl_id, file_id);
-    if (!term.has_value())
-    {
-        return {std::move(page), KvError::NotFound};
-    }
+    CHECK(term.has_value()) << "ReadPage, not found term for file id "
+                            << file_id << " in table " << tbl_id;
     auto [fd_ref, err] = OpenFD(tbl_id, file_id, false, term.value());
     if (err != KvError::NoError)
     {
@@ -262,10 +260,8 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
     {
         auto [file_id, offset] = ConvFilePageId(fp_id);
         auto term = GetFileIdTerm(tbl_id, file_id);
-        if (!term.has_value())
-        {
-            return KvError::NotFound;
-        }
+        CHECK(term.has_value()) << "ReadPages, not found term for file id "
+                                << file_id << " in table " << tbl_id;
         auto [fd_ref, err] = OpenFD(tbl_id, file_id, false, term.value());
         if (err != KvError::NoError)
         {
