@@ -1954,11 +1954,15 @@ KvError CloudStoreMgr::RestoreLocalCacheState()
 
             TableIdent tbl_id = TableIdent::FromString(
                 partition_it->path().filename().string());
-            if (!tbl_id.IsValid() || tbl_id.ShardIndex(num_shards) != shard_id_)
+            if (!tbl_id.IsValid())
             {
                 LOG(ERROR) << "Invalid files exist in store path: "
                            << partition_it->path().filename().string();
                 return KvError::InvalidArgs;
+            }
+            if (tbl_id.ShardIndex(num_shards) != shard_id_)
+            {
+                continue;
             }
 
             KvError err = RestoreFilesForTable(
