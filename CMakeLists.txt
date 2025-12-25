@@ -8,33 +8,37 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # Coverage option
 option(WITH_COVERAGE "Enable code coverage" OFF)
-if(WITH_COVERAGE)
+if (WITH_COVERAGE)
     message(STATUS "Building with coverage flags")
     add_compile_options(-O0 -g --coverage)
     add_link_options(--coverage)
-endif()
+endif ()
 
 option(WITH_ASAN "build with ASAN" OFF)
-if(WITH_ASAN)
-    message("build eloqstore with ASAN: ${WITH_ASAN}")
-    set(BOOST_CONTEXT_ASAN_PATH "$ENV{HOME}/boost_ucontext_asan")
+if (WITH_ASAN)
+    message(STATUS "build eloqstore with ASAN: ${WITH_ASAN}")
+
     add_compile_definitions(BOOST_USE_ASAN)
     add_compile_definitions(BOOST_USE_UCONTEXT)
 
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fno-omit-frame-pointer")
-    find_library(Boost_CONTEXT_LIBRARY
-            NAMES boost_context
-            PATHS ${BOOST_CONTEXT_ASAN_PATH}/lib
-            NO_DEFAULT_PATH)
-    set(BOOST_CONTEXT_TARGET ${Boost_CONTEXT_LIBRARY})
-    if(NOT Boost_CONTEXT_LIBRARY)
+    add_compile_options(-fsanitize=address -fno-omit-frame-pointer)
+    add_link_options(-fsanitize=address)
+
+    find_library(Boost_CONTEXT_ASAN_LIBRARY
+            NAMES boost_context-asan
+    )
+
+    if (NOT Boost_CONTEXT_ASAN_LIBRARY)
         message(FATAL_ERROR
-                "boost_context (ASAN/ucontext) not found in ${BOOST_CONTEXT_ASAN_PATH}/lib")
-    endif()
+                "libboost_context-asan not found in system library paths")
+    endif ()
+
+    set(BOOST_CONTEXT_TARGET ${Boost_CONTEXT_ASAN_LIBRARY})
+
 else ()
     find_package(Boost REQUIRED COMPONENTS context)
     set(BOOST_CONTEXT_TARGET Boost::context)
-endif()
+endif ()
 
 option(ELOQ_MODULE_ENABLED "Enable EloqModule" OFF)
 message("ELOQ_MODULE_ENABLED: " ${ELOQ_MODULE_ENABLED})
