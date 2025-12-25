@@ -464,6 +464,12 @@ TEST_CASE("append mode survives compression toggles across restarts",
     verify.Validate();
 
     store->Stop();
+    store = start_store(true);
+    verify.SetStore(store.get());
+    verify.Scan(0, 200);
+    verify.Validate();
+
+    store->Stop();
     store.reset();
     CleanupStore(base_opts);
 }
