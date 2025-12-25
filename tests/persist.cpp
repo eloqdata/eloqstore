@@ -426,3 +426,44 @@ TEST_CASE("append mode with restart", "[persist]")
         }
     }
 }
+
+TEST_CASE("append mode survives compression toggles across restarts",
+          "[persist]")
+{
+    eloqstore::KvOptions base_opts = append_opts;
+    base_opts.enable_compression = false;
+    CleanupStore(base_opts);
+
+    auto start_store = [&](bool enable_compression)
+    {
+        eloqstore::KvOptions opts = base_opts;
+        opts.enable_compression = enable_compression;
+        auto new_store = std::make_unique<eloqstore::EloqStore>(opts);
+        REQUIRE(new_store->Start() == eloqstore::KvError::NoError);
+        return new_store;
+    };
+
+    auto store = start_store(false);
+    MapVerifier verify(test_tbl_id, store.get(), false);
+    verify.SetAutoClean(false);
+    verify.SetValueSize(1024);
+
+    verify.Upsert(0, 100);
+    verify.Validate();
+
+    store->Stop();
+    store = start_store(true);
+    verify.SetStore(store.get());
+    verify.Upsert(100, 200);
+    verify.Validate();
+
+    store->Stop();
+    store = start_store(false);
+    verify.SetStore(store.get());
+    verify.Scan(0, 200);
+    verify.Validate();
+
+    store->Stop();
+    store.reset();
+    CleanupStore(base_opts);
+}
