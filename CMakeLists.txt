@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(eloqkvstore)
 
+include(CheckCXXSourceCompiles)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
@@ -36,9 +38,11 @@ if (WITH_ASAN)
     set(BOOST_CONTEXT_TARGET ${Boost_CONTEXT_ASAN_LIBRARY})
 
 else ()
-    find_package(Boost REQUIRED COMPONENTS context)
-    set(BOOST_CONTEXT_TARGET Boost::context)
+    find_library(Boost_CONTEXT_LIBRARY NAMES boost_context)
+
+    set(BOOST_CONTEXT_TARGET ${Boost_CONTEXT_LIBRARY})
 endif ()
+message("BOOST_CONTEXT_TARGET: ${BOOST_CONTEXT_TARGET}")
 
 option(ELOQ_MODULE_ENABLED "Enable EloqModule" OFF)
 message("ELOQ_MODULE_ENABLED: " ${ELOQ_MODULE_ENABLED})
