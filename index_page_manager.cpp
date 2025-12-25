@@ -122,7 +122,10 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
         meta->Pin();
         meta->manifest_size_ = replayer.file_size_;
         meta->next_expire_ts_ = 0;
-        meta->compression_->LoadDictionary(std::move(replayer.dict_bytes_));
+        if (!replayer.dict_bytes_.empty())
+        {
+            meta->compression_->LoadDictionary(std::move(replayer.dict_bytes_));
+        }
         if (meta->ttl_root_id_ != MaxPageId)
         {
             // For simplicity, we initialize next_expire_ts_ to 1,
