@@ -37,6 +37,7 @@ enum class RequestType : uint8_t
 class KvRequest
 {
 public:
+    virtual ~KvRequest() = default;
     virtual RequestType Type() const = 0;
     KvError Error() const;
     bool RetryableErr() const;
