@@ -67,7 +67,6 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
                   manifest_terms);
 
     // No need to check term expired for local mode.
-    (void) manifest_terms;
 
     // 3. get archived max file id.
     FileId least_not_archived_file_id = 0;
@@ -403,6 +402,7 @@ KvError DeleteUnreferencedCloudFiles(
     CloudStoreMgr *cloud_mgr)
 {
     std::vector<std::string> files_to_delete;
+    auto process_term = cloud_mgr->ProcessTerm();
 
     for (const std::string &file_name : data_files)
     {
@@ -416,6 +416,13 @@ KvError DeleteUnreferencedCloudFiles(
         [[maybe_unused]] uint64_t term = 0;
         if (!ParseDataFileSuffix(ret.second, file_id, term))
         {
+            LOG(FATAL) << "Failed to parse data file suffix: " << file_name;
+            continue;
+        }
+
+        if (term > process_term)
+        {
+            // Skip files with term greater than process term.
             continue;
         }
 
@@ -437,8 +444,13 @@ KvError DeleteUnreferencedCloudFiles(
         }
     }
 
+    if (files_to_delete.size() == data_files.size())
+    {
+        files_to_delete.emplace_back(tbl_id.ToString() + "/" +
+                                     ManifestFileName(process_term));
+    }
+
     // delete expired manifest files.
-    auto process_term = cloud_mgr->ProcessTerm();
     for (const uint64_t term : manifest_terms)
     {
         if (term < process_term)
@@ -455,12 +467,6 @@ KvError DeleteUnreferencedCloudFiles(
 
     KvTask *current_task = ThdTask();
     auto *http_mgr = cloud_mgr->GetObjectStore().GetHttpManager();
-    if (files_to_delete.size() == data_files.size())
-    {
-        files_to_delete.emplace_back(tbl_id.ToString() + "/" +
-                                     ManifestFileName(process_term));
-    }
-
     // If we're deleting every file in the directory, issue a single purge
     // request for the table path.
     std::vector<ObjectStore::DeleteTask> delete_tasks;

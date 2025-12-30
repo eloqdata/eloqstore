@@ -261,20 +261,17 @@ KvError WriteTask::FlushManifest()
         FilePageId max_fp_id =
             cow_meta_.mapper_->FilePgAllocator()->MaxFilePageId();
         // Serialize FileIdTermMapping for this table (if available)
-        std::shared_ptr<FileIdTermMapping> file_id_mapping =
+        std::shared_ptr<FileIdTermMapping> file_term_mapping =
             IoMgr()->GetOrCreateFileIdTermMapping(tbl_ident_);
-        if (!file_id_mapping->contains(IouringMgr::LruFD::kManifest))
-        {
-            file_id_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
-                                              IoMgr()->ProcessTerm());
-        }
+        file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
+                                            IoMgr()->ProcessTerm());
         std::string_view snapshot =
             wal_builder_.Snapshot(cow_meta_.root_id_,
                                   cow_meta_.ttl_root_id_,
                                   mapping,
                                   max_fp_id,
                                   dict_bytes,
-                                  *file_id_mapping);
+                                  *file_term_mapping);
         err = IoMgr()->SwitchManifest(tbl_ident_, snapshot);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
@@ -296,20 +293,17 @@ KvError WriteTask::FlushManifest()
         MappingSnapshot *mapping = cow_meta_.mapper_->GetMapping();
         FilePageId max_fp_id =
             cow_meta_.mapper_->FilePgAllocator()->MaxFilePageId();
-        std::shared_ptr<FileIdTermMapping> file_id_mapping =
+        std::shared_ptr<FileIdTermMapping> file_term_mapping =
             IoMgr()->GetOrCreateFileIdTermMapping(tbl_ident_);
-        if (!file_id_mapping->contains(IouringMgr::LruFD::kManifest))
-        {
-            file_id_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
-                                              IoMgr()->ProcessTerm());
-        }
+        file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
+                                            IoMgr()->ProcessTerm());
         std::string_view snapshot =
             wal_builder_.Snapshot(cow_meta_.root_id_,
                                   cow_meta_.ttl_root_id_,
                                   mapping,
                                   max_fp_id,
                                   dict_bytes,
-                                  *file_id_mapping);
+                                  *file_term_mapping);
         err = IoMgr()->SwitchManifest(tbl_ident_, snapshot);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();

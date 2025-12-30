@@ -108,7 +108,7 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
     {
         // On failure, clear mapping and log a warning, but continue replay.
         file_id_term_mapping_->clear();
-        LOG(ERROR) << "Failed to deserialize FileIdTermMapping from snapshot, "
+        LOG(FATAL) << "Failed to deserialize FileIdTermMapping from snapshot, "
                       "treating mapping as empty.";
     }
 

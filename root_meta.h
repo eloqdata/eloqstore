@@ -25,7 +25,7 @@ public:
                               const MappingSnapshot *mapping,
                               FilePageId max_fp_id,
                               std::string_view dict_bytes,
-                              const FileIdTermMapping &file_id_mapping);
+                              const FileIdTermMapping &file_term_mapping);
 
     std::string_view Finalize(PageId new_root, PageId ttl_root);
     void Reset();

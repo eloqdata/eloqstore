@@ -37,18 +37,18 @@ std::string_view ManifestBuilder::Snapshot(
     const MappingSnapshot *mapping,
     FilePageId max_fp_id,
     std::string_view dict_bytes,
-    const FileIdTermMapping &file_id_mapping)
+    const FileIdTermMapping &file_term_mapping)
 {
     Reset();
     // Reserve some space: max_fp_id + dict header + fileid_term_mapping count +
     // fileid_term_mapping pairs + mapping
     buff_.reserve(4 + 8 * (mapping->mapping_tbl_.size() + 1) + 8 +
-                  16 * file_id_mapping.size());
+                  16 * file_term_mapping.size());
     PutVarint64(&buff_, max_fp_id);
     PutVarint32(&buff_, dict_bytes.size());
     buff_.append(dict_bytes.data(), dict_bytes.size());
     // Serialize FileIdTermMapping before mapping table
-    SerializeFileIdTermMapping(file_id_mapping, buff_);
+    SerializeFileIdTermMapping(file_term_mapping, buff_);
     mapping->Serialize(buff_);
     return Finalize(root_id, ttl_root);
 }

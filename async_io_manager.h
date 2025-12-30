@@ -457,7 +457,7 @@ public:
     std::unordered_map<TableIdent, PartitionFiles> tables_;
     // Per-table FileIdTermMapping storage. Mapping is shared between
     // components via shared_ptr and keyed by TableIdent.
-    std::unordered_map<TableIdent, std::shared_ptr<FileIdTermMapping>>
+    absl::flat_hash_map<TableIdent, std::shared_ptr<FileIdTermMapping>>
         file_terms_;
     LruFD lru_fd_head_{nullptr, MaxFileId};
     LruFD lru_fd_tail_{nullptr, MaxFileId};
