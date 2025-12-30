@@ -26,6 +26,7 @@ public:
                               std::string_view dict_bytes);
 
     std::string_view Finalize(PageId new_root, PageId ttl_root);
+    static bool ValidateChecksum(std::string_view record);
     void Reset();
     bool Empty() const;
     uint32_t CurrentSize() const;
@@ -39,6 +40,7 @@ public:
     static constexpr uint16_t offset_len = offset_ttl_root + sizeof(PageId);
 
 private:
+    static uint64_t CalcChecksum(std::string_view content);
     std::string buff_;
 };
 

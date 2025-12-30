@@ -10,6 +10,7 @@
 #include "async_io_manager.h"
 #include "coding.h"
 #include "error.h"
+#include "index_page_manager.h"
 #include "kv_options.h"
 #include "root_meta.h"
 
@@ -67,7 +68,7 @@ KvError Replayer::ParseNextRecord(ManifestFile *file)
 
     std::string_view content = log_buf_;
     // Verify checksum
-    if (!ValidateChecksum(content))
+    if (!ManifestBuilder::ValidateChecksum(content))
     {
         LOG(ERROR) << "Manifest file corrupted, checksum mismatch.";
         return KvError::Corrupted;
@@ -139,25 +140,29 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
                                                 const TableIdent *tbl_ident)
 {
     auto mapping = std::make_shared<MappingSnapshot>(
-        idx_mgr, tbl_ident, std::move(mapping_tbl_));
+        idx_mgr,
+        tbl_ident,
+        MappingSnapshot::MappingTbl(std::move(mapping_tbl_)),
+        idx_mgr->MapperArena());
     auto mapper = std::make_unique<PageMapper>(std::move(mapping));
     auto &m_table = mapper->GetMapping()->mapping_tbl_;
 
     std::vector<FilePageId> using_fp_ids;
     std::unordered_set<FilePageId> using_fp_ids_set;
+    const size_t table_size = m_table.size();
     if (opts_->data_append_mode)
     {
-        using_fp_ids.reserve(m_table.size());
+        using_fp_ids.reserve(table_size);
     }
     else
     {
-        using_fp_ids_set.reserve(m_table.size());
+        using_fp_ids_set.reserve(table_size);
     }
 
-    for (PageId page_id = 0; page_id < m_table.size(); page_id++)
+    for (PageId page_id = 0; page_id < table_size; page_id++)
     {
         // Get all free page ids.
-        uint64_t val = m_table[page_id];
+        uint64_t val = m_table.Get(page_id);
         if (!MappingSnapshot::IsFilePageId(val))
         {
             mapper->FreePage(page_id);

@@ -4,7 +4,6 @@
 #include <functional>
 #include <memory>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include "error.h"

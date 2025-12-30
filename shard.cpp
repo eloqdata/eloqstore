@@ -15,7 +15,6 @@
 
 #ifdef ELOQ_MODULE_ENABLED
 #include <bthread/eloq_module.h>
-#include <bvar/latency_recorder.h>
 #endif
 namespace eloqstore
 {
@@ -70,17 +69,10 @@ void Shard::WorkLoop()
 
     while (true)
     {
-        while (true)
-        {
-            io_mgr_->Submit();
-            io_mgr_->PollComplete();
-            bool busy = ExecuteReadyTasks();
-            if (!busy)
-            {
-                // CPU is not busy, we can process more requests.
-                break;
-            }
-        }
+        io_mgr_->Submit();
+        io_mgr_->PollComplete();
+        ExecuteReadyTasks();
+
         int nreqs = dequeue_requests();
         if (nreqs < 0)
         {
@@ -370,6 +362,13 @@ bool Shard::ExecuteReadyTasks()
         {
             OnTaskFinished(task);
         }
+    }
+    while (tasks_to_run_next_round_.Size() > 0)
+    {
+        KvTask *task = tasks_to_run_next_round_.Peek();
+        tasks_to_run_next_round_.Dequeue();
+        task->status_ = TaskStatus::Ongoing;
+        ready_tasks_.Enqueue(task);
     }
     running_ = nullptr;
     return busy;

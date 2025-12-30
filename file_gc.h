@@ -6,6 +6,7 @@
 #include "error.h"
 #include "kv_options.h"
 #include "object_store.h"
+#include "page_mapper.h"
 #include "types.h"
 // https://github.com/cameron314/concurrentqueue/issues/280
 #undef BLOCK_SIZE
@@ -13,7 +14,7 @@
 namespace eloqstore
 {
 void GetRetainedFiles(std::unordered_set<FileId> &result,
-                      const std::vector<uint64_t> &tbl,
+                      const MappingSnapshot::MappingTbl &tbl,
                       uint8_t pages_per_file_shift);
 
 class ObjectStore;

@@ -2,6 +2,7 @@
 
 #include <sys/types.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <string>
@@ -988,7 +989,8 @@ void ManifestVerifier::Snapshot()
                                             eloqstore::MaxPageId,
                                             answer_.GetMapping(),
                                             max_fp_id,
-                                            std::string_view{});
+                                            std::string_view{},
+                                            false);
     file_ = sv;
     builder_.Reset();
 }
@@ -1002,30 +1004,26 @@ void ManifestVerifier::Verify()
     CHECK(replayer.root_ == root_id_);
     auto mapper = replayer.GetMapper(&idx_mgr_, &tbl_id_);
 
-    const auto &answer_map = answer_.GetMapping()->mapping_tbl_;
-    const auto &recovered_map = mapper->GetMapping()->mapping_tbl_;
-    auto it_answer = answer_map.begin();
-    auto it_recovered = recovered_map.begin();
-
-    while (it_answer != answer_map.end() && it_recovered != recovered_map.end())
+    const auto &answer_tbl = answer_.GetMapping()->mapping_tbl_;
+    const auto &recovered_tbl = mapper->GetMapping()->mapping_tbl_;
+    size_t min_sz = std::min(answer_tbl.size(), recovered_tbl.size());
+    for (size_t i = 0; i < min_sz; ++i)
     {
-        if (*it_answer != *it_recovered)
+        uint64_t answer_val = answer_tbl.Get(i);
+        uint64_t recovered_val = recovered_tbl.Get(i);
+        if (answer_val != recovered_val)
         {
-            CHECK(!eloqstore::MappingSnapshot::IsFilePageId(*it_answer));
-            CHECK(!eloqstore::MappingSnapshot::IsFilePageId(*it_recovered));
+            CHECK(!eloqstore::MappingSnapshot::IsFilePageId(answer_val));
+            CHECK(!eloqstore::MappingSnapshot::IsFilePageId(recovered_val));
         }
-        it_answer++;
-        it_recovered++;
     }
-    while (it_answer != answer_map.end())
+    for (size_t i = min_sz; i < answer_tbl.size(); ++i)
     {
-        CHECK(!eloqstore::MappingSnapshot::IsFilePageId(*it_answer));
-        it_answer++;
+        CHECK(!eloqstore::MappingSnapshot::IsFilePageId(answer_tbl.Get(i)));
     }
-    while (it_recovered != recovered_map.end())
+    for (size_t i = min_sz; i < recovered_tbl.size(); ++i)
     {
-        CHECK(!eloqstore::MappingSnapshot::IsFilePageId(*it_recovered));
-        it_recovered++;
+        CHECK(!eloqstore::MappingSnapshot::IsFilePageId(recovered_tbl.Get(i)));
     }
 }
 }  // namespace test_util

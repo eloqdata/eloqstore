@@ -1,10 +1,12 @@
+#include <bvar/bvar.h>
 #include <gflags/gflags.h>
 #include <glog/logging.h>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <iostream>
-#include <numeric>
+#include <limits>
 #include <random>
 #include <utility>
 #include <vector>
@@ -28,59 +30,43 @@ DEFINE_uint32(write_interval, 0, "interval seconds between writes");
 DEFINE_uint32(read_per_part, 1, "concurrent read/scan requests per partition");
 DEFINE_uint32(test_secs, 60, "read/scan test time");
 DEFINE_uint32(read_thds, 1, "number of client threads send read/scan requests");
-DEFINE_bool(strict_seq_write,
+DEFINE_bool(load,
             false,
-            "strict sequential writes: step=1 and upsert-only to fill keys");
+            "load data sequentially for later tests (step=1, upsert-only)");
+DEFINE_double(write_stats_interval_sec,
+              1.0,
+              "minimum seconds between periodic write performance logs");
+DEFINE_double(read_stats_interval_sec,
+              1.0,
+              "minimum seconds between read latency logs");
+DEFINE_double(scan_stats_interval_sec,
+              1.0,
+              "minimum seconds between scan latency logs");
 DEFINE_uint64(scan_bytes, 0, "bytes to scan per request; 0 scans to the end");
+DEFINE_bool(show_write_perf,
+            false,
+            "when true, print periodic and summary write throughput");
 
 using namespace std::chrono;
 
 constexpr char table[] = "bm";
 std::atomic<bool> stop_{false};
+bvar::LatencyRecorder g_write_latency("simple_bench_write");
+bvar::LatencyRecorder g_read_latency("simple_bench_read");
+bvar::LatencyRecorder g_scan_latency("simple_bench_scan");
+std::atomic<uint64_t> g_write_max_latency{0};
+std::atomic<uint64_t> g_read_max_latency{0};
+std::atomic<uint64_t> g_scan_max_latency{0};
 
-struct LatencyMetrics
+void UpdateMaxLatency(std::atomic<uint64_t> &target, uint64_t latency)
 {
-    uint64_t average{0};
-    uint64_t p50{0};
-    uint64_t p90{0};
-    uint64_t p99{0};
-    uint64_t p999{0};
-    uint64_t max{0};
-};
-
-LatencyMetrics CalculateLatencyMetrics(const std::vector<uint64_t> &samples)
-{
-    LatencyMetrics metrics;
-    if (samples.empty())
+    uint64_t previous = target.load(std::memory_order_relaxed);
+    while (previous < latency &&
+           !target.compare_exchange_weak(
+               previous, latency, std::memory_order_relaxed))
     {
-        return metrics;
     }
-
-    uint64_t sum = std::accumulate(samples.begin(), samples.end(), uint64_t{0});
-    std::vector<uint64_t> sorted(samples);
-    std::sort(sorted.begin(), sorted.end());
-    auto quantile_index = [&sorted](double quantile)
-    {
-        size_t idx = static_cast<size_t>(
-            quantile * static_cast<double>(sorted.size() - 1));
-        if (idx >= sorted.size())
-        {
-            idx = sorted.size() - 1;
-        }
-        return idx;
-    };
-
-    metrics.average = sum / sorted.size();
-    metrics.p50 = sorted[quantile_index(0.5)];
-    metrics.p90 = sorted[quantile_index(0.9)];
-    metrics.p99 = sorted[quantile_index(0.99)];
-    metrics.p999 = sorted[quantile_index(0.999)];
-    metrics.max = sorted.back();
-    return metrics;
 }
-
-static constexpr size_t kReadLatencyWindow = 500000;
-static constexpr size_t kScanLatencyWindow = 50000;
 
 void EncodeKey(char *dst, uint64_t key)
 {
@@ -122,11 +108,10 @@ Writer::Writer(uint32_t id) : id_(id)
         std::string key;
         key.resize(sizeof(uint64_t));
         EncodeKey(key.data(), writing_key_);
-        writing_key_ +=
-            FLAGS_strict_seq_write ? 1 : ((rand_gen() % key_interval) + 1);
+        writing_key_ += FLAGS_load ? 1 : ((rand_gen() % key_interval) + 1);
         std::string value;
         value.resize(FLAGS_kv_size - sizeof(uint64_t));
-        if (!FLAGS_strict_seq_write && (rand_gen() % del_ratio == 0))
+        if (!FLAGS_load && (rand_gen() % del_ratio == 0))
         {
             entries.emplace_back(std::move(key),
                                  std::move(value),
@@ -153,11 +138,10 @@ void Writer::NextBatch()
     uint64_t ts = utils::UnixTs<milliseconds>();
     for (auto &entry : request_.batch_)
     {
-        writing_key_ +=
-            FLAGS_strict_seq_write ? 1 : ((rand_gen() % key_interval) + 1);
+        writing_key_ += FLAGS_load ? 1 : ((rand_gen() % key_interval) + 1);
         EncodeKey(entry.key_.data(), writing_key_);
         entry.timestamp_ = ts;
-        if (!FLAGS_strict_seq_write && (rand_gen() % del_ratio == 0))
+        if (!FLAGS_load && (rand_gen() % del_ratio == 0))
         {
             entry.op_ = eloqstore::WriteOp::Delete;
         }
@@ -188,10 +172,11 @@ void WriteLoop(eloqstore::EloqStore *store)
         finished.enqueue(p);
     };
 
-    std::vector<uint64_t> latencies_total;
-    latencies_total.reserve(FLAGS_write_batchs + FLAGS_partitions);
+    bool recorded_write_latency = false;
     auto total_start = high_resolution_clock::now();
     auto window_start = total_start;
+    const double min_window_ms =
+        std::max(1.0, FLAGS_write_stats_interval_sec * 1000.0);
     for (auto &writer : writers)
     {
         writer->start_ts_ = utils::UnixTs<microseconds>();
@@ -204,7 +189,9 @@ void WriteLoop(eloqstore::EloqStore *store)
 
         assert(writer->request_.IsDone());
         assert(writer->request_.Error() == eloqstore::KvError::NoError);
-        latencies_total.push_back(writer->latency_);
+        g_write_latency << static_cast<int64_t>(writer->latency_);
+        UpdateMaxLatency(g_write_max_latency, writer->latency_);
+        recorded_write_latency = true;
         writer->NextBatch();
         writer->start_ts_ = utils::UnixTs<microseconds>();
         store->ExecAsyn(&writer->request_, uint64_t(writer), callback);
@@ -215,21 +202,23 @@ void WriteLoop(eloqstore::EloqStore *store)
             auto now = high_resolution_clock::now();
             double cost_ms =
                 duration_cast<milliseconds>(now - window_start).count();
-            if (cost_ms <= 0.0)
+            if (cost_ms < min_window_ms)
             {
-                cost_ms = 1.0;
+                continue;
             }
             const uint64_t num_kvs =
                 uint64_t(FLAGS_batch_size) * FLAGS_partitions;
             const uint64_t kvs_per_sec = num_kvs * 1000 / cost_ms;
-            const double upsert_ratio_current =
-                FLAGS_strict_seq_write ? 1.0 : upsert_ratio;
+            const double upsert_ratio_current = FLAGS_load ? 1.0 : upsert_ratio;
             const uint64_t mb_per_sec =
                 (static_cast<uint64_t>(kvs_per_sec * upsert_ratio_current) *
                  FLAGS_kv_size) >>
                 20;
-            LOG(INFO) << "write speed " << kvs_per_sec << " kvs/s | cost "
-                      << cost_ms << " ms | " << mb_per_sec << " MiB/s";
+            if (FLAGS_show_write_perf)
+            {
+                LOG(INFO) << "write speed " << kvs_per_sec << " kvs/s | cost "
+                          << cost_ms << " ms | " << mb_per_sec << " MiB/s";
+            }
 
             if (FLAGS_write_interval > 0)
             {
@@ -246,27 +235,41 @@ void WriteLoop(eloqstore::EloqStore *store)
     {
         total_cost_ms = 1.0;
     }
-    if (!latencies_total.empty())
+    if (recorded_write_latency)
     {
         const uint64_t num_kvs =
             static_cast<uint64_t>(FLAGS_batch_size) * FLAGS_write_batchs;
         const uint64_t kvs_per_sec = num_kvs * 1000 / total_cost_ms;
-        const double upsert_ratio_current =
-            FLAGS_strict_seq_write ? 1.0 : upsert_ratio;
+        const double upsert_ratio_current = FLAGS_load ? 1.0 : upsert_ratio;
         const uint64_t mb_per_sec =
             (static_cast<uint64_t>(kvs_per_sec * upsert_ratio_current) *
              FLAGS_kv_size) >>
             20;
-        LatencyMetrics metrics = CalculateLatencyMetrics(latencies_total);
-        LOG(INFO) << "write summary " << kvs_per_sec << " kvs/s | cost "
-                  << total_cost_ms << " ms | " << mb_per_sec
-                  << " MiB/s | average latency " << metrics.average
-                  << " microseconds | p50 " << metrics.p50
-                  << " microseconds | p90 " << metrics.p90
-                  << " microseconds | p99 " << metrics.p99
-                  << " microseconds | p99.9 " << metrics.p999
-                  << " microseconds | max latency " << metrics.max
-                  << " microseconds";
+        const auto average = static_cast<uint64_t>(g_write_latency.latency());
+        const auto p50 =
+            static_cast<uint64_t>(g_write_latency.latency_percentile(0.50));
+        const auto p90 =
+            static_cast<uint64_t>(g_write_latency.latency_percentile(0.90));
+        const auto p99 =
+            static_cast<uint64_t>(g_write_latency.latency_percentile(0.99));
+        const auto p999 =
+            static_cast<uint64_t>(g_write_latency.latency_percentile(0.999));
+        const auto p9999 =
+            static_cast<uint64_t>(g_write_latency.latency_percentile(0.9999));
+        const auto max_latency =
+            g_write_max_latency.load(std::memory_order_relaxed);
+        if (FLAGS_show_write_perf)
+        {
+            LOG(INFO) << "write summary " << kvs_per_sec << " kvs/s | cost "
+                      << total_cost_ms << " ms | " << mb_per_sec
+                      << " MiB/s | average latency " << average
+                      << " microseconds | p50 " << p50 << " microseconds | p90 "
+                      << p90 << " microseconds | p99 " << p99
+                      << " microseconds | p99.9 " << p999
+                      << " microseconds | p99.99 " << p9999
+                      << " microseconds | max latency " << max_latency
+                      << " microseconds";
+        }
     }
     for (uint32_t i = 0; i < FLAGS_partitions; i++)
     {
@@ -320,10 +323,10 @@ void ReadLoop(eloqstore::EloqStore *store, uint32_t thd_id)
         store->ExecAsyn(&reader->request_, uint64_t(reader), callback);
     };
 
-    std::vector<uint64_t> latencies;
-    latencies.reserve(kReadLatencyWindow);
     const auto start = high_resolution_clock::now();
-    auto last_time = high_resolution_clock::now();
+    auto last_log = start;
+    const double read_interval_ms =
+        std::max(1.0, FLAGS_read_stats_interval_sec * 1000.0);
     for (auto &reader : readers)
     {
         send_req(reader.get());
@@ -332,33 +335,45 @@ void ReadLoop(eloqstore::EloqStore *store, uint32_t thd_id)
     {
         Reader *reader;
         finished.wait_dequeue(reader);
-        latencies.push_back(reader->latency_);
+        g_read_latency << static_cast<int64_t>(reader->latency_);
+        UpdateMaxLatency(g_read_max_latency, reader->latency_);
 
         send_req(reader);
 
-        if (latencies.size() == kReadLatencyWindow)
+        auto now = high_resolution_clock::now();
+        double cost_ms = duration_cast<milliseconds>(now - last_log).count();
+        if (cost_ms < read_interval_ms)
         {
-            auto now = high_resolution_clock::now();
-            double cost_ms =
-                duration_cast<milliseconds>(now - last_time).count();
-            uint64_t qps = latencies.size() * 1000 / cost_ms;
-            LatencyMetrics metrics = CalculateLatencyMetrics(latencies);
-            LOG(INFO) << "[" << thd_id << "]read speed " << qps
-                      << " QPS | average latency " << metrics.average
-                      << " microseconds | p50 " << metrics.p50
-                      << " microseconds | p90 " << metrics.p90
-                      << " microseconds | p99 " << metrics.p99
-                      << " microseconds | p99.9 " << metrics.p999
-                      << " microseconds | max latency " << metrics.max
-                      << " microseconds";
+            continue;
+        }
 
-            if (stop_.load(std::memory_order_relaxed))
-            {
-                break;
-            }
+        const double qps = g_read_latency.qps();
+        const auto average = static_cast<uint64_t>(g_read_latency.latency());
+        const auto p50 =
+            static_cast<uint64_t>(g_read_latency.latency_percentile(0.50));
+        const auto p90 =
+            static_cast<uint64_t>(g_read_latency.latency_percentile(0.90));
+        const auto p99 =
+            static_cast<uint64_t>(g_read_latency.latency_percentile(0.99));
+        const auto p999 =
+            static_cast<uint64_t>(g_read_latency.latency_percentile(0.999));
+        const auto p9999 =
+            static_cast<uint64_t>(g_read_latency.latency_percentile(0.9999));
+        const auto max_latency =
+            g_read_max_latency.load(std::memory_order_relaxed);
+        LOG(INFO) << "[" << thd_id << "]read speed " << qps
+                  << " QPS | average latency " << average
+                  << " microseconds | p50 " << p50 << " microseconds | p90 "
+                  << p90 << " microseconds | p99 " << p99
+                  << " microseconds | p99.9 " << p999
+                  << " microseconds | p99.99 " << p9999
+                  << " microseconds | max latency " << max_latency
+                  << " microseconds";
 
-            last_time = high_resolution_clock::now();
-            latencies.clear();
+        last_log = now;
+        if (stop_.load(std::memory_order_relaxed))
+        {
+            break;
         }
     }
     size_t total_kvs = 0;
@@ -451,11 +466,11 @@ void ScanLoop(eloqstore::EloqStore *store, uint32_t thd_id)
         store->ExecAsyn(&scanner->request_, uint64_t(scanner), callback);
     };
 
-    std::vector<uint64_t> latencies;
-    latencies.reserve(kScanLatencyWindow);
     const auto start = high_resolution_clock::now();
     auto last_time = high_resolution_clock::now();
     uint64_t window_kvs = 0;
+    const double scan_interval_ms =
+        std::max(1.0, FLAGS_scan_stats_interval_sec * 1000.0);
     for (auto &scanner : scanners)
     {
         send_req(scanner.get());
@@ -464,38 +479,52 @@ void ScanLoop(eloqstore::EloqStore *store, uint32_t thd_id)
     {
         Scanner *scanner;
         finished.wait_dequeue(scanner);
-        latencies.push_back(scanner->latency_);
+        g_scan_latency << static_cast<int64_t>(scanner->latency_);
+        UpdateMaxLatency(g_scan_max_latency, scanner->latency_);
         window_kvs += scanner->last_entries_;
 
         send_req(scanner);
 
-        if (latencies.size() == kScanLatencyWindow)
+        auto now = high_resolution_clock::now();
+        double cost_ms = duration_cast<milliseconds>(now - last_time).count();
+        if (cost_ms < scan_interval_ms)
         {
-            auto now = high_resolution_clock::now();
-            double cost_ms =
-                duration_cast<milliseconds>(now - last_time).count();
-            uint64_t qps = latencies.size() * 1000 / cost_ms;
-            uint64_t kvps = window_kvs * 1000 / cost_ms;
-            LatencyMetrics metrics = CalculateLatencyMetrics(latencies);
-            uint64_t mb_per_sec = (kvps * FLAGS_kv_size) >> 20;
-            LOG(INFO) << "[" << thd_id << "]scan speed " << mb_per_sec
-                      << " MB/s | " << kvps << " KVs/s | " << qps
-                      << " QPS | average latency " << metrics.average
-                      << " microseconds | p50 " << metrics.p50
-                      << " microseconds | p90 " << metrics.p90
-                      << " microseconds | p99 " << metrics.p99
-                      << " microseconds | p99.9 " << metrics.p999
-                      << " microseconds | max latency " << metrics.max
-                      << " microseconds";
+            continue;
+        }
+        if (cost_ms <= 0.0)
+        {
+            cost_ms = 1.0;
+        }
+        const double qps = g_scan_latency.qps();
+        uint64_t kvps = window_kvs * 1000 / cost_ms;
+        uint64_t mb_per_sec = (kvps * FLAGS_kv_size) >> 20;
+        const auto average = static_cast<uint64_t>(g_scan_latency.latency());
+        const auto p50 =
+            static_cast<uint64_t>(g_scan_latency.latency_percentile(0.50));
+        const auto p90 =
+            static_cast<uint64_t>(g_scan_latency.latency_percentile(0.90));
+        const auto p99 =
+            static_cast<uint64_t>(g_scan_latency.latency_percentile(0.99));
+        const auto p999 =
+            static_cast<uint64_t>(g_scan_latency.latency_percentile(0.999));
+        const auto p9999 =
+            static_cast<uint64_t>(g_scan_latency.latency_percentile(0.9999));
+        const auto max_latency =
+            g_scan_max_latency.load(std::memory_order_relaxed);
+        LOG(INFO) << "[" << thd_id << "]scan speed " << mb_per_sec << " MB/s | "
+                  << kvps << " KVs/s | " << qps << " QPS | average latency "
+                  << average << " microseconds | p50 " << p50
+                  << " microseconds | p90 " << p90 << " microseconds | p99 "
+                  << p99 << " microseconds | p99.9 " << p999
+                  << " microseconds | p99.99 " << p9999
+                  << " microseconds | max latency " << max_latency
+                  << " microseconds";
 
-            if (stop_.load(std::memory_order_relaxed))
-            {
-                break;
-            }
-
-            last_time = high_resolution_clock::now();
-            latencies.clear();
-            window_kvs = 0;
+        last_time = now;
+        window_kvs = 0;
+        if (stop_.load(std::memory_order_relaxed))
+        {
+            break;
         }
     }
     size_t total_kvs = 0;
@@ -517,6 +546,30 @@ int main(int argc, char *argv[])
 {
     google::ParseCommandLineFlags(&argc, &argv, true);
     CHECK(FLAGS_kv_size > sizeof(uint64_t));
+    CHECK_GT(FLAGS_batch_size, 0);
+
+    if (FLAGS_load)
+    {
+        const uint64_t batches_per_partition =
+            (static_cast<uint64_t>(FLAGS_max_key) + FLAGS_batch_size - 1) /
+            static_cast<uint64_t>(FLAGS_batch_size);
+        uint64_t desired_batches =
+            std::max<uint64_t>(batches_per_partition, 1) *
+            static_cast<uint64_t>(FLAGS_partitions);
+        if (desired_batches > std::numeric_limits<uint32_t>::max())
+        {
+            LOG(FATAL) << "load requires write_batchs=" << desired_batches
+                       << ", which exceeds uint32_t::max. Reduce max_key or "
+                          "batch size.";
+        }
+        FLAGS_write_batchs = static_cast<uint32_t>(desired_batches);
+        FLAGS_show_write_perf = true;
+        FLAGS_workload = "load";
+        LOG(INFO) << "load=1, forcing workload=load and write_batchs set to "
+                  << FLAGS_write_batchs << " (" << batches_per_partition
+                  << " batches per partition to cover keys up to "
+                  << FLAGS_max_key << ")";
+    }
 
     eloqstore::KvOptions options;
     if (int res = options.LoadFromIni(FLAGS_kvoptions.c_str()); res != 0)
@@ -527,7 +580,12 @@ int main(int argc, char *argv[])
     eloqstore::EloqStore store(options);
     store.Start();
 
-    if (FLAGS_workload == "write-read")
+    if (FLAGS_workload == "load")
+    {
+        std::thread load_thd(WriteLoop, &store);
+        load_thd.join();
+    }
+    else if (FLAGS_workload == "write-read")
     {
         // Hybrid write and read.
         std::thread write_thd(WriteLoop, &store);

@@ -2,30 +2,229 @@
 
 #include <glog/logging.h>
 
+#include <algorithm>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "coding.h"
 #include "index_page_manager.h"
 
 namespace eloqstore
 {
+MappingSnapshot::MappingTbl::MappingTbl(std::vector<uint64_t> tbl)
+    : base_(std::move(tbl)), logical_size_(base_.size())
+{
+}
+
+void MappingSnapshot::MappingTbl::Clear()
+{
+    base_.clear();
+    changes_.clear();
+    logical_size_ = 0;
+    under_copying_ = false;
+}
+
+void MappingSnapshot::MappingTbl::Reserve(size_t n)
+{
+    if (!under_copying_)
+    {
+        base_.reserve(n);
+    }
+}
+
+size_t MappingSnapshot::MappingTbl::size() const
+{
+    if (__builtin_expect(!under_copying_, 1))
+        return base_.size();
+    return logical_size_;
+}
+
+size_t MappingSnapshot::MappingTbl::capacity() const
+{
+    return base_.capacity();
+}
+
+void MappingSnapshot::MappingTbl::StartCopying()
+{
+    under_copying_ = true;
+    size_t base_size = base_.size();
+    if (base_size > logical_size_)
+    {
+        logical_size_ = base_size;
+    }
+}
+
+void MappingSnapshot::MappingTbl::FinishCopying()
+{
+    ApplyChanges();
+    changes_.clear();
+    under_copying_ = false;
+}
+
+void MappingSnapshot::MappingTbl::ApplyChanges()
+{
+    if (changes_.empty())
+    {
+        logical_size_ = base_.size();
+        return;
+    }
+    if (logical_size_ > base_.size())
+    {
+        base_.resize(logical_size_, InvalidValue);
+    }
+    for (const auto &entry : changes_)
+    {
+        base_[entry.first] = entry.second;
+    }
+    logical_size_ = base_.size();
+}
+
+void MappingSnapshot::MappingTbl::Set(PageId page_id, uint64_t value)
+{
+    size_t next_size = static_cast<size_t>(page_id) + 1;
+    if (logical_size_ < next_size)
+    {
+        logical_size_ = next_size;
+    }
+    if (__builtin_expect(under_copying_, 0))
+    {
+        changes_[page_id] = value;
+        return;
+    }
+    EnsureSize(page_id);
+    base_[page_id] = value;
+    logical_size_ = base_.size();
+}
+
+PageId MappingSnapshot::MappingTbl::PushBack(uint64_t value)
+{
+    PageId page_id = static_cast<PageId>(logical_size_);
+    Set(page_id, value);
+    return page_id;
+}
+
+uint64_t MappingSnapshot::MappingTbl::Get(PageId page_id) const
+{
+    if (__builtin_expect(under_copying_, 0))
+    {
+        auto it = changes_.find(page_id);
+        if (it != changes_.end())
+        {
+            return it->second;
+        }
+    }
+    CHECK(page_id < base_.size());
+    return base_[page_id];
+}
+
+std::vector<uint64_t> &MappingSnapshot::MappingTbl::Base()
+{
+    return base_;
+}
+
+const std::vector<uint64_t> &MappingSnapshot::MappingTbl::Base() const
+{
+    return base_;
+}
+
+void MappingSnapshot::MappingTbl::ApplyPendingTo(MappingTbl &dst) const
+{
+    CHECK(logical_size_ >= dst.base_.size() &&
+          logical_size_ >= dst.logical_size_);
+    if (logical_size_ > dst.base_.size())
+    {
+        dst.base_.resize(logical_size_, MappingSnapshot::InvalidValue);
+    }
+    if (logical_size_ > dst.logical_size_)
+    {
+        dst.logical_size_ = logical_size_;
+    }
+    for (const auto &entry : changes_)
+    {
+        PageId page_id = entry.first;
+        dst.base_[page_id] = entry.second;
+    }
+}
+
+void MappingSnapshot::MappingTbl::EnsureSize(PageId page_id)
+{
+    if (page_id >= base_.size())
+    {
+        // TODO(chenzhao): change mapping to std::vector<std::array>
+        base_.resize(page_id + 1, InvalidValue);
+    }
+}
+
+MappingSnapshot::MappingTbl MappingArena::Get()
+{
+    if (pool_.empty())
+    {
+        return {};
+    }
+    auto tbl = std::move(pool_.back());
+    pool_.pop_back();
+    tbl.Clear();
+    return tbl;
+}
+
+void MappingArena::Return(MappingSnapshot::MappingTbl tbl)
+{
+    if (tbl.capacity() == 0 || pool_.size() >= max_cached_)
+    {
+        return;
+    }
+    tbl.Clear();
+    pool_.push_back(std::move(tbl));
+}
 
 PageMapper::PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident)
-    : mapping_(std::make_shared<MappingSnapshot>(idx_mgr, tbl_ident)),
-      file_page_allocator_(FilePageAllocator::Instance(Options()))
 {
-    mapping_->mapping_tbl_.reserve(Options()->init_page_count);
+    auto *arena = idx_mgr->MapperArena();
+    MappingSnapshot::MappingTbl tbl =
+        arena == nullptr ? MappingSnapshot::MappingTbl() : arena->Get();
+    mapping_ = std::make_shared<MappingSnapshot>(
+        idx_mgr, tbl_ident, std::move(tbl), arena);
+
+    auto &mapping_tbl = mapping_->mapping_tbl_;
+    mapping_tbl.Reserve(idx_mgr->Options()->init_page_count);
+    file_page_allocator_ = FilePageAllocator::Instance(idx_mgr->Options());
 }
 
 PageMapper::PageMapper(const PageMapper &rhs)
-    : mapping_(std::make_shared<MappingSnapshot>(rhs.mapping_->idx_mgr_,
-                                                 rhs.mapping_->tbl_ident_)),
-      free_page_head_(rhs.free_page_head_),
+    : free_page_head_(rhs.free_page_head_),
       free_page_cnt_(rhs.free_page_cnt_),
       file_page_allocator_(rhs.file_page_allocator_->Clone())
 {
-    mapping_->mapping_tbl_ = std::vector<uint64_t>(rhs.mapping_->mapping_tbl_);
+    auto *arena = rhs.mapping_->arena_;
+    MappingSnapshot::MappingTbl tbl =
+        arena == nullptr ? MappingSnapshot::MappingTbl() : arena->Get();
+    mapping_ = std::make_shared<MappingSnapshot>(rhs.mapping_->idx_mgr_,
+                                                 rhs.mapping_->tbl_ident_,
+                                                 std::move(tbl),
+                                                 arena);
+
+    auto &src_tbl = rhs.mapping_->mapping_tbl_;
+    src_tbl.StartCopying();
+    const auto &src = src_tbl.Base();
+    auto &dst = mapping_->mapping_tbl_.Base();
+    dst.clear();
+    dst.reserve(src.size());
+
+    static constexpr size_t kCopyBatchSize = 512;
+    for (size_t i = 0; i < src.size(); i += kCopyBatchSize)
+    {
+        size_t batch_size = std::min(kCopyBatchSize, src.size() - i);
+        dst.insert(dst.end(), src.begin() + i, src.begin() + i + batch_size);
+        ThdTask()->YieldToNextRound();
+    }
+
+    src_tbl.ApplyPendingTo(mapping_->mapping_tbl_);
+    src_tbl.FinishCopying();
+
     assert(file_page_allocator_->MaxFilePageId() ==
            rhs.file_page_allocator_->MaxFilePageId());
 }
@@ -35,8 +234,7 @@ PageId PageMapper::GetPage()
     auto &map = Mapping();
     if (free_page_head_ == MaxPageId)
     {
-        map.emplace_back(MappingSnapshot::InvalidValue);
-        return map.size() - 1;
+        return map.PushBack(MappingSnapshot::InvalidValue);
     }
     else
     {
@@ -44,7 +242,7 @@ PageId PageMapper::GetPage()
         // The free page head points to the next free page.
         free_page_head_ = mapping_->GetNextFree(free_page);
         // Sets the free page's mapped file page to null.
-        map[free_page] = MappingSnapshot::InvalidValue;
+        map.Set(free_page, MappingSnapshot::InvalidValue);
         free_page_cnt_--;
         return free_page;
     }
@@ -54,9 +252,10 @@ void PageMapper::FreePage(PageId page_id)
 {
     auto &map = Mapping();
     assert(page_id < map.size());
-    map[page_id] = free_page_head_ == MaxPageId
+    uint64_t val = free_page_head_ == MaxPageId
                        ? MappingSnapshot::InvalidValue
                        : MappingSnapshot::EncodePageId(free_page_head_);
+    map.Set(page_id, val);
     free_page_head_ = page_id;
     free_page_cnt_++;
 }
@@ -83,7 +282,7 @@ MappingSnapshot *PageMapper::GetMapping() const
     return mapping_.get();
 }
 
-uint32_t PageMapper::UseCount()
+uint32_t PageMapper::UseCount() const
 {
     return mapping_.use_count();
 }
@@ -93,7 +292,7 @@ const KvOptions *PageMapper::Options() const
     return mapping_->idx_mgr_->Options();
 }
 
-std::vector<uint64_t> &PageMapper::Mapping()
+MappingSnapshot::MappingTbl &PageMapper::Mapping()
 {
     return mapping_->mapping_tbl_;
 }
@@ -103,16 +302,17 @@ bool PageMapper::DebugStat() const
 {
     FilePageId min_fp_id = MaxFilePageId;
     uint32_t cnt = 0;
-    for (uint64_t val : mapping_->mapping_tbl_)
+    const auto &tbl = mapping_->mapping_tbl_;
+    for (PageId page_id = 0; page_id < tbl.size(); ++page_id)
     {
-        FilePageId fp_id = mapping_->ToFilePage(val);
+        FilePageId fp_id = mapping_->ToFilePage(tbl.Get(page_id));
         if (fp_id != MaxFilePageId)
         {
             cnt++;
             min_fp_id = std::min(min_fp_id, fp_id);
         }
     }
-    assert(cnt == mapping_->mapping_tbl_.size() - free_page_cnt_);
+    assert(cnt == tbl.size() - free_page_cnt_);
     auto allocator = dynamic_cast<AppendAllocator *>(FilePgAllocator());
     if (allocator != nullptr && min_fp_id != MaxFilePageId)
     {
@@ -125,9 +325,10 @@ bool PageMapper::DebugStat() const
 
 void PageMapper::UpdateMapping(PageId page_id, FilePageId file_page_id)
 {
-    assert(page_id < mapping_->mapping_tbl_.size());
+    auto &map = Mapping();
+    assert(page_id < map.size());
     uint64_t val = MappingSnapshot::EncodeFilePageId(file_page_id);
-    mapping_->mapping_tbl_[page_id] = val;
+    map.Set(page_id, val);
 }
 
 uint64_t MappingSnapshot::EncodeFilePageId(FilePageId file_page_id)
@@ -145,15 +346,13 @@ uint64_t MappingSnapshot::DecodeId(uint64_t val)
     return val >> TypeBits;
 }
 
-MappingSnapshot::MappingSnapshot(IndexPageManager *idx_mgr,
-                                 const TableIdent *tbl_id)
-    : idx_mgr_(idx_mgr), tbl_ident_(tbl_id)
-{
-}
-
 MappingSnapshot::~MappingSnapshot()
 {
     idx_mgr_->FreeMappingSnapshot(this);
+    if (arena_ != nullptr)
+    {
+        arena_->Return(std::move(mapping_tbl_));
+    }
 }
 
 FilePageId MappingSnapshot::ToFilePage(PageId page_id) const
@@ -163,7 +362,7 @@ FilePageId MappingSnapshot::ToFilePage(PageId page_id) const
         return MaxFilePageId;
     }
     assert(page_id < mapping_tbl_.size());
-    return ToFilePage(mapping_tbl_[page_id]);
+    return ToFilePage(mapping_tbl_.Get(page_id));
 }
 
 FilePageId MappingSnapshot::ToFilePage(uint64_t val) const
@@ -189,7 +388,7 @@ FilePageId MappingSnapshot::ToFilePage(uint64_t val) const
 PageId MappingSnapshot::GetNextFree(PageId page_id) const
 {
     assert(page_id < mapping_tbl_.size());
-    uint64_t val = mapping_tbl_[page_id];
+    uint64_t val = mapping_tbl_.Get(page_id);
     if (val == InvalidValue)
     {
         return MaxPageId;
@@ -214,18 +413,22 @@ void MappingSnapshot::Unswizzling(MemIndexPage *page)
     PageId page_id = page->GetPageId();
     FilePageId file_page_id = page->GetFilePageId();
 
-    if (page_id < mapping_tbl_.size() &&
-        IsSwizzlingPointer(mapping_tbl_[page_id]) &&
-        reinterpret_cast<MemIndexPage *>(mapping_tbl_[page_id]) == page)
+    auto &mapping_tbl = mapping_tbl_;
+    if (page_id < mapping_tbl.size())
     {
-        mapping_tbl_[page_id] = EncodeFilePageId(file_page_id);
+        uint64_t val = mapping_tbl.Get(page_id);
+        if (IsSwizzlingPointer(val) &&
+            reinterpret_cast<MemIndexPage *>(val) == page)
+        {
+            mapping_tbl.Set(page_id, EncodeFilePageId(file_page_id));
+        }
     }
 }
 
 MemIndexPage *MappingSnapshot::GetSwizzlingPointer(PageId page_id) const
 {
     assert(page_id < mapping_tbl_.size());
-    uint64_t val = mapping_tbl_[page_id];
+    uint64_t val = mapping_tbl_.Get(page_id);
     if (IsSwizzlingPointer(val))
     {
         MemIndexPage *idx_page = reinterpret_cast<MemIndexPage *>(val);
@@ -236,9 +439,10 @@ MemIndexPage *MappingSnapshot::GetSwizzlingPointer(PageId page_id) const
 
 void MappingSnapshot::AddSwizzling(PageId page_id, MemIndexPage *idx_page)
 {
-    assert(page_id < mapping_tbl_.size());
+    auto &mapping_tbl = mapping_tbl_;
+    assert(page_id < mapping_tbl.size());
 
-    uint64_t val = mapping_tbl_[page_id];
+    uint64_t val = mapping_tbl.Get(page_id);
     if (IsSwizzlingPointer(val))
     {
         assert(reinterpret_cast<MemIndexPage *>(val) == idx_page);
@@ -246,7 +450,7 @@ void MappingSnapshot::AddSwizzling(PageId page_id, MemIndexPage *idx_page)
     else
     {
         assert(DecodeId(val) == idx_page->GetFilePageId());
-        mapping_tbl_[page_id] = reinterpret_cast<uint64_t>(idx_page);
+        mapping_tbl.Set(page_id, reinterpret_cast<uint64_t>(idx_page));
     }
 }
 
@@ -267,15 +471,21 @@ MappingSnapshot::ValType MappingSnapshot::GetValType(uint64_t val)
 
 void MappingSnapshot::Serialize(std::string &dst) const
 {
-    for (PageId i = 0; i < mapping_tbl_.size(); i++)
+    bool yield = ThdTask() != nullptr;
+    const size_t tbl_size = mapping_tbl_.size();
+    for (PageId i = 0; i < tbl_size; i++)
     {
-        uint64_t val = mapping_tbl_[i];
+        uint64_t val = mapping_tbl_.Get(i);
         if (IsSwizzlingPointer(val))
         {
             MemIndexPage *p = reinterpret_cast<MemIndexPage *>(val);
             val = EncodeFilePageId(p->GetFilePageId());
         }
         PutVarint64(&dst, val);
+        if (yield && i % 512 == 0)
+        {
+            ThdTask()->YieldToNextRound();
+        }
     }
 }
 

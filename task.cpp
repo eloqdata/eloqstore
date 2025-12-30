@@ -26,6 +26,12 @@ void KvTask::Yield()
     shard->main_ = shard->main_.resume();
 }
 
+void KvTask::YieldToNextRound()
+{
+    shard->tasks_to_run_next_round_.Enqueue(this);
+    shard->main_ = shard->main_.resume();
+}
+
 void KvTask::Resume()
 {
     // Resume the task only if it is blocked.

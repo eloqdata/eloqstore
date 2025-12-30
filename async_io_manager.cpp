@@ -233,7 +233,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
 {
     assert(page_ids.size() <= max_read_pages_batch);
 
-    struct ReadReq : public BaseReq
+    struct ReadReq : BaseReq
     {
         ReadReq() = default;
         ReadReq(KvTask *task, LruFD::Ref fd, uint32_t offset)
@@ -242,10 +242,11 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
               offset_(offset),
               page_(true) {};
 
-        LruFD::Ref fd_ref_;
-        uint32_t offset_;
-        Page page_{false};
         bool done_{false};
+        // no need to construct
+        uint32_t offset_;
+        LruFD::Ref fd_ref_;
+        Page page_{false};
     };
 
     // ReadReq is a temporary object, so we allocate it on stack.

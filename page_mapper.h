@@ -1,29 +1,68 @@
 #pragma once
 
-#include <cstdint>
 #include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
+#include "task.h"
 #include "types.h"
 
 namespace eloqstore
 {
 class IndexPageManager;
+class MappingArena;
 class MemIndexPage;
 class ManifestBuilder;
 struct KvOptions;
 
 struct MappingSnapshot
 {
-    MappingSnapshot(IndexPageManager *idx_mgr, const TableIdent *tbl_id);
+    class MappingTbl
+    {
+    public:
+        MappingTbl() = default;
+        explicit MappingTbl(std::vector<uint64_t> tbl);
+        MappingTbl(MappingTbl &&) = default;
+        MappingTbl &operator=(MappingTbl &&) = default;
+        MappingTbl(const MappingTbl &) = delete;
+        MappingTbl &operator=(const MappingTbl &) = delete;
+
+        void Clear();
+        void Reserve(size_t n);
+        size_t size() const;
+        size_t capacity() const;
+        void StartCopying();
+        void FinishCopying();
+        void ApplyChanges();
+
+        void Set(PageId page_id, uint64_t value);
+        PageId PushBack(uint64_t value);
+        uint64_t Get(PageId page_id) const;
+        std::vector<uint64_t> &Base();
+        const std::vector<uint64_t> &Base() const;
+        void ApplyPendingTo(MappingTbl &dst) const;
+
+    private:
+        void EnsureSize(PageId page_id);
+
+        bool under_copying_{false};
+        absl::flat_hash_map<PageId, uint64_t> changes_;
+        std::vector<uint64_t> base_;
+        size_t logical_size_{0};
+    };
+
     MappingSnapshot(IndexPageManager *idx_mgr,
                     const TableIdent *tbl_id,
-                    std::vector<uint64_t> tbl)
+                    MappingTbl tbl,
+                    MappingArena *arena = nullptr)
         : idx_mgr_(idx_mgr),
           tbl_ident_(tbl_id),
-          mapping_tbl_(std::move(tbl)) {};
+          arena_(arena),
+          mapping_tbl_(std::move(tbl))
+    {
+    }
     ~MappingSnapshot();
 
     static constexpr uint8_t TypeBits = 3;
@@ -65,8 +104,7 @@ struct MappingSnapshot
 
     IndexPageManager *idx_mgr_;
     const TableIdent *tbl_ident_;
-
-    std::vector<uint64_t> mapping_tbl_;
+    MappingArena *arena_{nullptr};
 
     /**
      * @brief A list of file pages to be freed in this mapping snapshot.
@@ -81,6 +119,23 @@ struct MappingSnapshot
      * file pages are safely reused without risk of premature reclamation.
      */
     std::shared_ptr<MappingSnapshot> next_snapshot_{nullptr};
+    MappingTbl mapping_tbl_;
+};
+
+class MappingArena
+{
+public:
+    explicit MappingArena(size_t max_cached = 32) : max_cached_(max_cached)
+    {
+        pool_.reserve(max_cached_);
+    }
+
+    MappingSnapshot::MappingTbl Get();
+    void Return(MappingSnapshot::MappingTbl tbl);
+
+private:
+    const size_t max_cached_;
+    std::vector<MappingSnapshot::MappingTbl> pool_;
 };
 
 /**
@@ -202,13 +257,13 @@ public:
     std::shared_ptr<MappingSnapshot> GetMappingSnapshot() const;
     MappingSnapshot *GetMapping() const;
     void UpdateMapping(PageId page_id, FilePageId file_page_id);
-    uint32_t UseCount();
+    uint32_t UseCount() const;
 #ifndef NDEBUG
     bool DebugStat() const;
 #endif
 private:
     const KvOptions *Options() const;
-    std::vector<uint64_t> &Mapping();
+    MappingSnapshot::MappingTbl &Mapping();
 
     std::shared_ptr<MappingSnapshot> mapping_;
     PageId free_page_head_{MaxPageId};

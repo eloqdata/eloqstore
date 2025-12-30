@@ -99,6 +99,10 @@ KvError WriteTask::WritePage(VarPage page, FilePageId file_page_id)
             err = FlushBatchPages();
             CHECK_KV_ERR(err);
         }
+        else
+        {
+            YieldToNextRound();
+        }
     }
     else
     {
@@ -109,6 +113,10 @@ KvError WriteTask::WritePage(VarPage page, FilePageId file_page_id)
             // Avoid long running WriteTask block ReadTask/ScanTask
             err = WaitWrite();
             CHECK_KV_ERR(err);
+        }
+        else
+        {
+            YieldToNextRound();
         }
     }
     return KvError::NoError;

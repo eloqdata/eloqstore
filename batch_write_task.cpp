@@ -332,7 +332,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         err = ApplyOnePage(cidx, now_ms);
         CHECK_KV_ERR(err);
     }
-    // Flush all dirty leaf data pages in leaf_triple_ .
+    // Flush all dirty leaf data pages in leaf_triple_.
     assert(TripleElement(2) == nullptr);
     err = ShiftLeafLink();
     CHECK_KV_ERR(err);
@@ -508,7 +508,6 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             prev_key = key;
             return KvError::NoError;
         });
-
     while (is_base_iter_valid && change_it != change_end_it)
     {
         std::string_view base_key = base_page_iter.Key();
@@ -1597,10 +1596,10 @@ KvError BatchWriteTask::Truncate(std::string_view trunc_pos)
         ttl_batch_.clear();
 
         MappingSnapshot *mapping = cow_meta_.mapper_->GetMapping();
-        auto &mapping_tbl = mapping->mapping_tbl_;
+        const auto &mapping_tbl = mapping->mapping_tbl_;
         for (PageId page_id = 0; page_id < mapping_tbl.size(); ++page_id)
         {
-            uint64_t val = mapping_tbl[page_id];
+            uint64_t val = mapping_tbl.Get(page_id);
             auto val_type = MappingSnapshot::GetValType(val);
             if (val_type == MappingSnapshot::ValType::Invalid ||
                 val_type == MappingSnapshot::ValType::PageId)

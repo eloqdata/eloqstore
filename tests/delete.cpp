@@ -143,6 +143,7 @@ TEST_CASE("upsert with expire timestamp", "[TTL]")
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     // Need a write operation to trigger the last clean operation.
     verify.Delete(0, 1);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     verify.Validate();
     // Make sure the last clean task finished.
     verify.Delete(0, 1);

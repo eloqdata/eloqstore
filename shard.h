@@ -8,6 +8,7 @@
 
 #include "circular_queue.h"
 #include "eloq_store.h"
+#include "page_mapper.h"
 #include "task_manager.h"
 
 // https://github.com/cameron314/concurrentqueue/issues/280
@@ -46,6 +47,7 @@ public:
     boost::context::continuation main_;
     KvTask *running_;
     CircularQueue<KvTask *> ready_tasks_;
+    CircularQueue<KvTask *> tasks_to_run_next_round_;
 
 private:
     void WorkLoop();

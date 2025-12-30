@@ -18,6 +18,8 @@ namespace eloqstore
 class KvTask;
 class PageMapper;
 
+class MappingArena;
+
 class IndexPageManager
 {
 public:
@@ -63,14 +65,9 @@ public:
                       std::string_view key,
                       PageId &result);
 
-    KvError SeekIndex(MappingSnapshot *mapping,
-                      PageId page_id,
-                      std::string_view key,
-                      std::span<PageId> results,
-                      size_t &result_size);
-
     const KvOptions *Options() const;
     AsyncIoManager *IoMgr() const;
+    MappingArena *MapperArena();
 
     void EvictRootIfEmpty(const TableIdent &tbl_id);
 
@@ -122,5 +119,6 @@ private:
     std::unordered_map<TableIdent, RootMeta> tbl_roots_;
 
     AsyncIoManager *io_manager_;
+    MappingArena mapping_arena_;
 };
 }  // namespace eloqstore

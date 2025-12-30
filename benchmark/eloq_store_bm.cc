@@ -151,7 +151,7 @@ void BMResult::Wait(uint64_t start_ts)
                          .count();
 
         // Terminate the test.
-        bm_terminated_.store(true, std::memory_order_acq_rel);
+        bm_terminated_.store(true, std::memory_order_release);
         // Wait all the request finished.
         LOG(INFO) << "Waitting all the worker finished.";
         lk.lock();

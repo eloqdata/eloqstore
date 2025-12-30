@@ -20,11 +20,13 @@
 namespace eloqstore
 {
 void GetRetainedFiles(std::unordered_set<FileId> &result,
-                      const std::vector<uint64_t> &tbl,
+                      const MappingSnapshot::MappingTbl &tbl,
                       uint8_t pages_per_file_shift)
 {
-    for (uint64_t val : tbl)
+    const size_t tbl_size = tbl.size();
+    for (PageId page_id = 0; page_id < tbl_size; ++page_id)
     {
+        uint64_t val = tbl.Get(page_id);
         if (MappingSnapshot::IsFilePageId(val))
         {
             FilePageId fp_id = MappingSnapshot::DecodeId(val);
@@ -32,7 +34,7 @@ void GetRetainedFiles(std::unordered_set<FileId> &result,
             result.emplace(file_id);
         }
     }
-};
+}
 
 namespace FileGarbageCollector
 {
