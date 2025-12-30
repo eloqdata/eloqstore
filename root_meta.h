@@ -7,6 +7,7 @@
 #include <unordered_set>
 
 #include "compression.h"
+#include "manifest_buffer.h"
 #include "mem_index_page.h"
 #include "page_mapper.h"
 #include "task.h"
@@ -41,7 +42,7 @@ public:
 
 private:
     static uint64_t CalcChecksum(std::string_view content);
-    std::string buff_;
+    ManifestBuffer buff_;
 };
 
 struct CowRootMeta

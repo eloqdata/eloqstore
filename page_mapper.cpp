@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "coding.h"
+#include "manifest_buffer.h"
 #include "index_page_manager.h"
 #include "task.h"
 
@@ -470,7 +471,7 @@ MappingSnapshot::ValType MappingSnapshot::GetValType(uint64_t val)
     return ValType(val & TypeMask);
 }
 
-void MappingSnapshot::Serialize(std::string &dst) const
+void MappingSnapshot::Serialize(ManifestBuffer &dst) const
 {
     const size_t tbl_size = mapping_tbl_.size();
     const bool can_yield = shard != nullptr;
@@ -482,7 +483,7 @@ void MappingSnapshot::Serialize(std::string &dst) const
             MemIndexPage *p = reinterpret_cast<MemIndexPage *>(val);
             val = EncodeFilePageId(p->GetFilePageId());
         }
-        PutVarint64(&dst, val);
+        dst.AppendVarint64(val);
         if (can_yield && (i & 511) == 0)
         {
             ThdTask()->YieldToNextRound();

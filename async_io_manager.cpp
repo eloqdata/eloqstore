@@ -1484,7 +1484,7 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
                               std::string_view content)
 {
     std::string tmpfile = std::string(name) + TmpSuffix;
-    uint64_t tmp_oflags = O_CREAT | O_TRUNC | O_RDWR;
+    uint64_t tmp_oflags = O_CREAT | O_TRUNC | O_RDWR | O_DIRECT;
     int tmp_fd = OpenAt(dir_fd.FdPair(), tmpfile.c_str(), tmp_oflags, 0644);
     if (tmp_fd < 0)
     {
@@ -1492,12 +1492,50 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
         return tmp_fd;
     }
 
-    int res = Write({tmp_fd, false}, content.data(), content.size(), 0);
+    const char *write_ptr = content.data();
+    size_t io_size = content.size();
+    std::unique_ptr<char, decltype(&::free)> aligned_snapshot(nullptr, &::free);
+    if (io_size > 0)
+    {
+        size_t aligned_size = (io_size + page_align - 1) & ~(page_align - 1);
+        char *buf = static_cast<char *>(std::aligned_alloc(page_align, aligned_size));
+        if (buf == nullptr)
+        {
+            Close(tmp_fd);
+            LOG(ERROR) << "aligned_alloc failed, size " << aligned_size;
+            return -ENOMEM;
+        }
+        std::memcpy(buf, content.data(), io_size);
+        if (aligned_size > io_size)
+        {
+            std::memset(buf + io_size, 0, aligned_size - io_size);
+        }
+        aligned_snapshot.reset(buf);
+        write_ptr = aligned_snapshot.get();
+        io_size = aligned_size;
+    }
+
+    int res = 0;
+    if (io_size > 0)
+    {
+        res = Write({tmp_fd, false}, write_ptr, io_size, 0);
+    }
     if (res < 0)
     {
         Close(tmp_fd);
         LOG(ERROR) << "write temporary file failed " << strerror(-res);
         return res;
+    }
+    if (!content.empty() && io_size != content.size())
+    {
+        res = ftruncate(tmp_fd, content.size());
+        if (res < 0)
+        {
+            int err = errno;
+            Close(tmp_fd);
+            LOG(ERROR) << "truncate temporary file failed " << strerror(err);
+            return -err;
+        }
     }
     TEST_KILL_POINT("AtomicWriteFile:Sync")
     res = Fdatasync({tmp_fd, false});

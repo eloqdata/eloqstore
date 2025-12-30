@@ -13,19 +13,19 @@ namespace eloqstore
 
 ManifestBuilder::ManifestBuilder()
 {
-    buff_.resize(header_bytes);
+    buff_.Resize(header_bytes);
 }
 
 void ManifestBuilder::UpdateMapping(PageId page_id, FilePageId file_page_id)
 {
-    PutVarint32(&buff_, page_id);
-    PutVarint64(&buff_, MappingSnapshot::EncodeFilePageId(file_page_id));
+    buff_.AppendVarint32(page_id);
+    buff_.AppendVarint64(MappingSnapshot::EncodeFilePageId(file_page_id));
 }
 
 void ManifestBuilder::DeleteMapping(PageId page_id)
 {
-    PutVarint32(&buff_, page_id);
-    PutVarint64(&buff_, MappingSnapshot::InvalidValue);
+    buff_.AppendVarint32(page_id);
+    buff_.AppendVarint64(MappingSnapshot::InvalidValue);
 }
 
 std::string_view ManifestBuilder::Snapshot(PageId root_id,
@@ -35,41 +35,41 @@ std::string_view ManifestBuilder::Snapshot(PageId root_id,
                                            std::string_view dict_bytes)
 {
     Reset();
-    buff_.reserve(4 + 8 * (mapping->mapping_tbl_.size() + 1));
-    PutVarint64(&buff_, max_fp_id);
-    PutVarint32(&buff_, dict_bytes.size());
-    buff_.append(dict_bytes.data(), dict_bytes.size());
+    buff_.Reserve(4 + 8 * (mapping->mapping_tbl_.size() + 1));
+    buff_.AppendVarint64(max_fp_id);
+    buff_.AppendVarint32(dict_bytes.size());
+    buff_.Append(dict_bytes.data(), dict_bytes.size());
     mapping->Serialize(buff_);
     return Finalize(root_id, ttl_root);
 }
 
 void ManifestBuilder::Reset()
 {
-    buff_.resize(header_bytes);
+    buff_.Resize(header_bytes);
 }
 
 bool ManifestBuilder::Empty() const
 {
-    return buff_.size() <= header_bytes;
+    return buff_.Size() <= header_bytes;
 }
 
 uint32_t ManifestBuilder::CurrentSize() const
 {
-    return buff_.size();
+    return buff_.Size();
 }
 
 std::string_view ManifestBuilder::Finalize(PageId new_root, PageId ttl_root)
 {
-    EncodeFixed32(buff_.data() + offset_root, new_root);
-    EncodeFixed32(buff_.data() + offset_ttl_root, ttl_root);
+    EncodeFixed32(buff_.Data() + offset_root, new_root);
+    EncodeFixed32(buff_.Data() + offset_ttl_root, ttl_root);
 
-    const uint32_t payload_len = buff_.size() - header_bytes;
-    EncodeFixed32(buff_.data() + offset_len, payload_len);
+    const uint32_t payload_len = buff_.Size() - header_bytes;
+    EncodeFixed32(buff_.Data() + offset_len, payload_len);
 
-    const std::string_view content(buff_.data() + checksum_bytes,
-                                   buff_.size() - checksum_bytes);
-    EncodeFixed64(buff_.data(), CalcChecksum(content));
-    return buff_;
+    const std::string_view content(buff_.Data() + checksum_bytes,
+                                   buff_.Size() - checksum_bytes);
+    EncodeFixed64(buff_.Data(), CalcChecksum(content));
+    return buff_.View();
 }
 
 bool ManifestBuilder::ValidateChecksum(std::string_view record)

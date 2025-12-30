@@ -15,6 +15,7 @@ class IndexPageManager;
 class MappingArena;
 class MemIndexPage;
 class ManifestBuilder;
+class ManifestBuffer;
 struct KvOptions;
 
 struct MappingSnapshot
@@ -100,7 +101,7 @@ struct MappingSnapshot
     static uint64_t EncodePageId(PageId page_id);
     static uint64_t DecodeId(uint64_t val);
 
-    void Serialize(std::string &dst) const;
+    void Serialize(ManifestBuffer &dst) const;
 
     IndexPageManager *idx_mgr_;
     const TableIdent *tbl_ident_;
