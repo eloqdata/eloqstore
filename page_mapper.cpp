@@ -12,6 +12,7 @@
 
 #include "coding.h"
 #include "index_page_manager.h"
+#include "task.h"
 
 namespace eloqstore
 {
@@ -471,8 +472,8 @@ MappingSnapshot::ValType MappingSnapshot::GetValType(uint64_t val)
 
 void MappingSnapshot::Serialize(std::string &dst) const
 {
-    bool yield = ThdTask() != nullptr;
     const size_t tbl_size = mapping_tbl_.size();
+    const bool can_yield = shard != nullptr;
     for (PageId i = 0; i < tbl_size; i++)
     {
         uint64_t val = mapping_tbl_.Get(i);
@@ -482,7 +483,7 @@ void MappingSnapshot::Serialize(std::string &dst) const
             val = EncodeFilePageId(p->GetFilePageId());
         }
         PutVarint64(&dst, val);
-        if (yield && i % 512 == 0)
+        if (can_yield && (i & 511) == 0)
         {
             ThdTask()->YieldToNextRound();
         }
