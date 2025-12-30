@@ -173,7 +173,7 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
                                               Page page)
 {
     auto [file_id, offset] = ConvFilePageId(fp_id);
-    auto [fd_ref, err] = OpenFD(tbl_id, file_id);
+    auto [fd_ref, err] = OpenFD(tbl_id, file_id, true);
     if (err != KvError::NoError)
     {
         return {std::move(page), err};
@@ -257,7 +257,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
     for (uint8_t i = 0; FilePageId fp_id : page_ids)
     {
         auto [file_id, offset] = ConvFilePageId(fp_id);
-        auto [fd_ref, err] = OpenFD(tbl_id, file_id);
+        auto [fd_ref, err] = OpenFD(tbl_id, file_id, true);
         if (err != KvError::NoError)
         {
             return err;
@@ -384,7 +384,7 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
                               FilePageId file_page_id)
 {
     auto [file_id, offset] = ConvFilePageId(file_page_id);
-    auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id);
+    auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id, true);
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;
     TEST_KILL_POINT_WEIGHT("WritePage", 1000)
@@ -407,7 +407,7 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
                                FilePageId first_fp_id)
 {
     auto [file_id, offset] = ConvFilePageId(first_fp_id);
-    auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id);
+    auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id, true);
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;
 
@@ -730,6 +730,10 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     }
     else
     {
+        if (direct == false)
+        {
+            LOG(WARNING) << "Open " << file_id << " with false";
+        }
         fd = OpenFile(tbl_id, file_id, direct);
         if (fd == -ENOENT && create)
         {
@@ -1464,7 +1468,7 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
                                    uint64_t manifest_size)
 {
     assert(manifest_size > 0);
-    auto [fd_ref, err] = OpenFD(tbl_id, LruFD::kManifest);
+    auto [fd_ref, err] = OpenFD(tbl_id, LruFD::kManifest, true);
     CHECK_KV_ERR(err);
 
     TEST_KILL_POINT_WEIGHT("AppendManifest:Write", 10)
