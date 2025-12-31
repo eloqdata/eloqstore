@@ -173,7 +173,6 @@ public:
 
 private:
     std::unique_ptr<AsyncHttpManager> async_http_mgr_;
-    DirectIoBufferPool *buffer_pool_;
 };
 
 struct CloudPathInfo

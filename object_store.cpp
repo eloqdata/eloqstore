@@ -1246,16 +1246,9 @@ void AsyncHttpManager::ProcessCompletedRequests()
             {
                 auto upload_task = static_cast<ObjectStore::UploadTask *>(task);
                 CHECK(shard != nullptr);
-                if (shard != nullptr)
-                {
-                    reinterpret_cast<CloudStoreMgr *>(shard->IoManager())
-                        ->GetDirectIoBufferPool()
-                        .Release(std::move(upload_task->data_buffer_));
-                }
-                else
-                {
-                    upload_task->data_buffer_.clear();
-                }
+                reinterpret_cast<CloudStoreMgr *>(shard->IoManager())
+                    ->GetDirectIoBufferPool()
+                    .Release(std::move(upload_task->data_buffer_));
                 upload_task->buffer_offset_ = 0;
             }
 
