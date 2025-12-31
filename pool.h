@@ -11,8 +11,7 @@ template <typename T>
 class Pool
 {
 public:
-    explicit Pool(size_t max_cached = 0)
-        : max_cached_(max_cached)
+    explicit Pool(size_t max_cached = 0) : max_cached_(max_cached)
     {
         pool_.reserve(max_cached_);
     }
@@ -44,4 +43,3 @@ private:
 };
 
 }  // namespace eloqstore
-

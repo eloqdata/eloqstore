@@ -22,9 +22,9 @@
 // https://github.com/cameron314/concurrentqueue/issues/280
 #undef BLOCK_SIZE
 
-#include "direct_io_buffer_pool.h"
 #include "concurrentqueue/concurrentqueue.h"
 #include "direct_io_buffer.h"
+#include "direct_io_buffer_pool.h"
 #include "error.h"
 #include "kv_options.h"
 #include "object_store.h"

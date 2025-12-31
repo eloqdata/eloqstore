@@ -88,6 +88,7 @@ public:
         {
             kv_task_ = task;
         }
+
     protected:
         friend class ObjectStore;
         friend class AsyncHttpManager;
@@ -216,8 +217,7 @@ public:
 class AsyncHttpManager
 {
 public:
-    AsyncHttpManager(const KvOptions *options,
-                     DirectIoBufferPool *buffer_pool);
+    AsyncHttpManager(const KvOptions *options, DirectIoBufferPool *buffer_pool);
     ~AsyncHttpManager();
 
     void SubmitRequest(ObjectStore::Task *task);

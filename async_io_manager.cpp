@@ -3151,8 +3151,7 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
             upload_slots_waiting_.Wait(current_task);
         }
 
-        size_t batch =
-            std::min(max_upload_batch, pending.size() - processed);
+        size_t batch = std::min(max_upload_batch, pending.size() - processed);
         size_t span_size =
             std::min(max_upload_batch - inflight_upload_files_, batch);
         auto span = std::span<ObjectStore::UploadTask *>(
@@ -3600,9 +3599,8 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
                        << path_str;
             status = KvError::InvalidArgs;
         }
-        else if (alignment == 0 ||
-                 (reinterpret_cast<uintptr_t>(write_ptr) &
-                  (alignment - 1)) != 0)
+        else if (alignment == 0 || (reinterpret_cast<uintptr_t>(write_ptr) &
+                                    (alignment - 1)) != 0)
         {
             LOG(ERROR) << "direct IO buffer not aligned for write: "
                        << path_str;

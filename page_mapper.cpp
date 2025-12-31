@@ -167,8 +167,8 @@ PageMapper::PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident)
     auto *arena = idx_mgr->MapperArena();
     MappingSnapshot::MappingTbl tbl =
         arena == nullptr ? MappingSnapshot::MappingTbl() : arena->Acquire();
-    mapping_ = std::make_shared<MappingSnapshot>(
-        idx_mgr, tbl_ident, std::move(tbl));
+    mapping_ =
+        std::make_shared<MappingSnapshot>(idx_mgr, tbl_ident, std::move(tbl));
 
     auto &mapping_tbl = mapping_->mapping_tbl_;
     mapping_tbl.reserve(idx_mgr->Options()->init_page_count);
@@ -183,9 +183,8 @@ PageMapper::PageMapper(const PageMapper &rhs)
     auto *arena = shard->IndexManager()->MapperArena();
     MappingSnapshot::MappingTbl tbl =
         arena == nullptr ? MappingSnapshot::MappingTbl() : arena->Acquire();
-    mapping_ = std::make_shared<MappingSnapshot>(rhs.mapping_->idx_mgr_,
-                                                 rhs.mapping_->tbl_ident_,
-                                                 std::move(tbl));
+    mapping_ = std::make_shared<MappingSnapshot>(
+        rhs.mapping_->idx_mgr_, rhs.mapping_->tbl_ident_, std::move(tbl));
 
     auto &src_tbl = rhs.mapping_->mapping_tbl_;
     src_tbl.StartCopying();

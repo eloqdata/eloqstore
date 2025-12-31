@@ -51,10 +51,8 @@ bool ParseJsonListResponse(std::string_view payload,
 {
     Json::Value response;
     Json::Reader reader;
-    if (!reader.parse(payload.data(),
-                      payload.data() + payload.size(),
-                      response,
-                      false))
+    if (!reader.parse(
+            payload.data(), payload.data() + payload.size(), response, false))
     {
         return false;
     }
@@ -787,8 +785,7 @@ ObjectStore::ObjectStore(const KvOptions *options,
             g_aws_cleanup_registered = true;
         }
     }
-    async_http_mgr_ =
-        std::make_unique<AsyncHttpManager>(options, buffer_pool_);
+    async_http_mgr_ = std::make_unique<AsyncHttpManager>(options, buffer_pool_);
 }
 
 ObjectStore::~ObjectStore()

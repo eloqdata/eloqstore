@@ -257,8 +257,7 @@ KvError WriteTask::FlushManifest()
         const size_t direct_io_size = wal_builder_.DirectIoSize();
         assert(direct_io_size >= snapshot.size());
 
-        err = IoMgr()->SwitchManifest(
-            tbl_ident_, snapshot, direct_io_size);
+        err = IoMgr()->SwitchManifest(tbl_ident_, snapshot, direct_io_size);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
         cow_meta_.compression_->ClearDirty();
@@ -288,8 +287,7 @@ KvError WriteTask::FlushManifest()
         const size_t direct_io_size = wal_builder_.DirectIoSize();
         assert(direct_io_size >= snapshot.size());
 
-        err = IoMgr()->SwitchManifest(
-            tbl_ident_, snapshot, direct_io_size);
+        err = IoMgr()->SwitchManifest(tbl_ident_, snapshot, direct_io_size);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
         cow_meta_.compression_->ClearDirty();
