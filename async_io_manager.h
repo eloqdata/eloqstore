@@ -26,7 +26,6 @@
 #include "direct_io_buffer.h"
 #include "direct_io_buffer_pool.h"
 #include "error.h"
-#include "kv_options.h"
 #include "object_store.h"
 #include "prewarm_task.h"
 #include "task.h"
@@ -434,9 +433,6 @@ public:
     KvError WriteFile(const TableIdent &tbl_id,
                       std::string_view filename,
                       const DirectIoBuffer &buffer);
-    KvError WriteFile(const TableIdent &tbl_id,
-                      std::string_view filename,
-                      std::string_view data);
     size_t LocalCacheRemained() const
     {
         return shard_local_space_limit_ - used_local_space_;
@@ -458,6 +454,7 @@ public:
     size_t GetPrewarmFilesPulled() const;
     void RecycleBuffers(std::vector<DirectIoBuffer> &buffers);
     void RecycleBuffer(DirectIoBuffer buffer);
+    DirectIoBufferPool &GetDirectIoBufferPool();
     PrewarmStats &GetPrewarmStats()
     {
         return prewarm_stats_;

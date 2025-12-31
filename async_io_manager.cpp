@@ -1932,7 +1932,7 @@ CloudStoreMgr::CloudStoreMgr(const KvOptions *opts, uint32_t fd_limit)
     : IouringMgr(opts, fd_limit),
       file_cleaner_(this),
       direct_io_buffer_pool_(opts->direct_io_buffer_pool_size),
-      obj_store_(opts, &direct_io_buffer_pool_)
+      obj_store_(opts)
 {
     lru_file_head_.next_ = &lru_file_tail_;
     lru_file_tail_.prev_ = &lru_file_head_;
@@ -2112,6 +2112,11 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
     }
 
     return KvError::NoError;
+}
+
+DirectIoBufferPool &CloudStoreMgr::GetDirectIoBufferPool()
+{
+    return direct_io_buffer_pool_;
 }
 
 std::pair<size_t, size_t> CloudStoreMgr::TrimRestoredCacheUsage()
@@ -3647,16 +3652,4 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
     }
     return status;
 }
-
-KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
-                                 std::string_view filename,
-                                 std::string_view data)
-{
-    DirectIoBuffer temp = direct_io_buffer_pool_.Acquire();
-    temp.assign(data);
-    KvError status = WriteFile(tbl_id, filename, temp);
-    direct_io_buffer_pool_.Release(std::move(temp));
-    return status;
-}
-
 }  // namespace eloqstore

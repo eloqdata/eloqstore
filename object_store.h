@@ -17,6 +17,7 @@
 #include "direct_io_buffer_pool.h"
 #include "error.h"
 #include "kv_options.h"
+#include "pool.h"
 #include "task.h"
 #include "types.h"
 
@@ -35,11 +36,11 @@ class CloudStoreMgr;
 class AsyncHttpManager;
 class AsyncIoManager;
 
+using DirectIoBufferPool = Pool<DirectIoBuffer>;
 class ObjectStore
 {
 public:
-    explicit ObjectStore(const KvOptions *options,
-                         DirectIoBufferPool *buffer_pool);
+    explicit ObjectStore(const KvOptions *options);
     ~ObjectStore();
 
     AsyncHttpManager *GetHttpManager()
@@ -217,7 +218,7 @@ public:
 class AsyncHttpManager
 {
 public:
-    AsyncHttpManager(const KvOptions *options, DirectIoBufferPool *buffer_pool);
+    AsyncHttpManager();
     ~AsyncHttpManager();
 
     void SubmitRequest(ObjectStore::Task *task);
@@ -269,8 +270,6 @@ private:
     std::unordered_map<CURL *, ObjectStore::Task *> active_requests_;
     std::multimap<std::chrono::steady_clock::time_point, ObjectStore::Task *>
         pending_retries_;
-    const KvOptions *options_;
-    DirectIoBufferPool *buffer_pool_;
     int running_handles_{0};
 
     CloudPathInfo cloud_path_;

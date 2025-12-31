@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "async_io_manager.h"
+#include "shard.h"
 #include "task.h"
 #include "utils.h"
 
@@ -766,9 +767,7 @@ std::unique_ptr<CloudBackend> CreateBackend(const KvOptions *options,
 
 }  // namespace
 
-ObjectStore::ObjectStore(const KvOptions *options,
-                         DirectIoBufferPool *buffer_pool)
-    : buffer_pool_(buffer_pool)
+ObjectStore::ObjectStore(const KvOptions *options)
 {
     curl_global_init(CURL_GLOBAL_DEFAULT);
     {
@@ -785,7 +784,7 @@ ObjectStore::ObjectStore(const KvOptions *options,
             g_aws_cleanup_registered = true;
         }
     }
-    async_http_mgr_ = std::make_unique<AsyncHttpManager>(options, buffer_pool_);
+    async_http_mgr_ = std::make_unique<AsyncHttpManager>();
 }
 
 ObjectStore::~ObjectStore()
@@ -812,17 +811,16 @@ bool ObjectStore::ParseListObjectsResponse(
         payload, strip_prefix, objects, infos, next_continuation_token);
 }
 
-AsyncHttpManager::AsyncHttpManager(const KvOptions *options,
-                                   DirectIoBufferPool *buffer_pool)
-    : options_(options), buffer_pool_(buffer_pool)
+AsyncHttpManager::AsyncHttpManager()
 {
-    if (options_->cloud_store_path.empty())
+    const KvOptions *option = Options();
+    if (option->cloud_store_path.empty())
     {
         LOG(FATAL) << "cloud_store_path must be set when using cloud store";
     }
-    cloud_path_ = ParseCloudPath(options_->cloud_store_path);
+    cloud_path_ = ParseCloudPath(option->cloud_store_path);
 
-    backend_ = CreateBackend(options_, cloud_path_);
+    backend_ = CreateBackend(option, cloud_path_);
     CHECK(backend_) << "Failed to initialize cloud backend";
 
     multi_handle_ = curl_multi_init();
@@ -1247,9 +1245,12 @@ void AsyncHttpManager::ProcessCompletedRequests()
             if (task->TaskType() == ObjectStore::Task::Type::AsyncUpload)
             {
                 auto upload_task = static_cast<ObjectStore::UploadTask *>(task);
-                if (buffer_pool_ != nullptr)
+                CHECK(shard != nullptr);
+                if (shard != nullptr)
                 {
-                    buffer_pool_->Release(std::move(upload_task->data_buffer_));
+                    reinterpret_cast<CloudStoreMgr *>(shard->IoManager())
+                        ->GetDirectIoBufferPool()
+                        .Release(std::move(upload_task->data_buffer_));
                 }
                 else
                 {
