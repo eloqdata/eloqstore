@@ -2957,7 +2957,7 @@ KvError CloudStoreMgr::ReadArchiveFileAndDelete(const TableIdent &tbl_id,
                                                 const std::string &filename,
                                                 std::string &content)
 {
-    KvError read_err = ReadFile(tbl_id, filename, content);
+    KvError read_err = IouringMgr::ReadFile(tbl_id, filename, content);
     if (read_err != KvError::NoError)
     {
         return read_err;
