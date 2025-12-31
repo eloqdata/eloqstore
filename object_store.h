@@ -14,7 +14,6 @@
 #include <vector>
 
 #include "direct_io_buffer.h"
-#include "direct_io_buffer_pool.h"
 #include "error.h"
 #include "kv_options.h"
 #include "pool.h"

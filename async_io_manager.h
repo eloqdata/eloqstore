@@ -24,7 +24,6 @@
 
 #include "concurrentqueue/concurrentqueue.h"
 #include "direct_io_buffer.h"
-#include "direct_io_buffer_pool.h"
 #include "error.h"
 #include "object_store.h"
 #include "prewarm_task.h"
@@ -477,9 +476,9 @@ private:
     KvError DownloadFile(const TableIdent &tbl_id, FileId file_id);
     KvError UploadFiles(const TableIdent &tbl_id,
                         std::vector<std::string> filenames);
-    KvError ReadFiles(const TableIdent &tbl_id,
-                      std::span<const std::string> filenames,
-                      std::vector<DirectIoBuffer> &buffers);
+    KvError ReadFile(const TableIdent &tbl_id,
+                     const std::string &filename,
+                     DirectIoBuffer &buffer);
 
     bool DequeClosedFile(const FileKey &key);
     void EnqueClosedFile(FileKey key);

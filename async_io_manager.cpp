@@ -2702,6 +2702,7 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id, FileId file_id)
 
     // Set KvTask pointer and initialize inflight_io_
     download_task.SetKvTask(current_task);
+    download_task.response_data_ = std::move(direct_io_buffer_pool_.Acquire());
 
     obj_store_.GetHttpManager()->SubmitRequest(&download_task);
     current_task->WaitIo();
@@ -2732,393 +2733,131 @@ void CloudStoreMgr::RecycleBuffer(DirectIoBuffer buffer)
     direct_io_buffer_pool_.Release(std::move(buffer));
 }
 
-KvError CloudStoreMgr::ReadFiles(const TableIdent &tbl_id,
-                                 std::span<const std::string> filenames,
-                                 std::vector<DirectIoBuffer> &buffers)
+KvError CloudStoreMgr::ReadFile(const TableIdent &tbl_id,
+                                const std::string &filename,
+                                DirectIoBuffer &buffer)
 {
-    if (filenames.empty())
+    auto [type, id_view] = ParseFileName(filename);
+    bool is_data_file = type == FileNameData;
+
+    if (!is_data_file && type != FileNameManifest)
     {
-        return KvError::NoError;
+        LOG(ERROR) << "Unsupported file for upload: " << filename;
+        return KvError::InvalidArgs;
     }
 
-    struct UploadFileCtx
+    if (is_data_file)
     {
-        enum class Stage
+        uint64_t parsed = 0;
+        auto conv = std::from_chars(
+            id_view.data(), id_view.data() + id_view.size(), parsed);
+        if (conv.ec != std::errc{} ||
+            conv.ptr != id_view.data() + id_view.size())
         {
-            NeedOpen,
-            NeedStat,
-            NeedRead,
-            NeedClose,
-            Done
+            LOG(ERROR) << "Invalid data file name: " << filename;
+            return KvError::InvalidArgs;
+        }
+    }
+
+    DirectIoBuffer local_buffer = std::move(direct_io_buffer_pool_.Acquire());
+    fs::path abs_path = tbl_id.StorePath(options_->store_path);
+    abs_path /= filename;
+
+    int fd = OpenAt({AT_FDCWD, false}, abs_path.c_str(), O_RDONLY | O_DIRECT);
+    if (fd < 0)
+    {
+        LOG(ERROR) << "Failed to open file for upload: " << abs_path
+                   << ", error=" << strerror(-fd);
+        RecycleBuffer(std::move(local_buffer));
+        return ToKvError(fd);
+    }
+
+    size_t file_size = is_data_file ? options_->DataFileSize() : 0;
+    if (!is_data_file)
+    {
+        struct statx stx
+        {
         };
-
-        std::string abs_path_;
-        DirectIoBuffer *buffer_slot_{nullptr};
-        bool is_data_file_{false};
-        bool need_stat_{false};
-        bool buffer_ready_{false};
-        size_t file_size_{0};
-        size_t remaining_{0};
-        size_t read_offset_{0};
-        int fd_{-1};
-        struct statx stat_buf_
+        int stat_res = Statx(fd, "", &stx);
+        if (stat_res < 0)
         {
-        };
-        struct open_how open_how_
-        {
-        };
-        Stage stage_{Stage::NeedOpen};
-    };
-
-    struct OpenReq : BaseReq
-    {
-        OpenReq(KvTask *task, UploadFileCtx *ctx) : BaseReq(task), ctx_(ctx)
-        {
+            KvError err = ToKvError(stat_res);
+            LOG(ERROR) << "Failed to stat file for upload: " << abs_path
+                       << ", error=" << strerror(-stat_res);
+            if (int close_res = Close(fd); close_res < 0)
+            {
+                LOG(ERROR) << "Failed to close file after stat: " << abs_path
+                           << ", error=" << strerror(-close_res);
+            }
+            RecycleBuffer(std::move(local_buffer));
+            return err;
         }
-        UploadFileCtx *ctx_;
-    };
+        file_size = static_cast<size_t>(stx.stx_size);
+    }
 
-    struct StatReq : BaseReq
+    local_buffer.resize(file_size, false);
+    size_t remaining = local_buffer.padded_size();
+    size_t read_offset = 0;
+    FdIdx fd_idx{fd, false};
+    KvError status = KvError::NoError;
+    while (status == KvError::NoError && remaining > 0)
     {
-        StatReq(KvTask *task, UploadFileCtx *ctx) : BaseReq(task), ctx_(ctx)
+        int read_res = Read(
+            fd_idx, local_buffer.data() + read_offset, remaining, read_offset);
+        if (read_res < 0)
         {
+            status = ToKvError(read_res);
+            LOG(ERROR) << "Failed to read file for upload: " << abs_path
+                       << ", error=" << strerror(-read_res);
+            break;
         }
-        UploadFileCtx *ctx_;
-    };
-
-    struct ReadReq : BaseReq
-    {
-        ReadReq(KvTask *task, UploadFileCtx *ctx) : BaseReq(task), ctx_(ctx)
+        if (read_res == 0)
         {
+            if (read_offset >= file_size)
+            {
+                remaining = 0;
+            }
+            else
+            {
+                status = KvError::EndOfFile;
+                LOG(ERROR) << "Unexpected EOF while reading file for upload: "
+                           << abs_path;
+            }
+            break;
         }
-        UploadFileCtx *ctx_;
-    };
-
-    struct CloseReq : BaseReq
-    {
-        CloseReq(KvTask *task, UploadFileCtx *ctx) : BaseReq(task), ctx_(ctx)
+        read_offset += static_cast<size_t>(read_res);
+        if (remaining >= static_cast<size_t>(read_res))
         {
-        }
-        UploadFileCtx *ctx_;
-    };
-
-    RecycleBuffers(buffers);
-    buffers.resize(filenames.size());
-
-    std::vector<UploadFileCtx> ctxs;
-    ctxs.reserve(filenames.size());
-
-    auto emplace_ctx = [&](size_t idx, bool is_data_file) -> UploadFileCtx &
-    {
-        UploadFileCtx &ctx = ctxs.emplace_back();
-        ctx.is_data_file_ = is_data_file;
-        ctx.buffer_slot_ = &buffers[idx];
-        *ctx.buffer_slot_ = direct_io_buffer_pool_.Acquire();
-        ctx.abs_path_ =
-            (tbl_id.StorePath(options_->store_path) / filenames[idx]).string();
-        if (ctx.is_data_file_)
-        {
-            ctx.file_size_ = options_->DataFileSize();
+            remaining -= static_cast<size_t>(read_res);
         }
         else
         {
-            ctx.need_stat_ = true;
+            remaining = 0;
         }
-        return ctx;
-    };
-
-    for (size_t i = 0; i < filenames.size(); ++i)
-    {
-        const std::string &filename = filenames[i];
-        auto [type, id_view] = ParseFileName(filename);
-        if (type == FileNameData)
+        if (read_offset >= file_size)
         {
-            uint64_t parsed = 0;
-            auto conv = std::from_chars(
-                id_view.data(), id_view.data() + id_view.size(), parsed);
-            if (conv.ec != std::errc{} ||
-                conv.ptr != id_view.data() + id_view.size())
-            {
-                RecycleBuffers(buffers);
-                return KvError::InvalidArgs;
-            }
-            emplace_ctx(i, true);
-        }
-        else if (type == FileNameManifest)
-        {
-            emplace_ctx(i, false);
+            remaining = 0;
         }
     }
 
-    if (ctxs.empty())
-    {
-        return KvError::NoError;
-    }
-
-    KvError status = KvError::NoError;
-    auto register_error =
-        [&](UploadFileCtx &ctx, KvError err, const char *action)
+    if (int close_res = Close(fd); close_res < 0)
     {
         if (status == KvError::NoError)
         {
-            status = err;
-            LOG(ERROR) << "Failed to " << action
-                       << " for upload: " << ctx.abs_path_ << ": "
-                       << ErrorString(err);
+            status = ToKvError(close_res);
         }
-    };
-
-    std::vector<OpenReq> open_reqs;
-    std::vector<StatReq> stat_reqs;
-    std::vector<ReadReq> read_reqs;
-    std::vector<CloseReq> close_reqs;
-    open_reqs.reserve(ctxs.size());
-    stat_reqs.reserve(ctxs.size());
-    read_reqs.reserve(ctxs.size());
-    close_reqs.reserve(ctxs.size());
-
-    auto process_open = [&]() -> bool
-    {
-        open_reqs.clear();
-        for (UploadFileCtx &ctx : ctxs)
-        {
-            if (ctx.stage_ != UploadFileCtx::Stage::NeedOpen)
-            {
-                continue;
-            }
-            open_reqs.emplace_back(ThdTask(), &ctx);
-            io_uring_sqe *sqe =
-                GetSQE(UserDataType::BaseReq, &open_reqs.back());
-            ctx.open_how_ = {};
-            ctx.open_how_.flags = O_RDONLY | O_DIRECT;
-            io_uring_prep_openat2(
-                sqe, AT_FDCWD, ctx.abs_path_.c_str(), &ctx.open_how_);
-        }
-        if (open_reqs.empty())
-        {
-            return false;
-        }
-        ThdTask()->WaitIo();
-        for (OpenReq &req : open_reqs)
-        {
-            if (req.res_ < 0)
-            {
-                register_error(*req.ctx_, ToKvError(req.res_), "open file");
-                continue;
-            }
-            req.ctx_->fd_ = req.res_;
-            req.ctx_->stage_ = req.ctx_->need_stat_
-                                   ? UploadFileCtx::Stage::NeedStat
-                                   : UploadFileCtx::Stage::NeedRead;
-        }
-        return true;
-    };
-
-    auto process_stat = [&]() -> bool
-    {
-        stat_reqs.clear();
-        for (UploadFileCtx &ctx : ctxs)
-        {
-            if (ctx.stage_ != UploadFileCtx::Stage::NeedStat || ctx.fd_ < 0)
-            {
-                continue;
-            }
-            stat_reqs.emplace_back(ThdTask(), &ctx);
-            io_uring_sqe *sqe =
-                GetSQE(UserDataType::BaseReq, &stat_reqs.back());
-            io_uring_prep_statx(sqe,
-                                ctx.fd_,
-                                "",
-                                AT_EMPTY_PATH,
-                                STATX_BASIC_STATS,
-                                &ctx.stat_buf_);
-        }
-        if (stat_reqs.empty())
-        {
-            return false;
-        }
-        ThdTask()->WaitIo();
-        for (StatReq &req : stat_reqs)
-        {
-            if (req.res_ < 0)
-            {
-                register_error(*req.ctx_, ToKvError(req.res_), "stat file");
-                continue;
-            }
-            req.ctx_->file_size_ =
-                static_cast<size_t>(req.ctx_->stat_buf_.stx_size);
-            req.ctx_->need_stat_ = false;
-            req.ctx_->stage_ = UploadFileCtx::Stage::NeedRead;
-        }
-        return true;
-    };
-
-    auto process_read = [&]() -> bool
-    {
-        bool issued_any = false;
-        while (status == KvError::NoError)
-        {
-            read_reqs.clear();
-            for (UploadFileCtx &ctx : ctxs)
-            {
-                if (ctx.stage_ != UploadFileCtx::Stage::NeedRead || ctx.fd_ < 0)
-                {
-                    continue;
-                }
-                if (!ctx.buffer_ready_)
-                {
-                    ctx.buffer_slot_->resize(ctx.file_size_, false);
-                    ctx.buffer_ready_ = true;
-                    ctx.remaining_ = ctx.buffer_slot_->padded_size();
-                    ctx.read_offset_ = 0;
-                }
-                if (ctx.remaining_ == 0 || ctx.read_offset_ >= ctx.file_size_)
-                {
-                    ctx.stage_ = UploadFileCtx::Stage::NeedClose;
-                    continue;
-                }
-                read_reqs.emplace_back(ThdTask(), &ctx);
-                io_uring_sqe *sqe =
-                    GetSQE(UserDataType::BaseReq, &read_reqs.back());
-                io_uring_prep_read(sqe,
-                                   ctx.fd_,
-                                   ctx.buffer_slot_->data() + ctx.read_offset_,
-                                   ctx.remaining_,
-                                   ctx.read_offset_);
-            }
-            if (read_reqs.empty())
-            {
-                break;
-            }
-            issued_any = true;
-            ThdTask()->WaitIo();
-            for (ReadReq &req : read_reqs)
-            {
-                if (req.res_ < 0)
-                {
-                    register_error(*req.ctx_, ToKvError(req.res_), "read file");
-                }
-                else if (req.res_ == 0)
-                {
-                    if (req.ctx_->read_offset_ >= req.ctx_->file_size_)
-                    {
-                        req.ctx_->remaining_ = 0;
-                        req.ctx_->stage_ = UploadFileCtx::Stage::NeedClose;
-                    }
-                    else
-                    {
-                        register_error(
-                            *req.ctx_, KvError::EndOfFile, "read file");
-                    }
-                }
-                else
-                {
-                    req.ctx_->read_offset_ += static_cast<size_t>(req.res_);
-                    if (req.ctx_->remaining_ >= static_cast<size_t>(req.res_))
-                    {
-                        req.ctx_->remaining_ -= static_cast<size_t>(req.res_);
-                    }
-                    else
-                    {
-                        req.ctx_->remaining_ = 0;
-                    }
-                    if (req.ctx_->remaining_ == 0 ||
-                        req.ctx_->read_offset_ >= req.ctx_->file_size_)
-                    {
-                        req.ctx_->remaining_ = 0;
-                        req.ctx_->stage_ = UploadFileCtx::Stage::NeedClose;
-                    }
-                }
-            }
-        }
-        return issued_any;
-    };
-
-    auto process_close = [&]() -> bool
-    {
-        close_reqs.clear();
-        for (UploadFileCtx &ctx : ctxs)
-        {
-            if (ctx.stage_ != UploadFileCtx::Stage::NeedClose || ctx.fd_ < 0)
-            {
-                continue;
-            }
-            close_reqs.emplace_back(ThdTask(), &ctx);
-            io_uring_sqe *sqe =
-                GetSQE(UserDataType::BaseReq, &close_reqs.back());
-            io_uring_prep_close(sqe, ctx.fd_);
-        }
-        if (close_reqs.empty())
-        {
-            return false;
-        }
-        ThdTask()->WaitIo();
-        for (CloseReq &req : close_reqs)
-        {
-            if (req.res_ < 0)
-            {
-                register_error(*req.ctx_, ToKvError(req.res_), "close file");
-            }
-            req.ctx_->fd_ = -1;
-            req.ctx_->stage_ = UploadFileCtx::Stage::Done;
-        }
-        return true;
-    };
-
-    while (status == KvError::NoError)
-    {
-        bool progressed = false;
-        progressed |= process_open();
-        if (status != KvError::NoError)
-        {
-            break;
-        }
-        progressed |= process_stat();
-        if (status != KvError::NoError)
-        {
-            break;
-        }
-        progressed |= process_read();
-        if (status != KvError::NoError)
-        {
-            break;
-        }
-        progressed |= process_close();
-        if (status != KvError::NoError)
-        {
-            break;
-        }
-
-        bool all_done = true;
-        for (const UploadFileCtx &ctx : ctxs)
-        {
-            if (ctx.stage_ != UploadFileCtx::Stage::Done)
-            {
-                all_done = false;
-                break;
-            }
-        }
-        if (all_done || !progressed)
-        {
-            break;
-        }
+        LOG(ERROR) << "Failed to close file after read: " << abs_path
+                   << ", error=" << strerror(-close_res);
     }
 
     if (status != KvError::NoError)
     {
-        process_close();
-        for (UploadFileCtx &ctx : ctxs)
-        {
-            if (ctx.fd_ >= 0)
-            {
-                IouringMgr::Close(ctx.fd_);
-                ctx.fd_ = -1;
-            }
-        }
-        RecycleBuffers(buffers);
+        RecycleBuffer(std::move(local_buffer));
+        return status;
     }
 
-    return status;
+    buffer = std::move(local_buffer);
+    return KvError::NoError;
 }
 
 KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
@@ -3146,11 +2885,10 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
 
     size_t processed = 0;
     const size_t max_upload_batch = options_->max_upload_batch;
-    std::vector<std::string> batch_filenames;
     std::vector<DirectIoBuffer> batch_contents;
+    batch_contents.reserve(max_upload_batch);
     while (processed < pending.size())
     {
-        RecycleBuffers(batch_contents);
         while (inflight_upload_files_ >= max_upload_batch)
         {
             upload_slots_waiting_.Wait(current_task);
@@ -3162,17 +2900,18 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
         auto span = std::span<ObjectStore::UploadTask *>(
             pending.data() + processed, span_size);
         inflight_upload_files_ += span_size;
-        batch_filenames.clear();
-        batch_filenames.reserve(span_size);
+        batch_contents.clear();
+        KvError read_err = KvError::NoError;
         for (ObjectStore::UploadTask *task : span)
         {
-            batch_filenames.push_back(task->filename_);
+            DirectIoBuffer file_buffer;
+            read_err = ReadFile(tbl_id, task->filename_, file_buffer);
+            if (read_err != KvError::NoError)
+            {
+                break;
+            }
+            batch_contents.emplace_back(std::move(file_buffer));
         }
-
-        KvError read_err =
-            ReadFiles(tbl_id,
-                      std::span<const std::string>(batch_filenames),
-                      batch_contents);
         if (read_err != KvError::NoError)
         {
             inflight_upload_files_ -= span_size;
@@ -3189,6 +2928,7 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
             task->buffer_offset_ = 0;
             obj_store_.GetHttpManager()->SubmitRequest(task);
         }
+        batch_contents.clear();
 
         if (!span.empty())
         {
