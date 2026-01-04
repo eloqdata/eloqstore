@@ -4,6 +4,8 @@
 #include <utility>
 #include <vector>
 
+#include <glog/logging.h>
+
 namespace eloqstore
 {
 
@@ -32,6 +34,7 @@ public:
     {
         if (max_cached_ == 0 || pool_.size() >= max_cached_)
         {
+            LOG(WARNING) << "Release pool";
             return;
         }
         pool_.push_back(std::move(value));
