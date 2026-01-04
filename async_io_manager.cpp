@@ -2854,16 +2854,15 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
         }
     }
 
-    if (int close_res = Close(fd); close_res < 0)
+    sqe = GetSQE(UserDataType::KvTask, ThdTask());
+    io_uring_prep_close(sqe, fd);
+    int res = ThdTask()->WaitIoResult();
+    if (res < 0)
     {
-        if (status == KvError::NoError)
-        {
-            status = ToKvError(close_res);
-        }
-        LOG(ERROR) << "Failed to close file after read: " << abs_path
-                   << ", error=" << strerror(-close_res);
+        LOG(ERROR) << "close file/directory " << fd
+                   << " failed: " << strerror(-res);
+        status = ToKvError(res);
     }
-
     CHECK_KV_ERR(status);
     return KvError::NoError;
 }
@@ -3325,7 +3324,15 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
         }
     }
 
-    int close_res = Close(fd);
+    sqe = GetSQE(UserDataType::KvTask, ThdTask());
+    io_uring_prep_close(sqe, fd);
+    int close_res = ThdTask()->WaitIoResult();
+    if (close_res < 0)
+    {
+        LOG(ERROR) << "close file/directory " << fd
+                   << " failed: " << strerror(-close_res);
+        status = ToKvError(close_res);
+    }
     if (status == KvError::NoError && close_res < 0)
     {
         status = ToKvError(close_res);
