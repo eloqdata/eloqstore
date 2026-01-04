@@ -209,6 +209,10 @@ struct KvOptions
      * enabled.
      */
     uint16_t prewarm_task_count = 3;
+    /**
+     * @brief Size of mapping arena.
+     */
+    size_t mapping_arena_size = 16;
 
     std::function<bool(const TableIdent &)> prewarm_filter;
 };

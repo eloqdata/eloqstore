@@ -22,7 +22,7 @@
 namespace eloqstore
 {
 IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
-    : io_manager_(io_manager)
+    : io_manager_(io_manager), mapping_arena_(Options()->mapping_arena_size)
 {
     active_head_.EnqueNext(&active_tail_);
 }
