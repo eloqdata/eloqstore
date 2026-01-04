@@ -53,6 +53,7 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
     {
         LOG(ERROR) << "read finish cost " << current_ts - ts_ << ", err=" << (int) err;
     }
+    LOG(INFO) << "set ts_ to " << current_ts;
     ts_ = current_ts;
     return KvError::NoError;
 }
