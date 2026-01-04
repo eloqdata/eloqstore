@@ -2776,7 +2776,11 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
     fs::path abs_path = tbl_id.StorePath(options_->store_path);
     abs_path /= filename;
 
-    int fd = OpenAt({AT_FDCWD, false}, abs_path.c_str(), O_RDONLY | O_DIRECT);
+    io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
+    sqe->flags |= O_RDONLY | O_DIRECT;
+    open_how how = {.flags = O_RDONLY | O_DIRECT, .mode = 0, .resolve = 0};
+    io_uring_prep_openat2(sqe, AT_FDCWD, abs_path.c_str(), &how);
+    int fd = ThdTask()->WaitIoResult();
     if (fd < 0)
     {
         LOG(ERROR) << "Failed to open file for upload: " << abs_path
