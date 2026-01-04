@@ -220,6 +220,11 @@ void Shard::ProcessReq(KvRequest *req)
                                      read_req->value_,
                                      read_req->ts_,
                                      read_req->expire_ts_);
+            auto current_ts = butil::cpuwide_time_ns();
+            if (current_ts - task->ts_ > task->threshold_)
+            {
+                LOG(ERROR) << "read cost " << current_ts - task->ts_;
+            }
             return err;
         };
         StartTask(task, req, lbd);

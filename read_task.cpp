@@ -48,11 +48,6 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
     value = value_storage.empty() ? val_view : std::move(value_storage);
     timestamp = iter.Timestamp();
     expire_ts = iter.ExpireTs();
-    auto current_ts = butil::cpuwide_time_ns();
-    if (current_ts - ts_ > threshold_)
-    {
-        LOG(ERROR) << "read cost " << current_ts - ts_;
-    }
     return KvError::NoError;
 }
 
