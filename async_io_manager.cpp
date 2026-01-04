@@ -2777,7 +2777,6 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
     abs_path /= filename;
 
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
-    sqe->flags |= O_RDONLY | O_DIRECT;
     open_how how = {.flags = O_RDONLY | O_DIRECT, .mode = 0, .resolve = 0};
     io_uring_prep_openat2(sqe, AT_FDCWD, abs_path.c_str(), &how);
     int fd = ThdTask()->WaitIoResult();
@@ -3259,8 +3258,12 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
     fs::create_directories(path.parent_path(), ec);
 
     std::string path_str = path.string();
-    int flags = O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT;
-    int fd = OpenAt({AT_FDCWD, false}, path_str.c_str(), flags, 0644);
+    io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
+    open_how how = {.flags = O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT,
+                    .mode = 0644,
+                    .resolve = 0};
+    io_uring_prep_openat2(sqe, AT_FDCWD, path_str.c_str(), &how);
+    int fd = ThdTask()->WaitIoResult();
     if (fd < 0)
     {
         LOG(ERROR) << "failed to open file for write: " << path_str
