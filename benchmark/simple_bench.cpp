@@ -11,13 +11,13 @@
 #include <utility>
 #include <vector>
 
-#include "../coding.h"
-#include "../eloq_store.h"
-#include "../utils.h"
+#include "coding.h"
+#include "eloq_store.h"
+#include "utils.h"
 
 // https://github.com/cameron314/concurrentqueue/issues/280
 #undef BLOCK_SIZE
-#include "../concurrentqueue/blockingconcurrentqueue.h"
+#include "../external/concurrentqueue/blockingconcurrentqueue.h"
 
 DEFINE_string(kvoptions, "", "Path to config file of EloqStore options");
 DEFINE_string(workload, "", "workload (write/read/scan/write-read/write-scan)");

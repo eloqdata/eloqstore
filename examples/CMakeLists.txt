@@ -1,7 +1,7 @@
 project(Examples)
 
 set(EXAMPLE_DIR ${CMAKE_SOURCE_DIR}/examples)
-set(EXAMPLE_INCLUDE ${CMAKE_SOURCE_DIR})
+set(EXAMPLE_INCLUDE ${CMAKE_SOURCE_DIR}/include ${CMAKE_SOURCE_DIR})
 
 set(EXAMPLE_SOURCES
     basic_example.cpp

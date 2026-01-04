@@ -8,8 +8,8 @@
 #include <string_view>
 #include <vector>
 
-#include "../kv_options.h"
-#include "../page.h"
+#include "kv_options.h"
+#include "storage/page.h"
 
 // usage: ./page_checksum_tool data_file_path offset
 namespace

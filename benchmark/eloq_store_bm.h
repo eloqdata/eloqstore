@@ -6,7 +6,7 @@
 #include <iomanip>
 #include <list>
 
-#include "../eloq_store.h"
+#include "eloq_store.h"
 #include "obj_gen.h"
 
 namespace EloqStoreBM

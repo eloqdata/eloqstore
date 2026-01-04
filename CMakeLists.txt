@@ -78,52 +78,55 @@ if (GIT_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
     endif ()
 endif ()
 
-if (NOT EXISTS "${PROJECT_SOURCE_DIR}/concurrentqueue/CMakeLists.txt")
+if (NOT EXISTS "${PROJECT_SOURCE_DIR}/external/concurrentqueue/CMakeLists.txt")
     message(FATAL_ERROR "The submodules were not downloaded! GIT_SUBMODULE was turned off or failed. Please update submodules and try again.")
 endif ()
-add_subdirectory(concurrentqueue)
+add_subdirectory(external/concurrentqueue)
 
-add_subdirectory(abseil)
+add_subdirectory(external/abseil)
 
-set(INI_SOURCES ${PROJECT_SOURCE_DIR}/inih/ini.c ${PROJECT_SOURCE_DIR}/inih/cpp/INIReader.cpp)
+set(INI_SOURCES ${PROJECT_SOURCE_DIR}/external/inih/ini.c ${PROJECT_SOURCE_DIR}/external/inih/cpp/INIReader.cpp)
 
 SET(ELOQ_STORE_INCLUDE
         ${URING_INCLUDE_PATH}
-        ${Boost_INCLUDE_DIRS})
+        ${Boost_INCLUDE_DIRS}
+        ${PROJECT_SOURCE_DIR}/external
+        ${PROJECT_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR})
 
 set(ELOQ_STORE_SOURCES
-        coding.cpp
-        data_page_builder.cpp
-        comparator.cpp
-        index_page_builder.cpp
-        mem_index_page.cpp
-        index_page_manager.cpp
-        task.cpp
-        read_task.cpp
-        scan_task.cpp
-        prewarm_task.cpp
-        write_task.cpp
-        batch_write_task.cpp
-        background_write.cpp
-        async_io_manager.cpp
-        data_page.cpp
-        page.cpp
-        page_mapper.cpp
-        task_manager.cpp
-        eloq_store.cpp
-        shard.cpp
-        root_meta.cpp
-        replayer.cpp
-        kill_point.cpp
-        file_gc.cpp
-        archive_crond.cpp
-        object_store.cpp
-        types.cpp
-        kv_options.cpp
-        eloqstore_module.cpp
-        compression.cpp
         external/random.cc
-        external/xxhash.c)
+        external/xxhash.c
+        src/async_io_manager.cpp
+        src/coding.cpp
+        src/comparator.cpp
+        src/compression.cpp
+        src/eloq_store.cpp
+        src/eloqstore_module.cpp
+        src/file_gc.cpp
+        src/kill_point.cpp
+        src/kv_options.cpp
+        src/replayer.cpp
+        src/storage/data_page.cpp
+        src/storage/data_page_builder.cpp
+        src/storage/index_page_builder.cpp
+        src/storage/index_page_manager.cpp
+        src/storage/mem_index_page.cpp
+        src/storage/object_store.cpp
+        src/storage/page.cpp
+        src/storage/page_mapper.cpp
+        src/storage/root_meta.cpp
+        src/storage/shard.cpp
+        src/tasks/archive_crond.cpp
+        src/tasks/background_write.cpp
+        src/tasks/batch_write_task.cpp
+        src/tasks/prewarm_task.cpp
+        src/tasks/read_task.cpp
+        src/tasks/scan_task.cpp
+        src/tasks/task.cpp
+        src/tasks/task_manager.cpp
+        src/tasks/write_task.cpp
+        src/types.cpp)
 
 add_library(eloqstore STATIC ${ELOQ_STORE_SOURCES} ${INI_SOURCES})
 
@@ -135,7 +138,7 @@ target_include_directories(page_checksum_tool PUBLIC ${ELOQ_STORE_INCLUDE})
 target_link_libraries(page_checksum_tool PRIVATE eloqstore)
 
 
-add_library(test_util STATIC test_utils.cpp)
+add_library(test_util STATIC src/test_utils.cpp)
 target_link_libraries(test_util PUBLIC eloqstore)
 
 option(WITH_UNIT_TESTS "build with unit tests" ON)

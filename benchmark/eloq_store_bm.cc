@@ -4,7 +4,7 @@
 #include <iomanip>
 #include <numeric>
 
-#include "../kv_options.h"
+#include "kv_options.h"
 
 namespace EloqStoreBM
 {

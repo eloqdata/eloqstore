@@ -1,9 +1,9 @@
 [submodule "concurrentqueue"]
-	path = concurrentqueue
+	path = external/concurrentqueue
 	url = https://github.com/cameron314/concurrentqueue.git
 [submodule "inih"]
-	path = inih
+	path = external/inih
 	url = https://github.com/benhoyt/inih.git
 [submodule "abseil"]
-	path = abseil
+	path = external/abseil
 	url = https://github.com/abseil/abseil-cpp.git

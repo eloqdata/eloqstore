@@ -12,7 +12,7 @@
 #include "eloq_store.h"
 #include "error.h"
 // #include "write_op.h"
-#include "write_task.h"
+#include "tasks/write_task.h"
 
 namespace StressTest
 {

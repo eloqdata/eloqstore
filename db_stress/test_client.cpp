@@ -2,8 +2,8 @@
 
 #include <iostream>
 
-#include "../test_utils.h"
-#include "../utils.h"
+#include "test_utils.h"
+#include "utils.h"
 
 DEFINE_string(options, "", "path to ini config file");
 DEFINE_string(partition, "", "table partition id");

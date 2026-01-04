@@ -1,0 +1,269 @@
+#include "tasks/background_write.h"
+
+#include <string>
+
+#include "storage/shard.h"
+#include "utils.h"
+
+namespace eloqstore
+{
+class MovingCachedPages
+{
+public:
+    MovingCachedPages(size_t cap)
+    {
+        pages_.reserve(cap);
+    }
+    ~MovingCachedPages()
+    {
+        // Moving operations are aborted
+        for (auto [page, src_fp_id] : pages_)
+        {
+            page->SetFilePageId(src_fp_id);
+            page->Unpin();
+        }
+    }
+    void Add(MemIndexPage *page, FilePageId dest_fp_id)
+    {
+        page->Pin();
+        FilePageId src_fp_id = page->GetFilePageId();
+        page->SetFilePageId(dest_fp_id);
+        pages_.emplace_back(page, src_fp_id);
+    }
+    void Finish()
+    {
+        // Moving operations are succeed
+        for (auto [page, _] : pages_)
+        {
+            page->Unpin();
+        }
+        pages_.clear();
+    }
+
+private:
+    std::vector<std::pair<MemIndexPage *, FilePageId>> pages_;
+};
+
+KvError BackgroundWrite::CompactDataFile()
+{
+    LOG(INFO) << "start CompactDataFile on " << this->tbl_ident_;
+    const KvOptions *opts = Options();
+    assert(opts->data_append_mode);
+    assert(opts->file_amplify_factor != 0);
+
+    auto [meta, err] = shard->IndexManager()->FindRoot(tbl_ident_);
+    CHECK_KV_ERR(err);
+
+    auto allocator =
+        static_cast<AppendAllocator *>(meta->mapper_->FilePgAllocator());
+    uint32_t mapping_cnt = meta->mapper_->MappingCount();
+
+    // Ensure consistency between the mapping count and the available trees.
+    // mapping_cnt counts both the primary tree and the TTL tree, so we only
+    // expect it to be zero when both roots are invalid.
+    if (mapping_cnt == 0)
+    {
+        // Update statistic.
+        FilePageId max_fp_id = allocator->MaxFilePageId();
+        allocator->UpdateStat(max_fp_id >> opts->pages_per_file_shift, 0);
+        TriggerFileGC();
+        return KvError::NoError;
+    }
+    CHECK((meta->root_id_ != MaxPageId) || (meta->ttl_root_id_ != MaxPageId))
+        << "mapping_cnt=" << mapping_cnt << " tbl:" << tbl_ident_;
+
+    const uint32_t pages_per_file = allocator->PagesPerFile();
+    const double file_saf_limit = opts->file_amplify_factor;
+    size_t space_size = allocator->SpaceSize();
+    assert(space_size >= mapping_cnt);
+
+    if (space_size < pages_per_file ||
+        double(space_size) / double(mapping_cnt) <= file_saf_limit)
+    {
+        DLOG(INFO) << "CompactDataFile: no compaction required";
+        // No compaction required.
+        return KvError::NoError;
+    }
+
+    // Begin compaction.
+
+    err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
+    CHECK_KV_ERR(err);
+    PageMapper *mapper = cow_meta_.mapper_.get();
+
+    allocator = static_cast<AppendAllocator *>(mapper->FilePgAllocator());
+    assert(mapping_cnt == mapper->MappingCount());
+
+    // Get all file page ids that are used by this version.
+    std::vector<std::pair<FilePageId, PageId>> fp_ids;
+    fp_ids.reserve(mapping_cnt);
+    size_t tbl_size = mapper->GetMapping()->mapping_tbl_.size();
+    for (PageId page_id = 0; page_id < tbl_size; page_id++)
+    {
+        FilePageId fp_id = ToFilePage(page_id);
+        if (fp_id != MaxFilePageId)
+        {
+            fp_ids.emplace_back(fp_id, page_id);
+        }
+    }
+    assert(fp_ids.size() == mapping_cnt);
+    // Sort by file page id.
+    std::sort(fp_ids.begin(), fp_ids.end());
+
+    constexpr uint8_t max_move_batch = max_read_pages_batch;
+    std::vector<Page> move_batch_buf;
+    move_batch_buf.reserve(max_move_batch);
+    std::vector<FilePageId> move_batch_fp_ids;
+    move_batch_fp_ids.reserve(max_move_batch);
+    MovingCachedPages moving_cached(mapping_cnt);
+
+    auto it_low = fp_ids.begin();
+    auto it_high = fp_ids.begin();
+    FileId begin_file_id = fp_ids.front().first >> opts->pages_per_file_shift;
+    // Do not compact the data file that is currently being written to and is
+    // not yet full.
+    const FileId end_file_id = allocator->CurrentFileId();
+    FileId min_file_id = end_file_id;
+    uint32_t empty_file_cnt = 0;
+    for (FileId file_id = begin_file_id; file_id < end_file_id; file_id++)
+    {
+        FilePageId end_fp_id = (file_id + 1) << opts->pages_per_file_shift;
+        while (it_high != fp_ids.end() && it_high->first < end_fp_id)
+        {
+            it_high++;
+        }
+        if (it_low == it_high)
+        {
+            if (min_file_id != end_file_id)
+            {
+                empty_file_cnt++;
+            }
+            // This file has no pages referenced by the latest mapping.
+            continue;
+        }
+
+        if (double factor = double(pages_per_file) / double(it_high - it_low);
+            factor <= file_saf_limit)
+        {
+            // This file don't need compaction.
+            if (min_file_id == end_file_id)
+            {
+                // Record the oldest file that don't need compaction.
+                min_file_id = file_id;
+            }
+            it_low = it_high;
+            continue;
+        }
+
+        // Compact this data file, copy all pages in this file to the back.
+        for (auto it = it_low; it < it_high; it += max_move_batch)
+        {
+            uint32_t batch_size = std::min(long(max_move_batch), it_high - it);
+            const std::span<std::pair<FilePageId, PageId>> batch_ids(
+                it, batch_size);
+            // Read original pages.
+            move_batch_fp_ids.clear();
+            for (auto [fp_id, page_id] : batch_ids)
+            {
+                MemIndexPage *page =
+                    cow_meta_.old_mapping_->GetSwizzlingPointer(page_id);
+                if (page != nullptr)
+                {
+                    auto [_, new_fp_id] = AllocatePage(page_id);
+                    moving_cached.Add(page, new_fp_id);
+                    err = WritePage(page, new_fp_id);
+                    CHECK_KV_ERR(err);
+                }
+                else
+                {
+                    move_batch_fp_ids.emplace_back(fp_id);
+                }
+            }
+            if (move_batch_fp_ids.empty())
+            {
+                continue;
+            }
+            err = IoMgr()->ReadPages(
+                tbl_ident_, move_batch_fp_ids, move_batch_buf);
+            CHECK_KV_ERR(err);
+            // Write these pages to the new file.
+            for (uint32_t i = 0; auto [fp_id, page_id] : batch_ids)
+            {
+                if (i == move_batch_fp_ids.size())
+                {
+                    break;
+                }
+                if (fp_id != move_batch_fp_ids[i])
+                {
+                    continue;
+                }
+                auto [_, new_fp_id] = AllocatePage(page_id);
+                err = WritePage(std::move(move_batch_buf[i]), new_fp_id);
+                CHECK_KV_ERR(err);
+                i++;
+            }
+        }
+        if (min_file_id != end_file_id)
+        {
+            empty_file_cnt++;
+        }
+        it_low = it_high;
+    }
+    allocator->UpdateStat(min_file_id, empty_file_cnt);
+    assert(mapping_cnt == mapper->MappingCount());
+    assert(allocator->SpaceSize() >= mapping_cnt);
+    assert(meta->mapper_->DebugStat());
+
+    err = UpdateMeta();
+    CHECK_KV_ERR(err);
+    moving_cached.Finish();
+    TriggerFileGC();
+    return KvError::NoError;
+}
+
+KvError BackgroundWrite::CreateArchive()
+{
+    assert(Options()->data_append_mode);
+    assert(Options()->num_retained_archives > 0);
+
+    KvError compact_err = CompactDataFile();
+    CHECK_KV_ERR(compact_err);
+
+    auto [meta, err] = shard->IndexManager()->FindRoot(tbl_ident_);
+    CHECK_KV_ERR(err);
+    PageId root = meta->root_id_;
+    if (root == MaxPageId)
+    {
+        return KvError::NotFound;
+    }
+
+    PageId ttl_root = meta->ttl_root_id_;
+    MappingSnapshot *mapping = meta->mapper_->GetMapping();
+    FilePageId max_fp_id = meta->mapper_->FilePgAllocator()->MaxFilePageId();
+    std::string_view dict_bytes;
+    if (meta->compression_->HasDictionary())
+    {
+        dict_bytes = meta->compression_->DictionaryBytes();
+    }
+    std::string_view snapshot =
+        wal_builder_.Snapshot(root, ttl_root, mapping, max_fp_id, dict_bytes);
+    const size_t direct_io_size = wal_builder_.DirectIoSize();
+    assert(direct_io_size >= snapshot.size());
+
+    uint64_t current_ts = utils::UnixTs<chrono::microseconds>();
+    err = IoMgr()->CreateArchive(
+        tbl_ident_, snapshot, current_ts, direct_io_size);
+    CHECK_KV_ERR(err);
+
+    // Update the cached max file id.
+    FileId max_file_id =
+        static_cast<FileId>(max_fp_id >> Options()->pages_per_file_shift);
+    IoMgr()->least_not_archived_file_ids_[tbl_ident_] = max_file_id + 1;
+
+    LOG(INFO) << "created archive for partition " << tbl_ident_ << " at "
+              << current_ts << ", updated cached max file id to "
+              << max_file_id + 1;
+    return KvError::NoError;
+}
+
+}  // namespace eloqstore

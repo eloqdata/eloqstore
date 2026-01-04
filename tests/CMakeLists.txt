@@ -4,6 +4,7 @@ find_package(Catch2 REQUIRED)
 
 set(UTEST_DIR ${CMAKE_SOURCE_DIR}/tests)
 set(UTEST_INCLUDE 
+    ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR})
 
 set(UTEST_SOURCES

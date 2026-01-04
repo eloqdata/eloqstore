@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "common.h"
-#include "task_manager.h"
+#include "tasks/task_manager.h"
 #include "test_utils.h"
 
 using test_util::MapVerifier;

@@ -11,7 +11,7 @@ jobs:
     - uses: DoozyX/clang-format-lint-action@v0.18
       with:
         source: '.'
-        exclude: './third_party ./external ./abseil ./concurrentqueue inih'
+        exclude: './external'
         extensions: 'h,cpp,cc'
         clangFormatVersion: 18
         style: file

@@ -21,9 +21,10 @@ add_executable(db_stress
     expected_value.cpp
     db_stress_driver.cpp)
 
-target_include_directories(db_stress PUBLIC ${PROJECT_SOURCE_DIR} 
+target_include_directories(db_stress PUBLIC ${PROJECT_SOURCE_DIR}
                                             ${PROJECT_SOURCE_DIR}/..
-                                            ${ELOQ_STORE_SOURCE_DIR}
+                                            ${CMAKE_SOURCE_DIR}
+                                            ${CMAKE_SOURCE_DIR}/include
                                             ${GFLAGS_INCLUDE_DIRS}
                                             ${GLOG_INCLUDE_DIRS})
 

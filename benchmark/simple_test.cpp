@@ -13,7 +13,7 @@
 #include <thread>
 #include <vector>
 
-#include "../eloq_store.h"
+#include "eloq_store.h"
 
 const size_t KEY_LEN_MIN = 16;
 const size_t KEY_LEN_MAX = 16;

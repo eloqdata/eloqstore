@@ -4,9 +4,9 @@
 #include <cassert>
 #include <cstdlib>
 
-#include "../kill_point.h"
-#include "../kv_options.h"
-#include "../test_utils.h"
+#include "kill_point.h"
+#include "kv_options.h"
+#include "test_utils.h"
 
 DEFINE_string(options, "", "path to ini config file");
 DEFINE_uint32(num_client_threads, 1, "Amount of threads");

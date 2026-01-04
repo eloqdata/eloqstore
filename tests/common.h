@@ -24,7 +24,7 @@
 #include <string_view>
 #include <vector>
 
-#include "../common.h"
+#include "../include/common.h"
 #include "coding.h"
 #include "eloq_store.h"
 #include "kv_options.h"
