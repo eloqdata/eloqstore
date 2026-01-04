@@ -2861,7 +2861,10 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
     {
         LOG(ERROR) << "close file/directory " << fd
                    << " failed: " << strerror(-res);
-        status = ToKvError(res);
+        if (status == KvError::NoError)
+        {
+            status = ToKvError(res);
+        }
     }
     CHECK_KV_ERR(status);
     return KvError::NoError;
@@ -3331,7 +3334,10 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
     {
         LOG(ERROR) << "close file/directory " << fd
                    << " failed: " << strerror(-close_res);
-        status = ToKvError(close_res);
+        if (status == KvError::NoError)
+        {
+            status = ToKvError(close_res);
+        }
     }
     if (status == KvError::NoError && close_res < 0)
     {
