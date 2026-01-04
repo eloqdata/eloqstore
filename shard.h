@@ -78,9 +78,10 @@ private:
         task->req_ = req;
         task->status_ = TaskStatus::Ongoing;
         running_ = task;
+        auto ts = butil::cpuwide_time_ns();
         task->coro_ = boost::context::callcc(std::allocator_arg,
                                              stack_allocator_,
-                                             [lbd](continuation &&sink)
+                                             [lbd, &ts](continuation &&sink)
                                              {
                                                  shard->main_ = std::move(sink);
                                                  KvError err = lbd();
@@ -90,7 +91,7 @@ private:
                                                      task->Abort();
                                                  }
 
-                                                 auto ts = butil::cpuwide_time_ns();
+                                                 ts = butil::cpuwide_time_ns();
                                                  task->req_->SetDone(err);
                                                  task->req_ = nullptr;
                                                  task->status_ =
@@ -100,9 +101,15 @@ private:
                                                  {
                                                      LOG(ERROR) << "StartTask finish " << ts;
                                                  }
+                                                 ts = butil::cpuwide_time_ns();
                                                  return std::move(shard->main_);
                                              });
         running_ = nullptr;
+        ts = butil::cpuwide_time_ns() - ts;
+        if (ts > 200000)
+        {
+            LOG(ERROR) << "StartTask finish " << ts;
+        }
         if (task->status_ == TaskStatus::Finished)
         {
             OnTaskFinished(task);
