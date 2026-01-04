@@ -118,6 +118,6 @@ private:
     std::unordered_map<TableIdent, RootMeta> tbl_roots_;
 
     AsyncIoManager *io_manager_;
-    MappingArena mapping_arena_;
+    MappingArena mapping_arena_{16};
 };
 }  // namespace eloqstore
