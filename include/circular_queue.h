@@ -9,7 +9,7 @@ namespace eloqstore
 
 static void ValidateCapacity(size_t capacity)
 {
-    if ((capacity & (capacity - 1)) != 0)
+    if (capacity == 0 || (capacity & (capacity - 1)) != 0)
     {
         throw std::invalid_argument(
             "CircularQueue capacity must be a power of two");
@@ -75,7 +75,7 @@ public:
             return;
         }
 
-        size_t new_capacity = capacity_ == 0 ? 1 : capacity_ << 1;
+        size_t new_capacity = capacity_ << 1;
         std::unique_ptr<T[]> new_vec = std::make_unique<T[]>(new_capacity);
 
         if (capacity_ > 0)
@@ -111,7 +111,7 @@ public:
             return;
         }
 
-        size_t new_capacity = capacity_ == 0 ? 1 : capacity_ << 1;
+        size_t new_capacity = capacity_ << 1;
         std::unique_ptr<T[]> new_vec = std::make_unique<T[]>(new_capacity);
 
         if (capacity_ > 0)
@@ -152,7 +152,7 @@ public:
         }
         else if (cnt_ == capacity_)
         {
-            size_t new_capacity = capacity_ == 0 ? 1 : capacity_ << 1;
+            size_t new_capacity = capacity_ << 1;
             std::unique_ptr<T[]> new_vec = std::make_unique<T[]>(new_capacity);
 
             // Before: 0-------Tail-Head---------N-1
@@ -191,11 +191,7 @@ public:
     void Dequeue()
     {
         assert(cnt_ > 0);
-        ++head_;
-        if (head_ == capacity_)
-        {
-            head_ = 0;
-        }
+        head_ = (head_ + 1) & (capacity_ - 1);
         --cnt_;
     }
 

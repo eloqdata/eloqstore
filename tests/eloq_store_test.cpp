@@ -234,18 +234,21 @@ TEST_CASE("EloqStore handles requests when stopped", "[eloq_store]")
     CleanupTestDir(test_dir);
 }
 
-TEST_CASE("CircularQueue reset from zero capacity", "[cqueue]")
+TEST_CASE("CircularQueue rejects zero capacity", "[cqueue]")
 {
-    eloqstore::CircularQueue<int> q(0);
-    REQUIRE(q.Capacity() == 0);
+    REQUIRE_THROWS_AS(
+        eloqstore::CircularQueue<int>(0),
+        std::invalid_argument
+    );
+}
 
-    q.Reset(0);
-    REQUIRE(q.Capacity() == 0);
-
-    q.Enqueue(42);  // triggers internal Reset(8)
-    REQUIRE(q.Size() == 1);
-    REQUIRE(q.Capacity() >= 1);
-    REQUIRE(q.Peek() == 42);
+TEST_CASE("CircularQueue reset rejects zero capacity", "[cqueue]")
+{
+    eloqstore::CircularQueue<int> q;
+    REQUIRE_THROWS_AS(
+        q.Reset(0),
+        std::invalid_argument
+    );
 }
 
 TEST_CASE("CircularQueue reset assigns new capacity", "[cqueue]")
