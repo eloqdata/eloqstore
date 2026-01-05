@@ -171,8 +171,15 @@ struct KvOptions
      */
     uint16_t data_page_size = 4 * KB;
 
-    size_t FilePageOffsetMask() const;
-    size_t DataFileSize() const;
+    size_t FilePageOffsetMask() const
+    {
+        return (1 << pages_per_file_shift) - 1;
+    }
+
+    size_t DataFileSize() const
+    {
+        return static_cast<size_t>(data_page_size) << pages_per_file_shift;
+    }
     /**
      * @brief Amount of pages per data file (1 << pages_per_file_shift).
      * It is recommended to set a smaller file size like 4MB in append write

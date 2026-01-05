@@ -9,8 +9,6 @@
 #include <limits>
 #include <string>
 #include <string_view>
-#include <system_error>
-#include <utility>
 #include <vector>
 
 #include "inih/cpp/INIReader.h"
@@ -346,15 +344,5 @@ bool KvOptions::operator==(const KvOptions &other) const
            pages_per_file_shift == other.pages_per_file_shift &&
            overflow_pointers == other.overflow_pointers &&
            data_append_mode == other.data_append_mode;
-}
-
-size_t KvOptions::FilePageOffsetMask() const
-{
-    return (1 << pages_per_file_shift) - 1;
-}
-
-size_t KvOptions::DataFileSize() const
-{
-    return static_cast<size_t>(data_page_size) << pages_per_file_shift;
 }
 }  // namespace eloqstore
