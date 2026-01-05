@@ -91,6 +91,7 @@ SET(ELOQ_STORE_INCLUDE
         ${URING_INCLUDE_PATH}
         ${Boost_INCLUDE_DIRS}
         ${PROJECT_SOURCE_DIR}/external
+        ${PROJECT_SOURCE_DIR}/external/abseil
         ${PROJECT_SOURCE_DIR}/include
         ${PROJECT_SOURCE_DIR})
 
