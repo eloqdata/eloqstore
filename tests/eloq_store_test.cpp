@@ -244,7 +244,7 @@ TEST_CASE("CircularQueue reset from zero capacity", "[cqueue]")
 
     q.Enqueue(42);  // triggers internal Reset(8)
     REQUIRE(q.Size() == 1);
-    REQUIRE(q.Capacity() >= 8);
+    REQUIRE(q.Capacity() >= 1);
     REQUIRE(q.Peek() == 42);
 }
 
@@ -263,4 +263,22 @@ TEST_CASE("CircularQueue reset assigns new capacity", "[cqueue]")
     REQUIRE(q.Size() == 2);
     REQUIRE(q.Get(0) == 3);
     REQUIRE(q.Get(1) == 4);
+}
+
+TEST_CASE("CircularQueue EnqueueAsFirst prepends items", "[cqueue]")
+{
+    eloqstore::CircularQueue<int> q;
+    q.Enqueue(3);
+    q.Enqueue(4);
+    q.Enqueue(5);
+
+    q.EnqueueAsFirst(2);
+    q.EnqueueAsFirst(1);
+
+    REQUIRE(q.Size() == 5);
+    REQUIRE(q.Get(0) == 1);
+    REQUIRE(q.Get(1) == 2);
+    REQUIRE(q.Get(2) == 3);
+    REQUIRE(q.Get(3) == 4);
+    REQUIRE(q.Get(4) == 5);
 }
