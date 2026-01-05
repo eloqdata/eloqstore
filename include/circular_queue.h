@@ -191,7 +191,7 @@ public:
     void Dequeue()
     {
         assert(cnt_ > 0);
-        head_ = (head_ + 1) & (capacity_ - 1);
+        head_ = (head_ + 1) & mask_;
         --cnt_;
     }
 
