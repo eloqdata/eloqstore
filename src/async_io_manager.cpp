@@ -236,8 +236,8 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
         ReadReq() = default;
         ReadReq(KvTask *task, LruFD::Ref fd, uint32_t offset)
             : BaseReq(task),
-              fd_ref_(std::move(fd)),
               offset_(offset),
+              fd_ref_(std::move(fd)),
               page_(true) {};
 
         bool done_{false};
