@@ -34,7 +34,7 @@ EloqKV on EloqStore delivers 4x higher disk access throughput compared to Redis'
 
 <div align="center">
 <a href='https://www.eloqdata.com'>
-<img src="images/eloqstore_benchmark.jpg" alt="EloqStore" height=150></img>
+<img src="images/eloqstore_benchmark.jpg" alt="EloqStore" height=250></img>
 </a>
 
 ## ✨ Core Features
