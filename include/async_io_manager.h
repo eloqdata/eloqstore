@@ -41,6 +41,7 @@ class ManifestFile
 public:
     virtual ~ManifestFile() = default;
     virtual KvError Read(char *dst, size_t n) = 0;
+    virtual KvError SkipPadding(size_t n) = 0;
 };
 
 using ManifestFilePtr = std::unique_ptr<ManifestFile>;
@@ -109,14 +110,12 @@ public:
 
     virtual KvError AppendManifest(const TableIdent &tbl_id,
                                    std::string_view log,
-                                   uint64_t manifest_size) = 0;
+                                   uint64_t offset) = 0;
     virtual KvError SwitchManifest(const TableIdent &tbl_id,
-                                   std::string_view snapshot,
-                                   size_t padded_size) = 0;
+                                   std::string_view snapshot) = 0;
     virtual KvError CreateArchive(const TableIdent &tbl_id,
                                   std::string_view snapshot,
-                                  uint64_t ts,
-                                  size_t padded_size) = 0;
+                                  uint64_t ts) = 0;
     virtual std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) = 0;
 
@@ -162,14 +161,12 @@ public:
 
     KvError AppendManifest(const TableIdent &tbl_id,
                            std::string_view log,
-                           uint64_t manifest_size) override;
+                           uint64_t offset) override;
     KvError SwitchManifest(const TableIdent &tbl_id,
-                           std::string_view snapshot,
-                           size_t padded_size) override;
+                           std::string_view snapshot) override;
     KvError CreateArchive(const TableIdent &tbl_id,
                           std::string_view snapshot,
-                          uint64_t ts,
-                          size_t padded_size) override;
+                          uint64_t ts) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
 
@@ -276,8 +273,10 @@ public:
         Manifest(IouringMgr *io_mgr, LruFD::Ref fd, uint64_t size);
         ~Manifest();
         KvError Read(char *dst, size_t n) override;
+        KvError SkipPadding(size_t n) override;
 
     private:
+        KvError EnsureBuffered();
         static constexpr uint32_t buf_size = 1 << 20;
         IouringMgr *io_mgr_;
         LruFD::Ref fd_;
@@ -310,7 +309,6 @@ public:
     int Read(FdIdx fd, char *dst, size_t n, uint64_t offset);
     int Write(FdIdx fd, const char *src, size_t n, uint64_t offset);
     int Fdatasync(FdIdx fd);
-    int Ftruncate(FdIdx fd, off_t length);
     int Statx(int fd, const char *path, struct statx *result);
     int Rename(FdIdx dir_fd, const char *old_path, const char *new_path);
     int Close(int fd);
@@ -326,8 +324,7 @@ public:
      */
     virtual int WriteSnapshot(LruFD::Ref dir_fd,
                               std::string_view name,
-                              std::string_view content,
-                              size_t padded_size);
+                              std::string_view content);
     virtual int CreateFile(LruFD::Ref dir_fd, FileId file_id);
     virtual int OpenFile(const TableIdent &tbl_id, FileId file_id, bool direct);
     virtual KvError SyncFile(LruFD::Ref fd);
@@ -411,12 +408,10 @@ public:
     void Submit() override;
     void PollComplete() override;
     KvError SwitchManifest(const TableIdent &tbl_id,
-                           std::string_view snapshot,
-                           size_t padded_size) override;
+                           std::string_view snapshot) override;
     KvError CreateArchive(const TableIdent &tbl_id,
                           std::string_view snapshot,
-                          uint64_t ts,
-                          size_t padded_size) override;
+                          uint64_t ts) override;
     void CleanManifest(const TableIdent &tbl_id) override;
 
     ObjectStore &GetObjectStore()
@@ -602,14 +597,12 @@ public:
 
     KvError AppendManifest(const TableIdent &tbl_id,
                            std::string_view log,
-                           uint64_t manifest_size) override;
+                           uint64_t offset) override;
     KvError SwitchManifest(const TableIdent &tbl_id,
-                           std::string_view snapshot,
-                           size_t padded_size) override;
+                           std::string_view snapshot) override;
     KvError CreateArchive(const TableIdent &tbl_id,
                           std::string_view snapshot,
-                          uint64_t ts,
-                          size_t padded_size) override;
+                          uint64_t ts) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
 
@@ -620,6 +613,7 @@ public:
     public:
         explicit Manifest(std::string_view content) : content_(content) {};
         KvError Read(char *dst, size_t n) override;
+        KvError SkipPadding(size_t n) override;
 
     private:
         std::string_view content_;

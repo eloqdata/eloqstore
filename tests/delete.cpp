@@ -126,6 +126,51 @@ TEST_CASE("rand write with expire timestamp", "[TTL]")
     }
 }
 
+TEST_CASE("write expired keys", "[TTL]")
+{
+    eloqstore::EloqStore *store = InitStore(append_opts);
+
+    {
+        std::vector<eloqstore::WriteDataEntry> entries;
+        for (size_t idx = 0; idx < 10; ++idx)
+        {
+            entries.emplace_back(Key(idx),
+                                 std::to_string(idx),
+                                 1,
+                                 eloqstore::WriteOp::Upsert,
+                                 1);
+        }
+        eloqstore::TableIdent tbl{"t", 0};
+        eloqstore::BatchWriteRequest req;
+        req.SetArgs(tbl, std::move(entries));
+        store->ExecSync(&req);
+    }
+
+    {
+        std::vector<eloqstore::WriteDataEntry> entries;
+        for (size_t idx = 0; idx < 10000; ++idx)
+        {
+            entries.emplace_back(
+                Key(idx), Value(idx, 100000), 1, eloqstore::WriteOp::Upsert);
+        }
+        eloqstore::TableIdent tbl{"t", 0};
+        eloqstore::BatchWriteRequest req;
+        req.SetArgs(tbl, std::move(entries));
+        store->ExecSync(&req);
+    }
+
+    std::vector<eloqstore::WriteDataEntry> entries;
+    for (size_t idx = 0; idx < 10; ++idx)
+    {
+        entries.emplace_back(
+            Key(idx), std::to_string(idx), 1, eloqstore::WriteOp::Upsert, 1);
+    }
+    eloqstore::TableIdent tbl{"t", 0};
+    eloqstore::BatchWriteRequest req;
+    req.SetArgs(tbl, std::move(entries));
+    store->ExecSync(&req);
+}
+
 TEST_CASE("upsert with expire timestamp", "[TTL]")
 {
     eloqstore::EloqStore *store = InitStore(mem_store_opts);

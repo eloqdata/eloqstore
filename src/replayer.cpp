@@ -12,6 +12,7 @@
 #include "error.h"
 #include "kv_options.h"
 #include "storage/index_page_manager.h"
+#include "storage/page.h"
 #include "storage/root_meta.h"
 
 namespace eloqstore
@@ -55,19 +56,22 @@ KvError Replayer::Replay(ManifestFile *file)
 
 KvError Replayer::ParseNextRecord(ManifestFile *file)
 {
-    // Read header
-    KvError err = file->Read(log_buf_.data(), ManifestBuilder::header_bytes);
-    CHECK_KV_ERR(err);
+    constexpr uint16_t header_len = ManifestBuilder::header_bytes;
+    log_buf_.resize(header_len);
+    KvError err = file->Read(log_buf_.data(), header_len);
+    if (err != KvError::NoError)
+    {
+        return err;
+    }
 
-    // Read payload
-    const uint32_t len =
+    const uint32_t payload_len =
         DecodeFixed32(log_buf_.data() + ManifestBuilder::offset_len);
-    log_buf_.resize(ManifestBuilder::header_bytes + len);
-    err = file->Read(log_buf_.data() + ManifestBuilder::header_bytes, len);
+    log_buf_.resize(static_cast<size_t>(header_len) + payload_len);
+    err = file->Read(log_buf_.data() + header_len, payload_len);
     CHECK_KV_ERR(err);
 
-    std::string_view content = log_buf_;
-    // Verify checksum
+    std::string_view content(log_buf_.data(),
+                             static_cast<size_t>(header_len) + payload_len);
     if (!ManifestBuilder::ValidateChecksum(content))
     {
         LOG(ERROR) << "Manifest file corrupted, checksum mismatch.";
@@ -79,8 +83,19 @@ KvError Replayer::ParseNextRecord(ManifestFile *file)
     content = content.substr(sizeof(PageId));
     ttl_root_ = DecodeFixed32(content.data());
     content = content.substr(sizeof(PageId));
-    payload_ = content.substr(sizeof(uint32_t));  // Skip payload length
-    file_size_ += ManifestBuilder::header_bytes + len;
+    payload_ = content.substr(sizeof(uint32_t), payload_len);
+    const size_t record_bytes = header_len + payload_len;
+    file_size_ += record_bytes;
+    const size_t alignment = page_align;
+    const size_t remainder = record_bytes & (alignment - 1);
+    if (remainder > 0)
+    {
+        const size_t padding = alignment - remainder;
+        err = file->SkipPadding(padding);
+        CHECK(err == KvError::NoError) << "Manifest is corrupted";
+        file_size_ += padding;
+    }
+
     return KvError::NoError;
 }
 

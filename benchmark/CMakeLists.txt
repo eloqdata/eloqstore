@@ -26,6 +26,13 @@ endif ()
 include_directories(${BRPC_INCLUDE_PATH})
 set(DYNAMIC_LIB ${DYNAMIC_LIB} ${BRPC_LIB})
 
+find_path(GFLAGS_INCLUDE_PATH gflags/gflags.h)
+find_library(GFLAGS_LIBRARY NAMES gflags libgflags)
+if ((NOT GFLAGS_INCLUDE_PATH) OR (NOT GFLAGS_LIBRARY))
+    message(FATAL_ERROR "Fail to find gflags")
+endif ()
+include_directories(${GFLAGS_INCLUDE_PATH})
+
 
 option(HAVE_RANDOM_R "Whether have random_r" ON)
 if(HAVE_RANDOM_R)
@@ -44,16 +51,16 @@ if (WITH_ROCKSDB)
 endif()
 
 add_executable(eloqstore_benchmark main.cpp ${ELOQ_STORE_BM_SOURCES})
-target_link_libraries(eloqstore_benchmark ${DYNAMIC_LIB} eloqstore)
+target_link_libraries(eloqstore_benchmark ${DYNAMIC_LIB} eloqstore ${GFLAGS_LIBRARY})
 
 add_executable(load_bench load_bench.cpp)
-target_link_libraries(load_bench eloqstore ${BRPC_LIB})
+target_link_libraries(load_bench eloqstore ${BRPC_LIB} ${GFLAGS_LIBRARY})
 
 add_executable(simple_bench simple_bench.cpp)
-target_link_libraries(simple_bench eloqstore ${BRPC_LIB})
+target_link_libraries(simple_bench eloqstore ${BRPC_LIB} ${GFLAGS_LIBRARY})
 
 add_executable(simple_test simple_test.cpp)
-target_link_libraries(simple_test eloqstore ${BRPC_LIB})
+target_link_libraries(simple_test eloqstore ${BRPC_LIB} ${GFLAGS_LIBRARY})
 
 include(CTest)
 enable_testing()

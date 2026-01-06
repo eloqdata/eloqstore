@@ -10,6 +10,7 @@
 
 #include "error.h"
 #include "replayer.h"
+#include "storage/page.h"
 #include "tasks/scan_task.h"
 #include "types.h"
 #include "utils.h"
@@ -973,9 +974,19 @@ void ManifestVerifier::Finish()
         }
         else
         {
+            const size_t alignment = eloqstore::page_align;
+            const size_t padded_size =
+                (file_.size() + alignment - 1) & ~(alignment - 1);
+            if (file_.size() != padded_size)
+            {
+                file_.resize(padded_size, '\0');
+            }
             std::string_view sv =
                 builder_.Finalize(root_id_, eloqstore::MaxPageId);
             file_.append(sv);
+            const size_t new_padded =
+                (file_.size() + alignment - 1) & ~(alignment - 1);
+            file_.resize(new_padded, '\0');
             builder_.Reset();
         }
     }
@@ -991,6 +1002,10 @@ void ManifestVerifier::Snapshot()
                                             max_fp_id,
                                             std::string_view{});
     file_ = sv;
+    const size_t alignment = eloqstore::page_align;
+    const size_t padded_size =
+        (file_.size() + alignment - 1) & ~(alignment - 1);
+    file_.resize(padded_size, '\0');
     builder_.Reset();
 }
 

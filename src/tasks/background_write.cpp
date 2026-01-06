@@ -247,12 +247,9 @@ KvError BackgroundWrite::CreateArchive()
     }
     std::string_view snapshot =
         wal_builder_.Snapshot(root, ttl_root, mapping, max_fp_id, dict_bytes);
-    const size_t direct_io_size = wal_builder_.DirectIoSize();
-    assert(direct_io_size >= snapshot.size());
 
     uint64_t current_ts = utils::UnixTs<chrono::microseconds>();
-    err = IoMgr()->CreateArchive(
-        tbl_ident_, snapshot, current_ts, direct_io_size);
+    err = IoMgr()->CreateArchive(tbl_ident_, snapshot, current_ts);
     CHECK_KV_ERR(err);
 
     // Update the cached max file id.

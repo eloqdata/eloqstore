@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -254,24 +255,24 @@ KvError WriteTask::FlushManifest()
                                   mapping,
                                   max_fp_id,
                                   dict_bytes);
-        const size_t direct_io_size = wal_builder_.DirectIoSize();
-        assert(direct_io_size >= snapshot.size());
-
-        err = IoMgr()->SwitchManifest(tbl_ident_, snapshot, direct_io_size);
+        err = IoMgr()->SwitchManifest(tbl_ident_, snapshot);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
         cow_meta_.compression_->ClearDirty();
         return KvError::NoError;
     }
 
+    const size_t alignment = page_align;
+    const uint64_t log_physical_size =
+        (wal_builder_.CurrentSize() + alignment - 1) & ~(alignment - 1);
     if (!dict_dirty && manifest_size > 0 &&
-        manifest_size + wal_builder_.CurrentSize() <= opts->manifest_limit)
+        manifest_size + log_physical_size <= opts->manifest_limit)
     {
         std::string_view blob =
             wal_builder_.Finalize(cow_meta_.root_id_, cow_meta_.ttl_root_id_);
         err = IoMgr()->AppendManifest(tbl_ident_, blob, manifest_size);
         CHECK_KV_ERR(err);
-        cow_meta_.manifest_size_ += blob.size();
+        cow_meta_.manifest_size_ += log_physical_size;
     }
     else
     {
@@ -284,10 +285,7 @@ KvError WriteTask::FlushManifest()
                                   mapping,
                                   max_fp_id,
                                   dict_bytes);
-        const size_t direct_io_size = wal_builder_.DirectIoSize();
-        assert(direct_io_size >= snapshot.size());
-
-        err = IoMgr()->SwitchManifest(tbl_ident_, snapshot, direct_io_size);
+        err = IoMgr()->SwitchManifest(tbl_ident_, snapshot);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
         cow_meta_.compression_->ClearDirty();

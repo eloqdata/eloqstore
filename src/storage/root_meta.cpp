@@ -58,11 +58,6 @@ uint32_t ManifestBuilder::CurrentSize() const
     return buff_.size();
 }
 
-size_t ManifestBuilder::DirectIoSize() const
-{
-    return buff_.padded_size();
-}
-
 std::string_view ManifestBuilder::Finalize(PageId new_root, PageId ttl_root)
 {
     EncodeFixed32(buff_.data() + offset_root, new_root);
@@ -74,6 +69,7 @@ std::string_view ManifestBuilder::Finalize(PageId new_root, PageId ttl_root)
     const std::string_view content(buff_.data() + checksum_bytes,
                                    buff_.size() - checksum_bytes);
     EncodeFixed64(buff_.data(), CalcChecksum(content));
+    buff_.AlignTo(page_align);
     return buff_.View();
 }
 

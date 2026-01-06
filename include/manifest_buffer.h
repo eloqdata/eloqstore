@@ -43,6 +43,11 @@ public:
         append(buf, static_cast<size_t>(end - buf));
     }
 
+    void AlignTo(uint64_t alignment)
+    {
+        size_ = (size_ + alignment - 1) & ~(alignment - 1);
+    }
+
     std::string_view View() const
     {
         return view();

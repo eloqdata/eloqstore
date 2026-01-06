@@ -134,17 +134,7 @@ public:
 protected:
     static size_t AlignSize(size_t size)
     {
-        const size_t alignment = page_align;
-        if (size == 0)
-        {
-            return alignment;
-        }
-        const size_t remainder = size % alignment;
-        if (remainder == 0)
-        {
-            return size;
-        }
-        return size + (alignment - remainder);
+        return (size + page_align - 1) & ~(page_align - 1);
     }
 
     void EnsureCapacity(size_t min_capacity)

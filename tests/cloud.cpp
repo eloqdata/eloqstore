@@ -121,6 +121,43 @@ TEST_CASE("cloud prewarm downloads while shards idle", "[cloud][prewarm]")
     store->Stop();
 }
 
+TEST_CASE("cloud prewarm supports writes after restart", "[cloud][prewarm]")
+{
+    using namespace std::chrono_literals;
+    namespace fs = std::filesystem;
+
+    eloqstore::KvOptions options = cloud_options;
+    options.prewarm_cloud_cache = true;
+    eloqstore::EloqStore *store = InitStore(options);
+
+    eloqstore::TableIdent tbl_id{"prewarm_single_write", 0};
+    MapVerifier writer(tbl_id, store);
+    writer.SetAutoClean(false);
+    writer.Upsert(0, 1);
+    writer.Validate();
+
+    store->Stop();
+    CleanupLocalStore(options);
+
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    writer.SetStore(store);
+
+    const fs::path partition_path =
+        fs::path(options.store_path[0]) / tbl_id.ToString();
+
+    REQUIRE(WaitForCondition(5s,
+                             20ms,
+                             [&]() {
+                                 return fs::exists(partition_path) &&
+                                        !fs::is_empty(partition_path);
+                             }));
+
+    writer.Upsert(1, 2);
+    writer.Validate();
+
+    store->Stop();
+}
+
 TEST_CASE("cloud reopen waits on evicting cached file", "[cloud][gc]")
 {
     using namespace std::chrono_literals;

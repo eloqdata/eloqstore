@@ -20,6 +20,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <memory>
 #include <span>
 #include <string>
@@ -32,10 +33,12 @@
 #include <bthread/eloq_module.h>
 #endif
 
+#include "coding.h"
 #include "common.h"
 #include "eloq_store.h"
 #include "kill_point.h"
 #include "kv_options.h"
+#include "storage/root_meta.h"
 #include "storage/shard.h"
 #include "tasks/task.h"
 #include "tasks/write_task.h"
@@ -1237,17 +1240,6 @@ int IouringMgr::Fdatasync(FdIdx fd)
     return ThdTask()->WaitIoResult();
 }
 
-int IouringMgr::Ftruncate(FdIdx fd, off_t length)
-{
-    io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
-    if (fd.second)
-    {
-        sqe->flags |= IOSQE_FIXED_FILE;
-    }
-    io_uring_prep_ftruncate(sqe, fd.first, length);
-    return ThdTask()->WaitIoResult();
-}
-
 int IouringMgr::Statx(int fd, const char *path, struct statx *result)
 {
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
@@ -1470,18 +1462,32 @@ int IouringMgr::UnlinkAt(FdIdx dir_fd, const char *path, bool rmdir)
 
 KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
                                    std::string_view log,
-                                   uint64_t manifest_size)
+                                   uint64_t offset)
 {
-    assert(manifest_size > 0);
-    auto [fd_ref, err] = OpenFD(tbl_id, LruFD::kManifest, false);
+    if (log.empty())
+    {
+        return KvError::NoError;
+    }
+    auto [fd_ref, err] = OpenFD(tbl_id, LruFD::kManifest, true);
     CHECK_KV_ERR(err);
+    fd_ref.Get()->dirty_ = true;
 
     TEST_KILL_POINT_WEIGHT("AppendManifest:Write", 10)
-    int res = Write(fd_ref.FdPair(), log.data(), log.size(), manifest_size);
-    if (res < 0)
+
+    const size_t alignment = page_align;
+    assert((offset & (alignment - 1)) == 0);
+    assert((log.size() & (alignment - 1)) == 0);
+
+    int wres = Write(fd_ref.FdPair(), log.data(), log.size(), offset);
+    if (wres < 0)
     {
         LOG(ERROR) << "append manifest failed " << tbl_id;
-        return ToKvError(res);
+        return ToKvError(wres);
+    }
+    if (wres < log.size())
+    {
+        LOG(ERROR) << "append manifest less than expected " << tbl_id;
+        return KvError::TryAgain;
     }
 
     TEST_KILL_POINT_WEIGHT("AppendManifest:Sync", 10)
@@ -1490,9 +1496,9 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
 
 int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
                               std::string_view name,
-                              std::string_view content,
-                              size_t padded_size)
+                              std::string_view content)
 {
+    assert(!content.empty());
     std::string tmpfile = std::string(name) + TmpSuffix;
     uint64_t tmp_oflags = O_CREAT | O_TRUNC | O_RDWR | O_DIRECT;
     int tmp_fd = OpenAt(dir_fd.FdPair(), tmpfile.c_str(), tmp_oflags, 0644);
@@ -1503,46 +1509,24 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
     }
 
     const char *write_ptr = content.data();
-    size_t io_size = padded_size;
+    size_t io_size = content.size();
     const size_t alignment = page_align;
-    if (io_size > 0)
-    {
-        if ((io_size & (alignment - 1)) != 0 ||
-            (reinterpret_cast<uintptr_t>(write_ptr) & (alignment - 1)) != 0)
-        {
-            Close(tmp_fd);
-            LOG(ERROR) << "snapshot buffer not aligned for direct IO";
-            return -EINVAL;
-        }
-        if (content.size() > io_size)
-        {
-            Close(tmp_fd);
-            LOG(ERROR) << "snapshot logical size exceeds padded size";
-            return -EINVAL;
-        }
-    }
-
-    int res = 0;
-    if (io_size > 0)
-    {
-        res = Write({tmp_fd, false}, write_ptr, io_size, 0);
-    }
+    assert((io_size & (alignment - 1)) == 0);
+    assert((reinterpret_cast<uintptr_t>(write_ptr) & (alignment - 1)) == 0);
+    int res = Write({tmp_fd, false}, write_ptr, io_size, 0);
     if (res < 0)
     {
         Close(tmp_fd);
         LOG(ERROR) << "write temporary file failed " << strerror(-res);
         return res;
     }
-    if (!content.empty() && io_size != content.size())
+    if (res < io_size)
     {
-        res = Ftruncate({tmp_fd, false}, static_cast<off_t>(content.size()));
-        if (res < 0)
-        {
-            Close(tmp_fd);
-            LOG(ERROR) << "truncate temporary file failed " << strerror(-res);
-            return res;
-        }
+        Close(tmp_fd);
+        LOG(ERROR) << "write temporary file less than expected.";
+        return -EIO;
     }
+
     TEST_KILL_POINT("AtomicWriteFile:Sync")
     res = Fdatasync({tmp_fd, false});
     if (res < 0)
@@ -1574,8 +1558,7 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
 }
 
 KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
-                                   std::string_view snapshot,
-                                   size_t padded_size)
+                                   std::string_view snapshot)
 {
     LruFD::Ref fd_ref = GetOpenedFD(tbl_id, LruFD::kManifest);
     if (fd_ref != nullptr)
@@ -1587,8 +1570,7 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
 
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory);
     CHECK_KV_ERR(err);
-    int res = WriteSnapshot(
-        std::move(dir_fd), FileNameManifest, snapshot, padded_size);
+    int res = WriteSnapshot(std::move(dir_fd), FileNameManifest, snapshot);
     if (res < 0)
     {
         return ToKvError(res);
@@ -1599,13 +1581,12 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
 
 KvError IouringMgr::CreateArchive(const TableIdent &tbl_id,
                                   std::string_view snapshot,
-                                  uint64_t ts,
-                                  size_t padded_size)
+                                  uint64_t ts)
 {
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory);
     CHECK_KV_ERR(err);
     const std::string name = ArchiveName(ts);
-    int res = WriteSnapshot(std::move(dir_fd), name, snapshot, padded_size);
+    int res = WriteSnapshot(std::move(dir_fd), name, snapshot);
     if (res < 0)
     {
         return ToKvError(res);
@@ -1689,51 +1670,73 @@ IouringMgr::Manifest::~Manifest()
     }
 }
 
+KvError IouringMgr::Manifest::EnsureBuffered()
+{
+    while (buf_offset_ >= buf_end_)
+    {
+        if (file_offset_ >= file_size_)
+        {
+            return KvError::EndOfFile;
+        }
+        size_t expected = std::min(file_size_ - file_offset_, size_t(buf_size));
+        int res =
+            io_mgr_->Read(fd_.FdPair(), buf_.get(), buf_size, file_offset_);
+        if (res < 0)
+        {
+            KvError err = ToKvError(res);
+            if (err == KvError::TryAgain)
+            {
+                continue;
+            }
+            return err;
+        }
+        else if (res == 0)
+        {
+            return KvError::EndOfFile;
+        }
+        else if (static_cast<size_t>(res) < expected)
+        {
+            // Read less than expected, ensure next read starts from alignment.
+            res &= ~(page_align - 1);
+        }
+
+        file_offset_ += res;
+        buf_end_ = res;
+        buf_offset_ = 0;
+    }
+    return KvError::NoError;
+}
+
 KvError IouringMgr::Manifest::Read(char *dst, size_t n)
 {
     while (n > 0)
     {
-        if (buf_offset_ >= buf_end_)
+        KvError err = EnsureBuffered();
+        if (err != KvError::NoError)
         {
-            if (file_offset_ >= file_size_)
-            {
-                // Reached end of file.
-                return KvError::EndOfFile;
-            }
-            // Read the next page.
-            size_t expected =
-                std::min(file_size_ - file_offset_, size_t(buf_size));
-            int res =
-                io_mgr_->Read(fd_.FdPair(), buf_.get(), buf_size, file_offset_);
-            if (res < 0)
-            {
-                KvError err = ToKvError(res);
-                if (err == KvError::TryAgain)
-                {
-                    continue;
-                }
-                return err;
-            }
-            else if (res == 0)
-            {
-                return KvError::EndOfFile;
-            }
-            else if (static_cast<size_t>(res) < expected)
-            {
-                // Read less than expected, we need to ensure file_offset_ is
-                // aligned for the next retry operation.
-                res &= ~(page_align - 1);
-            }
-
-            file_offset_ += res;
-            buf_end_ = res;
-            buf_offset_ = 0;
+            return err;
         }
 
         size_t bytes = std::min(size_t(buf_end_ - buf_offset_), n);
         memcpy(dst, buf_.get() + buf_offset_, bytes);
         buf_offset_ += bytes;
         dst += bytes;
+        n -= bytes;
+    }
+    return KvError::NoError;
+}
+
+KvError IouringMgr::Manifest::SkipPadding(size_t n)
+{
+    while (n > 0)
+    {
+        KvError err = EnsureBuffered();
+        if (err != KvError::NoError)
+        {
+            return err;
+        }
+        size_t bytes = std::min(size_t(buf_end_ - buf_offset_), n);
+        buf_offset_ += bytes;
         n -= bytes;
     }
     return KvError::NoError;
@@ -2368,8 +2371,7 @@ size_t CloudStoreMgr::GetPrewarmFilesPulled() const
 }
 
 KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
-                                      std::string_view snapshot,
-                                      size_t padded_size)
+                                      std::string_view snapshot)
 {
     LruFD::Ref fd_ref = GetOpenedFD(tbl_id, LruFD::kManifest);
     if (fd_ref != nullptr)
@@ -2396,8 +2398,7 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
 
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory);
     CHECK_KV_ERR(err);
-    int res = WriteSnapshot(
-        std::move(dir_fd), FileNameManifest, snapshot, padded_size);
+    int res = WriteSnapshot(std::move(dir_fd), FileNameManifest, snapshot);
     if (res < 0)
     {
         if (dequed)
@@ -2429,8 +2430,7 @@ void CloudStoreMgr::CleanManifest(const TableIdent &tbl_id)
 
 KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
                                      std::string_view snapshot,
-                                     uint64_t ts,
-                                     size_t padded_size)
+                                     uint64_t ts)
 {
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory);
     CHECK_KV_ERR(err);
@@ -2440,7 +2440,7 @@ KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
         return ToKvError(res);
     }
     const std::string name = ArchiveName(ts);
-    res = WriteSnapshot(std::move(dir_fd), name, snapshot, padded_size);
+    res = WriteSnapshot(std::move(dir_fd), name, snapshot);
     if (res < 0)
     {
         return ToKvError(res);
@@ -3215,8 +3215,7 @@ KvError MemStoreMgr::AppendManifest(const TableIdent &tbl_id,
 }
 
 KvError MemStoreMgr::SwitchManifest(const TableIdent &tbl_id,
-                                    std::string_view snapshot,
-                                    size_t /*padded_size*/)
+                                    std::string_view snapshot)
 {
     auto it = store_.find(tbl_id);
     if (it == store_.end())
@@ -3231,8 +3230,7 @@ KvError MemStoreMgr::SwitchManifest(const TableIdent &tbl_id,
 
 KvError MemStoreMgr::CreateArchive(const TableIdent &tbl_id,
                                    std::string_view snapshot,
-                                   uint64_t ts,
-                                   size_t /*padded_size*/)
+                                   uint64_t ts)
 {
     LOG(FATAL) << "not implemented";
 }
@@ -3245,6 +3243,16 @@ KvError MemStoreMgr::Manifest::Read(char *dst, size_t n)
     }
     memcpy(dst, content_.data(), n);
     content_ = content_.substr(n);
+    return KvError::NoError;
+}
+
+KvError MemStoreMgr::Manifest::SkipPadding(size_t n)
+{
+    if (content_.length() < n)
+    {
+        return KvError::EndOfFile;
+    }
+    content_.remove_prefix(n);
     return KvError::NoError;
 }
 
@@ -3277,52 +3285,26 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
     const size_t alignment = buffer.alignment();
     const char *write_ptr = buffer.data();
 
-    if (padded_size > 0)
+    assert(write_ptr != nullptr);
+    assert(padded_size > 0);
+    assert((reinterpret_cast<uintptr_t>(write_ptr) & (alignment - 1)) == 0);
+    assert(logical_size == padded_size);
+    size_t off = 0;
+    while (off < padded_size)
     {
-        if (write_ptr == nullptr)
+        size_t to_write = padded_size - off;
+        int wres = Write({fd, false}, write_ptr + off, to_write, off);
+        if (wres < 0)
         {
-            LOG(ERROR) << "direct IO buffer missing data for write: "
-                       << path_str;
-            status = KvError::InvalidArgs;
+            status = ToKvError(wres);
+            break;
         }
-        else if (alignment == 0 || (reinterpret_cast<uintptr_t>(write_ptr) &
-                                    (alignment - 1)) != 0)
+        if (wres == 0)
         {
-            LOG(ERROR) << "direct IO buffer not aligned for write: "
-                       << path_str;
-            status = KvError::InvalidArgs;
+            status = KvError::IoFail;
+            break;
         }
-        else
-        {
-            size_t off = 0;
-            while (off < padded_size)
-            {
-                size_t to_write = padded_size - off;
-                int wres = Write({fd, false}, write_ptr + off, to_write, off);
-                if (wres < 0)
-                {
-                    status = ToKvError(wres);
-                    break;
-                }
-                if (wres == 0)
-                {
-                    status = KvError::IoFail;
-                    break;
-                }
-                off += static_cast<size_t>(wres);
-            }
-        }
-    }
-
-    if (status == KvError::NoError && logical_size != padded_size)
-    {
-        int res = Ftruncate({fd, false}, static_cast<off_t>(logical_size));
-        if (res < 0)
-        {
-            LOG(ERROR) << "failed to truncate file: " << path_str
-                       << ", error=" << strerror(-res);
-            status = ToKvError(res);
-        }
+        off += static_cast<size_t>(wres);
     }
 
     sqe = GetSQE(UserDataType::KvTask, ThdTask());

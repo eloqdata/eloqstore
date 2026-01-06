@@ -32,7 +32,6 @@ public:
     void Reset();
     bool Empty() const;
     uint32_t CurrentSize() const;
-    size_t DirectIoSize() const;
 
     // checksum(8B)|root(4B)|ttl_root(4B)|log_size(4B)
     static constexpr uint16_t header_bytes =
