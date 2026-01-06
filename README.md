@@ -1,3 +1,19 @@
+<div align="center">
+<a href='https://www.eloqdata.com'>
+<img src="images/eloqstore_github_logo.jpg" alt="EloqStore" height=150></img>
+</a>
+
+---
+
+[![License: BSL 2.0](https://img.shields.io/badge/License-BSL_2.0-blue.svg)](https://github.com/eloqdata/eloqstore/blob/main/LICENSE.md)
+[![Language](https://img.shields.io/badge/language-C++-orange)](https://isocpp.org/)
+[![GitHub issues](https://img.shields.io/github/issues/eloqdata/eloqstore)](https://github.com/eloqdata/eloqstore/issues)
+[![Release](https://img.shields.io/badge/release-latest-blue)](https://www.eloqdata.com/download)
+<a href="https://discord.com/invite/nmYjBkfak6">
+  <img alt="EloqKV" src="https://img.shields.io/badge/discord-blue.svg?logo=discord&logoColor=white">
+</a>
+</div>
+
 # EloqStore
 
 ## 🔨 Compile
