@@ -1,13 +1,19 @@
 ---
-name: Feature request
-about: Request a feature or enhancement.
+name: ✨ Feature Request
+about: Suggest a new feature or capability
 title: "[Feature]: "
 labels: feature
 ---
-- **Summary (Provide a general summary of the issue in the Title above):**(required)
 
-- **Detailed Description (Provide a detailed description of the change or addition you are proposing):**(required)
+**Feature Summary**
 
-- **Software version (the version of the software you're running):**(required)
-e.g. 0.0.1
-- **Possible Implementation(suggest an idea for implementing addition or change)**(optional)
+<!-- What new feature do you want to add? -->
+
+**Motivation**
+
+<!-- Why is this feature needed? What problem does it solve? -->
+
+**Proposed Solution**
+
+<!-- How do you imagine it being implemented or used? -->
+

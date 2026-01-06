@@ -1,15 +1,20 @@
 ---
-name: Bug report
-about: File a bug report.
+name: 🐞 Bug Report
+about: Report a bug or unexpected behavior
 title: "[Bug]: "
 labels: bug
 ---
-- **Software version (the version of the software you're running):**(required)
-e.g. 0.0.1
-- **Reproduce steps (describe steps of reproducing the bug):**(required)
 
-- **Expected result (describe the right result as expected):**(required)
+**What happened?**
 
-- **Actual result (describe the incorrect result actually happened):**(required)
+<!-- Describe the bug and what you expected to happen -->
 
-- **Related issues (references to the related issues, e.g. eloqdb/repository#number):**(optional)
+**Steps to Reproduce**
+
+
+**Environment**
+
+- OS:
+- Version:
+- Any other relevant details:
+- Any related issues:
