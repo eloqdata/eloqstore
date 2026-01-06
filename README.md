@@ -18,7 +18,7 @@
 
 **EloqStore** is a high-performance hybrid-tier key-value storage engine that combines object storage (S3-compatible) with local NVMe SSDs to deliver exceptional write throughput and sub-millisecond read latency. Built in C++ with a focus on production-grade reliability and performance.
 
-EloqStore serves as the foundational storage layer for EloqData's database products (EloqKV, EloqDoc, EloqSQL), enabling SSD-based workloads to achieve memory-like latency characteristics while maintaining durability and cost efficiency.
+EloqStore serves as the foundational storage layer for EloqData's database products ([EloqKV](https://github.com/eloqdata/eloqkv), [EloqDoc](https://github.com/eloqdata/eloqdoc), [EloqSQL]https://github.com/eloqdata/eloqsql), enabling SSD-based workloads to achieve memory-like latency characteristics while maintaining durability and cost efficiency.
 
 For example, EloqKV on EloqStore delivers 4x higher disk access throughput compared to Redis's memory access, with **10x** cost reduction, making it a viable drop-in replacement for Redis.
 
