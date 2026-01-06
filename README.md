@@ -59,23 +59,19 @@ The engine uses a copy-on-write (COW) B-tree structure that enables lock-free re
 
 ### Cloud & Enterprise
 
-Managed service offering with:
+Managed service [EloqCloud](https://cloue.eloqdata.com) offering with:
 - Serverless architecture (no infrastructure management)
 - High performance and fast scaling
 - Enterprise-grade security and compliance
 
-## 🌐 Protocol Compatibility
+## 🌐 Ecosystem
 
-EloqStore powers database products with full protocol compatibility:
+EloqStore exposes a C++ API for direct integration. EloqStore powers different kinds of database products including:
 
 - **Redis/Valkey Protocol**: Drop-in replacement for Redis with persistent storage
 - **MongoDB Wire Protocol**: Document database with MongoDB API compatibility
-- **SQL Interface**: Relational database with PostgreSQL-compatible SQL
+- **SQL Interface**: Relational database with MySQL API compatibility
 - **Vector Search**: Native vector indexing and similarity search capabilities
-
-## 🔧 Integration
-
-EloqStore exposes a C++ API for direct integration. For higher-level database products, use EloqKV (Redis-compatible), EloqDoc (MongoDB-compatible), or EloqSQL (MySQL-compatible).
 
 ## 🔨 Compile
 
