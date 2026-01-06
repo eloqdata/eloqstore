@@ -20,7 +20,7 @@
 
 EloqStore serves as the foundational storage layer for EloqData's database products (EloqKV, EloqDoc, EloqSQL), enabling SSD-based workloads to achieve memory-like latency characteristics while maintaining durability and cost efficiency.
 
-EloqKV on EloqStore delivers 4x higher disk access throughput compared to Redis's memory access, with **10x** cost reduction, making it a viable drop-in replacement for Redis.
+For example, EloqKV on EloqStore delivers 4x higher disk access throughput compared to Redis's memory access, with **10x** cost reduction, making it a viable drop-in replacement for Redis.
 
 <div align="center">
 <a href='https://www.eloqdata.com'>
@@ -59,7 +59,7 @@ The engine uses a copy-on-write (COW) B-tree structure that enables lock-free re
 
 ### Cloud & Enterprise
 
-Managed service [EloqCloud](https://cloue.eloqdata.com) offering with:
+Managed service [EloqCloud](https://cloud.eloqdata.com) offering with:
 - Serverless architecture (no infrastructure management)
 - High performance and fast scaling
 - Enterprise-grade security and compliance
