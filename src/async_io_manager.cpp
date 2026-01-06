@@ -1520,7 +1520,7 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
         LOG(ERROR) << "write temporary file failed " << strerror(-res);
         return res;
     }
-    if (res < io_size)
+    if (res < static_cast<int>(io_size))
     {
         Close(tmp_fd);
         LOG(ERROR) << "write temporary file less than expected.";
