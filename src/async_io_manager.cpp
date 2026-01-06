@@ -1484,7 +1484,7 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
         LOG(ERROR) << "append manifest failed " << tbl_id;
         return ToKvError(wres);
     }
-    if (wres < log.size())
+    if (wres < static_cast<int>(log.size()))
     {
         LOG(ERROR) << "append manifest less than expected " << tbl_id;
         return KvError::TryAgain;
