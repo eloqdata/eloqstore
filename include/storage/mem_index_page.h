@@ -148,7 +148,7 @@ public:
 
     void Seek(std::string_view key);
 
-    std::string PeekNextKey() const;
+    void PeekNextKey(std::string &key) const;
 
     std::string_view Key() const
     {

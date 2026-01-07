@@ -232,14 +232,15 @@ const char *IndexPageIter::DecodeEntry(const char *ptr,
     return ptr;
 }
 
-std::string IndexPageIter::PeekNextKey() const
+void IndexPageIter::PeekNextKey(std::string &key) const
 {
+    key.clear();
     const char *pt = page_.data() + curr_offset_;
     const char *limit = page_.data() + restart_offset_;
 
     if (pt >= limit)
     {
-        return std::string();
+        return;
     }
 
     uint32_t shared = 0, non_shared = 0;
@@ -247,13 +248,13 @@ std::string IndexPageIter::PeekNextKey() const
 
     if (pt == nullptr || key_.size() < shared)
     {
-        return std::string();
+        key.clear();
     }
     else
     {
-        std::string peek_key{key_.data(), shared};
-        peek_key.append(pt, non_shared);
-        return peek_key;
+        key.reserve(shared + non_shared);
+        key.append(key_.data(), shared);
+        key.append(pt, non_shared);
     }
 }
 

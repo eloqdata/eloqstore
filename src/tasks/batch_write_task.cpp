@@ -1243,10 +1243,11 @@ std::string BatchWriteTask::RightBound(bool is_data_page)
 {
     size_t level = is_data_page ? 0 : 1;
     auto stack_it = stack_.crbegin() + level;
+    std::string next_key{};
     while (stack_it != stack_.crend())
     {
         IndexPageIter &idx_iter = (*stack_it)->idx_page_iter_;
-        std::string next_key = idx_iter.PeekNextKey();
+        idx_iter.PeekNextKey(next_key);
         if (!next_key.empty())
         {
             return next_key;
@@ -1255,7 +1256,7 @@ std::string BatchWriteTask::RightBound(bool is_data_page)
     }
 
     // An empty string for right bound means positive infinity.
-    return std::string{};
+    return next_key;
 }
 
 KvError BatchWriteTask::DeleteTree(PageId page_id, bool update_prev)

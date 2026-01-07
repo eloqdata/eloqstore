@@ -219,7 +219,7 @@ struct KvOptions
     /**
      * @brief Size of mapping arena.
      */
-    size_t mapping_arena_size = 16;
+    size_t mapping_arena_size = 128;
 
     std::function<bool(const TableIdent &)> prewarm_filter;
 };

@@ -16,6 +16,8 @@
 #ifdef ELOQ_MODULE_ENABLED
 #include <bthread/eloq_module.h>
 #endif
+DEFINE_uint64(max_running_writing, 0, "max_running_writing");
+
 namespace eloqstore
 {
 Shard::Shard(const EloqStore *store, size_t shard_id, uint32_t fd_limit)
@@ -183,17 +185,34 @@ PagesPool *Shard::PagePool()
 
 void Shard::OnReceivedReq(KvRequest *req)
 {
-    if (auto wreq = dynamic_cast<WriteRequest *>(req); wreq != nullptr)
+    if (!req->ReadOnly())
     {
-        // Try acquire lock to ensure write operation is executed
-        // sequentially on each table partition.
-        auto [it, ok] = pending_queues_.try_emplace(req->tbl_id_);
-        if (!ok)
+        auto wreq = reinterpret_cast<WriteRequest *>(req);
+        auto it = pending_queues_.find(req->tbl_id_);
+        if (it != pending_queues_.end())
         {
             // Wait on pending write queue because of other write task.
             it->second.PushBack(wreq);
             return;
         }
+
+        if (FLAGS_max_running_writing != 0 &&
+            running_writing_tasks_ >= FLAGS_max_running_writing)
+        {
+            // Hit concurrency limit, re-enqueue for later processing.
+            requests_.enqueue(req);
+#ifdef ELOQ_MODULE_ENABLED
+            req_queue_size_.fetch_add(1, std::memory_order_relaxed);
+#endif
+            return;
+        }
+
+        // Try acquire lock to ensure write operation is executed
+        // sequentially on each table partition.
+        auto [inserted_it, ok] = pending_queues_.try_emplace(req->tbl_id_);
+        (void)inserted_it;
+        assert(ok);
+        ++running_writing_tasks_;
     }
 
     ProcessReq(req);
@@ -386,6 +405,7 @@ void Shard::OnTaskFinished(KvTask *task)
         {
             // No more write requests, remove the pending queue.
             pending_queues_.erase(it);
+            --running_writing_tasks_;
         }
         else
         {

@@ -48,6 +48,7 @@ public:
     KvTask *running_;
     CircularQueue<KvTask *> ready_tasks_;
     CircularQueue<KvTask *> tasks_to_run_next_round_;
+    size_t running_writing_tasks_{};
 
 private:
     void WorkLoop();

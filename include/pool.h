@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstddef>
 #include <utility>
 #include <vector>
 
@@ -28,7 +27,7 @@ public:
         return value;
     }
 
-    void Release(T value)
+    void Release(T &&value)
     {
         if (max_cached_ == 0 || pool_.size() >= max_cached_)
         {

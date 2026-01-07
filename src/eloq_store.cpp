@@ -505,6 +505,11 @@ KvError KvRequest::Error() const
     return err_;
 }
 
+bool KvRequest::ReadOnly() const
+{
+    return Type() < RequestType::BatchWrite;
+}
+
 bool KvRequest::RetryableErr() const
 {
     return IsRetryableErr(err_);
