@@ -16,8 +16,6 @@
 #ifdef ELOQ_MODULE_ENABLED
 #include <bthread/eloq_module.h>
 #endif
-DEFINE_uint64(max_running_writing, 0, "max_running_writing");
-
 namespace eloqstore
 {
 Shard::Shard(const EloqStore *store, size_t shard_id, uint32_t fd_limit)
@@ -196,8 +194,9 @@ void Shard::OnReceivedReq(KvRequest *req)
             return;
         }
 
-        if (FLAGS_max_running_writing != 0 &&
-            running_writing_tasks_ >= FLAGS_max_running_writing)
+        const uint32_t write_limit =
+            store_->options_.max_concurrent_writes;
+        if (write_limit != 0 && running_writing_tasks_ >= write_limit)
         {
             // Hit concurrency limit, re-enqueue for later processing.
             requests_.enqueue(req);
@@ -395,8 +394,9 @@ bool Shard::ExecuteReadyTasks()
 
 void Shard::OnTaskFinished(KvTask *task)
 {
-    if (auto *wtask = dynamic_cast<WriteTask *>(task); wtask != nullptr)
+    if (!task->ReadOnly())
     {
+        auto wtask = reinterpret_cast<WriteTask *>(task);
         auto it = pending_queues_.find(wtask->TableId());
         assert(it != pending_queues_.end());
         task_mgr_.FreeTask(task);

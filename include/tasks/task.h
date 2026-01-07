@@ -44,11 +44,11 @@ enum struct TaskType
 {
     Read = 0,
     Scan,
-    BatchWrite,
-    BackgroundWrite,
     EvictFile,
     Prewarm,
-    ListObject
+    ListObject,
+    BatchWrite,
+    BackgroundWrite
 };
 
 std::pair<Page, KvError> LoadPage(const TableIdent &tbl_id,
@@ -97,6 +97,10 @@ public:
     virtual ~KvTask() = default;
     virtual TaskType Type() const = 0;
     virtual void Abort() {};
+    bool ReadOnly() const
+    {
+        return Type() < TaskType::BatchWrite;
+    }
     void Yield();
     void YieldToNextRound();
     /**
