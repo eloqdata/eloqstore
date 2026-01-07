@@ -38,6 +38,7 @@ class KvRequest
 public:
     virtual ~KvRequest() = default;
     virtual RequestType Type() const = 0;
+    bool ReadOnly() const;
     KvError Error() const;
     bool RetryableErr() const;
     const char *ErrMessage() const;

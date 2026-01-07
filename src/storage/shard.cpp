@@ -183,17 +183,34 @@ PagesPool *Shard::PagePool()
 
 void Shard::OnReceivedReq(KvRequest *req)
 {
-    if (auto wreq = dynamic_cast<WriteRequest *>(req); wreq != nullptr)
+    if (!req->ReadOnly())
     {
-        // Try acquire lock to ensure write operation is executed
-        // sequentially on each table partition.
-        auto [it, ok] = pending_queues_.try_emplace(req->tbl_id_);
-        if (!ok)
+        auto wreq = reinterpret_cast<WriteRequest *>(req);
+        auto it = pending_queues_.find(req->tbl_id_);
+        if (it != pending_queues_.end())
         {
             // Wait on pending write queue because of other write task.
             it->second.PushBack(wreq);
             return;
         }
+
+        const uint32_t write_limit = store_->options_.max_concurrent_writes;
+        if (write_limit != 0 && running_writing_tasks_ >= write_limit)
+        {
+            // Hit concurrency limit, re-enqueue for later processing.
+            requests_.enqueue(req);
+#ifdef ELOQ_MODULE_ENABLED
+            req_queue_size_.fetch_add(1, std::memory_order_relaxed);
+#endif
+            return;
+        }
+
+        // Try acquire lock to ensure write operation is executed
+        // sequentially on each table partition.
+        auto [inserted_it, ok] = pending_queues_.try_emplace(req->tbl_id_);
+        (void) inserted_it;
+        assert(ok);
+        ++running_writing_tasks_;
     }
 
     ProcessReq(req);
@@ -376,8 +393,9 @@ bool Shard::ExecuteReadyTasks()
 
 void Shard::OnTaskFinished(KvTask *task)
 {
-    if (auto *wtask = dynamic_cast<WriteTask *>(task); wtask != nullptr)
+    if (!task->ReadOnly())
     {
+        auto wtask = reinterpret_cast<WriteTask *>(task);
         auto it = pending_queues_.find(wtask->TableId());
         assert(it != pending_queues_.end());
         task_mgr_.FreeTask(task);
@@ -386,6 +404,7 @@ void Shard::OnTaskFinished(KvTask *task)
         {
             // No more write requests, remove the pending queue.
             pending_queues_.erase(it);
+            --running_writing_tasks_;
         }
         else
         {

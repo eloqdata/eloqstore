@@ -142,6 +142,11 @@ int KvOptions::LoadFromIni(const char *path)
         max_inflight_write =
             reader.GetUnsigned(sec_run, "max_inflight_write", 4096);
     }
+    if (reader.HasValue(sec_run, "max_concurrent_writes"))
+    {
+        max_concurrent_writes = reader.GetUnsigned(
+            sec_run, "max_concurrent_writes", max_concurrent_writes);
+    }
     if (reader.HasValue(sec_run, "max_write_batch_pages"))
     {
         max_write_batch_pages =
@@ -318,6 +323,7 @@ bool KvOptions::operator==(const KvOptions &other) const
            manifest_limit == other.manifest_limit &&
            fd_limit == other.fd_limit && io_queue_size == other.io_queue_size &&
            max_inflight_write == other.max_inflight_write &&
+           max_concurrent_writes == other.max_concurrent_writes &&
            max_write_batch_pages == other.max_write_batch_pages &&
            buf_ring_size == other.buf_ring_size &&
            coroutine_stack_size == other.coroutine_stack_size &&
