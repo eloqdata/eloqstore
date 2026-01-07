@@ -28,6 +28,13 @@ For example, EloqKV on EloqStore delivers 4x higher disk access throughput compa
 </a>
 </div>
 
+## 📋 Requirements
+
+EloqStore uses `io_uring` for high-performance asynchronous I/O operations. As a result, it requires:
+
+- **Minimum OS**: Ubuntu 24.04 or later (or equivalent Linux kernel 6.8+)
+- **Kernel**: Linux kernel 6.8+ (required for full io_uring support)
+
 
 ## 🏗️ Architecture
 
@@ -75,6 +82,23 @@ EloqStore exposes a C++ API for direct integration. EloqStore powers different k
 
 ## 🔨 Compile
 
+### Install Dependencies
+
+For Ubuntu 24.04, you can install all required dependencies using the provided script:
+
+```shell
+bash scripts/install_dependency_ubuntu2404.sh
+```
+
+This script installs all necessary dependencies including:
+- Build tools (CMake, GCC, Ninja)
+- System libraries (Boost, glog, jsoncpp, liburing, zstd, etc.)
+- AWS SDK C++ (S3)
+- Testing framework (Catch2)
+- Additional libraries (Abseil, gRPC, etc.)
+
+**Note**: This script requires sudo privileges and may take several minutes to complete.
+
 ### Debug Mode
 
 ```shell
@@ -99,9 +123,33 @@ cd ..
 
 ### Run Unit Tests
 
+EloqStore requires an S3-compatible object storage backend for testing. MinIO is recommended for local development and testing.
+
+**1. Download and start MinIO:**
+
+```shell
+# Download MinIO
+wget https://dl.min.io/server/minio/release/linux-amd64/minio
+chmod +x minio
+
+# Start MinIO server (runs on port 9000 by default)
+./minio server /tmp/minio-data --console-address ":9001"
+```
+
+**2. Create test bucket
+
+```shell
+mc alias set 'myminio' 'http://127.0.0.1:9000' 'minioadmin' 'minioadmin'
+mc mb myminio/eloqstore
+```
+
+**3. Run unit tests:**
+
 ```shell
 ctest --test-dir build/tests/
 ```
+
+**Note**: Ensure MinIO is running before executing the tests. The tests will connect to MinIO running on `127.0.0.1:9000` by default.
 
 ### Benchmark
 
