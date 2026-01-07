@@ -8,14 +8,22 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
     container:
       image: eloqdata/eloq-dev-ci-ubuntu2404:latest
+      options: --user root
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
         submodules: recursive
+
+    - name: Fix permissions
+      run: |
+        chmod -R a+rwx $GITHUB_WORKSPACE || true
 
     - name: Configure CMake
       run: |
