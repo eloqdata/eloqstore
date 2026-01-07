@@ -25,6 +25,10 @@ jobs:
       run: |
         chmod -R a+rwx $GITHUB_WORKSPACE || true
 
+    - name: Configure Git safe directory
+      run: |
+        git config --global --add safe.directory $GITHUB_WORKSPACE
+
     - name: Configure CMake
       run: |
         mkdir -p build
@@ -34,6 +38,30 @@ jobs:
     - name: Build
       run: |
         cmake --build build -j$(nproc)
+
+    - name: Install and start MinIO
+      run: |
+        # Download MinIO server
+        wget -q https://dl.min.io/server/minio/release/linux-amd64/minio
+        chmod +x minio
+        # Download MinIO client
+        wget -q https://dl.min.io/client/mc/release/linux-amd64/mc
+        chmod +x mc
+        # Start MinIO server in background
+        mkdir -p /tmp/minio-data
+        ./minio server /tmp/minio-data --console-address ":9001" &
+        MINIO_PID=$!
+        # Wait for MinIO to be ready
+        sleep 5
+        # Configure MinIO client and create bucket (retry until MinIO is ready)
+        for i in {1..30}; do
+          if ./mc alias set myminio http://127.0.0.1:9000 minioadmin minioadmin 2>/dev/null; then
+            ./mc mb myminio/eloqstore || true
+            break
+          fi
+          sleep 1
+        done
+        echo "MINIO_PID=$MINIO_PID" >> $GITHUB_ENV
 
     - name: Run unit tests
       run: |
