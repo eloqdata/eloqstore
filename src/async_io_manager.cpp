@@ -1474,7 +1474,7 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
 
     TEST_KILL_POINT_WEIGHT("AppendManifest:Write", 10)
 
-    const size_t alignment = page_align;
+    [[maybe_unused]] const size_t alignment = page_align;
     assert((offset & (alignment - 1)) == 0);
     assert((log.size() & (alignment - 1)) == 0);
 
@@ -1510,7 +1510,7 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
 
     const char *write_ptr = content.data();
     size_t io_size = content.size();
-    const size_t alignment = page_align;
+    [[maybe_unused]] const size_t alignment = page_align;
     assert((io_size & (alignment - 1)) == 0);
     assert((reinterpret_cast<uintptr_t>(write_ptr) & (alignment - 1)) == 0);
     int res = Write({tmp_fd, false}, write_ptr, io_size, 0);
@@ -1520,7 +1520,7 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
         LOG(ERROR) << "write temporary file failed " << strerror(-res);
         return res;
     }
-    if (res < io_size)
+    if (res < static_cast<int>(io_size))
     {
         Close(tmp_fd);
         LOG(ERROR) << "write temporary file less than expected.";
@@ -3281,8 +3281,8 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
 
     KvError status = KvError::NoError;
     const size_t padded_size = buffer.padded_size();
-    const size_t logical_size = buffer.size();
-    const size_t alignment = buffer.alignment();
+    [[maybe_unused]] const size_t logical_size = buffer.size();
+    [[maybe_unused]] const size_t alignment = buffer.alignment();
     const char *write_ptr = buffer.data();
 
     assert(write_ptr != nullptr);
