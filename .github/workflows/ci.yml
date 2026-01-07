@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container:
+      image: eloqdata/eloq-dev-ci-ubuntu2404:latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Configure CMake
+      run: |
+        mkdir -p build
+        cmake -B build -S . \
+          -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build
+      run: |
+        cmake --build build -j$(nproc)
+
+    - name: Run unit tests
+      run: |
+        ctest --test-dir build/tests/ --output-on-failure -V
+
