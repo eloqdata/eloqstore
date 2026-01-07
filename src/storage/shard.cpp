@@ -194,8 +194,7 @@ void Shard::OnReceivedReq(KvRequest *req)
             return;
         }
 
-        const uint32_t write_limit =
-            store_->options_.max_concurrent_writes;
+        const uint32_t write_limit = store_->options_.max_concurrent_writes;
         if (write_limit != 0 && running_writing_tasks_ >= write_limit)
         {
             // Hit concurrency limit, re-enqueue for later processing.
@@ -209,7 +208,7 @@ void Shard::OnReceivedReq(KvRequest *req)
         // Try acquire lock to ensure write operation is executed
         // sequentially on each table partition.
         auto [inserted_it, ok] = pending_queues_.try_emplace(req->tbl_id_);
-        (void)inserted_it;
+        (void) inserted_it;
         assert(ok);
         ++running_writing_tasks_;
     }
