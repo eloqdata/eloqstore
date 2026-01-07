@@ -1,3 +1,10 @@
+EloqStore is available under a dual license. You may choose to use EloqStore under either:
+
+1. Business Source License 2.0 (BSL 2.0) - see below
+2. GNU Affero General Public License, version 3 (AGPL v3) - see AGPL section below
+
+---
+
 Business Source License 2.0
 
 Copyright (c) 2026 EloqData
@@ -87,5 +94,28 @@ For commercial use of the Licensed Work beyond the restrictions set forth in Sec
 
 ---
 
-END OF TERMS AND CONDITIONS
+END OF BSL 2.0 TERMS AND CONDITIONS
+
+---
+
+GNU AFFERO GENERAL PUBLIC LICENSE
+Version 3, 19 November 2007
+
+Copyright (C) 2026-present EloqData Inc.
+
+This program is free software: you can redistribute it and/or modify
+it under the terms of the GNU Affero General Public License, version 3,
+as published by the Free Software Foundation.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU Affero General Public License for more details.
+
+You should have received a copy of the GNU Affero General Public License
+along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+---
+
+END OF AGPL v3 TERMS AND CONDITIONS
 

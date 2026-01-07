@@ -5,7 +5,7 @@
 
 ---
 
-[![License: BSL 2.0](https://img.shields.io/badge/License-BSL_2.0-blue.svg)](https://github.com/eloqdata/eloqstore/blob/main/LICENSE.md)
+[![License: BSL 2.0](https://img.shields.io/badge/License-BSL_2.0-blue.svg)](https://github.com/eloqdata/eloqstore/blob/main/LICENSE.md) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-green.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Language](https://img.shields.io/badge/language-C++-orange)](https://isocpp.org/)
 [![GitHub issues](https://img.shields.io/github/issues/eloqdata/eloqstore)](https://github.com/eloqdata/eloqstore/issues)
 [![Release](https://img.shields.io/badge/release-latest-blue)](https://www.eloqdata.com/download)
@@ -53,9 +53,9 @@ The engine uses a copy-on-write (COW) B-tree structure that enables lock-free re
 
 ## 🚀 Deployment Models
 
-### Open Source & Self-Hosted
+### Self-Hosted
 
-100% open source under BSL 2.0 license. Deploy on-premises or in your cloud infrastructure with full control over data and operations. No vendor lock-in, complete source code access.
+Deploy on-premises or in your cloud infrastructure with full control over data and operations. EloqStore is available under dual license: BSL 2.0 or AGPL v3. Complete source code access.
 
 ### Cloud & Enterprise
 
