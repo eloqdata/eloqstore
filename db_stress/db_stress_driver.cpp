@@ -128,7 +128,7 @@ void RunStressTest(int argc, char **argv)
         opts.data_page_size = FLAGS_data_page_size;
         opts.data_page_restart_interval = FLAGS_data_page_restart_interval;
         opts.index_page_restart_interval = FLAGS_index_page_restart_interval;
-        opts.index_buffer_pool_size = FLAGS_index_buffer_pool_size;
+        opts.buffer_pool_size = FLAGS_buffer_pool_size;
         opts.io_queue_size = FLAGS_io_queue_size;
         opts.fd_limit = FLAGS_fd_limit;
         opts.manifest_limit = FLAGS_manifest_limit;

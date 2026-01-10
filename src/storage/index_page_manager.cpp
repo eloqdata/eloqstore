@@ -49,8 +49,13 @@ MemIndexPage *IndexPageManager::AllocIndexPage()
         if (!IsFull())
         {
             auto &new_page =
-                index_pages_.emplace_back(std::make_unique<MemIndexPage>());
+                index_pages_.emplace_back(std::make_unique<MemIndexPage>(true));
             next_free = new_page.get();
+            if (__builtin_expect(next_free->PagePtr() == nullptr, 0))
+            {
+                index_pages_.pop_back();
+                return nullptr;
+            }
         }
         else
         {
@@ -92,7 +97,7 @@ bool IndexPageManager::IsFull() const
 {
     // Calculate current total memory usage
     size_t current_size = index_pages_.size() * Options()->data_page_size;
-    return current_size >= Options()->index_buffer_pool_size;
+    return current_size >= Options()->buffer_pool_size;
 }
 
 std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(

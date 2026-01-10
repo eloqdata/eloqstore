@@ -82,7 +82,7 @@ DEFINE_uint32(num_threads, 8, "Amount of threads");
 DEFINE_uint32(data_page_restart_interval, 16, "interval of datapage restart");
 DEFINE_uint32(index_page_restart_interval, 16, "interval of indexpage restart");
 DEFINE_uint32(init_page_count, 1 << 15, "nums of init page");
-DEFINE_uint32(index_buffer_pool_size, 1 << 15, "size of index buffer pool");
+DEFINE_uint32(buffer_pool_size, 1 << 15, "size of shared buffer pool");
 DEFINE_uint64(manifest_limit, 16 << 20, "limit of manifest");
 DEFINE_uint32(fd_limit, 10000, "limit of fd");
 DEFINE_uint32(io_queue_size, 4096, "size of io_queue");

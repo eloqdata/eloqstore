@@ -37,6 +37,10 @@ public:
     Page(const Page &) = delete;
     Page &operator=(const Page &) = delete;
     ~Page();
+    explicit operator bool() const
+    {
+        return ptr_ != nullptr;
+    }
     friend void swap(Page &lhs, Page &rhs)
     {
         std::swap(lhs.ptr_, rhs.ptr_);
@@ -59,7 +63,7 @@ public:
     void Free(char *ptr);
 
 private:
-    void Extend(size_t pages);
+    bool Extend(size_t pages);
 
     struct FreePage
     {
@@ -76,6 +80,8 @@ private:
     std::vector<MemChunk> chunks_;
     FreePage *free_head_;
     size_t free_cnt_;
+    size_t max_pages_;
+    size_t total_pages_;
 };
 
 }  // namespace eloqstore
