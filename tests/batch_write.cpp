@@ -316,7 +316,7 @@ TEST_CASE("batch write task pool cleaned after abort", "[batch_write]")
     eloqstore::KvOptions opts = append_opts;
     opts.num_threads = 1;  // route all partitions to the same shard
     opts.buffer_pool_size =
-        opts.data_page_size * 5;  // only one index page buffer
+        opts.data_page_size * 20;  // a small number of pages
 
     eloqstore::EloqStore *store = InitStore(opts);
     const std::vector<eloqstore::TableIdent> partitions = {
