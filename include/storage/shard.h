@@ -79,24 +79,28 @@ private:
         task->req_ = req;
         task->status_ = TaskStatus::Ongoing;
         running_ = task;
-        task->coro_ = boost::context::callcc(std::allocator_arg,
-                                             stack_allocator_,
-                                             [lbd](continuation &&sink)
-                                             {
-                                                 shard->main_ = std::move(sink);
-                                                 KvError err = lbd();
-                                                 KvTask *task = ThdTask();
-                                                 if (err != KvError::NoError)
-                                                 {
-                                                     task->Abort();
-                                                 }
+        task->coro_ = boost::context::callcc(
+            std::allocator_arg,
+            stack_allocator_,
+            [lbd](continuation &&sink)
+            {
+                shard->main_ = std::move(sink);
+                KvError err = lbd();
+                KvTask *task = ThdTask();
+                if (err != KvError::NoError)
+                {
+                    task->Abort();
+                    if (err == KvError::OutOfMem)
+                    {
+                        LOG(ERROR) << "Task is aborted due to out of memory";
+                    }
+                }
 
-                                                 task->req_->SetDone(err);
-                                                 task->req_ = nullptr;
-                                                 task->status_ =
-                                                     TaskStatus::Finished;
-                                                 return std::move(shard->main_);
-                                             });
+                task->req_->SetDone(err);
+                task->req_ = nullptr;
+                task->status_ = TaskStatus::Finished;
+                return std::move(shard->main_);
+            });
         running_ = nullptr;
         if (task->status_ == TaskStatus::Finished)
         {
