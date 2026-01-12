@@ -983,7 +983,7 @@ KvError AsyncHttpManager::EnsureBucketExists()
         request_info.body.empty() ? "" : request_info.body.c_str();
     curl_easy_setopt(easy, CURLOPT_POSTFIELDS, body_ptr);
     curl_easy_setopt(easy,
-                     CURLOPT_POSTFIELDSIZE,
+                     CURLOPT_POSTFIELDSIZE_LARGE,
                      static_cast<int64_t>(request_info.body.size()));
 
     curl_slist *headers = nullptr;
