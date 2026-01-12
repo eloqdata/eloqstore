@@ -48,14 +48,14 @@ MemIndexPage *IndexPageManager::AllocIndexPage()
     {
         if (!IsFull())
         {
-            auto &new_page =
-                index_pages_.emplace_back(std::make_unique<MemIndexPage>(true));
-            next_free = new_page.get();
-            if (__builtin_expect(next_free->PagePtr() == nullptr, 0))
+            auto new_page = std::make_unique<MemIndexPage>(true);
+            MemIndexPage *new_page_ptr = new_page.get();
+            if (__builtin_expect(new_page_ptr->PagePtr() == nullptr, 0))
             {
-                index_pages_.pop_back();
                 return nullptr;
             }
+            index_pages_.push_back(std::move(new_page));
+            next_free = new_page_ptr;
         }
         else
         {
