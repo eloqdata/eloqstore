@@ -13,6 +13,10 @@
 #include "tasks/list_object_task.h"
 #include "utils.h"
 
+#ifdef ELOQSTORE_WITH_TXSERVICE
+#include "eloqstore_metrics.h"
+#endif
+
 #ifdef ELOQ_MODULE_ENABLED
 #include <bthread/eloq_module.h>
 #endif
@@ -67,9 +71,39 @@ void Shard::WorkLoop()
         return nreqs;
     };
 
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    // Metrics collection setup
+    metrics::Meter *meter = nullptr;
+    if (store_->EnableMetrics())
+    {
+        meter = store_->GetMetricsMeter(shard_id_);
+        assert(meter != nullptr);
+    }
+#endif
+
     while (true)
     {
+#ifdef ELOQSTORE_WITH_TXSERVICE
+        // Metrics collection: start timing the round (one iteration = one
+        // round)
+        metrics::TimePoint round_start{};
+        if (store_->EnableMetrics())
+        {
+            round_start = metrics::Clock::now();
+        }
+
+        // Metrics collection: time io_mgr_->Submit()
+#endif
+
         io_mgr_->Submit();
+
+#ifdef ELOQSTORE_WITH_TXSERVICE
+        if (store_->EnableMetrics())
+        {
+            meter->CollectDuration(
+                metrics::NAME_ELOQSTORE_ASYNC_IO_SUBMIT_DURATION, round_start);
+        }
+#endif
         io_mgr_->PollComplete();
         ExecuteReadyTasks();
 
@@ -83,6 +117,17 @@ void Shard::WorkLoop()
         {
             OnReceivedReq(reqs[i]);
         }
+
+#ifdef ELOQSTORE_WITH_TXSERVICE
+        // Metrics collection: end of round
+        if (store_->EnableMetrics())
+        {
+            meter->CollectDuration(
+                metrics::NAME_ELOQSTORE_WORK_ONE_ROUND_DURATION, round_start);
+            meter->Collect(metrics::NAME_ELOQSTORE_TASK_MANAGER_ACTIVE_TASKS,
+                           static_cast<double>(task_mgr_.NumActive()));
+        }
+#endif
     }
 
     io_mgr_->Stop();
@@ -422,6 +467,18 @@ void Shard::OnTaskFinished(KvTask *task)
 #ifdef ELOQ_MODULE_ENABLED
 void Shard::WorkOneRound()
 {
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    // Metrics collection: start timing the round
+    metrics::TimePoint round_start{};
+    metrics::Meter *meter = nullptr;
+    if (store_->EnableMetrics())
+    {
+        meter = store_->GetMetricsMeter(shard_id_);
+        assert(meter != nullptr);
+        round_start = metrics::Clock::now();
+    }
+#endif
+
     if (__builtin_expect(!io_mgr_->BackgroundJobInited(), false))
     {
         io_mgr_->InitBackgroundJob();
@@ -439,15 +496,47 @@ void Shard::WorkOneRound()
         if (io_mgr_->NeedPrewarm())
             io_mgr_->RunPrewarm();
         else
+        {
             return;
+        }
     }
 
     req_queue_size_.fetch_sub(nreqs, std::memory_order_relaxed);
 
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    // Metrics collection: time io_mgr_->Submit()
+    metrics::TimePoint submit_start{};
+    if (store_->EnableMetrics())
+    {
+        submit_start = metrics::Clock::now();
+        assert(meter != nullptr);
+    }
+#endif
+
     io_mgr_->Submit();
+
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    if (store_->EnableMetrics())
+    {
+        meter->CollectDuration(metrics::NAME_ELOQSTORE_ASYNC_IO_SUBMIT_DURATION,
+                               submit_start);
+    }
+#endif
+
     io_mgr_->PollComplete();
 
     ExecuteReadyTasks();
+
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    // Metrics collection: end of round
+    if (store_->EnableMetrics())
+    {
+        meter->CollectDuration(metrics::NAME_ELOQSTORE_WORK_ONE_ROUND_DURATION,
+                               round_start);
+        meter->Collect(metrics::NAME_ELOQSTORE_TASK_MANAGER_ACTIVE_TASKS,
+                       static_cast<double>(task_mgr_.NumActive()));
+    }
+#endif
 }
 #endif
 

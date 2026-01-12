@@ -28,6 +28,10 @@
 #include "eloqstore_module.h"
 #endif
 
+#ifdef ELOQSTORE_WITH_TXSERVICE
+#include "eloqstore_metrics.h"
+#endif
+
 namespace eloqstore
 {
 
@@ -148,6 +152,7 @@ KvError EloqStore::Start()
         LOG(ERROR) << "EloqStore started , do not start again";
         return KvError::NoError;
     }
+
     eloq_store = this;
     // Initialize
     if (!options_.store_path.empty())
@@ -475,6 +480,82 @@ void EloqStore::Stop()
     root_fds_.clear();
     LOG(INFO) << "EloqStore is stopped.";
 }
+
+#ifdef ELOQSTORE_WITH_TXSERVICE
+void EloqStore::InitializeMetrics(metrics::MetricsRegistry *metrics_registry,
+                                  const metrics::CommonLabels &common_labels)
+{
+    // Resize meters array to match number of shards
+    metrics_meters_.resize(options_.num_threads);
+
+    if (metrics_registry == nullptr)
+    {
+        return;
+    }
+
+    // Create and initialize meter for each shard
+    for (size_t i = 0; i < options_.num_threads; ++i)
+    {
+        // Add shard_id to common labels for this shard
+        metrics::CommonLabels shard_labels = common_labels;
+        shard_labels["shard_id"] = std::to_string(i);
+
+        // Create meter for this shard
+        metrics_meters_[i] =
+            std::make_unique<metrics::Meter>(metrics_registry, shard_labels);
+
+        // Register metrics for this shard
+        metrics_meters_[i]->Register(
+            metrics::NAME_ELOQSTORE_WORK_ONE_ROUND_DURATION,
+            metrics::Type::Histogram);
+        metrics_meters_[i]->Register(
+            metrics::NAME_ELOQSTORE_ASYNC_IO_SUBMIT_DURATION,
+            metrics::Type::Histogram);
+        metrics_meters_[i]->Register(
+            metrics::NAME_ELOQSTORE_TASK_MANAGER_ACTIVE_TASKS,
+            metrics::Type::Gauge);
+        metrics_meters_[i]->Register(metrics::NAME_ELOQSTORE_REQUEST_LATENCY,
+                                     metrics::Type::Histogram,
+                                     {{"request_type",
+                                       {"read",
+                                        "floor",
+                                        "scan",
+                                        "list_object",
+                                        "batch_write",
+                                        "truncate",
+                                        "drop_table",
+                                        "archive",
+                                        "compact",
+                                        "clean_expired"}}});
+        metrics_meters_[i]->Register(metrics::NAME_ELOQSTORE_REQUESTS_COMPLETED,
+                                     metrics::Type::Counter,
+                                     {{"request_type",
+                                       {"read",
+                                        "floor",
+                                        "scan",
+                                        "list_object",
+                                        "batch_write",
+                                        "truncate",
+                                        "drop_table",
+                                        "archive",
+                                        "compact",
+                                        "clean_expired"}}});
+    }
+
+    enable_eloqstore_metrics_ = true;
+}
+
+metrics::Meter *EloqStore::GetMetricsMeter(size_t shard_id) const
+{
+    if (shard_id >= metrics_meters_.size())
+    {
+        return nullptr;
+    }
+
+    assert(shard_id < metrics_meters_.size());
+    return metrics_meters_[shard_id].get();
+}
+#endif
 
 const KvOptions &EloqStore::Options() const
 {

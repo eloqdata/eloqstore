@@ -11,6 +11,10 @@
 #include "storage/page_mapper.h"
 #include "tasks/task_manager.h"
 
+#ifdef ELOQSTORE_WITH_TXSERVICE
+#include "eloqstore_metrics.h"
+#endif
+
 // https://github.com/cameron314/concurrentqueue/issues/280
 #undef BLOCK_SIZE
 #include "concurrentqueue/blockingconcurrentqueue.h"
@@ -79,11 +83,23 @@ private:
         task->req_ = req;
         task->status_ = TaskStatus::Ongoing;
         running_ = task;
+
         task->coro_ = boost::context::callcc(
             std::allocator_arg,
             stack_allocator_,
-            [lbd](continuation &&sink)
+            [lbd, this](continuation &&sink)
             {
+#ifdef ELOQSTORE_WITH_TXSERVICE
+                // Metrics collection: record start time for latency measurement
+                metrics::TimePoint request_start;
+                metrics::Meter *meter = nullptr;
+                if (this->store_->EnableMetrics())
+                {
+                    request_start = metrics::Clock::now();
+                    meter = this->store_->GetMetricsMeter(shard_id_);
+                    assert(meter != nullptr);
+                }
+#endif
                 shard->main_ = std::move(sink);
                 KvError err = lbd();
                 KvTask *task = ThdTask();
@@ -96,15 +112,65 @@ private:
                     }
                 }
 
+#ifdef ELOQSTORE_WITH_TXSERVICE
+                // Save request type before SetDone
+                RequestType request_type = task->req_->Type();
+#endif
                 task->req_->SetDone(err);
                 task->req_ = nullptr;
                 task->status_ = TaskStatus::Finished;
+
+#ifdef ELOQSTORE_WITH_TXSERVICE
+                // Collect latency metric when request completes
+                if (this->store_->EnableMetrics())
+                {
+                    const char *request_type_str =
+                        RequestTypeToString(request_type);
+                    meter->CollectDuration(
+                        metrics::NAME_ELOQSTORE_REQUEST_LATENCY,
+                        request_start,
+                        request_type_str);
+                    // Increment request completion counter
+                    meter->Collect(metrics::NAME_ELOQSTORE_REQUESTS_COMPLETED,
+                                   1.0,
+                                   request_type_str);
+                }
+#endif
                 return std::move(shard->main_);
             });
         running_ = nullptr;
         if (task->status_ == TaskStatus::Finished)
         {
             OnTaskFinished(task);
+        }
+    }
+
+    static const char *RequestTypeToString(RequestType type)
+    {
+        switch (type)
+        {
+        case RequestType::Read:
+            return "read";
+        case RequestType::Floor:
+            return "floor";
+        case RequestType::Scan:
+            return "scan";
+        case RequestType::ListObject:
+            return "list_object";
+        case RequestType::BatchWrite:
+            return "batch_write";
+        case RequestType::Truncate:
+            return "truncate";
+        case RequestType::DropTable:
+            return "drop_table";
+        case RequestType::Archive:
+            return "archive";
+        case RequestType::Compact:
+            return "compact";
+        case RequestType::CleanExpired:
+            return "clean_expired";
+        default:
+            return "unknown";
         }
     }
 

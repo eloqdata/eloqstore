@@ -10,6 +10,14 @@
 #include "kv_options.h"
 #include "types.h"
 
+#ifdef ELOQSTORE_WITH_TXSERVICE
+#include "metrics.h"
+namespace metrics
+{
+class Meter;
+}  // namespace metrics
+#endif
+
 namespace utils
 {
 struct CloudObjectInfo;
@@ -32,6 +40,35 @@ enum class RequestType : uint8_t
     Compact,
     CleanExpired
 };
+
+inline const char *RequestTypeToString(RequestType type)
+{
+    switch (type)
+    {
+    case RequestType::Read:
+        return "read";
+    case RequestType::Floor:
+        return "floor";
+    case RequestType::Scan:
+        return "scan";
+    case RequestType::ListObject:
+        return "list_object";
+    case RequestType::BatchWrite:
+        return "batch_write";
+    case RequestType::Truncate:
+        return "truncate";
+    case RequestType::DropTable:
+        return "drop_table";
+    case RequestType::Archive:
+        return "archive";
+    case RequestType::Compact:
+        return "compact";
+    case RequestType::CleanExpired:
+        return "clean_expired";
+    default:
+        return "unknown";
+    }
+}
 
 class KvRequest
 {
@@ -396,6 +433,24 @@ public:
     bool ExecAsyn(KvRequest *req);
     void ExecSync(KvRequest *req);
 
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    void InitializeMetrics(metrics::MetricsRegistry *metrics_registry,
+                           const metrics::CommonLabels &common_labels);
+
+    /**
+     * @brief Get the metrics meter for a specific shard.
+     * @param shard_id The shard ID.
+     * @return Pointer to the meter for the shard, or nullptr if metrics are not
+     * enabled or shard_id is invalid.
+     */
+    metrics::Meter *GetMetricsMeter(size_t shard_id) const;
+#endif
+
+    bool EnableMetrics() const
+    {
+        return enable_eloqstore_metrics_;
+    }
+
 private:
     bool SendRequest(KvRequest *req);
     void HandleDropTableRequest(DropTableRequest *req);
@@ -406,6 +461,9 @@ private:
     KvOptions options_;
     std::vector<int> root_fds_;
     std::vector<std::unique_ptr<Shard>> shards_;
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    std::vector<std::unique_ptr<metrics::Meter>> metrics_meters_;
+#endif
     std::atomic<bool> stopped_{true};
 
     std::unique_ptr<ArchiveCrond> archive_crond_{nullptr};
@@ -413,6 +471,8 @@ private:
 #ifdef ELOQ_MODULE_ENABLED
     std::unique_ptr<EloqStoreModule> module_{nullptr};
 #endif
+
+    bool enable_eloqstore_metrics_{false};
 
     friend class Shard;
     friend class AsyncIoManager;
