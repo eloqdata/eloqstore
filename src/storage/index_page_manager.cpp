@@ -25,6 +25,9 @@ IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
     : io_manager_(io_manager), mapping_arena_(Options()->mapping_arena_size)
 {
     active_head_.EnqueNext(&active_tail_);
+    const size_t buffer_pages =
+        Options()->buffer_pool_size / Options()->data_page_size;
+    index_pages_.reserve(buffer_pages);
 }
 
 IndexPageManager::~IndexPageManager()
