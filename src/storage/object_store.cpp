@@ -984,7 +984,7 @@ KvError AsyncHttpManager::EnsureBucketExists()
     curl_easy_setopt(easy, CURLOPT_POSTFIELDS, body_ptr);
     curl_easy_setopt(easy,
                      CURLOPT_POSTFIELDSIZE,
-                     static_cast<long>(request_info.body.size()));
+                     static_cast<int64_t>(request_info.body.size()));
 
     curl_slist *headers = nullptr;
     for (const auto &header_line : request_info.headers)
@@ -997,7 +997,7 @@ KvError AsyncHttpManager::EnsureBucketExists()
     }
 
     CURLcode res = curl_easy_perform(easy);
-    long response_code = 0;
+    int64_t response_code = 0;
     if (res == CURLE_OK)
     {
         curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &response_code);
