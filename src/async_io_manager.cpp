@@ -1970,6 +1970,13 @@ KvError CloudStoreMgr::Init(Shard *shard)
     shard_id_ = shard->shard_id_;  // Store for NotifyWorker calls
     KvError err = IouringMgr::Init(shard);
     CHECK_KV_ERR(err);
+
+    if (shard_id_ == 0)
+    {
+        err = obj_store_.EnsureBucketExists();
+        CHECK_KV_ERR(err);
+    }
+
     if (options_->allow_reuse_local_caches)
     {
         err = RestoreLocalCacheState();

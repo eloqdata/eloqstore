@@ -6,6 +6,7 @@
 #include <aws/core/client/ClientConfiguration.h>
 #include <aws/core/http/Scheme.h>
 #include <aws/core/http/standard/StandardHttpRequest.h>
+#include <aws/core/utils/memory/stl/AWSStringStream.h>
 #include <aws/s3/S3Client.h>
 #include <glog/logging.h>
 
@@ -17,6 +18,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <ios>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -45,6 +47,18 @@ constexpr std::string_view kDefaultAwsRegion = "us-east-1";
 constexpr std::string_view kDefaultGcsEndpoint =
     "https://storage.googleapis.com";
 constexpr std::string_view kDefaultGcsRegion = "auto";
+
+size_t AppendToString(void *contents, size_t size, size_t nmemb, void *userp)
+{
+    size_t total = size * nmemb;
+    if (!userp || total == 0)
+    {
+        return total;
+    }
+    auto *buffer = static_cast<std::string *>(userp);
+    buffer->append(static_cast<char *>(contents), total);
+    return total;
+}
 
 bool ParseJsonListResponse(std::string_view payload,
                            std::vector<std::string> *objects,
@@ -599,6 +613,7 @@ protected:
         }
         request->url.clear();
         request->headers.clear();
+        request->body.clear();
         if (bucket_url_.empty() || !signer_)
         {
             return false;
@@ -626,6 +641,74 @@ protected:
 
         request->url = list_request->GetUri().GetURIString().c_str();
         for (const auto &header : list_request->GetHeaders())
+        {
+            request->headers.emplace_back(std::string(header.first.c_str()) +
+                                          ": " +
+                                          std::string(header.second.c_str()));
+        }
+        return true;
+    }
+
+    bool BuildCreateBucketRequest(SignedRequestInfo *request) const override
+    {
+        if (!request)
+        {
+            return false;
+        }
+        request->url.clear();
+        request->headers.clear();
+        request->body.clear();
+        if (bucket_url_.empty() || !signer_)
+        {
+            return false;
+        }
+
+        Aws::Http::URI uri(bucket_url_.c_str());
+        auto create_request =
+            Aws::MakeShared<Aws::Http::Standard::StandardHttpRequest>(
+                "eloqstore", uri, Aws::Http::HttpMethod::HTTP_PUT);
+        if (!create_request)
+        {
+            return false;
+        }
+
+        std::string default_region = DefaultRegion();
+        std::string region = options_->cloud_region.empty()
+                                 ? default_region
+                                 : options_->cloud_region;
+        if (!region.empty() && region != default_region)
+        {
+            std::string xml_body =
+                "<CreateBucketConfiguration "
+                "xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">";
+            xml_body.append("<LocationConstraint>");
+            xml_body.append(region);
+            xml_body.append(
+                "</LocationConstraint></CreateBucketConfiguration>");
+
+            auto body_stream = Aws::MakeShared<Aws::StringStream>("eloqstore");
+            if (!body_stream)
+            {
+                return false;
+            }
+            *body_stream << xml_body;
+            body_stream->flush();
+            body_stream->seekg(0, std::ios_base::beg);
+            create_request->AddContentBody(body_stream);
+            create_request->SetHeaderValue(Aws::Http::CONTENT_TYPE_HEADER,
+                                           "application/xml");
+            std::string body_length = std::to_string(xml_body.size());
+            create_request->SetHeaderValue(Aws::Http::CONTENT_LENGTH_HEADER,
+                                           Aws::String(body_length.c_str()));
+            request->body = std::move(xml_body);
+        }
+        if (!signer_->SignRequest(*create_request))
+        {
+            return false;
+        }
+
+        request->url = create_request->GetUri().GetURIString().c_str();
+        for (const auto &header : create_request->GetHeaders())
         {
             request->headers.emplace_back(std::string(header.first.c_str()) +
                                           ": " +
@@ -811,6 +894,15 @@ bool ObjectStore::ParseListObjectsResponse(
         payload, strip_prefix, objects, infos, next_continuation_token);
 }
 
+KvError ObjectStore::EnsureBucketExists()
+{
+    if (!async_http_mgr_)
+    {
+        return KvError::CloudErr;
+    }
+    return async_http_mgr_->EnsureBucketExists();
+}
+
 AsyncHttpManager::AsyncHttpManager()
 {
     const KvOptions *option = Options();
@@ -853,6 +945,96 @@ bool AsyncHttpManager::ParseListObjectsResponse(
     }
     return backend_->ParseListObjectsResponse(
         payload, strip_prefix, objects, infos, next_continuation_token);
+}
+
+KvError AsyncHttpManager::EnsureBucketExists()
+{
+    if (!backend_)
+    {
+        LOG(ERROR) << "Cloud backend is not initialized";
+        return KvError::CloudErr;
+    }
+
+    SignedRequestInfo request_info;
+    if (!backend_->BuildCreateBucketRequest(&request_info) ||
+        request_info.url.empty())
+    {
+        LOG(ERROR) << "Failed to build bucket creation request";
+        return KvError::CloudErr;
+    }
+
+    CURL *easy = curl_easy_init();
+    if (!easy)
+    {
+        LOG(ERROR)
+            << "Failed to initialize cURL easy handle for bucket creation";
+        return KvError::CloudErr;
+    }
+
+    std::string response_body;
+    curl_easy_setopt(easy, CURLOPT_PROXY, "");
+    curl_easy_setopt(easy, CURLOPT_NOPROXY, "*");
+    curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, AppendToString);
+    curl_easy_setopt(easy, CURLOPT_WRITEDATA, &response_body);
+    curl_easy_setopt(easy, CURLOPT_TIMEOUT, 60L);
+    curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, "PUT");
+    curl_easy_setopt(easy, CURLOPT_URL, request_info.url.c_str());
+    const char *body_ptr =
+        request_info.body.empty() ? "" : request_info.body.c_str();
+    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, body_ptr);
+    curl_easy_setopt(easy,
+                     CURLOPT_POSTFIELDSIZE,
+                     static_cast<long>(request_info.body.size()));
+
+    curl_slist *headers = nullptr;
+    for (const auto &header_line : request_info.headers)
+    {
+        headers = curl_slist_append(headers, header_line.c_str());
+    }
+    if (headers)
+    {
+        curl_easy_setopt(easy, CURLOPT_HTTPHEADER, headers);
+    }
+
+    CURLcode res = curl_easy_perform(easy);
+    long response_code = 0;
+    if (res == CURLE_OK)
+    {
+        curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &response_code);
+    }
+
+    KvError result = KvError::NoError;
+    if (res != CURLE_OK)
+    {
+        LOG(ERROR) << "Bucket creation request failed: "
+                   << curl_easy_strerror(res);
+        result = ClassifyCurlError(res);
+    }
+    else if ((response_code >= 200 && response_code < 300) ||
+             response_code == 409)
+    {
+        if (response_code == 409)
+        {
+            LOG(INFO) << "Cloud bucket '" << cloud_path_.bucket
+                      << "' already exists";
+        }
+        else
+        {
+            LOG(INFO) << "Created cloud bucket '" << cloud_path_.bucket
+                      << "' (HTTP " << response_code << ")";
+        }
+        result = KvError::NoError;
+    }
+    else
+    {
+        LOG(ERROR) << "Bucket creation failed with HTTP " << response_code
+                   << ": " << response_body;
+        result = ClassifyHttpError(response_code);
+    }
+
+    curl_slist_free_all(headers);
+    curl_easy_cleanup(easy);
+    return result;
 }
 
 void AsyncHttpManager::PerformRequests()

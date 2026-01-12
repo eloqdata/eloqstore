@@ -47,6 +47,8 @@ public:
         return async_http_mgr_.get();
     }
 
+    KvError EnsureBucketExists();
+
     bool ParseListObjectsResponse(
         std::string_view payload,
         const std::string &strip_prefix,
@@ -192,6 +194,7 @@ struct SignedRequestInfo
 {
     std::string url;
     std::vector<std::string> headers;
+    std::string body;
 };
 
 class CloudBackend
@@ -205,6 +208,7 @@ public:
                                   bool recursive,
                                   const std::string &continuation,
                                   SignedRequestInfo *request) const = 0;
+    virtual bool BuildCreateBucketRequest(SignedRequestInfo *request) const = 0;
     virtual bool ParseListObjectsResponse(
         std::string_view payload,
         const std::string &strip_prefix,
@@ -222,6 +226,8 @@ public:
     void SubmitRequest(ObjectStore::Task *task);
     void PerformRequests();
     void ProcessCompletedRequests();
+
+    KvError EnsureBucketExists();
 
     void Cleanup();
     bool IsIdle() const
