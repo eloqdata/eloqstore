@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+#include "compression.h"
 #include "error.h"
 #include "kv_options.h"
 #include "storage/page_mapper.h"
@@ -49,7 +50,8 @@ KvError ScanIterator::Seek(std::string_view key, bool ttl)
     {
         return KvError::EndOfFile;
     }
-    compression_ = meta->compression_.get();
+    root_meta_ = meta;
+    compression_hold_.reset();
     mapping_ = meta->mapper_->GetMappingSnapshot();
 
     err = BuildIndexStack(key);
@@ -274,8 +276,24 @@ std::string_view ScanIterator::Key() const
 std::pair<std::string_view, KvError> ScanIterator::ResolveValue(
     std::string &storage)
 {
-    return eloqstore::ResolveValue(
-        tbl_id_, mapping_.get(), iter_, storage, compression_);
+    if (iter_.CompressionType() == compression::CompressionType::Dictionary)
+    {
+        if (!compression_hold_)
+        {
+            auto [dict, err] =
+                shard->IndexManager()->GetOrLoadDict(tbl_id_, root_meta_);
+            if (err != KvError::NoError)
+            {
+                return {{}, err};
+            }
+            compression_hold_ = std::move(dict);
+        }
+    }
+    return eloqstore::ResolveValue(tbl_id_,
+                                   mapping_.get(),
+                                   iter_,
+                                   storage,
+                                   compression_hold_.get());
 }
 
 uint64_t ScanIterator::ExpireTs() const

@@ -3,6 +3,7 @@
 #include <string>
 #include <utility>
 
+#include "compression.h"
 #include "error.h"
 #include "storage/mem_index_page.h"
 #include "storage/page_mapper.h"
@@ -40,9 +41,21 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
         return KvError::NotFound;
     }
 
+    std::shared_ptr<compression::DictCompression> compression_guard;
+    if (iter.CompressionType() == compression::CompressionType::Dictionary)
+    {
+        auto [dict, dict_err] =
+            shard->IndexManager()->GetOrLoadDict(tbl_id, meta);
+        CHECK_KV_ERR(dict_err);
+        compression_guard = std::move(dict);
+    }
     std::string value_storage;
-    auto [val_view, fetch_err] = ResolveValue(
-        tbl_id, mapping.get(), iter, value_storage, meta->compression_.get());
+    auto [val_view, fetch_err] =
+        ResolveValue(tbl_id,
+                     mapping.get(),
+                     iter,
+                     value_storage,
+                     compression_guard.get());
     CHECK_KV_ERR(fetch_err);
     value = value_storage.empty() ? val_view : std::move(value_storage);
     timestamp = iter.Timestamp();
@@ -90,9 +103,21 @@ KvError ReadTask::Floor(const TableIdent &tbl_id,
         CHECK(found);
     }
     floor_key = iter.Key();
+    std::shared_ptr<compression::DictCompression> compression_guard;
+    if (iter.CompressionType() == compression::CompressionType::Dictionary)
+    {
+        auto [dict, dict_err] =
+            shard->IndexManager()->GetOrLoadDict(tbl_id, meta);
+        CHECK_KV_ERR(dict_err);
+        compression_guard = std::move(dict);
+    }
     std::string value_storage;
-    auto [val_view, fetch_err] = ResolveValue(
-        tbl_id, mapping.get(), iter, value_storage, meta->compression_.get());
+    auto [val_view, fetch_err] =
+        ResolveValue(tbl_id,
+                     mapping.get(),
+                     iter,
+                     value_storage,
+                     compression_guard.get());
     CHECK_KV_ERR(fetch_err);
     value = value_storage.empty() ? val_view : std::move(value_storage);
     timestamp = iter.Timestamp();

@@ -7,6 +7,7 @@
 
 #include "async_io_manager.h"
 #include "error.h"
+#include "storage/dict_meta.h"
 #include "storage/page_mapper.h"
 
 namespace eloqstore
@@ -24,7 +25,10 @@ public:
     std::vector<uint64_t> mapping_tbl_;
     FilePageId max_fp_id_;
     uint64_t file_size_;
-    std::string dict_bytes_;
+    DictMeta dict_meta_{};
+
+    static KvError ReadSnapshotDict(ManifestFile *file,
+                                    std::string &dict_bytes);
 
 private:
     KvError ParseNextRecord(ManifestFile *file);
@@ -34,5 +38,6 @@ private:
     const KvOptions *opts_;
     std::string log_buf_;
     std::string_view payload_;
+    uint64_t record_start_offset_{0};
 };
 }  // namespace eloqstore

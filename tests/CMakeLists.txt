@@ -17,6 +17,7 @@ set(UTEST_SOURCES
     cloud.cpp
     gc.cpp
     chore.cpp
+    compression_cache.cpp
     eloq_store_test.cpp
 )
 
