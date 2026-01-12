@@ -119,7 +119,7 @@ int KvOptions::LoadFromIni(const char *path)
         skip_verify_checksum =
             reader.GetBoolean(sec_run, "skip_verify_checksum", false);
     }
-    if (reader.HasValue(sec_run, "index_buffer_pool_size"))
+    if (reader.HasValue(sec_run, "buffer_pool_size"))
     {
         std::string buffer_pool_size_str =
             reader.Get(sec_run, "buffer_pool_size", "");
