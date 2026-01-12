@@ -303,12 +303,23 @@ KvError BackgroundWrite::CreateArchive()
     MappingSnapshot *mapping = meta->mapper_->GetMapping();
     FilePageId max_fp_id = meta->mapper_->FilePgAllocator()->MaxFilePageId();
     std::string_view dict_bytes;
-    if (meta->compression_->HasDictionary())
+    if (meta->dict_meta_.HasDictionary())
     {
-        dict_bytes = meta->compression_->DictionaryBytes();
+        auto [dict, dict_err] =
+            shard->IndexManager()->GetOrLoadDict(tbl_ident_, meta);
+        CHECK_KV_ERR(dict_err);
+        if (dict)
+        {
+            dict_bytes = dict->DictionaryBytes();
+        }
     }
     std::string_view snapshot =
-        wal_builder_.Snapshot(root, ttl_root, mapping, max_fp_id, dict_bytes);
+        wal_builder_.Snapshot(root,
+                              ttl_root,
+                              mapping,
+                              max_fp_id,
+                              meta->dict_meta_,
+                              dict_bytes);
 
     uint64_t current_ts = utils::UnixTs<chrono::microseconds>();
     err = IoMgr()->CreateArchive(tbl_ident_, snapshot, current_ts);

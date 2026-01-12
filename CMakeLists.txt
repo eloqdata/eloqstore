@@ -111,6 +111,7 @@ set(ELOQ_STORE_SOURCES
         src/replayer.cpp
         src/storage/data_page.cpp
         src/storage/data_page_builder.cpp
+        src/storage/compression_manager.cpp
         src/storage/index_page_builder.cpp
         src/storage/index_page_manager.cpp
         src/storage/mem_index_page.cpp

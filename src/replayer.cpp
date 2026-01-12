@@ -10,6 +10,7 @@
 #include "async_io_manager.h"
 #include "coding.h"
 #include "error.h"
+#include "external/xxhash.h"
 #include "kv_options.h"
 #include "storage/index_page_manager.h"
 #include "storage/page.h"
@@ -31,7 +32,7 @@ KvError Replayer::Replay(ManifestFile *file)
     mapping_tbl_.reserve(opts_->init_page_count);
     file_size_ = 0;
     max_fp_id_ = MaxFilePageId;
-    dict_bytes_.clear();
+    dict_meta_ = {};
 
     KvError err = ParseNextRecord(file);
     CHECK_KV_ERR(err);
@@ -57,6 +58,7 @@ KvError Replayer::Replay(ManifestFile *file)
 KvError Replayer::ParseNextRecord(ManifestFile *file)
 {
     constexpr uint16_t header_len = ManifestBuilder::header_bytes;
+    record_start_offset_ = file_size_;
     log_buf_.resize(header_len);
     KvError err = file->Read(log_buf_.data(), header_len);
     if (err != KvError::NoError)
@@ -101,21 +103,31 @@ KvError Replayer::ParseNextRecord(ManifestFile *file)
 
 void Replayer::DeserializeSnapshot(std::string_view snapshot)
 {
+    const std::string_view snapshot_start = snapshot;
     [[maybe_unused]] bool ok = GetVarint64(&snapshot, &max_fp_id_);
     assert(ok);
 
-    uint32_t dict_len = 0;
-    ok = GetVarint32(&snapshot, &dict_len);
+    ok = GetVarint32(&snapshot, &dict_meta_.dict_len);
     assert(ok);
-    if (dict_len > 0)
+
+    ok = GetVarint64(&snapshot, &dict_meta_.dict_checksum);
+    assert(ok);
+
+    ok = GetVarint64(&snapshot, &dict_meta_.dict_epoch);
+    assert(ok);
+
+    const size_t payload_offset = snapshot_start.size() - snapshot.size();
+    if (dict_meta_.dict_len > 0)
     {
-        assert(snapshot.size() >= dict_len);
-        dict_bytes_.assign(snapshot.data(), snapshot.data() + dict_len);
-        snapshot = snapshot.substr(dict_len);
+        dict_meta_.dict_offset = record_start_offset_ +
+                                 ManifestBuilder::header_bytes +
+                                 payload_offset;
+        assert(snapshot.size() >= dict_meta_.dict_len);
+        snapshot = snapshot.substr(dict_meta_.dict_len);
     }
     else
     {
-        dict_bytes_.clear();
+        dict_meta_.dict_offset = 0;
     }
 
     mapping_tbl_.reserve(opts_->init_page_count);
@@ -126,6 +138,79 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
         assert(ok);
         mapping_tbl_.push_back(value);
     }
+}
+
+KvError Replayer::ReadSnapshotDict(ManifestFile *file,
+                                   std::string &dict_bytes)
+{
+    dict_bytes.clear();
+    constexpr uint16_t header_len = ManifestBuilder::header_bytes;
+    std::string buffer;
+    buffer.resize(header_len);
+    KvError err = file->Read(buffer.data(), header_len);
+    CHECK_KV_ERR(err);
+
+    const uint32_t payload_len =
+        DecodeFixed32(buffer.data() + ManifestBuilder::offset_len);
+    buffer.resize(static_cast<size_t>(header_len) + payload_len);
+    err = file->Read(buffer.data() + header_len, payload_len);
+    CHECK_KV_ERR(err);
+
+    std::string_view content(buffer.data(),
+                             static_cast<size_t>(header_len) + payload_len);
+    if (!ManifestBuilder::ValidateChecksum(content))
+    {
+        return KvError::Corrupted;
+    }
+
+    content = content.substr(checksum_bytes);
+    content = content.substr(sizeof(PageId) * 2);
+    std::string_view snapshot = content.substr(sizeof(uint32_t), payload_len);
+
+    uint64_t max_fp_id = 0;
+    bool ok = GetVarint64(&snapshot, &max_fp_id);
+    if (!ok)
+    {
+        return KvError::Corrupted;
+    }
+    uint32_t dict_len = 0;
+    ok = GetVarint32(&snapshot, &dict_len);
+    if (!ok)
+    {
+        return KvError::Corrupted;
+    }
+    uint64_t dict_checksum = 0;
+    ok = GetVarint64(&snapshot, &dict_checksum);
+    if (!ok)
+    {
+        return KvError::Corrupted;
+    }
+    uint64_t dict_epoch = 0;
+    ok = GetVarint64(&snapshot, &dict_epoch);
+    if (!ok)
+    {
+        return KvError::Corrupted;
+    }
+    if (dict_len == 0)
+    {
+        return KvError::NoError;
+    }
+    if (snapshot.size() < dict_len)
+    {
+        return KvError::Corrupted;
+    }
+    dict_bytes.assign(snapshot.data(), snapshot.data() + dict_len);
+    if (dict_checksum != 0)
+    {
+        uint64_t actual =
+            XXH3_64bits(dict_bytes.data(), dict_bytes.size());
+        if (actual != dict_checksum)
+        {
+            return KvError::Corrupted;
+        }
+    }
+    (void)dict_epoch;
+    return KvError::NoError;
 }
 
 void Replayer::ReplayLog()

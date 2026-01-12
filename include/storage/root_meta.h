@@ -7,14 +7,19 @@
 #include <string_view>
 #include <unordered_set>
 
-#include "compression.h"
 #include "manifest_buffer.h"
+#include "storage/dict_meta.h"
 #include "storage/mem_index_page.h"
 #include "storage/page_mapper.h"
 #include "tasks/task.h"
 
 namespace eloqstore
 {
+namespace compression
+{
+class DictCompression;
+}  // namespace compression
+
 class ManifestBuilder
 {
 public:
@@ -25,6 +30,7 @@ public:
                               PageId ttl_root,
                               const MappingSnapshot *mapping,
                               FilePageId max_fp_id,
+                              const DictMeta &dict_meta,
                               std::string_view dict_bytes);
 
     std::string_view Finalize(PageId new_root, PageId ttl_root);
@@ -56,14 +62,13 @@ struct CowRootMeta
     uint64_t manifest_size_{};
     std::shared_ptr<MappingSnapshot> old_mapping_{nullptr};
     uint64_t next_expire_ts_{};
-    std::shared_ptr<compression::DictCompression> compression_{nullptr};
+    DictMeta dict_meta_{};
+    std::shared_ptr<compression::DictCompression> compression_{};
 };
 
 struct RootMeta
 {
-    RootMeta() : compression_(std::make_shared<compression::DictCompression>())
-    {
-    }
+    RootMeta() = default;
     RootMeta(const RootMeta &rhs) = delete;
     RootMeta(RootMeta &&rhs) = default;
     void Pin();
@@ -75,7 +80,8 @@ struct RootMeta
     std::unordered_set<MappingSnapshot *> mapping_snapshots_;
     uint64_t manifest_size_{0};
     uint64_t next_expire_ts_{0};
-    std::shared_ptr<compression::DictCompression> compression_{nullptr};
+    DictMeta dict_meta_{};
+    std::weak_ptr<compression::DictCompression> compression_{};
 
     uint32_t ref_cnt_{0};
     bool locked_{false};

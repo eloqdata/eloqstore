@@ -14,6 +14,7 @@
 
 namespace eloqstore
 {
+struct RootMeta;
 class ScanIterator
 {
 public:
@@ -51,7 +52,8 @@ private:
     std::array<FilePageId, max_read_pages_batch> prefetched_file_page_ids_{};
     size_t prefetched_offset_{0};
     size_t prefetched_count_{0};
-    const compression::DictCompression *compression_{nullptr};
+    RootMeta *root_meta_{nullptr};
+    std::shared_ptr<compression::DictCompression> compression_hold_{};
     std::vector<IndexFrame> index_stack_;
 
     void ResetPrefetchState();

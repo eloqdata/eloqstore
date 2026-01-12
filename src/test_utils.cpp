@@ -1000,6 +1000,7 @@ void ManifestVerifier::Snapshot()
                                             eloqstore::MaxPageId,
                                             answer_.GetMapping(),
                                             max_fp_id,
+                                            eloqstore::DictMeta{},
                                             std::string_view{});
     file_ = sv;
     const size_t alignment = eloqstore::page_align;

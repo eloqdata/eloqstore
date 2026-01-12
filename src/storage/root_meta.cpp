@@ -32,12 +32,15 @@ std::string_view ManifestBuilder::Snapshot(PageId root_id,
                                            PageId ttl_root,
                                            const MappingSnapshot *mapping,
                                            FilePageId max_fp_id,
+                                           const DictMeta &dict_meta,
                                            std::string_view dict_bytes)
 {
     Reset();
     buff_.reserve(4 + 8 * (mapping->mapping_tbl_.size() + 1));
     buff_.AppendVarint64(max_fp_id);
     buff_.AppendVarint32(dict_bytes.size());
+    buff_.AppendVarint64(dict_meta.dict_checksum);
+    buff_.AppendVarint64(dict_meta.dict_epoch);
     buff_.append(dict_bytes.data(), dict_bytes.size());
     mapping->Serialize(buff_);
     return Finalize(root_id, ttl_root);
