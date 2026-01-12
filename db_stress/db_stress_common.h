@@ -40,7 +40,7 @@ DECLARE_uint32(data_page_restart_interval);
 DECLARE_uint32(index_page_restart_interval);
 DECLARE_uint32(index_page_read_queue);
 DECLARE_uint32(init_page_count);
-DECLARE_uint32(index_buffer_pool_size);
+DECLARE_uint32(buffer_pool_size);
 DECLARE_uint64(manifest_limit);
 DECLARE_uint32(fd_limit);
 DECLARE_uint32(io_queue_size);

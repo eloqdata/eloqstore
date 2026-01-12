@@ -119,11 +119,11 @@ int KvOptions::LoadFromIni(const char *path)
         skip_verify_checksum =
             reader.GetBoolean(sec_run, "skip_verify_checksum", false);
     }
-    if (reader.HasValue(sec_run, "index_buffer_pool_size"))
+    if (reader.HasValue(sec_run, "buffer_pool_size"))
     {
-        std::string index_buffer_pool_size_str =
-            reader.Get(sec_run, "index_buffer_pool_size", "");
-        index_buffer_pool_size = ParseSizeWithUnit(index_buffer_pool_size_str);
+        std::string buffer_pool_size_str =
+            reader.Get(sec_run, "buffer_pool_size", "");
+        buffer_pool_size = ParseSizeWithUnit(buffer_pool_size_str);
     }
     if (reader.HasValue(sec_run, "manifest_limit"))
     {
@@ -319,7 +319,7 @@ bool KvOptions::operator==(const KvOptions &other) const
            index_page_restart_interval == other.index_page_restart_interval &&
            init_page_count == other.init_page_count &&
            skip_verify_checksum == other.skip_verify_checksum &&
-           index_buffer_pool_size == other.index_buffer_pool_size &&
+           buffer_pool_size == other.buffer_pool_size &&
            manifest_limit == other.manifest_limit &&
            fd_limit == other.fd_limit && io_queue_size == other.io_queue_size &&
            max_inflight_write == other.max_inflight_write &&

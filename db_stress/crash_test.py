@@ -140,7 +140,7 @@ def randomize_dynamic_params():
         "data_page_restart_interval": random.choice([8, 16, 24, 32]),
         "index_page_restart_interval": random.choice([8, 16, 24, 32]),
         # "skip_verify_checksum": random.choice([True, False]),
-        "index_buffer_pool_size": random.choice([1<<14, 1<<15, 1<<16]),
+        "buffer_pool_size": random.choice([1<<14, 1<<15, 1<<16]),
         "fd_limit": random.choice([5000, 10000, 15000]),
         "io_queue_size": random.choice([2048, 4096, 8192]),
         "max_inflight_write": random.choice([2048, 4096, 8192]),
@@ -165,7 +165,7 @@ def init_csv_file(test_type):
             fieldnames = [
                 'start_time', 'end_time', 'duration_seconds', 'exit_code', 'hit_timeout',
                 'num_threads', 'data_page_restart_interval', 'index_page_restart_interval',
-                'index_buffer_pool_size', 'fd_limit', 'io_queue_size', 'max_inflight_write',
+                'buffer_pool_size', 'fd_limit', 'io_queue_size', 'max_inflight_write',
                 'max_write_batch_pages', 'buf_ring_size', 'file_amplify_factor',
                 'reserve_space_ratio', 'open_wfile','command'
             ]
@@ -198,7 +198,7 @@ def record_test_result(test_type, start_time, end_time, exit_code, hit_timeout, 
         'num_threads': cmd_params.get('num_threads', ''),
         'data_page_restart_interval': cmd_params.get('data_page_restart_interval', ''),
         'index_page_restart_interval': cmd_params.get('index_page_restart_interval', ''),
-        'index_buffer_pool_size': cmd_params.get('index_buffer_pool_size', ''),
+        'buffer_pool_size': cmd_params.get('buffer_pool_size', ''),
         'fd_limit': cmd_params.get('fd_limit', ''),
         'io_queue_size': cmd_params.get('io_queue_size', ''),
         'max_inflight_write': cmd_params.get('max_inflight_write', ''),
@@ -228,7 +228,7 @@ default_params = {
     "data_page_restart_interval" : 16,# default 16
     "index_page_restart_interval" : 16,#default 16
     # "index_page_read_queue" : 1024,#default 1024
-    "index_buffer_pool_size" : 0xFFFFFFFF,#default UINT32_MAX
+    "buffer_pool_size" : 0xFFFFFFFF,#default UINT32_MAX
     "init_page_count" : 1 << 15,#default 1<<15
     "pages_per_file_shift" : lambda:11,   #default 11  
     "manifest_limit" : lambda:16 <<20,#default 8<<20

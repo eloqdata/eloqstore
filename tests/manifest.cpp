@@ -333,7 +333,7 @@ TEST_CASE("manifest deletion on rootmeta eviction", "[manifest][eviction]")
                                        << " has_archive=" << has_archive);
 
         eloqstore::KvOptions case_opts = opts;
-        case_opts.index_buffer_pool_size = 15 * 4 * KB;
+        case_opts.buffer_pool_size = 15 * 4 * KB;
         case_opts.file_amplify_factor = 2;
         case_opts.data_append_mode = true;
         if (case_opts.store_path.empty())
