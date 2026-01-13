@@ -127,8 +127,7 @@ TEST_CASE("batch write abort releases pinned index pages",
     opts.store_path = {test_path};
     opts.num_threads = 1;
     opts.data_page_size = 4096;
-    opts.buffer_pool_size =
-        4096 * 3;  // Allow only a index page, and two data page.
+    opts.buffer_pool_size = 4096;  // Allow only a single MemIndexPage.
     opts.buf_ring_size = 8;
     opts.max_write_batch_pages = 4;
 
@@ -162,12 +161,12 @@ TEST_CASE("batch write abort releases pinned index pages",
 
     eloqstore::TableIdent tbl_id{"abort-oom", 0};
     eloqstore::BatchWriteRequest first_req;
-    first_req.SetArgs(tbl_id, build_entries(0, 1, 32, 64));
+    first_req.SetArgs(tbl_id, build_entries(0, 4, key_len, large_value_len));
     store->ExecSync(&first_req);
     REQUIRE(first_req.Error() == eloqstore::KvError::NoError);
 
     // The second write must allocate a fresh index page while the existing root
-    // is pinned. With only one slot in the buffer pool, this triggers
+    // is pinned. With only one slot in the index buffer pool, this triggers
     // KvError::OutOfMem and calls BatchWriteTask::Abort to unpin/recycle pages.
     eloqstore::BatchWriteRequest oom_req;
     oom_req.SetArgs(tbl_id, build_entries(4, 2, key_len, large_value_len));
@@ -188,8 +187,8 @@ TEST_CASE("batch write task pool handles many partitions concurrently",
 {
     eloqstore::KvOptions opts = append_opts;
     opts.store_path = {test_path};
-    opts.num_threads = 1;                 // single shard, many partitions
-    opts.buffer_pool_size = 4096 * 4000;  // enough for many pages
+    opts.num_threads = 1;                // single shard, many partitions
+    opts.buffer_pool_size = 4096 * 400;  // enough for many pages
     opts.max_write_batch_pages = 8;
 
     auto make_entries = [](uint32_t base, uint32_t count)
@@ -315,8 +314,7 @@ TEST_CASE("batch write task pool cleaned after abort", "[batch_write]")
 
     eloqstore::KvOptions opts = append_opts;
     opts.num_threads = 1;  // route all partitions to the same shard
-    opts.buffer_pool_size =
-        opts.data_page_size * 20;  // a small number of pages
+    opts.buffer_pool_size = opts.data_page_size;  // only one index page buffer
 
     eloqstore::EloqStore *store = InitStore(opts);
     const std::vector<eloqstore::TableIdent> partitions = {

@@ -55,10 +55,9 @@ private:
      * @param prev_page The previous page is expected to be larger than the
      * current page, and will be modified in-place.
      * @param cur_page The current page before redistributing.
-     * @return <new page data, error>.
+     * @return The current page after redistributing.
      */
-    std::pair<Page, KvError> Redistribute(DataPage &prev_page,
-                                          std::string_view cur_page);
+    Page Redistribute(DataPage &prev_page, std::string_view cur_page);
     std::string_view Redistribute(MemIndexPage *prev_page,
                                   std::string_view cur_page,
                                   std::string &cur_page_key);

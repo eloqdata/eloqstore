@@ -161,12 +161,6 @@ KvError IouringMgr::Init(Shard *shard)
     for (uint16_t i = 0; i < num_bufs; i++)
     {
         Page page(shard->PagePool()->Allocate());
-        if (!page)
-        {
-            LOG(ERROR) << "failed to allocate page for buf_ring";
-            bufs_pool_.clear();
-            return KvError::OutOfMem;
-        }
         io_uring_buf_ring_add(buf_ring_, page.Ptr(), buf_size, i, mask, i);
         bufs_pool_.emplace_back(std::move(page));
     }
@@ -179,10 +173,6 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
                                               FilePageId fp_id,
                                               Page page)
 {
-    if (!page)
-    {
-        return {std::move(page), KvError::OutOfMem};
-    }
     auto [file_id, offset] = ConvFilePageId(fp_id);
     auto [fd_ref, err] = OpenFD(tbl_id, file_id, true);
     if (err != KvError::NoError)
@@ -3122,10 +3112,6 @@ std::pair<Page, KvError> MemStoreMgr::ReadPage(const TableIdent &tbl_id,
                                                FilePageId fp_id,
                                                Page page)
 {
-    if (!page)
-    {
-        return {std::move(page), KvError::OutOfMem};
-    }
     auto it = store_.find(tbl_id);
     if (it == store_.end())
     {

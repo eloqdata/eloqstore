@@ -83,66 +83,35 @@ char *Page::Ptr() const
 }
 
 PagesPool::PagesPool(const KvOptions *options)
-    : options_(options),
-      free_head_(nullptr),
-      free_cnt_(0),
-      max_pages_(0),
-      total_pages_(0)
+    : options_(options), free_head_(nullptr), free_cnt_(0)
 {
-    const size_t buffer_pages =
-        options->buffer_pool_size / options->data_page_size;
-    max_pages_ = buffer_pages + options->buf_ring_size;
-    if (max_pages_ == 0)
-    {
-        max_pages_ = 1;
-    }
-
     // Initially allocate only enough pages for the io_uring buffer ring and
     // grow lazily on demand when the pool runs out of free pages.
     size_t initial_pages =
         options->buf_ring_size > 0 ? options->buf_ring_size : 1;
-    if (initial_pages > max_pages_)
-    {
-        initial_pages = max_pages_;
-    }
-    bool ok = Extend(initial_pages);
-    CHECK(ok) << "Failed to initialize Page Pool";
+    Extend(initial_pages);
 }
 
-bool PagesPool::Extend(size_t pages)
+void PagesPool::Extend(size_t pages)
 {
     assert(pages > 0);
-    if (total_pages_ >= max_pages_)
-    {
-        return false;
-    }
-    size_t remaining = max_pages_ - total_pages_;
-    if (pages > remaining)
-    {
-        pages = remaining;
-    }
     uint16_t page_size = options_->data_page_size;
     const size_t chunk_size = pages * page_size;
     char *ptr = (char *) std::aligned_alloc(page_align, chunk_size);
     assert(ptr);
     chunks_.emplace_back(UPtr(ptr, &std::free), chunk_size);
-    total_pages_ += pages;
 
     for (size_t i = 0; i < chunk_size; i += page_size)
     {
         Free(ptr + i);
     }
-    return true;
 }
 
 char *PagesPool::Allocate()
 {
     if (free_head_ == nullptr)
     {
-        if (!Extend(1024))
-        {
-            return nullptr;
-        }
+        Extend(1024);  // Extend the pool with 1024 pages if free list is empty.
         assert(free_head_ != nullptr);
     }
     FreePage *head = free_head_;

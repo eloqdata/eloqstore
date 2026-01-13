@@ -1038,8 +1038,7 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
             prev_page->ContentLength() > three_quarter)
         {
             // This page is too small, redistribute it with the previous page.
-            auto [page, redis_err] = Redistribute(*prev_page, page_view);
-            CHECK_KV_ERR(redis_err);
+            Page page = Redistribute(*prev_page, page_view);
             new_data_page.SetPage(std::move(page));
             DataPageIter iter(&new_data_page, Options());
             assert(iter.HasNext());
@@ -1048,12 +1047,7 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
         }
         else
         {
-            Page page(true);
-            if (__builtin_expect(!page, 0))
-            {
-                return KvError::OutOfMem;
-            }
-            new_data_page.SetPage(std::move(page));
+            new_data_page.SetPage(Page(true));
             memcpy(new_data_page.PagePtr(), page_view.data(), page_view.size());
         }
 
@@ -1071,10 +1065,6 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
     else
     {
         DataPage new_page(page_id);
-        if (new_page.IsEmpty())
-        {
-            return KvError::OutOfMem;
-        }
         memcpy(new_page.PagePtr(), page_view.data(), page_view.size());
         // This is an existing data page with updated content.
         LeafLinkUpdate(std::move(new_page));
@@ -1082,8 +1072,8 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
     return ShiftLeafLink();
 }
 
-std::pair<Page, KvError> BatchWriteTask::Redistribute(DataPage &prev_page,
-                                                      std::string_view cur_page)
+Page BatchWriteTask::Redistribute(DataPage &prev_page,
+                                  std::string_view cur_page)
 {
     const uint16_t prev_page_len = prev_page.ContentLength();
     const uint16_t cur_page_len =
@@ -1108,15 +1098,11 @@ std::pair<Page, KvError> BatchWriteTask::Redistribute(DataPage &prev_page,
     }
     assert(preserve_len <= prev_page_len);
     Page new_page(true);
-    if (__builtin_expect(!new_page, 0))
-    {
-        return {Page(false), KvError::OutOfMem};
-    }
     if (preserve_len == prev_page_len)
     {
         // Corner case: can not move any region from the previous page.
         std::memcpy(new_page.Ptr(), cur_page.data(), cur_page.size());
-        return {std::move(new_page), KvError::NoError};
+        return new_page;
     }
 
     // Merge last several regions of previous page with current page.
@@ -1154,7 +1140,7 @@ std::pair<Page, KvError> BatchWriteTask::Redistribute(DataPage &prev_page,
         DecodeFixed16(new_page.Ptr() + DataPage::page_size_offset);
     assert(prev_page_len + cur_page_len == preserve_len + new_page_len);
 #endif
-    return {std::move(new_page), KvError::NoError};
+    return new_page;
 }
 
 std::string_view BatchWriteTask::Redistribute(MemIndexPage *prev_page,
@@ -1382,12 +1368,8 @@ KvError BatchWriteTask::WriteOverflowValue(std::string_view value)
         {
             // Write end page of the previous group that contains pointers to
             // the next group.
-            OverflowPage end_page(end_page_id, opts, page_val, pointers);
-            if (end_page.PagePtr() == nullptr)
-            {
-                return KvError::OutOfMem;
-            }
-            err = WritePage(std::move(end_page));
+            err =
+                WritePage(OverflowPage(end_page_id, opts, page_val, pointers));
             CHECK_KV_ERR(err);
         }
 
@@ -1411,12 +1393,7 @@ KvError BatchWriteTask::WriteOverflowValue(std::string_view value)
             uint16_t page_val_size = std::min(size_t(page_cap), value.size());
             page_val = value.substr(0, page_val_size);
             value = value.substr(page_val_size);
-            OverflowPage page(pg_id, opts, page_val);
-            if (page.PagePtr() == nullptr)
-            {
-                return KvError::OutOfMem;
-            }
-            err = WritePage(std::move(page));
+            err = WritePage(OverflowPage(pg_id, opts, page_val));
             CHECK_KV_ERR(err);
         }
         assert(i == pointers.size());
@@ -1720,10 +1697,6 @@ std::pair<bool, KvError> BatchWriteTask::TruncateDataPage(
     {
         // This currently updated data page will become the new tail data page.
         DataPage new_page(page_id);
-        if (new_page.IsEmpty())
-        {
-            return {false, KvError::OutOfMem};
-        }
         std::string_view page_view = data_page_builder_.Finish();
         memcpy(new_page.PagePtr(), page_view.data(), page_view.size());
         new_page.SetNextPageId(MaxPageId);

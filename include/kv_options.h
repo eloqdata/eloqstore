@@ -40,7 +40,7 @@ struct KvOptions
      */
     bool skip_verify_checksum = false;
     /**
-     * @brief Max size of the shared page buffer per shard (in bytes).
+     * @brief Max size of cached index pages per shard (in bytes).
      */
     uint64_t buffer_pool_size = 32 * MB;
     /**

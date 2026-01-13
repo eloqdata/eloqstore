@@ -25,9 +25,6 @@ IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
     : io_manager_(io_manager), mapping_arena_(Options()->mapping_arena_size)
 {
     active_head_.EnqueNext(&active_tail_);
-    const size_t buffer_pages =
-        Options()->buffer_pool_size / Options()->data_page_size;
-    index_pages_.reserve(buffer_pages);
 }
 
 IndexPageManager::~IndexPageManager()
@@ -51,14 +48,9 @@ MemIndexPage *IndexPageManager::AllocIndexPage()
     {
         if (!IsFull())
         {
-            auto new_page = std::make_unique<MemIndexPage>(true);
-            MemIndexPage *new_page_ptr = new_page.get();
-            if (__builtin_expect(new_page_ptr->PagePtr() == nullptr, 0))
-            {
-                return nullptr;
-            }
-            index_pages_.push_back(std::move(new_page));
-            next_free = new_page_ptr;
+            auto &new_page =
+                index_pages_.emplace_back(std::make_unique<MemIndexPage>());
+            next_free = new_page.get();
         }
         else
         {

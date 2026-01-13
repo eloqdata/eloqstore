@@ -73,7 +73,6 @@ TEST_CASE("hard concurrency test", "[persist][concurrency]")
     std::string root_path(test_path);
     eloqstore::KvOptions options = {
         .num_threads = 4,
-        .buffer_pool_size = 4096ULL * 1024 * 1024,
         .store_path = {root_path + "/disk0",
                        root_path + "/disk1",
                        root_path + "/disk2"},

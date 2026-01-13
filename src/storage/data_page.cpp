@@ -38,7 +38,7 @@ DataPage &DataPage::operator=(DataPage &&other) noexcept
 
 bool DataPage::IsEmpty() const
 {
-    return !page_;
+    return page_.Ptr() == nullptr;
 }
 
 uint16_t DataPage::ContentLength() const
@@ -533,10 +533,6 @@ OverflowPage::OverflowPage(PageId page_id,
     }
 
     page_ = Page(true);
-    if (!page_)
-    {
-        return;
-    }
 
     SetPageType(page_.Ptr(), PageType::Overflow);
 
