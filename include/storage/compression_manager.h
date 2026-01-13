@@ -70,10 +70,15 @@ public:
         std::shared_ptr<compression::DictCompression> compression_{};
     };
 
-    CompressionManager(AsyncIoManager *io_mgr, const KvOptions *options);
+    CompressionManager(AsyncIoManager *io_mgr,
+                       const KvOptions *options,
+                       size_t capacity_bytes);
 
     std::pair<Handle, KvError> GetOrLoad(const TableIdent &tbl_id,
                                          const DictMeta &meta);
+    std::pair<Handle, KvError> GetOrLoad(const TableIdent &tbl_id,
+                                         const DictMeta &meta,
+                                         ManifestFile *manifest);
     void UpdateDictionary(
         const std::shared_ptr<compression::DictCompression> &compression,
         const DictMeta &meta);
@@ -100,7 +105,7 @@ private:
     void EnqueueFront(Entry *entry);
     void Dequeue(Entry *entry);
     void EvictIfNeeded();
-    KvError LoadDictionary(Entry *entry);
+    KvError LoadDictionary(Entry *entry, ManifestFile *manifest);
 
     AsyncIoManager *io_mgr_;
     const KvOptions *options_;

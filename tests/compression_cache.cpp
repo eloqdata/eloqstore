@@ -213,7 +213,7 @@ TEST_CASE("CompressionManager lazy loads and evicts dictionaries")
     io_mgr.AddManifest(tbl1, BuildManifest(opts, io_mgr, tbl1, dict1, meta1));
     io_mgr.AddManifest(tbl2, BuildManifest(opts, io_mgr, tbl2, dict2, meta2));
 
-    eloqstore::CompressionManager mgr(&io_mgr, &opts);
+    eloqstore::CompressionManager mgr(&io_mgr, &opts, opts.dict_cache_size);
 
     auto [handle1, err1] = mgr.GetOrLoad(tbl1, meta1);
     REQUIRE(err1 == eloqstore::KvError::NoError);
@@ -250,7 +250,7 @@ TEST_CASE("CompressionManager keeps pinned dictionary from eviction")
     io_mgr.AddManifest(tbl1, BuildManifest(opts, io_mgr, tbl1, dict1, meta1));
     io_mgr.AddManifest(tbl2, BuildManifest(opts, io_mgr, tbl2, dict2, meta2));
 
-    eloqstore::CompressionManager mgr(&io_mgr, &opts);
+    eloqstore::CompressionManager mgr(&io_mgr, &opts, opts.dict_cache_size);
 
     auto [handle1, err1] = mgr.GetOrLoad(tbl1, meta1);
     REQUIRE(err1 == eloqstore::KvError::NoError);

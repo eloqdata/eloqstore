@@ -44,7 +44,7 @@ struct KvOptions
      */
     uint64_t buffer_pool_size = 32 * MB;
     /**
-     * @brief Max size of cached compression dictionaries per shard (in bytes).
+     * @brief Max size of cached compression dictionaries (global, in bytes).
      */
     uint64_t dict_cache_size = 64 * MB;
     /**
