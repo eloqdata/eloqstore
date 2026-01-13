@@ -31,7 +31,7 @@ public:
     static uint16_t const leftmost_ptr_offset =
         page_size_offset + sizeof(uint16_t);
 
-    explicit MemIndexPage(bool alloc) : page_(alloc) {};
+    explicit MemIndexPage(bool alloc = true) : page_(alloc) {};
     uint16_t ContentLength() const;
     uint16_t RestartNum() const;
 
