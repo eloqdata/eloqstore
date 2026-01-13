@@ -91,19 +91,10 @@ void Shard::WorkLoop()
         {
             round_start = metrics::Clock::now();
         }
-
-        // Metrics collection: time io_mgr_->Submit()
 #endif
 
         io_mgr_->Submit();
 
-#ifdef ELOQSTORE_WITH_TXSERVICE
-        if (store_->EnableMetrics())
-        {
-            meter->CollectDuration(
-                metrics::NAME_ELOQSTORE_ASYNC_IO_SUBMIT_DURATION, round_start);
-        }
-#endif
         io_mgr_->PollComplete();
         ExecuteReadyTasks();
 
@@ -490,7 +481,9 @@ void Shard::WorkOneRound()
         OnReceivedReq(reqs[i]);
     }
 
-    if (nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle())
+    bool is_idle_round =
+        nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle();
+    if (is_idle_round)
     {
         // No request and no active task and no active io.
         if (io_mgr_->NeedPrewarm())
@@ -503,25 +496,7 @@ void Shard::WorkOneRound()
 
     req_queue_size_.fetch_sub(nreqs, std::memory_order_relaxed);
 
-#ifdef ELOQSTORE_WITH_TXSERVICE
-    // Metrics collection: time io_mgr_->Submit()
-    metrics::TimePoint submit_start{};
-    if (store_->EnableMetrics())
-    {
-        submit_start = metrics::Clock::now();
-        assert(meter != nullptr);
-    }
-#endif
-
     io_mgr_->Submit();
-
-#ifdef ELOQSTORE_WITH_TXSERVICE
-    if (store_->EnableMetrics())
-    {
-        meter->CollectDuration(metrics::NAME_ELOQSTORE_ASYNC_IO_SUBMIT_DURATION,
-                               submit_start);
-    }
-#endif
 
     io_mgr_->PollComplete();
 
@@ -529,7 +504,7 @@ void Shard::WorkOneRound()
 
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: end of round
-    if (store_->EnableMetrics())
+    if (store_->EnableMetrics() && !is_idle_round)
     {
         meter->CollectDuration(metrics::NAME_ELOQSTORE_WORK_ONE_ROUND_DURATION,
                                round_start);
