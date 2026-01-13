@@ -1,7 +1,5 @@
 #include "storage/compression_manager.h"
 
-#include <boost/functional/hash.hpp>
-
 #include <cassert>
 #include <string>
 #include <utility>
@@ -130,8 +128,7 @@ CompressionManager::GetOrLoad(const TableIdent &tbl_id,
     if (meta.HasDictionary() && !entry->compression_->HasDictionary())
     {
         LOG(INFO) << "dict cache miss, loading dictionary for "
-                  << tbl_id.ToString() << " epoch=" << meta.dict_epoch
-                  << " len=" << meta.dict_len;
+                  << tbl_id.ToString() << " len=" << meta.dict_len;
         KvError err = LoadDictionary(entry, manifest);
         if (err != KvError::NoError)
         {
@@ -159,27 +156,6 @@ void CompressionManager::UpdateDictionary(
         {
             continue;
         }
-        if (entry->key_.dict_epoch_ != meta.dict_epoch)
-        {
-            auto node = entries_.extract(it);
-            node.key().dict_epoch_ = meta.dict_epoch;
-            node.mapped().key_.dict_epoch_ = meta.dict_epoch;
-            node.mapped().meta_ = meta;
-            const size_t new_bytes =
-                node.mapped().compression_->DictionaryBytes().size();
-            if (new_bytes >= node.mapped().bytes_)
-            {
-                used_bytes_ += (new_bytes - node.mapped().bytes_);
-            }
-            else
-            {
-                used_bytes_ -= (node.mapped().bytes_ - new_bytes);
-            }
-            node.mapped().bytes_ = new_bytes;
-            entries_.insert(std::move(node));
-            EvictIfNeeded();
-            return;
-        }
         entry->meta_ = meta;
         const size_t new_bytes = entry->compression_->DictionaryBytes().size();
         if (new_bytes >= entry->bytes_)
@@ -198,15 +174,13 @@ void CompressionManager::UpdateDictionary(
 
 size_t CompressionManager::KeyHash::operator()(const Key &key) const
 {
-    size_t seed = std::hash<TableIdent>()(key.tbl_id_);
-    boost::hash_combine(seed, key.dict_epoch_);
-    return seed;
+    return std::hash<TableIdent>()(key.tbl_id_);
 }
 
 CompressionManager::Entry *CompressionManager::GetEntry(
     const TableIdent &tbl_id, const DictMeta &meta)
 {
-    Key key{tbl_id, meta.dict_epoch};
+    Key key{tbl_id};
     auto [it, inserted] = entries_.try_emplace(key);
     Entry *entry = &it->second;
     if (inserted)
@@ -290,7 +264,6 @@ void CompressionManager::EvictIfNeeded()
         }
         Dequeue(victim);
         LOG(INFO) << "dict evicted for " << victim->key_.tbl_id_.ToString()
-                  << " epoch=" << victim->key_.dict_epoch_
                   << " bytes=" << victim->bytes_;
         used_bytes_ -= victim->bytes_;
         entries_.erase(victim->key_);
@@ -327,7 +300,6 @@ KvError CompressionManager::LoadDictionary(Entry *entry,
     }
     entry->compression_->LoadDictionary(std::move(dict_bytes));
     LOG(INFO) << "dict loaded for " << entry->key_.tbl_id_.ToString()
-              << " epoch=" << entry->meta_.dict_epoch
               << " bytes=" << entry->meta_.dict_len;
     UpdateDictionary(entry->compression_, entry->meta_);
     return KvError::NoError;

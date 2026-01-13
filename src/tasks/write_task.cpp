@@ -33,8 +33,7 @@ uint64_t DictOffset(FilePageId max_fp_id, const DictMeta &meta)
         return 0;
     }
     return ManifestBuilder::header_bytes + Varint64Size(max_fp_id) +
-           Varint32Size(meta.dict_len) + Varint64Size(meta.dict_checksum) +
-           Varint64Size(meta.dict_epoch);
+           Varint32Size(meta.dict_len) + Varint64Size(meta.dict_checksum);
 }
 }  // namespace
 

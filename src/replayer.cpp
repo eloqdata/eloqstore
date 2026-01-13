@@ -113,9 +113,6 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
     ok = GetVarint64(&snapshot, &dict_meta_.dict_checksum);
     assert(ok);
 
-    ok = GetVarint64(&snapshot, &dict_meta_.dict_epoch);
-    assert(ok);
-
     const size_t payload_offset = snapshot_start.size() - snapshot.size();
     if (dict_meta_.dict_len > 0)
     {

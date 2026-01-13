@@ -21,12 +21,10 @@ public:
     struct Key
     {
         TableIdent tbl_id_;
-        uint64_t dict_epoch_{0};
 
         bool operator==(const Key &other) const
         {
-            return tbl_id_ == other.tbl_id_ &&
-                   dict_epoch_ == other.dict_epoch_;
+            return tbl_id_ == other.tbl_id_;
         }
     };
 

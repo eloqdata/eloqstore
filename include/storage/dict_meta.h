@@ -12,7 +12,6 @@ struct DictMeta
     uint32_t dict_len{0};
     uint64_t dict_offset{0};
     uint64_t dict_checksum{0};
-    uint64_t dict_epoch{0};
 
     bool HasDictionary() const
     {
@@ -30,7 +29,6 @@ struct DictMeta
                 static_cast<uint32_t>(dict_bytes.size());
             meta.dict_checksum = XXH3_64bits(dict_bytes.data(),
                                              dict_bytes.size());
-            meta.dict_epoch = meta.dict_checksum;
         }
         return meta;
     }

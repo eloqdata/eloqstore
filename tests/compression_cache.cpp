@@ -165,8 +165,7 @@ uint64_t DictOffset(eloqstore::FilePageId max_fp_id,
     return eloqstore::ManifestBuilder::header_bytes +
            eloqstore::Varint64Size(max_fp_id) +
            eloqstore::Varint32Size(meta.dict_len) +
-           eloqstore::Varint64Size(meta.dict_checksum) +
-           eloqstore::Varint64Size(meta.dict_epoch);
+           eloqstore::Varint64Size(meta.dict_checksum);
 }
 
 std::string BuildManifest(const eloqstore::KvOptions &opts,
@@ -181,7 +180,6 @@ std::string BuildManifest(const eloqstore::KvOptions &opts,
     dict_meta_out.dict_len = static_cast<uint32_t>(dict_bytes.size());
     dict_meta_out.dict_checksum =
         XXH3_64bits(dict_bytes.data(), dict_bytes.size());
-    dict_meta_out.dict_epoch = dict_meta_out.dict_checksum;
     dict_meta_out.dict_offset =
         DictOffset(mapper.FilePgAllocator()->MaxFilePageId(), dict_meta_out);
 
