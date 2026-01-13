@@ -141,75 +141,49 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
 }
 
 KvError Replayer::ReadSnapshotDict(ManifestFile *file,
+                                   const DictMeta &meta,
                                    std::string &dict_bytes)
 {
     dict_bytes.clear();
-    constexpr uint16_t header_len = ManifestBuilder::header_bytes;
-    std::string buffer;
-    buffer.resize(header_len);
-    KvError err = file->Read(buffer.data(), header_len);
-    CHECK_KV_ERR(err);
-
-    const uint32_t payload_len =
-        DecodeFixed32(buffer.data() + ManifestBuilder::offset_len);
-    buffer.resize(static_cast<size_t>(header_len) + payload_len);
-    err = file->Read(buffer.data() + header_len, payload_len);
-    CHECK_KV_ERR(err);
-
-    std::string_view content(buffer.data(),
-                             static_cast<size_t>(header_len) + payload_len);
-    if (!ManifestBuilder::ValidateChecksum(content))
-    {
-        return KvError::Corrupted;
-    }
-
-    content = content.substr(checksum_bytes);
-    content = content.substr(sizeof(PageId) * 2);
-    std::string_view snapshot = content.substr(sizeof(uint32_t), payload_len);
-
-    uint64_t max_fp_id = 0;
-    bool ok = GetVarint64(&snapshot, &max_fp_id);
-    if (!ok)
-    {
-        return KvError::Corrupted;
-    }
-    uint32_t dict_len = 0;
-    ok = GetVarint32(&snapshot, &dict_len);
-    if (!ok)
-    {
-        return KvError::Corrupted;
-    }
-    uint64_t dict_checksum = 0;
-    ok = GetVarint64(&snapshot, &dict_checksum);
-    if (!ok)
-    {
-        return KvError::Corrupted;
-    }
-    uint64_t dict_epoch = 0;
-    ok = GetVarint64(&snapshot, &dict_epoch);
-    if (!ok)
-    {
-        return KvError::Corrupted;
-    }
-    if (dict_len == 0)
+    if (meta.dict_len == 0)
     {
         return KvError::NoError;
     }
-    if (snapshot.size() < dict_len)
+    if (meta.dict_offset == 0)
     {
         return KvError::Corrupted;
     }
-    dict_bytes.assign(snapshot.data(), snapshot.data() + dict_len);
-    if (dict_checksum != 0)
+
+    size_t to_skip = meta.dict_offset;
+    char skip_buf[4096];
+    while (to_skip > 0)
+    {
+        size_t chunk = std::min(sizeof(skip_buf), to_skip);
+        KvError err = file->Read(skip_buf, chunk);
+        CHECK_KV_ERR(err);
+        to_skip -= chunk;
+    }
+
+    dict_bytes.resize(meta.dict_len);
+    size_t to_read = meta.dict_len;
+    size_t off = 0;
+    while (to_read > 0)
+    {
+        size_t chunk = std::min<size_t>(to_read, sizeof(skip_buf));
+        KvError err = file->Read(dict_bytes.data() + off, chunk);
+        CHECK_KV_ERR(err);
+        off += chunk;
+        to_read -= chunk;
+    }
+    if (meta.dict_checksum != 0)
     {
         uint64_t actual =
             XXH3_64bits(dict_bytes.data(), dict_bytes.size());
-        if (actual != dict_checksum)
+        if (actual != meta.dict_checksum)
         {
             return KvError::Corrupted;
         }
     }
-    (void)dict_epoch;
     return KvError::NoError;
 }
 

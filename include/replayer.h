@@ -28,6 +28,7 @@ public:
     DictMeta dict_meta_{};
 
     static KvError ReadSnapshotDict(ManifestFile *file,
+                                    const DictMeta &meta,
                                     std::string &dict_bytes);
 
 private:

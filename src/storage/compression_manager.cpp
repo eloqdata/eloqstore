@@ -105,16 +105,25 @@ void CompressionManager::Handle::Clear()
 }
 
 CompressionManager::CompressionManager(AsyncIoManager *io_mgr,
-                                       const KvOptions *options)
+                                       const KvOptions *options,
+                                       size_t capacity_bytes)
     : io_mgr_(io_mgr), options_(options)
 {
-    capacity_bytes_ = options_->dict_cache_size;
+    capacity_bytes_ = capacity_bytes;
     lru_head_.next_ = &lru_tail_;
     lru_tail_.prev_ = &lru_head_;
 }
 
 std::pair<CompressionManager::Handle, KvError>
 CompressionManager::GetOrLoad(const TableIdent &tbl_id, const DictMeta &meta)
+{
+    return GetOrLoad(tbl_id, meta, nullptr);
+}
+
+std::pair<CompressionManager::Handle, KvError>
+CompressionManager::GetOrLoad(const TableIdent &tbl_id,
+                              const DictMeta &meta,
+                              ManifestFile *manifest)
 {
     Entry *entry = GetEntry(tbl_id, meta);
     Handle handle(entry, this);
@@ -123,7 +132,7 @@ CompressionManager::GetOrLoad(const TableIdent &tbl_id, const DictMeta &meta)
         LOG(INFO) << "dict cache miss, loading dictionary for "
                   << tbl_id.ToString() << " epoch=" << meta.dict_epoch
                   << " len=" << meta.dict_len;
-        KvError err = LoadDictionary(entry);
+        KvError err = LoadDictionary(entry, manifest);
         if (err != KvError::NoError)
         {
             LOG(WARNING) << "dict load failed for " << tbl_id.ToString()
@@ -288,20 +297,29 @@ void CompressionManager::EvictIfNeeded()
     }
 }
 
-KvError CompressionManager::LoadDictionary(Entry *entry)
+KvError CompressionManager::LoadDictionary(Entry *entry,
+                                           ManifestFile *manifest)
 {
     if (entry->meta_.dict_len == 0)
     {
         return KvError::NoError;
     }
-    if (io_mgr_ == nullptr)
+    std::unique_ptr<ManifestFile> manifest_guard;
+    if (manifest == nullptr)
     {
-        return KvError::NotFound;
+        if (io_mgr_ == nullptr)
+        {
+            return KvError::NotFound;
+        }
+        auto [manifest_ptr, err] = io_mgr_->GetManifest(entry->key_.tbl_id_);
+        CHECK_KV_ERR(err);
+        manifest_guard = std::move(manifest_ptr);
+        manifest = manifest_guard.get();
     }
-    auto [manifest, err] = io_mgr_->GetManifest(entry->key_.tbl_id_);
-    CHECK_KV_ERR(err);
     std::string dict_bytes;
-    err = Replayer::ReadSnapshotDict(manifest.get(), dict_bytes);
+    KvError err = Replayer::ReadSnapshotDict(manifest,
+                                             entry->meta_,
+                                             dict_bytes);
     CHECK_KV_ERR(err);
     if (dict_bytes.size() != entry->meta_.dict_len)
     {
