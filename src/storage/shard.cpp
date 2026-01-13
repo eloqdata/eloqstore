@@ -461,13 +461,6 @@ void Shard::WorkOneRound()
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: start timing the round
     metrics::TimePoint round_start{};
-    metrics::Meter *meter = nullptr;
-    if (store_->EnableMetrics())
-    {
-        meter = store_->GetMetricsMeter(shard_id_);
-        assert(meter != nullptr);
-        round_start = metrics::Clock::now();
-    }
 #endif
 
     if (__builtin_expect(!io_mgr_->BackgroundJobInited(), false))
@@ -476,10 +469,6 @@ void Shard::WorkOneRound()
     }
     KvRequest *reqs[128];
     size_t nreqs = requests_.try_dequeue_bulk(reqs, std::size(reqs));
-    for (size_t i = 0; i < nreqs; i++)
-    {
-        OnReceivedReq(reqs[i]);
-    }
 
     bool is_idle_round =
         nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle();
@@ -487,11 +476,28 @@ void Shard::WorkOneRound()
     {
         // No request and no active task and no active io.
         if (io_mgr_->NeedPrewarm())
+        {
             io_mgr_->RunPrewarm();
+        }
         else
         {
             return;
         }
+    }
+    else
+    {
+#ifdef ELOQSTORE_WITH_TXSERVICE
+        // Metrics collection: start timing the round
+        if (store_->EnableMetrics())
+        {
+            round_start = metrics::Clock::now();
+        }
+#endif
+    }
+
+    for (size_t i = 0; i < nreqs; i++)
+    {
+        OnReceivedReq(reqs[i]);
     }
 
     req_queue_size_.fetch_sub(nreqs, std::memory_order_relaxed);
@@ -506,6 +512,7 @@ void Shard::WorkOneRound()
     // Metrics collection: end of round
     if (store_->EnableMetrics() && !is_idle_round)
     {
+        metrics::Meter *meter = store_->GetMetricsMeter(shard_id_);
         meter->CollectDuration(metrics::NAME_ELOQSTORE_WORK_ONE_ROUND_DURATION,
                                round_start);
         meter->Collect(metrics::NAME_ELOQSTORE_TASK_MANAGER_ACTIVE_TASKS,
