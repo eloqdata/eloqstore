@@ -10,7 +10,7 @@
 #include "compression.h"
 #include "error.h"
 #include "kv_options.h"
-#include "storage/dict_meta.h"
+#include "compression.h"
 #include "types.h"
 
 namespace eloqstore
