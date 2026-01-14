@@ -8,7 +8,7 @@
 #include <unordered_set>
 
 #include "manifest_buffer.h"
-#include "storage/dict_meta.h"
+#include "compression.h"
 #include "storage/mem_index_page.h"
 #include "storage/page_mapper.h"
 #include "tasks/task.h"

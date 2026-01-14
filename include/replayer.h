@@ -7,7 +7,7 @@
 
 #include "async_io_manager.h"
 #include "error.h"
-#include "storage/dict_meta.h"
+#include "compression.h"
 #include "storage/page_mapper.h"
 
 namespace eloqstore
