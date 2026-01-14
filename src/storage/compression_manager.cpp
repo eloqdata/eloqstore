@@ -113,12 +113,6 @@ CompressionManager::CompressionManager(AsyncIoManager *io_mgr,
 }
 
 std::pair<CompressionManager::Handle, KvError>
-CompressionManager::GetOrLoad(const TableIdent &tbl_id, const DictMeta &meta)
-{
-    return GetOrLoad(tbl_id, meta, nullptr);
-}
-
-std::pair<CompressionManager::Handle, KvError>
 CompressionManager::GetOrLoad(const TableIdent &tbl_id,
                               const DictMeta &meta,
                               ManifestFile *manifest)
@@ -172,20 +166,14 @@ void CompressionManager::UpdateDictionary(
     }
 }
 
-size_t CompressionManager::KeyHash::operator()(const Key &key) const
-{
-    return std::hash<TableIdent>()(key.tbl_id_);
-}
-
 CompressionManager::Entry *CompressionManager::GetEntry(
     const TableIdent &tbl_id, const DictMeta &meta)
 {
-    Key key{tbl_id};
-    auto [it, inserted] = entries_.try_emplace(key);
+    auto [it, inserted] = entries_.try_emplace(tbl_id);
     Entry *entry = &it->second;
     if (inserted)
     {
-        entry->key_ = key;
+        entry->tbl_id_ = tbl_id;
         entry->meta_ = meta;
         entry->compression_ = std::make_shared<compression::DictCompression>();
         entry->ref_count_ = 0;
@@ -263,10 +251,10 @@ void CompressionManager::EvictIfNeeded()
             continue;
         }
         Dequeue(victim);
-        LOG(INFO) << "dict evicted for " << victim->key_.tbl_id_.ToString()
+        LOG(INFO) << "dict evicted for " << victim->tbl_id_.ToString()
                   << " bytes=" << victim->bytes_;
         used_bytes_ -= victim->bytes_;
-        entries_.erase(victim->key_);
+        entries_.erase(victim->tbl_id_);
     }
 }
 
@@ -284,7 +272,7 @@ KvError CompressionManager::LoadDictionary(Entry *entry,
         {
             return KvError::NotFound;
         }
-        auto [manifest_ptr, err] = io_mgr_->GetManifest(entry->key_.tbl_id_);
+        auto [manifest_ptr, err] = io_mgr_->GetManifest(entry->tbl_id_);
         CHECK_KV_ERR(err);
         manifest_guard = std::move(manifest_ptr);
         manifest = manifest_guard.get();
@@ -299,7 +287,7 @@ KvError CompressionManager::LoadDictionary(Entry *entry,
         return KvError::Corrupted;
     }
     entry->compression_->LoadDictionary(std::move(dict_bytes));
-    LOG(INFO) << "dict loaded for " << entry->key_.tbl_id_.ToString()
+    LOG(INFO) << "dict loaded for " << entry->tbl_id_.ToString()
               << " bytes=" << entry->meta_.dict_len;
     UpdateDictionary(entry->compression_, entry->meta_);
     return KvError::NoError;

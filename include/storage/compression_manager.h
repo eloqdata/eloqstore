@@ -10,7 +10,6 @@
 #include "compression.h"
 #include "error.h"
 #include "kv_options.h"
-#include "compression.h"
 #include "types.h"
 
 namespace eloqstore
@@ -18,19 +17,9 @@ namespace eloqstore
 class CompressionManager
 {
 public:
-    struct Key
-    {
-        TableIdent tbl_id_;
-
-        bool operator==(const Key &other) const
-        {
-            return tbl_id_ == other.tbl_id_;
-        }
-    };
-
     struct Entry
     {
-        Key key_{};
+        TableIdent tbl_id_{};
         DictMeta meta_{};
         std::shared_ptr<compression::DictCompression> compression_{};
         uint32_t ref_count_{0};
@@ -63,8 +52,10 @@ public:
         Handle(struct Entry *entry, CompressionManager *owner);
         void Clear();
 
+        // Keep a pinned cache entry and an owning ref to the dictionary.
         struct Entry *entry_{nullptr};
         CompressionManager *owner_{nullptr};
+        // Keep a shared ref to the dictionary to pin it in memory.
         std::shared_ptr<compression::DictCompression> compression_{};
     };
 
@@ -72,11 +63,11 @@ public:
                        const KvOptions *options,
                        size_t capacity_bytes);
 
-    std::pair<Handle, KvError> GetOrLoad(const TableIdent &tbl_id,
-                                         const DictMeta &meta);
+    // ManifestFile *manifest is used to load the dictionary in FindRoot
+    // function.
     std::pair<Handle, KvError> GetOrLoad(const TableIdent &tbl_id,
                                          const DictMeta &meta,
-                                         ManifestFile *manifest);
+                                         ManifestFile *manifest = nullptr);
     void UpdateDictionary(
         const std::shared_ptr<compression::DictCompression> &compression,
         const DictMeta &meta);
@@ -92,11 +83,6 @@ public:
     }
 
 private:
-    struct KeyHash
-    {
-        size_t operator()(const Key &key) const;
-    };
-
     Entry *GetEntry(const TableIdent &tbl_id, const DictMeta &meta);
     void Pin(Entry *entry);
     void Unpin(Entry *entry);
@@ -109,7 +95,7 @@ private:
     const KvOptions *options_;
     size_t capacity_bytes_{0};
     size_t used_bytes_{0};
-    std::unordered_map<Key, Entry, KeyHash> entries_;
+    std::unordered_map<TableIdent, Entry> entries_;
     Entry lru_head_{};
     Entry lru_tail_{};
 };
