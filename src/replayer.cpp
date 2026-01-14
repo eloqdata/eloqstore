@@ -58,6 +58,7 @@ KvError Replayer::Replay(ManifestFile *file)
 KvError Replayer::ParseNextRecord(ManifestFile *file)
 {
     constexpr uint16_t header_len = ManifestBuilder::header_bytes;
+    // Track current record offset so dict_offset can be computed.
     record_start_offset_ = file_size_;
     log_buf_.resize(header_len);
     KvError err = file->Read(log_buf_.data(), header_len);

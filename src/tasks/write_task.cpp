@@ -32,6 +32,7 @@ uint64_t DictOffset(FilePageId max_fp_id, const DictMeta &meta)
     {
         return 0;
     }
+    // Dict bytes are stored after max_fp_id and dict metadata in snapshot.
     return ManifestBuilder::header_bytes + Varint64Size(max_fp_id) +
            Varint32Size(meta.dict_len) + Varint64Size(meta.dict_checksum);
 }
@@ -253,13 +254,17 @@ KvError WriteTask::FlushManifest()
     std::string_view dict_bytes;
     CHECK(cow_meta_.compression_ != nullptr);
     DictMeta dict_meta = cow_meta_.dict_meta_;
+    const bool dict_dirty = cow_meta_.compression_->Dirty();
     if (cow_meta_.compression_->HasDictionary())
     {
         const std::string &dict_vec = cow_meta_.compression_->DictionaryBytes();
         dict_bytes = {dict_vec.data(), dict_vec.size()};
-        dict_meta = DictMeta::FromCompression(*cow_meta_.compression_);
+        // Only recompute metadata when the dictionary is newly built.
+        if (dict_dirty)
+        {
+            dict_meta = DictMeta::FromCompression(*cow_meta_.compression_);
+        }
     }
-    const bool dict_dirty = cow_meta_.compression_->Dirty();
 
     if (need_empty_snapshot)
     {
@@ -279,9 +284,12 @@ KvError WriteTask::FlushManifest()
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
         cow_meta_.dict_meta_ = dict_meta;
-        cow_meta_.compression_->ClearDirty();
-        shard->IndexManager()->CompressionMgr()->UpdateDictionary(
-            cow_meta_.compression_, cow_meta_.dict_meta_);
+        if (dict_dirty)
+        {
+            cow_meta_.compression_->ClearDirty();
+            shard->IndexManager()->CompressionMgr()->UpdateDictionary(
+                cow_meta_.compression_, cow_meta_.dict_meta_);
+        }
         return KvError::NoError;
     }
 
@@ -314,9 +322,12 @@ KvError WriteTask::FlushManifest()
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
         cow_meta_.dict_meta_ = dict_meta;
-        cow_meta_.compression_->ClearDirty();
-        shard->IndexManager()->CompressionMgr()->UpdateDictionary(
-            cow_meta_.compression_, cow_meta_.dict_meta_);
+        if (dict_dirty)
+        {
+            cow_meta_.compression_->ClearDirty();
+            shard->IndexManager()->CompressionMgr()->UpdateDictionary(
+                cow_meta_.compression_, cow_meta_.dict_meta_);
+        }
     }
     return KvError::NoError;
 }

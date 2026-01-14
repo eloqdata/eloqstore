@@ -122,6 +122,7 @@ struct DictMeta
             const std::string &dict_bytes = compression.DictionaryBytes();
             meta.dict_len =
                 static_cast<uint32_t>(dict_bytes.size());
+            // DictMeta is derived from the in-memory dictionary bytes.
             meta.dict_checksum = XXH3_64bits(dict_bytes.data(),
                                              dict_bytes.size());
         }
