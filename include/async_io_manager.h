@@ -331,6 +331,7 @@ public:
     virtual KvError SyncFiles(const TableIdent &tbl_id,
                               std::span<LruFD::Ref> fds);
     KvError CloseFiles(std::span<LruFD::Ref> fds);
+    KvError FdatasyncFiles(const TableIdent &tbl_id, std::span<LruFD::Ref> fds);
     virtual KvError CloseFile(LruFD::Ref fd_ref);
     bool HasOtherFile(const TableIdent &tbl_id) const;
 

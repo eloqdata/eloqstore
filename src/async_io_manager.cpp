@@ -1004,8 +1004,8 @@ KvError IouringMgr::SyncFile(LruFD::Ref fd)
     return ToKvError(res);
 }
 
-KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
-                              std::span<LruFD::Ref> fds)
+KvError IouringMgr::FdatasyncFiles(const TableIdent &tbl_id,
+                                   std::span<LruFD::Ref> fds)
 {
     struct FsyncReq : BaseReq
     {
@@ -1017,11 +1017,11 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
     // Fsync all dirty files/directory.
     std::vector<FsyncReq> reqs;
     reqs.reserve(fds.size());
-    for (LruFD::Ref fd_ref : fds)
+    for (LruFD::Ref &fd_ref : fds)
     {
         // FsyncReq elements have pointer stability, because we have reserved
         // enough space for this vector so that it will never reallocate.
-        const FsyncReq &req = reqs.emplace_back(ThdTask(), std::move(fd_ref));
+        const FsyncReq &req = reqs.emplace_back(ThdTask(), fd_ref);
         auto [fd, registered] = req.fd_ref_.FdPair();
         io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, &req);
         if (registered)
@@ -1043,12 +1043,23 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
                        << req.fd_ref_.Get()->file_id_ << " : "
                        << strerror(-req.res_);
         }
-        else
-        {
-            req.fd_ref_.Get()->dirty_ = false;
-        }
     }
     return err;
+}
+
+KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
+                              std::span<LruFD::Ref> fds)
+{
+    KvError err = FdatasyncFiles(tbl_id, fds);
+    CHECK_KV_ERR(err);
+    for (LruFD::Ref &fd_ref : fds)
+    {
+        if (auto *fd = fd_ref.Get())
+        {
+            fd->dirty_ = false;
+        }
+    }
+    return KvError::NoError;
 }
 
 KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
@@ -1075,9 +1086,8 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
         dirty_groups;
     dirty_groups.reserve(4);
 
-    for (size_t i = 0; i < fds.size(); ++i)
+    for (auto &fd_ref : fds)
     {
-        LruFD::Ref &fd_ref = fds[i];
         LruFD *lru_fd = fd_ref.Get();
         if (lru_fd == nullptr)
         {
@@ -1117,8 +1127,6 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     KvError err = KvError::NoError;
     for (auto &[tbl_id, refs] : dirty_groups)
     {
-        LOG(FATAL) << "Now only Gc will trigger this function so it should not "
-                      "be here";
         err =
             SyncFiles(*tbl_id, std::span<LruFD::Ref>(refs.data(), refs.size()));
         if (err != KvError::NoError)
@@ -2552,7 +2560,7 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
 KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
                                  std::span<LruFD::Ref> fds)
 {
-    KvError err = IouringMgr::SyncFiles(tbl_id, fds);
+    KvError err = FdatasyncFiles(tbl_id, fds);
     CHECK_KV_ERR(err);
     std::vector<std::string> filenames;
     for (LruFD::Ref fd : fds)
@@ -2563,7 +2571,21 @@ KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
             filenames.emplace_back(ToFilename(file_id));
         }
     }
-    return UploadFiles(tbl_id, std::move(filenames));
+    err = UploadFiles(tbl_id, std::move(filenames));
+    if (err != KvError::NoError)
+    {
+        return err;
+    }
+
+    for (LruFD::Ref &fd_ref : fds)
+    {
+        if (auto *fd = fd_ref.Get())
+        {
+            fd->dirty_ = false;
+        }
+    }
+
+    return KvError::NoError;
 }
 
 KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
