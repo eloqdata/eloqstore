@@ -260,6 +260,7 @@ void DictCompression::BuildDictionary()
     if (ZDICT_isError(trained) != 0)
     {
         // Training failed, keep dictionary disabled.
+        LOG(ERROR) << "ZDICT is Error";
         has_dictionary_ = false;
         dirty_ = false;
         dictionary_.clear();

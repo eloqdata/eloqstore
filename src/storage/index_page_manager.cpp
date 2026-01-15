@@ -142,8 +142,11 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
         meta->dict_meta_ = replayer.dict_meta_;
         if (meta->dict_meta_.HasDictionary())
         {
-            auto [dict_handle, dict_err] = compression_mgr_.GetOrLoad(
-                tbl_id, meta->dict_meta_, manifest.get());
+            auto [dict_handle, dict_err] =
+                replayer.dict_bytes_.empty()
+                    ? compression_mgr_.GetOrLoad(tbl_id, meta->dict_meta_)
+                    : compression_mgr_.GetOrLoadFromBytes(
+                          tbl_id, meta->dict_meta_, replayer.dict_bytes_);
             CHECK_KV_ERR(dict_err);
             meta->compression_ = dict_handle.Shared();
         }

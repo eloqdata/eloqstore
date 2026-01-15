@@ -133,6 +133,30 @@ std::pair<CompressionManager::Handle, KvError> CompressionManager::GetOrLoad(
     return {std::move(handle), KvError::NoError};
 }
 
+std::pair<CompressionManager::Handle, KvError>
+CompressionManager::GetOrLoadFromBytes(const TableIdent &tbl_id,
+                                       const DictMeta &meta,
+                                       std::string_view dict_bytes)
+{
+    Entry *entry = GetEntry(tbl_id, meta);
+    Handle handle(entry, this);
+    if (meta.HasDictionary() && !entry->compression_->HasDictionary())
+    {
+        if (dict_bytes.size() != meta.dict_len)
+        {
+            LOG(WARNING) << "dict bytes size mismatch for " << tbl_id.ToString()
+                         << " expect=" << meta.dict_len
+                         << " got=" << dict_bytes.size();
+            handle.Clear();
+            return {{}, KvError::Corrupted};
+        }
+        entry->compression_->LoadDictionary(
+            std::string(dict_bytes.data(), dict_bytes.size()));
+        UpdateDictionary(entry->compression_, entry->meta_);
+    }
+    return {std::move(handle), KvError::NoError};
+}
+
 void CompressionManager::UpdateDictionary(
     const std::shared_ptr<compression::DictCompression> &compression,
     const DictMeta &meta)
