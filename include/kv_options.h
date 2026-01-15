@@ -46,7 +46,7 @@ struct KvOptions
     /**
      * @brief Max size of cached compression dictionaries (global, in bytes).
      */
-    uint64_t dict_cache_size = 64 * MB;
+    uint64_t dict_cache_size = 1 * GB;
     /**
      * @brief Limit manifest file size.
      */
@@ -222,7 +222,7 @@ struct KvOptions
     /**
      * @brief Compression is enabled.
      */
-    bool enable_compression = true;
+    bool enable_compression = false;
     /**
      * @brief Download recent files from cloud into local cache during startup.
      * The filter returning true means that this table partition needs to be

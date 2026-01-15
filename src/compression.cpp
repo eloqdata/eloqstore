@@ -160,7 +160,7 @@ const std::string &DictCompression::DictionaryBytes() const
     return dictionary_;
 }
 
-bool DictCompression::LoadDictionary(std::string &&dict_bytes)
+void DictCompression::LoadDictionary(std::string &&dict_bytes)
 {
     dictionary_ = std::move(dict_bytes);
     has_dictionary_ = true;
@@ -172,11 +172,9 @@ bool DictCompression::LoadDictionary(std::string &&dict_bytes)
         if (!EnsureZstdObjects())
         {
             // Failed to init zstd objects even with empty dictionary.
-            LOG(ERROR) << "Fail to init zstd objects";
-            return false;
+            LOG(FATAL) << "Fail to init zstd objects";
         }
     }
-    return true;
 }
 
 bool DictCompression::Dirty() const

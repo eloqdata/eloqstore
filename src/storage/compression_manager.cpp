@@ -80,17 +80,6 @@ CompressionManager::Handle::~Handle()
     Clear();
 }
 
-compression::DictCompression *CompressionManager::Handle::Get() const
-{
-    return compression_.get();
-}
-
-std::shared_ptr<compression::DictCompression>
-CompressionManager::Handle::Shared() const
-{
-    return compression_;
-}
-
 void CompressionManager::Handle::Clear()
 {
     if (entry_ != nullptr)
@@ -112,6 +101,13 @@ CompressionManager::CompressionManager(AsyncIoManager *io_mgr,
     lru_tail_.prev_ = &lru_head_;
 }
 
+// Retrieves or loads a dictionary from the cache or disk.
+// If the dictionary version (checksum/len) mismatches the cached one, it forces
+// a reload. This ensures that readers always get the correct dictionary version
+// corresponding to the data. Thread-safety: The CompressionManager itself is
+// not thread-safe and is expected to be accessed by a single thread (e.g.,
+// shard thread) or protected by external locks. However, the returned Handle
+// holds a shared_ptr which can be safely passed to other threads.
 std::pair<CompressionManager::Handle, KvError> CompressionManager::GetOrLoad(
     const TableIdent &tbl_id, const DictMeta &meta, ManifestFile *manifest)
 {
@@ -180,17 +176,18 @@ CompressionManager::GetOrLoadFromBytes(const TableIdent &tbl_id,
             handle.Clear();
             return {{}, KvError::Corrupted};
         }
-        if (!entry->compression_->LoadDictionary(
-                std::string(dict_bytes.data(), dict_bytes.size())))
-        {
-            handle.Clear();
-            return {{}, KvError::OutOfMem};
-        }
+        entry->compression_->LoadDictionary(
+            std::string(dict_bytes.data(), dict_bytes.size()));
         UpdateDictionary(entry->tbl_id_, entry->compression_, entry->meta_);
     }
     return {std::move(handle), KvError::NoError};
 }
 
+// Updates the dictionary metadata and memory usage for a given table.
+// This function must be called whenever a dictionary is loaded or updated
+// (e.g., after training). It recalculates the memory usage using ZSTD internal
+// APIs and triggers LRU eviction if necessary. Optimized to use O(1) lookup via
+// tbl_id.
 void CompressionManager::UpdateDictionary(
     const TableIdent &tbl_id,
     const std::shared_ptr<compression::DictCompression> &compression,
@@ -295,6 +292,10 @@ void CompressionManager::Dequeue(Entry *entry)
     entry->in_lru_ = false;
 }
 
+// Evicts entries from the LRU cache until memory usage is within capacity.
+// Entries are evicted from the tail (least recently used).
+// Entries that are currently in use (ref_count > 0 or shared_ptr use_count > 1)
+// or dirty are skipped.
 void CompressionManager::EvictIfNeeded()
 {
     Entry *cursor = lru_tail_.prev_;
@@ -341,10 +342,7 @@ KvError CompressionManager::LoadDictionary(Entry *entry, ManifestFile *manifest)
     {
         return KvError::Corrupted;
     }
-    if (!entry->compression_->LoadDictionary(std::move(dict_bytes)))
-    {
-        return KvError::OutOfMem;
-    }
+    entry->compression_->LoadDictionary(std::move(dict_bytes));
     LOG(INFO) << "dict loaded for " << entry->tbl_id_.ToString()
               << " bytes=" << entry->meta_.dict_len;
     UpdateDictionary(entry->tbl_id_, entry->compression_, entry->meta_);

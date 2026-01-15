@@ -44,8 +44,15 @@ public:
             return entry_ != nullptr;
         }
 
-        compression::DictCompression *Get() const;
-        std::shared_ptr<compression::DictCompression> Shared() const;
+        const std::shared_ptr<compression::DictCompression> &operator->() const
+        {
+            return compression_;
+        }
+
+        const std::shared_ptr<compression::DictCompression> &Shared() const
+        {
+            return compression_;
+        }
 
     private:
         friend class CompressionManager;

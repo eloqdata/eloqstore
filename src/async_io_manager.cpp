@@ -244,7 +244,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               offset_(offset),
               fd_ref_(std::move(fd)),
-              page_(true) {};
+              page_(true){};
 
         bool done_{false};
         // no need to construct
@@ -637,7 +637,6 @@ KvError ToKvError(int err_no)
     case -ENOBUFS:
         return KvError::TryAgain;
     case -ENOMEM:
-        LOG(ERROR) << "ToKvError: out of memory";
         return KvError::OutOfMem;
     case -EBUSY:
         return KvError::Busy;
@@ -1024,7 +1023,7 @@ KvError IouringMgr::FdatasyncFiles(const TableIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
     };
 
@@ -1081,7 +1080,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     struct CloseReq : BaseReq
     {
         CloseReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
         int fd_{LruFD::FdEmpty};
     };
@@ -1153,7 +1152,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     struct UnregisterReq : BaseReq
     {
         UnregisterReq(KvTask *task, PendingClose *pending)
-            : BaseReq(task), pending_(pending) {};
+            : BaseReq(task), pending_(pending){};
         PendingClose *pending_;
         int placeholder_{-1};
     };

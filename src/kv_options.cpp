@@ -131,12 +131,6 @@ int KvOptions::LoadFromIni(const char *path)
             reader.Get(sec_run, "dict_cache_size", "");
         dict_cache_size = ParseSizeWithUnit(dict_cache_size_str);
     }
-    if (reader.HasValue(sec_run, "dict_cache_size"))
-    {
-        std::string dict_cache_size_str =
-            reader.Get(sec_run, "dict_cache_size", "");
-        dict_cache_size = ParseSizeWithUnit(dict_cache_size_str);
-    }
     if (reader.HasValue(sec_run, "manifest_limit"))
     {
         manifest_limit = reader.GetUnsigned(sec_run, "manifest_limit", 8 * MB);

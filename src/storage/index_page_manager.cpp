@@ -295,7 +295,6 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
             MemIndexPage *new_page = AllocIndexPage();
             if (new_page == nullptr)
             {
-                LOG(INFO) << "Out of memory to allocate index page " << page_id;
                 return {nullptr, KvError::OutOfMem};
             }
             FilePageId file_page_id = mapping->ToFilePage(page_id);
@@ -545,10 +544,9 @@ CompressionManager *IndexPageManager::CompressionMgr()
 std::pair<std::shared_ptr<compression::DictCompression>, KvError>
 IndexPageManager::GetOrLoadDict(const TableIdent &tbl_ident, RootMeta *meta)
 {
-    if (meta == nullptr || !meta->dict_meta_.HasDictionary())
-    {
-        return {{}, KvError::NoError};
-    }
+    CHECK(meta != nullptr);
+    CHECK(meta->dict_meta_.dict_len > 0);
+
     if (auto cached = meta->compression_.lock())
     {
         return {std::move(cached), KvError::NoError};
