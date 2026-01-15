@@ -93,6 +93,7 @@ void Shard::WorkLoop()
         }
 #endif
 
+        ProcessCloudReadyTasks();
         io_mgr_->Submit();
 
         io_mgr_->PollComplete();
@@ -335,8 +336,8 @@ void Shard::ProcessReq(KvRequest *req)
 
             list_task.SetKvTask(task);
             auto cloud_mgr = static_cast<CloudStoreMgr *>(shard->io_mgr_.get());
-            cloud_mgr->GetObjectStore().GetHttpManager()->SubmitRequest(
-                &list_task);
+            cloud_mgr->AcquireCloudSlot(task);
+            cloud_mgr->GetObjectStore().SubmitTask(&list_task, shard);
             current_task->WaitIo();
 
             if (list_task.error_ != KvError::NoError)
@@ -426,8 +427,40 @@ void Shard::ProcessReq(KvRequest *req)
     }
 }
 
+void Shard::ProcessCloudReadyTasks()
+{
+    KvTask *ready_tasks[128];
+    size_t nready =
+        cloud_ready_tasks_.try_dequeue_bulk(ready_tasks, std::size(ready_tasks));
+    if (nready == 0)
+    {
+        return;
+    }
+
+    for (size_t i = 0; i < nready; ++i)
+    {
+        ready_tasks[i]->FinishIo();
+    }
+
+    if (auto *cloud_mgr = dynamic_cast<CloudStoreMgr *>(io_mgr_.get());
+        cloud_mgr != nullptr)
+    {
+        cloud_mgr->ReleaseCloudSlot(nready);
+    }
+}
+
+void Shard::EnqueueCloudReadyTask(KvTask *task)
+{
+    if (task == nullptr)
+    {
+        return;
+    }
+    cloud_ready_tasks_.enqueue(task);
+}
+
 bool Shard::ExecuteReadyTasks()
 {
+    ProcessCloudReadyTasks();
     bool busy = ready_tasks_.Size() > 0;
     while (ready_tasks_.Size() > 0)
     {
@@ -492,6 +525,7 @@ void Shard::WorkOneRound()
     {
         io_mgr_->InitBackgroundJob();
     }
+    ProcessCloudReadyTasks();
     KvRequest *reqs[128];
     size_t nreqs = requests_.try_dequeue_bulk(reqs, std::size(reqs));
 
@@ -527,6 +561,7 @@ void Shard::WorkOneRound()
 
     req_queue_size_.fetch_sub(nreqs, std::memory_order_relaxed);
 
+    ProcessCloudReadyTasks();
     io_mgr_->Submit();
 
     io_mgr_->PollComplete();

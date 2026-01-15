@@ -401,6 +401,7 @@ class ArchiveCrond;
 class ObjectStore;
 class EloqStoreModule;
 class PrewarmService;
+class CloudStorageService;
 
 class EloqStore
 {
@@ -413,6 +414,10 @@ public:
     void Stop();
     bool IsStopped() const;
     const KvOptions &Options() const;
+    CloudStorageService *CloudService() const
+    {
+        return cloud_service_.get();
+    }
 
     /**
      * @brief Validate KvOptions configuration.
@@ -466,6 +471,7 @@ private:
 #endif
     std::atomic<bool> stopped_{true};
 
+    std::unique_ptr<CloudStorageService> cloud_service_;
     std::unique_ptr<ArchiveCrond> archive_crond_{nullptr};
     std::unique_ptr<PrewarmService> prewarm_service_{nullptr};
 #ifdef ELOQ_MODULE_ENABLED

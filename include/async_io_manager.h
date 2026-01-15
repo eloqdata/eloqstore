@@ -35,6 +35,7 @@ namespace eloqstore
 class WriteReq;
 class WriteTask;
 class MemIndexPage;
+class CloudStorageService;
 
 class ManifestFile
 {
@@ -459,7 +460,9 @@ public:
 class CloudStoreMgr : public IouringMgr
 {
 public:
-    CloudStoreMgr(const KvOptions *opts, uint32_t fd_limit);
+    CloudStoreMgr(const KvOptions *opts,
+                  uint32_t fd_limit,
+                  CloudStorageService *service);
     static constexpr FileId ManifestFileId()
     {
         return LruFD::kManifest;
@@ -515,6 +518,8 @@ public:
     bool PopPrewarmFile(PrewarmFile &file);
     void ClearPrewarmFiles();
     void StopAllPrewarmTasks();
+    void AcquireCloudSlot(KvTask *task);
+    void ReleaseCloudSlot(size_t count = 1);
     bool AppendPrewarmFiles(std::vector<PrewarmFile> &files);
     size_t GetPrewarmPendingCount() const;
     void MarkPrewarmListingComplete();
@@ -636,9 +641,13 @@ private:
 
     DirectIoBufferPool direct_io_buffer_pool_;
     ObjectStore obj_store_;
+    CloudStorageService *cloud_service_{nullptr};
 
     size_t inflight_upload_files_{0};
     WaitingZone upload_slots_waiting_;
+    size_t max_cloud_slots_{};
+    size_t inflight_cloud_slots_{0};
+    WaitingZone cloud_slot_waiting_;
 
     friend class Prewarmer;
     friend class PrewarmService;
