@@ -185,6 +185,12 @@ std::pair<std::string_view, KvError> ResolveValue(
     }
     else if (iter.CompressionType() == compression::CompressionType::Dictionary)
     {
+        if (compression == nullptr)
+        {
+            LOG(ERROR) << "ResolveValue: missing dictionary for "
+                       << tbl_id.ToString();
+            return {{}, KvError::Corrupted};
+        }
         std::string uncompressed_value;
         if (!compression->Decompress(raw_value, uncompressed_value))
         {
