@@ -110,8 +110,8 @@ public:
         }
         std::string Info() const override
         {
-            std::string tbl = tbl_id_ ? tbl_id_->ToString() : std::string("<null>");
-            return std::string("Download(") + tbl + '/' + std::string(filename_) + ')';
+            return std::string("Download(") + tbl_id_->ToString() + '/' +
+                   std::string(filename_) + ')';
         }
         const TableIdent *tbl_id_;
         std::string_view filename_;
@@ -130,8 +130,8 @@ public:
         }
         std::string Info() const override
         {
-            std::string tbl = tbl_id_ ? tbl_id_->ToString() : std::string("<null>");
-            return std::string("Upload(") + tbl + '/' + filename_ + ')';
+            return std::string("Upload(") + tbl_id_->ToString() + '/' +
+                   filename_ + ')';
         }
 
         const TableIdent *tbl_id_;
