@@ -124,6 +124,29 @@ void CloudStorageService::RunWorker(size_t worker_index)
             break;
         }
 
+        bool http_active = ProcessHttpWork(worker_index);
+
+        bool started_jobs = false;
+        PendingJob ready_jobs[128];
+        size_t nready = job_queue_.try_dequeue_bulk(ready_jobs,
+                                                    std::size(ready_jobs));
+        for (size_t i = 0; i < nready; ++i)
+        {
+            PendingJob &ready_job = ready_jobs[i];
+            if (ready_job.store == nullptr || ready_job.task == nullptr)
+            {
+                continue;
+            }
+            pending_jobs_.fetch_sub(1, std::memory_order_relaxed);
+            ready_job.store->StartHttpRequest(ready_job.task);
+            started_jobs = true;
+        }
+
+        if (http_active || started_jobs)
+        {
+            continue;
+        }
+
         PendingJob job;
         bool has_job = job_queue_.wait_dequeue_timed(job, wait_timeout_us);
         if (has_job && job.store != nullptr && job.task != nullptr)
@@ -131,8 +154,6 @@ void CloudStorageService::RunWorker(size_t worker_index)
             pending_jobs_.fetch_sub(1, std::memory_order_relaxed);
             job.store->StartHttpRequest(job.task);
         }
-
-        ProcessHttpWork(worker_index);
     }
 
     PendingJob job;
