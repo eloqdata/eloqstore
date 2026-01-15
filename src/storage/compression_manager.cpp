@@ -116,6 +116,21 @@ std::pair<CompressionManager::Handle, KvError> CompressionManager::GetOrLoad(
     const TableIdent &tbl_id, const DictMeta &meta, ManifestFile *manifest)
 {
     Entry *entry = GetEntry(tbl_id, meta);
+
+    // If checksum mismatch, reload dictionary.
+    if (entry->compression_->HasDictionary() &&
+        (entry->meta_.dict_checksum != meta.dict_checksum ||
+         entry->meta_.dict_len != meta.dict_len))
+    {
+        LOG(INFO) << "dict version mismatch for " << tbl_id.ToString()
+                  << " old_len=" << entry->meta_.dict_len
+                  << " new_len=" << meta.dict_len;
+        used_bytes_ -= entry->bytes_;
+        entry->compression_ = std::make_shared<compression::DictCompression>();
+        entry->meta_ = meta;
+        entry->bytes_ = 0;
+    }
+
     Handle handle(entry, this);
     if (meta.HasDictionary() && !entry->compression_->HasDictionary())
     {
@@ -139,6 +154,21 @@ CompressionManager::GetOrLoadFromBytes(const TableIdent &tbl_id,
                                        std::string_view dict_bytes)
 {
     Entry *entry = GetEntry(tbl_id, meta);
+
+    // If checksum mismatch, reload dictionary.
+    if (entry->compression_->HasDictionary() &&
+        (entry->meta_.dict_checksum != meta.dict_checksum ||
+         entry->meta_.dict_len != meta.dict_len))
+    {
+        LOG(INFO) << "dict version mismatch for " << tbl_id.ToString()
+                  << " old_len=" << entry->meta_.dict_len
+                  << " new_len=" << meta.dict_len;
+        used_bytes_ -= entry->bytes_;
+        entry->compression_ = std::make_shared<compression::DictCompression>();
+        entry->meta_ = meta;
+        entry->bytes_ = 0;
+    }
+
     Handle handle(entry, this);
     if (meta.HasDictionary() && !entry->compression_->HasDictionary())
     {
@@ -150,8 +180,12 @@ CompressionManager::GetOrLoadFromBytes(const TableIdent &tbl_id,
             handle.Clear();
             return {{}, KvError::Corrupted};
         }
-        entry->compression_->LoadDictionary(
-            std::string(dict_bytes.data(), dict_bytes.size()));
+        if (!entry->compression_->LoadDictionary(
+                std::string(dict_bytes.data(), dict_bytes.size())))
+        {
+            handle.Clear();
+            return {{}, KvError::OutOfMem};
+        }
         UpdateDictionary(entry->compression_, entry->meta_);
     }
     return {std::move(handle), KvError::NoError};
@@ -165,6 +199,8 @@ void CompressionManager::UpdateDictionary(
     {
         return;
     }
+    // TODO: Optimize this O(N) loop with a map lookup if needed.
+    // Currently acceptable as number of tables is small.
     for (auto it = entries_.begin(); it != entries_.end(); ++it)
     {
         Entry *entry = &it->second;
@@ -173,7 +209,7 @@ void CompressionManager::UpdateDictionary(
             continue;
         }
         entry->meta_ = meta;
-        const size_t new_bytes = entry->compression_->DictionaryBytes().size();
+        const size_t new_bytes = entry->compression_->MemoryUsage();
         if (new_bytes >= entry->bytes_)
         {
             used_bytes_ += (new_bytes - entry->bytes_);
@@ -305,7 +341,10 @@ KvError CompressionManager::LoadDictionary(Entry *entry, ManifestFile *manifest)
     {
         return KvError::Corrupted;
     }
-    entry->compression_->LoadDictionary(std::move(dict_bytes));
+    if (!entry->compression_->LoadDictionary(std::move(dict_bytes)))
+    {
+        return KvError::OutOfMem;
+    }
     LOG(INFO) << "dict loaded for " << entry->tbl_id_.ToString()
               << " bytes=" << entry->meta_.dict_len;
     UpdateDictionary(entry->compression_, entry->meta_);

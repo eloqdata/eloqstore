@@ -56,7 +56,7 @@ public:
 
     bool HasDictionary() const;
     const std::string &DictionaryBytes() const;
-    void LoadDictionary(std::string &&dict_bytes);
+    bool LoadDictionary(std::string &&dict_bytes);
 
     bool Dirty() const;
     void ClearDirty();
@@ -70,6 +70,8 @@ public:
 
     bool Compress(std::string_view input, std::string &output) const;
     bool Decompress(std::string_view input, std::string &output) const;
+
+    size_t MemoryUsage() const;
 
 private:
     bool EnsureZstdObjects();
@@ -120,11 +122,10 @@ struct DictMeta
         if (compression.HasDictionary())
         {
             const std::string &dict_bytes = compression.DictionaryBytes();
-            meta.dict_len =
-                static_cast<uint32_t>(dict_bytes.size());
+            meta.dict_len = static_cast<uint32_t>(dict_bytes.size());
             // DictMeta is derived from the in-memory dictionary bytes.
-            meta.dict_checksum = XXH3_64bits(dict_bytes.data(),
-                                             dict_bytes.size());
+            meta.dict_checksum =
+                XXH3_64bits(dict_bytes.data(), dict_bytes.size());
         }
         return meta;
     }

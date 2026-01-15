@@ -160,14 +160,23 @@ const std::string &DictCompression::DictionaryBytes() const
     return dictionary_;
 }
 
-void DictCompression::LoadDictionary(std::string &&dict_bytes)
+bool DictCompression::LoadDictionary(std::string &&dict_bytes)
 {
     dictionary_ = std::move(dict_bytes);
     has_dictionary_ = true;
     if (!EnsureZstdObjects())
     {
-        LOG(FATAL) << "Manifest is corrupted";
+        // Fallback to empty dictionary if memory is insufficient.
+        has_dictionary_ = false;
+        dictionary_.clear();
+        if (!EnsureZstdObjects())
+        {
+            // Failed to init zstd objects even with empty dictionary.
+            LOG(ERROR) << "Fail to init zstd objects";
+            return false;
+        }
     }
+    return true;
 }
 
 bool DictCompression::Dirty() const
@@ -277,9 +286,32 @@ void DictCompression::BuildDictionary()
         dictionary_.clear();
         if (!EnsureZstdObjects())
         {
-            LOG(FATAL) << "Fail to init zstd objects with empty dictionary";
+            LOG(ERROR) << "Fail to init zstd objects with empty dictionary";
         }
     }
+}
+
+size_t DictCompression::MemoryUsage() const
+{
+    size_t size = dictionary_.capacity() + sample_data_.capacity() +
+                  sample_sizes_.capacity() * sizeof(size_t);
+    if (cctx_)
+    {
+        size += ZSTD_sizeof_CCtx(cctx_.get());
+    }
+    if (dctx_)
+    {
+        size += ZSTD_sizeof_DCtx(dctx_.get());
+    }
+    if (cdict_)
+    {
+        size += ZSTD_sizeof_CDict(cdict_.get());
+    }
+    if (ddict_)
+    {
+        size += ZSTD_sizeof_DDict(ddict_.get());
+    }
+    return size;
 }
 
 bool DictCompression::Compress(std::string_view input,
