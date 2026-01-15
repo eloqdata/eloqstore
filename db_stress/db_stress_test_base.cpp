@@ -290,8 +290,28 @@ std::string StressTest::Partition::GenerateValue(uint32_t base)
     00000000000000000000000012345777777777777777777777777777777777777777777777777
     |<------- 32-char prefix --->|<---------- remaining 48 chars--------------->
     */
-    char post_fix_ch = '0' + rand_.Uniform(10);  // [0,9]
-    std::string ret(value_sz, post_fix_ch);
+    std::string ret;
+    if (!FLAGS_enable_compression)
+    {
+        char post_fix_ch = '0' + rand_.Uniform(10);  // [0,9]
+        ret.assign(value_sz, post_fix_ch);
+        std::string value_base = std::to_string(base);
+        size_t zero_pad = 32 - value_base.size();
+        std::memset(&ret[0], '0', zero_pad);
+        std::memcpy(&ret[zero_pad], value_base.data(), value_base.size());
+        return ret;
+    }
+
+    // Use mixed characters to avoid trivially compressible payloads.
+    static const char kCharset[] =
+        "0123456789"
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "abcdefghijklmnopqrstuvwxyz";
+    ret.reserve(value_sz);
+    for (size_t i = 0; i < value_sz; ++i)
+    {
+        ret.push_back(kCharset[rand_.Uniform(sizeof(kCharset) - 1)]);
+    }
     std::string value_base = std::to_string(base);
     size_t zero_pad = 32 - value_base.size();
     std::memset(&ret[0], '0', zero_pad);
