@@ -288,7 +288,7 @@ KvError WriteTask::FlushManifest()
         {
             cow_meta_.compression_->ClearDirty();
             shard->IndexManager()->CompressionMgr()->UpdateDictionary(
-                cow_meta_.compression_, cow_meta_.dict_meta_);
+                tbl_ident_, cow_meta_.compression_, cow_meta_.dict_meta_);
         }
         return KvError::NoError;
     }
@@ -326,7 +326,7 @@ KvError WriteTask::FlushManifest()
         {
             cow_meta_.compression_->ClearDirty();
             shard->IndexManager()->CompressionMgr()->UpdateDictionary(
-                cow_meta_.compression_, cow_meta_.dict_meta_);
+                tbl_ident_, cow_meta_.compression_, cow_meta_.dict_meta_);
         }
     }
     return KvError::NoError;

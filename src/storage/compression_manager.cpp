@@ -186,12 +186,13 @@ CompressionManager::GetOrLoadFromBytes(const TableIdent &tbl_id,
             handle.Clear();
             return {{}, KvError::OutOfMem};
         }
-        UpdateDictionary(entry->compression_, entry->meta_);
+        UpdateDictionary(entry->tbl_id_, entry->compression_, entry->meta_);
     }
     return {std::move(handle), KvError::NoError};
 }
 
 void CompressionManager::UpdateDictionary(
+    const TableIdent &tbl_id,
     const std::shared_ptr<compression::DictCompression> &compression,
     const DictMeta &meta)
 {
@@ -199,29 +200,28 @@ void CompressionManager::UpdateDictionary(
     {
         return;
     }
-    // TODO: Optimize this O(N) loop with a map lookup if needed.
-    // Currently acceptable as number of tables is small.
-    for (auto it = entries_.begin(); it != entries_.end(); ++it)
+    auto it = entries_.find(tbl_id);
+    if (it == entries_.end())
     {
-        Entry *entry = &it->second;
-        if (entry->compression_ != compression)
-        {
-            continue;
-        }
-        entry->meta_ = meta;
-        const size_t new_bytes = entry->compression_->MemoryUsage();
-        if (new_bytes >= entry->bytes_)
-        {
-            used_bytes_ += (new_bytes - entry->bytes_);
-        }
-        else
-        {
-            used_bytes_ -= (entry->bytes_ - new_bytes);
-        }
-        entry->bytes_ = new_bytes;
-        EvictIfNeeded();
         return;
     }
+    Entry *entry = &it->second;
+    if (entry->compression_ != compression)
+    {
+        return;
+    }
+    entry->meta_ = meta;
+    const size_t new_bytes = entry->compression_->MemoryUsage();
+    if (new_bytes >= entry->bytes_)
+    {
+        used_bytes_ += (new_bytes - entry->bytes_);
+    }
+    else
+    {
+        used_bytes_ -= (entry->bytes_ - new_bytes);
+    }
+    entry->bytes_ = new_bytes;
+    EvictIfNeeded();
 }
 
 CompressionManager::Entry *CompressionManager::GetEntry(
@@ -347,7 +347,7 @@ KvError CompressionManager::LoadDictionary(Entry *entry, ManifestFile *manifest)
     }
     LOG(INFO) << "dict loaded for " << entry->tbl_id_.ToString()
               << " bytes=" << entry->meta_.dict_len;
-    UpdateDictionary(entry->compression_, entry->meta_);
+    UpdateDictionary(entry->tbl_id_, entry->compression_, entry->meta_);
     return KvError::NoError;
 }
 
