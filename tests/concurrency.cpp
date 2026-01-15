@@ -103,3 +103,22 @@ TEST_CASE("stress append only mode", "[persist][append]")
 
     tester.Clear();
 }
+
+TEST_CASE("append mode with compression LRU under concurrency",
+          "[persist][append][concurrency][compression]")
+{
+    eloqstore::KvOptions options{};
+    options.store_path = {test_path};
+    options.data_append_mode = true;
+    options.enable_compression = true;
+    options.dict_cache_size = 32 * eloqstore::KB;
+    eloqstore::EloqStore *store = InitStore(options);
+
+    ConcurrencyTester tester(store, "t_compress", 16, 256, 16, 256);
+    tester.Init();
+    tester.Run(200, 10, 5);
+
+    REQUIRE(ValidateFileSizes(options));
+
+    tester.Clear();
+}

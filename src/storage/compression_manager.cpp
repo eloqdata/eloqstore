@@ -1,10 +1,10 @@
 #include "storage/compression_manager.h"
 
+#include <glog/logging.h>
+
 #include <cassert>
 #include <string>
 #include <utility>
-
-#include <glog/logging.h>
 
 #include "replayer.h"
 
@@ -85,8 +85,8 @@ compression::DictCompression *CompressionManager::Handle::Get() const
     return compression_.get();
 }
 
-std::shared_ptr<compression::DictCompression> CompressionManager::Handle::
-    Shared() const
+std::shared_ptr<compression::DictCompression>
+CompressionManager::Handle::Shared() const
 {
     return compression_;
 }
@@ -112,10 +112,8 @@ CompressionManager::CompressionManager(AsyncIoManager *io_mgr,
     lru_tail_.prev_ = &lru_head_;
 }
 
-std::pair<CompressionManager::Handle, KvError>
-CompressionManager::GetOrLoad(const TableIdent &tbl_id,
-                              const DictMeta &meta,
-                              ManifestFile *manifest)
+std::pair<CompressionManager::Handle, KvError> CompressionManager::GetOrLoad(
+    const TableIdent &tbl_id, const DictMeta &meta, ManifestFile *manifest)
 {
     Entry *entry = GetEntry(tbl_id, meta);
     Handle handle(entry, this);
@@ -127,7 +125,7 @@ CompressionManager::GetOrLoad(const TableIdent &tbl_id,
         if (err != KvError::NoError)
         {
             LOG(WARNING) << "dict load failed for " << tbl_id.ToString()
-                         << " err=" << static_cast<int>(err);
+                         << " errrrrrrr=" << ErrorString(err);
             handle.Clear();
             return {{}, err};
         }
@@ -244,8 +242,7 @@ void CompressionManager::EvictIfNeeded()
     {
         Entry *victim = cursor;
         cursor = cursor->prev_;
-        if (victim->ref_count_ > 0 ||
-            victim->compression_.use_count() > 1 ||
+        if (victim->ref_count_ > 0 || victim->compression_.use_count() > 1 ||
             (victim->compression_ && victim->compression_->Dirty()))
         {
             continue;
@@ -258,8 +255,7 @@ void CompressionManager::EvictIfNeeded()
     }
 }
 
-KvError CompressionManager::LoadDictionary(Entry *entry,
-                                           ManifestFile *manifest)
+KvError CompressionManager::LoadDictionary(Entry *entry, ManifestFile *manifest)
 {
     if (entry->meta_.dict_len == 0)
     {
@@ -278,9 +274,8 @@ KvError CompressionManager::LoadDictionary(Entry *entry,
         manifest = manifest_guard.get();
     }
     std::string dict_bytes;
-    KvError err = Replayer::ReadSnapshotDict(manifest,
-                                             entry->meta_,
-                                             dict_bytes);
+    KvError err =
+        Replayer::ReadSnapshotDict(manifest, entry->meta_, dict_bytes);
     CHECK_KV_ERR(err);
     if (dict_bytes.size() != entry->meta_.dict_len)
     {

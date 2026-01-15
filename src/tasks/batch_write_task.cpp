@@ -255,6 +255,7 @@ void BatchWriteTask::Abort()
 KvError BatchWriteTask::Apply()
 {
     KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
+
     cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     CHECK_KV_ERR(err);
     err = ApplyBatch(cow_meta_.root_id_, true);
@@ -971,6 +972,8 @@ KvError BatchWriteTask::FinishIndexPage(DirtyIndexPage &prev,
     MemIndexPage *cur_page = shard->IndexManager()->AllocIndexPage();
     if (cur_page == nullptr)
     {
+        LOG(ERROR) << "FinishIndexPage: out of memory allocating index page"
+                   << " table=" << tbl_ident_.ToString();
         return KvError::OutOfMem;
     }
     memcpy(cur_page->PagePtr(), page_view.data(), page_view.size());
@@ -1566,6 +1569,8 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::TruncateIndexPage(
     MemIndexPage *new_page = shard->IndexManager()->AllocIndexPage();
     if (new_page == nullptr)
     {
+        LOG(ERROR) << "Truncate: out of memory allocating index page"
+                   << " table=" << tbl_ident_.ToString();
         return {nullptr, KvError::OutOfMem};
     }
     std::string_view page_view = builder.Finish();

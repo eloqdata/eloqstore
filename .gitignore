@@ -43,3 +43,4 @@ install
 .idea
 
 test-data
+data/
