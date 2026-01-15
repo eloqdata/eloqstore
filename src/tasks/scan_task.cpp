@@ -278,10 +278,11 @@ std::pair<std::string_view, KvError> ScanIterator::ResolveValue(
 {
     if (iter_.CompressionType() == compression::CompressionType::Dictionary)
     {
-        if (root_meta_ != nullptr && !root_meta_->dict_meta_.HasDictionary())
+        if (root_meta_ != nullptr && root_meta_->dict_meta_.dict_len == 0)
         {
-            LOG(FATAL) << "Dictionary value without dict meta for "
+            LOG(ERROR) << "Dictionary value without dict meta for "
                        << tbl_id_.ToString();
+            return {{}, KvError::Corrupted};
         }
         if (!compression_hold_)
         {
@@ -294,11 +295,8 @@ std::pair<std::string_view, KvError> ScanIterator::ResolveValue(
             compression_hold_ = std::move(dict);
         }
     }
-    return eloqstore::ResolveValue(tbl_id_,
-                                   mapping_.get(),
-                                   iter_,
-                                   storage,
-                                   compression_hold_.get());
+    return eloqstore::ResolveValue(
+        tbl_id_, mapping_.get(), iter_, storage, compression_hold_.get());
 }
 
 uint64_t ScanIterator::ExpireTs() const

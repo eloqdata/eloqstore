@@ -56,7 +56,7 @@ public:
 
     bool HasDictionary() const;
     const std::string &DictionaryBytes() const;
-    bool LoadDictionary(std::string &&dict_bytes);
+    void LoadDictionary(std::string &&dict_bytes);
 
     bool Dirty() const;
     void ClearDirty();

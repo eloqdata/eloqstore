@@ -255,7 +255,6 @@ void BatchWriteTask::Abort()
 KvError BatchWriteTask::Apply()
 {
     KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
-
     cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     CHECK_KV_ERR(err);
     err = ApplyBatch(cow_meta_.root_id_, true);
