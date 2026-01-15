@@ -72,6 +72,7 @@ public:
                                                   const DictMeta &meta,
                                                   std::string_view dict_bytes);
     void UpdateDictionary(
+        const TableIdent &tbl_id,
         const std::shared_ptr<compression::DictCompression> &compression,
         const DictMeta &meta);
 
