@@ -27,6 +27,7 @@ DECLARE_uint32(keys_per_batch);
 DECLARE_bool(syn_scan);
 
 DECLARE_string(db_path);
+DECLARE_bool(clean_data_dir_on_start);
 
 DECLARE_string(options);
 DECLARE_uint32(n_tables);
@@ -41,6 +42,8 @@ DECLARE_uint32(index_page_restart_interval);
 DECLARE_uint32(index_page_read_queue);
 DECLARE_uint32(init_page_count);
 DECLARE_uint32(buffer_pool_size);
+DECLARE_bool(enable_compression);
+DECLARE_uint64(dict_cache_size);
 DECLARE_uint64(manifest_limit);
 DECLARE_uint32(fd_limit);
 DECLARE_uint32(io_queue_size);
