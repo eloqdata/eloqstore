@@ -42,7 +42,7 @@ private:
     bool ProcessHttpWork(size_t worker_index);
 
     EloqStore *store_{nullptr};
-    moodycamel::BlockingConcurrentQueue<PendingJob> job_queue_;
+    std::vector<moodycamel::BlockingConcurrentQueue<PendingJob>> job_queues_;
     std::vector<ObjectStore *> shard_stores_;
 
     size_t worker_count_{1};

@@ -25,6 +25,7 @@ CloudStorageService::CloudStorageService(EloqStore *store) : store_(store)
     shard_stores_.assign(shard_count, nullptr);
 
     worker_count_ = std::max<size_t>(store_->Options().cloud_request_threads, 1);
+    job_queues_.resize(worker_count_);
 }
 
 CloudStorageService::~CloudStorageService()
@@ -49,9 +50,9 @@ void CloudStorageService::Start()
 void CloudStorageService::Stop()
 {
     bool was_running = !stopping_.exchange(true, std::memory_order_acq_rel);
-    for (size_t i = 0; i < worker_count_; ++i)
+    for (auto &queue : job_queues_)
     {
-        job_queue_.enqueue({nullptr, nullptr});
+        queue.enqueue({nullptr, nullptr});
     }
     if (!was_running && workers_.empty())
     {
@@ -97,7 +98,8 @@ void CloudStorageService::Submit(ObjectStore *store, ObjectStore::Task *task)
     Shard *owner = task->owner_shard_;
     CHECK(owner != nullptr) << "Cloud task missing owner shard";
     pending_jobs_.fetch_add(1, std::memory_order_relaxed);
-    job_queue_.enqueue({store, task});
+    size_t worker_idx = owner->shard_id_ % worker_count_;
+    job_queues_[worker_idx].enqueue({store, task});
 }
 
 void CloudStorageService::NotifyTaskFinished(ObjectStore::Task *task)
@@ -128,8 +130,8 @@ void CloudStorageService::RunWorker(size_t worker_index)
 
         bool started_jobs = false;
         PendingJob ready_jobs[128];
-        size_t nready = job_queue_.try_dequeue_bulk(ready_jobs,
-                                                    std::size(ready_jobs));
+        size_t nready = job_queues_[worker_index].try_dequeue_bulk(
+            ready_jobs, std::size(ready_jobs));
         for (size_t i = 0; i < nready; ++i)
         {
             PendingJob &ready_job = ready_jobs[i];
@@ -148,7 +150,8 @@ void CloudStorageService::RunWorker(size_t worker_index)
         }
 
         PendingJob job;
-        bool has_job = job_queue_.wait_dequeue_timed(job, wait_timeout_us);
+        bool has_job =
+            job_queues_[worker_index].wait_dequeue_timed(job, wait_timeout_us);
         if (has_job && job.store != nullptr && job.task != nullptr)
         {
             pending_jobs_.fetch_sub(1, std::memory_order_relaxed);
@@ -157,7 +160,7 @@ void CloudStorageService::RunWorker(size_t worker_index)
     }
 
     PendingJob job;
-    while (job_queue_.try_dequeue(job))
+    while (job_queues_[worker_index].try_dequeue(job))
     {
         if (job.store != nullptr && job.task != nullptr)
         {
