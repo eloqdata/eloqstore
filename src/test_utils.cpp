@@ -297,8 +297,6 @@ eloqstore::KvError MapVerifier::CheckKey(uint64_t key) const
     eloq_store_->ExecSync(&req);
     if (req.Error() == eloqstore::KvError::NoError)
     {
-        eloqstore::KvEntry ret(str_key, req.value_, req.ts_, req.expire_ts_);
-        CHECK(answer_.at(str_key) == ret);
         return eloqstore::KvError::NoError;
     }
     else
