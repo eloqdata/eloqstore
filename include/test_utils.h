@@ -1,5 +1,7 @@
 #pragma once
 
+#include <error.h>
+
 #include <cstdint>
 #include <map>
 #include <string>
@@ -61,6 +63,8 @@ public:
               std::string_view end,
               size_t page_entries = SIZE_MAX,
               size_t page_size = SIZE_MAX);
+
+    eloqstore::KvError CheckKey(uint64_t key) const;
 
     void Validate();
     void SetAutoValidate(bool v);

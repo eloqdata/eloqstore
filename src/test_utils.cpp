@@ -288,6 +288,25 @@ void MapVerifier::Read(std::string_view key)
     }
 }
 
+eloqstore::KvError MapVerifier::CheckKey(uint64_t key) const
+{
+    DLOG(INFO) << "Read(" << key << ')';
+    std::string str_key = Key(key, key_len_);
+    eloqstore::ReadRequest req;
+    req.SetArgs(tid_, str_key);
+    eloq_store_->ExecSync(&req);
+    if (req.Error() == eloqstore::KvError::NoError)
+    {
+        eloqstore::KvEntry ret(str_key, req.value_, req.ts_, req.expire_ts_);
+        CHECK(answer_.at(str_key) == ret);
+        return eloqstore::KvError::NoError;
+    }
+    else
+    {
+        return req.Error();
+    }
+}
+
 void MapVerifier::Floor(uint64_t key)
 {
     Floor(Key(key, key_len_));
