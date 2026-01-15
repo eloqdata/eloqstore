@@ -125,7 +125,7 @@ std::pair<CompressionManager::Handle, KvError> CompressionManager::GetOrLoad(
         if (err != KvError::NoError)
         {
             LOG(WARNING) << "dict load failed for " << tbl_id.ToString()
-                         << " errrrrrrr=" << ErrorString(err);
+                         << " err=" << ErrorString(err);
             handle.Clear();
             return {{}, err};
         }
