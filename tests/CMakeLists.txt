@@ -15,6 +15,7 @@ set(UTEST_SOURCES
     manifest.cpp
     concurrency.cpp
     cloud.cpp
+    cloud_term.cpp
     gc.cpp
     chore.cpp
     eloq_store_test.cpp
