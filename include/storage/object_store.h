@@ -73,6 +73,7 @@ public:
             AsyncDelete
         };
         virtual Type TaskType() = 0;
+        virtual std::string Info() const = 0;
 
         KvError error_{KvError::NoError};
         DirectIoBuffer response_data_;
@@ -107,6 +108,11 @@ public:
         {
             return Type::AsyncDownload;
         }
+        std::string Info() const override
+        {
+            std::string tbl = tbl_id_ ? tbl_id_->ToString() : std::string("<null>");
+            return std::string("Download(") + tbl + '/' + std::string(filename_) + ')';
+        }
         const TableIdent *tbl_id_;
         std::string_view filename_;
     };
@@ -121,6 +127,11 @@ public:
         Type TaskType() override
         {
             return Type::AsyncUpload;
+        }
+        std::string Info() const override
+        {
+            std::string tbl = tbl_id_ ? tbl_id_->ToString() : std::string("<null>");
+            return std::string("Upload(") + tbl + '/' + filename_ + ')';
         }
 
         const TableIdent *tbl_id_;
@@ -153,6 +164,10 @@ public:
         {
             return Type::AsyncList;
         }
+        std::string Info() const override
+        {
+            return std::string("List(") + remote_path_ + ')';
+        }
         std::string remote_path_;
         bool recurse_{false};
         std::string continuation_token_;
@@ -168,6 +183,10 @@ public:
         Type TaskType() override
         {
             return Type::AsyncDelete;
+        }
+        std::string Info() const override
+        {
+            return std::string("Delete(") + remote_path_ + ')';
         }
 
         std::string remote_path_;

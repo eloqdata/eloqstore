@@ -1381,7 +1381,8 @@ void AsyncHttpManager::ProcessCompletedRequests()
                         << "HTTP error " << response_code
                         << ", scheduling retry " << unsigned(task->retry_count_)
                         << "/" << unsigned(task->max_retries_) << " in "
-                        << retry_delay_ms << " ms";
+                        << retry_delay_ms << " ms"
+                        << ", task=" << task->Info();
                 }
                 else
                 {
@@ -1402,7 +1403,8 @@ void AsyncHttpManager::ProcessCompletedRequests()
                         << curl_easy_strerror(msg->data.result)
                         << ", scheduling retry " << unsigned(task->retry_count_)
                         << "/" << unsigned(task->max_retries_) << " in "
-                        << retry_delay_ms << " ms";
+                        << retry_delay_ms << " ms"
+                        << ", task=" << task->Info();
                 }
                 else
                 {
@@ -1432,6 +1434,14 @@ void AsyncHttpManager::ProcessCompletedRequests()
                     ->GetDirectIoBufferPool()
                     .Release(std::move(upload_task->data_buffer_));
                 upload_task->buffer_offset_ = 0;
+            }
+
+            if (task->retry_count_ > 0)
+            {
+                LOG(INFO) << "Retry succeeded after "
+                          << unsigned(task->retry_count_) << " attempts: "
+                          << task->Info();
+                task->retry_count_ = 0;
             }
 
             task->kv_task_->FinishIo();
@@ -1518,6 +1528,10 @@ void AsyncHttpManager::ProcessPendingRetries()
     {
         ObjectStore::Task *task = it->second;
         it = pending_retries_.erase(it);
+        LOG(INFO) << "Retrying task after backoff (attempt "
+                  << unsigned(task->retry_count_) << "/"
+                  << unsigned(task->max_retries_)
+                  << "): " << task->Info();
         // SubmitRequest will handle rescheduling if slot acquisition fails
         SubmitRequest(task);
     }
