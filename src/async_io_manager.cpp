@@ -153,7 +153,8 @@ KvError IouringMgr::Init(Shard *shard)
     buf_ring_ = io_uring_setup_buf_ring(&ring_, num_bufs, buf_group_, 0, &ret);
     if (buf_ring_ == nullptr)
     {
-        LOG(ERROR) << "failed to initialize buffer ring: " << ret;
+        LOG(ERROR) << "failed to initialize buffer ring: " << ret
+                   << " num_bufs=" << num_bufs << " buf_size=" << buf_size;
         io_uring_unregister_files(&ring_);
         io_uring_queue_exit(&ring_);
         return KvError::OutOfMem;
@@ -636,6 +637,7 @@ KvError ToKvError(int err_no)
     case -ENOBUFS:
         return KvError::TryAgain;
     case -ENOMEM:
+        LOG(ERROR) << "ToKvError: out of memory";
         return KvError::OutOfMem;
     case -EBUSY:
         return KvError::Busy;

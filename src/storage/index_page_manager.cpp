@@ -9,8 +9,8 @@
 #include <utility>
 #include <vector>
 
-#include "compression.h"
 #include "async_io_manager.h"
+#include "compression.h"
 #include "error.h"
 #include "kv_options.h"
 #include "replayer.h"
@@ -28,8 +28,7 @@ IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
       compression_mgr_(io_manager,
                        Options(),
                        Options()->num_threads > 0
-                           ? Options()->dict_cache_size /
-                                 Options()->num_threads
+                           ? Options()->dict_cache_size / Options()->num_threads
                            : Options()->dict_cache_size)
 {
     active_head_.EnqueNext(&active_tail_);
@@ -293,6 +292,7 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
             MemIndexPage *new_page = AllocIndexPage();
             if (new_page == nullptr)
             {
+                LOG(INFO) << "Out of memory to allocate index page " << page_id;
                 return {nullptr, KvError::OutOfMem};
             }
             FilePageId file_page_id = mapping->ToFilePage(page_id);
