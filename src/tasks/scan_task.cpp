@@ -278,6 +278,11 @@ std::pair<std::string_view, KvError> ScanIterator::ResolveValue(
 {
     if (iter_.CompressionType() == compression::CompressionType::Dictionary)
     {
+        if (root_meta_ != nullptr && !root_meta_->dict_meta_.HasDictionary())
+        {
+            LOG(FATAL) << "Dictionary value without dict meta for "
+                       << tbl_id_.ToString();
+        }
         if (!compression_hold_)
         {
             auto [dict, err] =
