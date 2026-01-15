@@ -1439,8 +1439,8 @@ void AsyncHttpManager::ProcessCompletedRequests()
             if (task->retry_count_ > 0)
             {
                 LOG(INFO) << "Retry succeeded after "
-                          << unsigned(task->retry_count_) << " attempts: "
-                          << task->Info();
+                          << static_cast<unsigned>(task->retry_count_)
+                          << " attempts: " << task->Info();
                 task->retry_count_ = 0;
             }
 
@@ -1530,8 +1530,7 @@ void AsyncHttpManager::ProcessPendingRetries()
         it = pending_retries_.erase(it);
         LOG(INFO) << "Retrying task after backoff (attempt "
                   << unsigned(task->retry_count_) << "/"
-                  << unsigned(task->max_retries_)
-                  << "): " << task->Info();
+                  << unsigned(task->max_retries_) << "): " << task->Info();
         // SubmitRequest will handle rescheduling if slot acquisition fails
         SubmitRequest(task);
     }
