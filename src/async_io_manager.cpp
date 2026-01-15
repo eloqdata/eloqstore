@@ -2520,6 +2520,8 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     auto [manifest, err] = IouringMgr::GetManifest(tbl_id);
     if (err == KvError::NoError)
     {
+        LOG(INFO) << "CloudStoreMgr::GetManifest: manifest already downloaded "
+                  << "for table " << tbl_id;
         return {std::move(manifest), err};
     }
 
@@ -2783,6 +2785,10 @@ KvError CloudStoreMgr::UpsertTermFile(const TableIdent &tbl_id,
 
         if (read_err == KvError::NotFound)
         {
+            DLOG(INFO) << "CloudStoreMgr::UpsertTermFile: term file not found "
+                          "for table "
+                       << tbl_id << ", create term file with process_term "
+                       << process_term;
             // Legacy table - create term file with current process_term
             auto [create_err, response_code] =
                 CasCreateTermFile(tbl_id, process_term);
