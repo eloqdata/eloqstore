@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "async_io_manager.h"
+#include "cloud_storage_service.h"
 #include "storage/shard.h"
 #include "tasks/task.h"
 #include "utils.h"
@@ -850,8 +851,10 @@ std::unique_ptr<CloudBackend> CreateBackend(const KvOptions *options,
 
 }  // namespace
 
-ObjectStore::ObjectStore(const KvOptions *options)
+ObjectStore::ObjectStore(const KvOptions *options, CloudStorageService *service)
+    : cloud_service_(service)
 {
+    CHECK(cloud_service_ != nullptr);
     curl_global_init(CURL_GLOBAL_DEFAULT);
     {
         std::lock_guard lk(g_aws_mutex);
@@ -867,7 +870,7 @@ ObjectStore::ObjectStore(const KvOptions *options)
             g_aws_cleanup_registered = true;
         }
     }
-    async_http_mgr_ = std::make_unique<AsyncHttpManager>();
+    async_http_mgr_ = std::make_unique<AsyncHttpManager>(options, service);
 }
 
 ObjectStore::~ObjectStore()
@@ -903,9 +906,37 @@ KvError ObjectStore::EnsureBucketExists()
     return async_http_mgr_->EnsureBucketExists();
 }
 
-AsyncHttpManager::AsyncHttpManager()
+void ObjectStore::SubmitTask(ObjectStore::Task *task, Shard *owner_shard)
 {
-    const KvOptions *option = Options();
+    CHECK(task != nullptr);
+    CHECK(owner_shard != nullptr);
+    task->SetOwnerShard(owner_shard);
+    CHECK(task->kv_task_ != nullptr);
+    task->kv_task_->inflight_io_++;
+    cloud_service_->Submit(this, task);
+}
+
+void ObjectStore::StartHttpRequest(ObjectStore::Task *task)
+{
+    CHECK(async_http_mgr_ != nullptr);
+    async_http_mgr_->SubmitRequest(task);
+}
+
+void ObjectStore::RunHttpWork()
+{
+    async_http_mgr_->PerformRequests();
+    async_http_mgr_->ProcessCompletedRequests();
+}
+
+bool ObjectStore::HttpWorkIdle() const
+{
+    return async_http_mgr_->IsIdle();
+}
+
+AsyncHttpManager::AsyncHttpManager(const KvOptions *option,
+                                   CloudStorageService *service)
+    : cloud_service_(service)
+{
     if (option->cloud_store_path.empty())
     {
         LOG(FATAL) << "cloud_store_path must be set when using cloud store";
@@ -1052,29 +1083,14 @@ void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
     task->error_ = KvError::NoError;
     task->response_data_.clear();
 
-    bool is_retry = task->waiting_retry_;
     task->waiting_retry_ = false;
-
-    if (!AcquireCloudSlot(task->kv_task_, task, is_retry))
-    {
-        // Slot acquisition failed (likely because we're not in coroutine
-        // context) Reschedule the retry for later
-        // SubmitRequest is only called from coroutine context except for
-        // ProcessPendingRetries. So if slot acquisition fails, it must be a
-        // retry.
-        CHECK(is_retry) << "Slot acquisition failed for non-retry task";
-        uint32_t retry_delay_ms = ComputeBackoffMs(task->retry_count_);
-        ScheduleRetry(task, std::chrono::milliseconds(retry_delay_ms));
-        return;
-    }
 
     CURL *easy = curl_easy_init();
     if (!easy)
     {
         LOG(ERROR) << "Failed to initialize cURL easy handle";
         task->error_ = KvError::CloudErr;
-        task->kv_task_->FinishIo();
-        ReleaseCloudSlot(task);
+        OnTaskFinished(task);
         return;
     }
 
@@ -1110,16 +1126,11 @@ void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
         break;
     }
 
-    if (!is_retry)
-    {
-        task->kv_task_->inflight_io_++;
-    }
     if (!setup_ok)
     {
         CleanupTaskResources(task);
         curl_easy_cleanup(easy);
-        task->kv_task_->FinishIo();
-        ReleaseCloudSlot(task);
+        OnTaskFinished(task);
         return;
     }
 
@@ -1130,8 +1141,7 @@ void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
                    << curl_multi_strerror(mres);
         curl_easy_cleanup(easy);
         task->error_ = KvError::CloudErr;
-        task->kv_task_->FinishIo();
-        ReleaseCloudSlot(task);
+        OnTaskFinished(task);
         return;
     }
 
@@ -1418,22 +1428,11 @@ void AsyncHttpManager::ProcessCompletedRequests()
             curl_easy_cleanup(easy);
             active_requests_.erase(easy);
             CleanupTaskResources(task);
-            ReleaseCloudSlot(task);
 
             if (schedule_retry)
             {
                 ScheduleRetry(task, std::chrono::milliseconds(retry_delay_ms));
                 continue;
-            }
-
-            if (task->TaskType() == ObjectStore::Task::Type::AsyncUpload)
-            {
-                auto upload_task = static_cast<ObjectStore::UploadTask *>(task);
-                CHECK(shard != nullptr);
-                reinterpret_cast<CloudStoreMgr *>(shard->IoManager())
-                    ->GetDirectIoBufferPool()
-                    .Release(std::move(upload_task->data_buffer_));
-                upload_task->buffer_offset_ = 0;
             }
 
             if (task->retry_count_ > 0)
@@ -1444,7 +1443,7 @@ void AsyncHttpManager::ProcessCompletedRequests()
                 task->retry_count_ = 0;
             }
 
-            task->kv_task_->FinishIo();
+            OnTaskFinished(task);
         }
     }
 }
@@ -1466,54 +1465,15 @@ void AsyncHttpManager::Cleanup()
         if (task->kv_task_->inflight_io_ > 0)
         {
             task->error_ = KvError::CloudErr;
-            task->kv_task_->FinishIo();
+            OnTaskFinished(task);
         }
-        ReleaseCloudSlot(task);
     }
     active_requests_.clear();
 }
 
-bool AsyncHttpManager::AcquireCloudSlot(KvTask *kv_task,
-                                        ObjectStore::Task *task,
-                                        bool is_retry)
+void AsyncHttpManager::OnTaskFinished(ObjectStore::Task *task)
 {
-    if (!task || task->cloud_slot_acquired_)
-    {
-        return true;  // Already acquired or invalid task
-    }
-    CHECK(kv_task != nullptr) << "Cloud operations require KvTask";
-
-    while (cloud_inflight_ >= kCloudConcurrencyLimit)
-    {
-        // Retry call AcquireCloudSlot outside of coroutine context. In this
-        // case we should not try to Yield() because it requires a valid
-        // coroutine context.
-        if (is_retry)
-        {
-            // Not in coroutine context - return false to indicate slot was not
-            // acquired
-            return false;
-        }
-        cloud_waiting_.Wait(kv_task);
-    }
-    cloud_inflight_++;
-    task->cloud_slot_acquired_ = true;
-    return true;
-}
-
-void AsyncHttpManager::ReleaseCloudSlot(ObjectStore::Task *task)
-{
-    if (!task || !task->cloud_slot_acquired_)
-    {
-        return;
-    }
-    CHECK_GT(cloud_inflight_, 0);
-    cloud_inflight_--;
-    task->cloud_slot_acquired_ = false;
-    if (!cloud_waiting_.Empty())
-    {
-        cloud_waiting_.WakeOne();
-    }
+    cloud_service_->NotifyTaskFinished(task);
 }
 
 void AsyncHttpManager::ProcessPendingRetries()

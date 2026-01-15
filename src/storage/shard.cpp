@@ -30,6 +30,8 @@ Shard::Shard(const EloqStore *store, size_t shard_id, uint32_t fd_limit)
       index_mgr_(io_mgr_.get()),
       stack_allocator_(store->options_.coroutine_stack_size)
 {
+    const auto &opts = store_->options_;
+    oss_enabled_ = !opts.store_path.empty() && !opts.cloud_store_path.empty();
 }
 
 KvError Shard::Init()
@@ -335,8 +337,8 @@ void Shard::ProcessReq(KvRequest *req)
 
             list_task.SetKvTask(task);
             auto cloud_mgr = static_cast<CloudStoreMgr *>(shard->io_mgr_.get());
-            cloud_mgr->GetObjectStore().GetHttpManager()->SubmitRequest(
-                &list_task);
+            cloud_mgr->AcquireCloudSlot(task);
+            cloud_mgr->GetObjectStore().SubmitTask(&list_task, shard);
             current_task->WaitIo();
 
             if (list_task.error_ != KvError::NoError)
@@ -428,6 +430,11 @@ void Shard::ProcessReq(KvRequest *req)
 
 bool Shard::ExecuteReadyTasks()
 {
+    if (oss_enabled_)
+    {
+        auto *cloud_mgr = reinterpret_cast<CloudStoreMgr *>(io_mgr_.get());
+        cloud_mgr->ProcessCloudReadyTasks(this);
+    }
     bool busy = ready_tasks_.Size() > 0;
     while (ready_tasks_.Size() > 0)
     {

@@ -35,6 +35,8 @@ namespace eloqstore
 class WriteReq;
 class WriteTask;
 class MemIndexPage;
+class CloudStorageService;
+class Shard;
 
 class ManifestFile
 {
@@ -164,6 +166,7 @@ public:
         return 0;  // Default implementation returns 0 for non-CloudStoreMgr
                    // implementations
     }
+
     virtual void CleanManifest(const TableIdent &tbl_id) = 0;
 
     const KvOptions *options_;
@@ -459,7 +462,9 @@ public:
 class CloudStoreMgr : public IouringMgr
 {
 public:
-    CloudStoreMgr(const KvOptions *opts, uint32_t fd_limit);
+    CloudStoreMgr(const KvOptions *opts,
+                  uint32_t fd_limit,
+                  CloudStorageService *service);
     static constexpr FileId ManifestFileId()
     {
         return LruFD::kManifest;
@@ -515,6 +520,10 @@ public:
     bool PopPrewarmFile(PrewarmFile &file);
     void ClearPrewarmFiles();
     void StopAllPrewarmTasks();
+    void AcquireCloudSlot(KvTask *task);
+    void ReleaseCloudSlot(size_t count = 1);
+    void EnqueueCloudReadyTask(KvTask *task);
+    void ProcessCloudReadyTasks(Shard *shard);
     bool AppendPrewarmFiles(std::vector<PrewarmFile> &files);
     size_t GetPrewarmPendingCount() const;
     void MarkPrewarmListingComplete();
@@ -622,6 +631,7 @@ private:
     size_t active_prewarm_tasks_{0};
 
     // Prewarm queue management
+    moodycamel::ConcurrentQueue<KvTask *> cloud_ready_tasks_;
     moodycamel::ConcurrentQueue<PrewarmFile> prewarm_queue_;
     static constexpr size_t kMaxPrewarmPendingFiles = 1000;
     std::atomic<bool> prewarm_listing_complete_{false};
@@ -636,9 +646,12 @@ private:
 
     DirectIoBufferPool direct_io_buffer_pool_;
     ObjectStore obj_store_;
+    CloudStorageService *cloud_service_{nullptr};
 
     size_t inflight_upload_files_{0};
     WaitingZone upload_slots_waiting_;
+    size_t inflight_cloud_slots_{0};
+    WaitingZone cloud_slot_waiting_;
 
     friend class Prewarmer;
     friend class PrewarmService;

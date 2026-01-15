@@ -99,6 +99,7 @@ set(ELOQ_STORE_SOURCES
         external/random.cc
         external/xxhash.c
         src/async_io_manager.cpp
+        src/cloud_storage_service.cpp
         src/coding.cpp
         src/comparator.cpp
         src/compression.cpp

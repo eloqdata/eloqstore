@@ -18,12 +18,15 @@
 // https://github.com/cameron314/concurrentqueue/issues/280
 #undef BLOCK_SIZE
 #include "concurrentqueue/blockingconcurrentqueue.h"
+#include "concurrentqueue/concurrentqueue.h"
 
 namespace eloqstore
 {
 #ifdef ELOQ_MODULE_ENABLED
 class EloqStoreModule;
 #endif
+
+class CloudStoreMgr;
 
 class Shard
 {
@@ -53,6 +56,7 @@ public:
     CircularQueue<KvTask *> ready_tasks_;
     CircularQueue<KvTask *> tasks_to_run_next_round_;
     size_t running_writing_tasks_{};
+    bool oss_enabled_{false};
 
 private:
     void WorkLoop();

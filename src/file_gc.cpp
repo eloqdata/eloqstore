@@ -143,7 +143,8 @@ KvError ListCloudFiles(const TableIdent &tbl_id,
     // Set KvTask pointer and initialize inflight_io_
     list_task.SetKvTask(current_task);
 
-    cloud_mgr->GetObjectStore().GetHttpManager()->SubmitRequest(&list_task);
+    cloud_mgr->AcquireCloudSlot(current_task);
+    cloud_mgr->GetObjectStore().SubmitTask(&list_task, shard);
     current_task->WaitIo();
 
     if (list_task.error_ != KvError::NoError)
@@ -223,7 +224,8 @@ KvError DownloadArchiveFile(const TableIdent &tbl_id,
     // Set KvTask pointer and initialize inflight_io_
     download_task.SetKvTask(current_task);
 
-    cloud_mgr->GetObjectStore().GetHttpManager()->SubmitRequest(&download_task);
+    cloud_mgr->AcquireCloudSlot(current_task);
+    cloud_mgr->GetObjectStore().SubmitTask(&download_task, shard);
     current_task->WaitIo();
 
     if (download_task.error_ != KvError::NoError)
@@ -418,7 +420,6 @@ KvError DeleteUnreferencedCloudFiles(
     }
 
     KvTask *current_task = ThdTask();
-    auto *http_mgr = cloud_mgr->GetObjectStore().GetHttpManager();
     if (files_to_delete.size() == data_files.size())
     {
         files_to_delete.emplace_back(tbl_id.ToString() + "/" +
@@ -435,7 +436,8 @@ KvError DeleteUnreferencedCloudFiles(
         delete_tasks.emplace_back(remote_path);
         ObjectStore::DeleteTask &task = delete_tasks.back();
         task.SetKvTask(current_task);
-        http_mgr->SubmitRequest(&task);
+        cloud_mgr->AcquireCloudSlot(current_task);
+        cloud_mgr->GetObjectStore().SubmitTask(&task, shard);
     }
 
     current_task->WaitIo();
