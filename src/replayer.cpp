@@ -33,11 +33,21 @@ KvError Replayer::Replay(ManifestFile *file)
     file_size_ = 0;
     max_fp_id_ = MaxFilePageId;
     dict_meta_ = {};
+    dict_bytes_.clear();
 
     KvError err = ParseNextRecord(file);
     CHECK_KV_ERR(err);
     assert(!payload_.empty());
     DeserializeSnapshot(payload_);
+    if (dict_meta_.HasDictionary() && dict_meta_.dict_checksum != 0)
+    {
+        uint64_t actual =
+            XXH3_64bits(dict_bytes_.data(), dict_bytes_.size());
+        if (actual != dict_meta_.dict_checksum)
+        {
+            return KvError::Corrupted;
+        }
+    }
 
     while (true)
     {
@@ -121,11 +131,13 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
                                  ManifestBuilder::header_bytes +
                                  payload_offset;
         assert(snapshot.size() >= dict_meta_.dict_len);
+        dict_bytes_.assign(snapshot.data(), dict_meta_.dict_len);
         snapshot = snapshot.substr(dict_meta_.dict_len);
     }
     else
     {
         dict_meta_.dict_offset = 0;
+        dict_bytes_.clear();
     }
 
     mapping_tbl_.reserve(opts_->init_page_count);

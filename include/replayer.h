@@ -26,6 +26,7 @@ public:
     FilePageId max_fp_id_;
     uint64_t file_size_;
     DictMeta dict_meta_{};
+    std::string dict_bytes_{};
 
     static KvError ReadSnapshotDict(ManifestFile *file,
                                     const DictMeta &meta,

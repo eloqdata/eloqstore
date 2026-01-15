@@ -68,6 +68,9 @@ public:
     std::pair<Handle, KvError> GetOrLoad(const TableIdent &tbl_id,
                                          const DictMeta &meta,
                                          ManifestFile *manifest = nullptr);
+    std::pair<Handle, KvError> GetOrLoadFromBytes(const TableIdent &tbl_id,
+                                                  const DictMeta &meta,
+                                                  std::string_view dict_bytes);
     void UpdateDictionary(
         const std::shared_ptr<compression::DictCompression> &compression,
         const DictMeta &meta);
