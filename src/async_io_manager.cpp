@@ -1086,7 +1086,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
         dirty_groups;
     dirty_groups.reserve(4);
 
-    for (auto & fd_ref : fds)
+    for (auto &fd_ref : fds)
     {
         LruFD *lru_fd = fd_ref.Get();
         if (lru_fd == nullptr)
