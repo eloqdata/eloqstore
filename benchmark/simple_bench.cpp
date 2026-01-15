@@ -175,6 +175,7 @@ void WriteLoop(eloqstore::EloqStore *store)
     bool recorded_write_latency = false;
     auto total_start = high_resolution_clock::now();
     auto window_start = total_start;
+    uint64_t last_logged_batches = 0;
     const double min_window_ms =
         std::max(1.0, FLAGS_write_stats_interval_sec * 1000.0);
     for (auto &writer : writers)
@@ -206,8 +207,10 @@ void WriteLoop(eloqstore::EloqStore *store)
             {
                 continue;
             }
+            const uint64_t completed_batches = i - last_logged_batches;
+            last_logged_batches = i;
             const uint64_t num_kvs =
-                uint64_t(FLAGS_batch_size) * FLAGS_partitions;
+                uint64_t(FLAGS_batch_size) * completed_batches;
             const uint64_t kvs_per_sec = num_kvs * 1000 / cost_ms;
             const double upsert_ratio_current = FLAGS_load ? 1.0 : upsert_ratio;
             const uint64_t mb_per_sec =
