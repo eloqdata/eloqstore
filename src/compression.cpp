@@ -250,9 +250,6 @@ size_t DictCompression::SampleCount()
 
 void DictCompression::BuildDictionary()
 {
-    has_dictionary_ = true;
-    dirty_ = true;
-
     std::string dict_buffer(kMaxDictBytes, '\0');
     const size_t trained = ZDICT_trainFromBuffer(dict_buffer.data(),
                                                  kMaxDictBytes,
@@ -262,13 +259,21 @@ void DictCompression::BuildDictionary()
     ClearSamples();
     if (ZDICT_isError(trained) != 0)
     {
-        dict_buffer = "";
+        // Training failed, keep dictionary disabled.
+        has_dictionary_ = false;
+        dirty_ = false;
+        dictionary_.clear();
+        return;
     }
+    has_dictionary_ = true;
+    dirty_ = true;
     dictionary_ = std::move(dict_buffer);
     if (!EnsureZstdObjects())
     {
         // In case that zstd objects cannot be created, use empty dictionary.
-        dictionary_ = "";
+        has_dictionary_ = false;
+        dirty_ = false;
+        dictionary_.clear();
         if (!EnsureZstdObjects())
         {
             LOG(FATAL) << "Fail to init zstd objects with empty dictionary";
