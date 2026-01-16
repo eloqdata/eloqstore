@@ -36,6 +36,7 @@ class WriteReq;
 class WriteTask;
 class MemIndexPage;
 class CloudStorageService;
+class Shard;
 
 class ManifestFile
 {
@@ -165,6 +166,7 @@ public:
         return 0;  // Default implementation returns 0 for non-CloudStoreMgr
                    // implementations
     }
+
     virtual void CleanManifest(const TableIdent &tbl_id) = 0;
 
     const KvOptions *options_;
@@ -520,6 +522,8 @@ public:
     void StopAllPrewarmTasks();
     void AcquireCloudSlot(KvTask *task);
     void ReleaseCloudSlot(size_t count = 1);
+    void EnqueueCloudReadyTask(KvTask *task);
+    void ProcessCloudReadyTasks(Shard *shard);
     bool AppendPrewarmFiles(std::vector<PrewarmFile> &files);
     size_t GetPrewarmPendingCount() const;
     void MarkPrewarmListingComplete();
@@ -627,6 +631,7 @@ private:
     size_t active_prewarm_tasks_{0};
 
     // Prewarm queue management
+    moodycamel::ConcurrentQueue<KvTask *> cloud_ready_tasks_;
     moodycamel::ConcurrentQueue<PrewarmFile> prewarm_queue_;
     static constexpr size_t kMaxPrewarmPendingFiles = 1000;
     std::atomic<bool> prewarm_listing_complete_{false};

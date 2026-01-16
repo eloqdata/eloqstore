@@ -26,6 +26,8 @@ namespace eloqstore
 class EloqStoreModule;
 #endif
 
+class CloudStoreMgr;
+
 class Shard
 {
 public:
@@ -54,6 +56,7 @@ public:
     CircularQueue<KvTask *> ready_tasks_;
     CircularQueue<KvTask *> tasks_to_run_next_round_;
     size_t running_writing_tasks_{};
+    bool oss_enabled_{false};
 
 private:
     void WorkLoop();
@@ -61,8 +64,6 @@ private:
     void OnTaskFinished(KvTask *task);
     void OnReceivedReq(KvRequest *req);
     void ProcessReq(KvRequest *req);
-    void ProcessCloudReadyTasks();
-    void EnqueueCloudReadyTask(KvTask *task);
 
 #ifdef ELOQ_MODULE_ENABLED
     void WorkOneRound();
@@ -178,7 +179,6 @@ private:
     }
 
     moodycamel::BlockingConcurrentQueue<KvRequest *> requests_;
-    moodycamel::ConcurrentQueue<KvTask *> cloud_ready_tasks_;
     std::thread thd_;
     PagesPool page_pool_;
     std::unique_ptr<AsyncIoManager> io_mgr_;
@@ -218,6 +218,5 @@ private:
 #endif
 
     friend class EloqStoreModule;
-    friend class CloudStorageService;
 };
 }  // namespace eloqstore

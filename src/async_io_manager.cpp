@@ -2360,6 +2360,37 @@ void CloudStoreMgr::ReleaseCloudSlot(size_t count)
     cloud_slot_waiting_.WakeN(count);
 }
 
+void CloudStoreMgr::EnqueueCloudReadyTask(KvTask *task)
+{
+    if (task == nullptr)
+    {
+        return;
+    }
+    cloud_ready_tasks_.enqueue(task);
+}
+
+void CloudStoreMgr::ProcessCloudReadyTasks(Shard *shard)
+{
+    if (shard == nullptr)
+    {
+        return;
+    }
+    KvTask *ready_tasks[128];
+    size_t nready = cloud_ready_tasks_.try_dequeue_bulk(ready_tasks,
+                                                        std::size(ready_tasks));
+    if (nready == 0)
+    {
+        return;
+    }
+
+    for (size_t i = 0; i < nready; ++i)
+    {
+        ready_tasks[i]->FinishIo();
+    }
+
+    ReleaseCloudSlot(nready);
+}
+
 bool CloudStoreMgr::AppendPrewarmFiles(std::vector<PrewarmFile> &files)
 {
     if (files.empty())

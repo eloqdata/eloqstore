@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 
+#include "async_io_manager.h"
 #include "eloq_store.h"
 #include "storage/shard.h"
 
@@ -114,7 +115,9 @@ void CloudStorageService::NotifyTaskFinished(ObjectStore::Task *task)
     {
         return;
     }
-    task->owner_shard_->EnqueueCloudReadyTask(task->kv_task_);
+    Shard *owner = task->owner_shard_;
+    auto *cloud_mgr = reinterpret_cast<CloudStoreMgr *>(owner->IoManager());
+    cloud_mgr->EnqueueCloudReadyTask(task->kv_task_);
 }
 
 void CloudStorageService::RunWorker(size_t worker_index)
