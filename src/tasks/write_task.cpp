@@ -310,7 +310,20 @@ KvError WriteTask::FlushManifest()
         MappingSnapshot *mapping = cow_meta_.mapper_->GetMapping();
         FilePageId max_fp_id =
             cow_meta_.mapper_->FilePgAllocator()->MaxFilePageId();
+        
+        // Recalculate dict offset if we are writing a snapshot.
+        // The previous dict_offset calculation might be stale or zero if we
+        // decided to switch manifest due to size limit or dirty dictionary.
         dict_meta.dict_offset = DictOffset(max_fp_id, dict_meta);
+
+        // If we are forcing a snapshot due to manifest size limit (not dirty),
+        // we still need to write the dictionary if one exists.
+        if (dict_bytes.empty() && dict_meta.HasDictionary())
+        {
+            const std::string &dict_vec = cow_meta_.compression_->DictionaryBytes();
+            dict_bytes = {dict_vec.data(), dict_vec.size()};
+        }
+        
         std::string_view snapshot =
             wal_builder_.Snapshot(cow_meta_.root_id_,
                                   cow_meta_.ttl_root_id_,
