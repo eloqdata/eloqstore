@@ -38,5 +38,19 @@ inline const Name NAME_ELOQSTORE_TASK_MANAGER_ACTIVE_TASKS{
 inline const Name NAME_ELOQSTORE_REQUEST_LATENCY{"eloqstore_request_latency"};
 inline const Name NAME_ELOQSTORE_REQUESTS_COMPLETED{
     "eloqstore_requests_completed"};
+inline const Name NAME_ELOQSTORE_INDEX_BUFFER_POOL_USED{
+    "eloqstore_index_buffer_pool_used"};
+inline const Name NAME_ELOQSTORE_INDEX_BUFFER_POOL_LIMIT{
+    "eloqstore_index_buffer_pool_limit"};
+inline const Name NAME_ELOQSTORE_OPEN_FILE_COUNT{"eloqstore_open_file_count"};
+inline const Name NAME_ELOQSTORE_OPEN_FILE_LIMIT{"eloqstore_open_file_limit"};
+inline const Name NAME_ELOQSTORE_LOCAL_SPACE_USED{"eloqstore_local_space_used"};
+inline const Name NAME_ELOQSTORE_LOCAL_SPACE_LIMIT{
+    "eloqstore_local_space_limit"};
+
+// Collection interval for Phase 9-11 gauge metrics (index buffer pool, page
+// pool, open file, local space) These metrics are collected every N
+// WorkOneRound() calls to reduce overhead
+inline constexpr size_t ELOQSTORE_GAUGE_COLLECTION_INTERVAL = 1000;
 }  // namespace metrics
 #endif  // ELOQSTORE_WITH_TXSERVICE

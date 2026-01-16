@@ -207,6 +207,12 @@ private:
     std::atomic<size_t> req_queue_size_{0};
 #endif
 
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    size_t work_one_round_count_{
+        0};  // Counter for frequency-controlled metric collection (not atomic
+             // since each Shard runs in single-threaded context)
+#endif
+
     friend class EloqStoreModule;
 };
 }  // namespace eloqstore

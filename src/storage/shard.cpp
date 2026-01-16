@@ -132,6 +132,31 @@ void Shard::Start()
 #else
     thd_ = std::thread([this] { WorkLoop(); });
 #endif
+
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    // Collect limit metrics once at initialization (these values don't change)
+    if (store_->EnableMetrics())
+    {
+        metrics::Meter *meter = store_->GetMetricsMeter(shard_id_);
+        if (meter != nullptr)
+        {
+            // Collect index buffer pool limit
+            size_t index_limit = index_mgr_.GetBufferPoolLimit();
+            meter->Collect(metrics::NAME_ELOQSTORE_INDEX_BUFFER_POOL_LIMIT,
+                           static_cast<double>(index_limit));
+
+            // Collect open file limit
+            size_t open_file_limit = io_mgr_->GetOpenFileLimit();
+            meter->Collect(metrics::NAME_ELOQSTORE_OPEN_FILE_LIMIT,
+                           static_cast<double>(open_file_limit));
+
+            // Collect local space limit
+            size_t local_space_limit = io_mgr_->GetLocalSpaceLimit();
+            meter->Collect(metrics::NAME_ELOQSTORE_LOCAL_SPACE_LIMIT,
+                           static_cast<double>(local_space_limit));
+        }
+    }
+#endif
 }
 
 void Shard::Stop()
@@ -517,6 +542,32 @@ void Shard::WorkOneRound()
                                round_start);
         meter->Collect(metrics::NAME_ELOQSTORE_TASK_MANAGER_ACTIVE_TASKS,
                        static_cast<double>(task_mgr_.NumActive()));
+
+        // Increment round counter for frequency-controlled metric collection
+        work_one_round_count_++;
+        bool should_collect_gauges =
+            (work_one_round_count_ %
+             metrics::ELOQSTORE_GAUGE_COLLECTION_INTERVAL) == 0;
+
+        // Collect used/count metrics (frequency-controlled)
+        // Note: limit metrics are collected once at initialization in Start()
+        if (should_collect_gauges)
+        {
+            // Collect index buffer pool used
+            size_t index_used = index_mgr_.GetBufferPoolUsed();
+            meter->Collect(metrics::NAME_ELOQSTORE_INDEX_BUFFER_POOL_USED,
+                           static_cast<double>(index_used));
+
+            // Collect open file count
+            size_t open_file_count = io_mgr_->GetOpenFileCount();
+            meter->Collect(metrics::NAME_ELOQSTORE_OPEN_FILE_COUNT,
+                           static_cast<double>(open_file_count));
+
+            // Collect local space used
+            size_t local_space_used = io_mgr_->GetLocalSpaceUsed();
+            meter->Collect(metrics::NAME_ELOQSTORE_LOCAL_SPACE_USED,
+                           static_cast<double>(local_space_used));
+        }
     }
 #endif
 }

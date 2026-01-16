@@ -539,6 +539,16 @@ KvError IouringMgr::CloseFiles(const TableIdent &tbl_id,
     return CloseFiles(std::span<LruFD::Ref>(fd_refs.data(), fd_refs.size()));
 }
 
+size_t IouringMgr::GetOpenFileCount() const
+{
+    return lru_fd_count_;
+}
+
+size_t IouringMgr::GetOpenFileLimit() const
+{
+    return fd_limit_;
+}
+
 void IouringMgr::CleanManifest(const TableIdent &tbl_id)
 {
     if (HasOtherFile(tbl_id))
@@ -2138,6 +2148,16 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
     }
 
     return KvError::NoError;
+}
+
+size_t CloudStoreMgr::GetLocalSpaceUsed() const
+{
+    return used_local_space_;
+}
+
+size_t CloudStoreMgr::GetLocalSpaceLimit() const
+{
+    return shard_local_space_limit_;
 }
 
 DirectIoBufferPool &CloudStoreMgr::GetDirectIoBufferPool()

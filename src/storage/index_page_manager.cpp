@@ -95,6 +95,16 @@ bool IndexPageManager::IsFull() const
     return current_size >= Options()->buffer_pool_size;
 }
 
+size_t IndexPageManager::GetBufferPoolUsed() const
+{
+    return index_pages_.size() * Options()->data_page_size;
+}
+
+size_t IndexPageManager::GetBufferPoolLimit() const
+{
+    return Options()->buffer_pool_size;
+}
+
 std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
     const TableIdent &tbl_id)
 {

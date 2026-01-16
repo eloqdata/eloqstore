@@ -125,6 +125,45 @@ public:
     {
         __builtin_unreachable();
     }
+    /**
+     * @brief Get the number of currently open file descriptors.
+     * @return Number of open file descriptors, or 0 if not applicable.
+     */
+    virtual size_t GetOpenFileCount() const
+    {
+        return 0;  // Default implementation returns 0 for non-IouringMgr
+                   // implementations
+    }
+
+    /**
+     * @brief Get the file descriptor limit for this shard.
+     * @return FD limit, or 0 if not applicable.
+     */
+    virtual size_t GetOpenFileLimit() const
+    {
+        return 0;  // Default implementation returns 0 for non-IouringMgr
+                   // implementations
+    }
+
+    /**
+     * @brief Get the current size of locally cached files in bytes.
+     * @return Total size in bytes, or 0 if not applicable.
+     */
+    virtual size_t GetLocalSpaceUsed() const
+    {
+        return 0;  // Default implementation returns 0 for non-CloudStoreMgr
+                   // implementations
+    }
+
+    /**
+     * @brief Get the local space limit for this shard in bytes.
+     * @return Local space limit in bytes, or 0 if not applicable.
+     */
+    virtual size_t GetLocalSpaceLimit() const
+    {
+        return 0;  // Default implementation returns 0 for non-CloudStoreMgr
+                   // implementations
+    }
     virtual void CleanManifest(const TableIdent &tbl_id) = 0;
 
     const KvOptions *options_;
@@ -176,6 +215,28 @@ public:
     KvError DeleteFiles(const std::vector<std::string> &file_paths);
     KvError CloseFiles(const TableIdent &tbl_id,
                        const std::span<FileId> file_ids);
+
+    /**
+     * @brief Get the number of currently open file descriptors.
+     * @return Number of open file descriptors.
+     */
+    size_t GetOpenFileCount() const override;
+
+    /**
+     * @brief Get the file descriptor limit for this shard.
+     * @return FD limit for this shard.
+     */
+    size_t GetOpenFileLimit() const override;
+
+    size_t GetLocalSpaceUsed() const override
+    {
+        return 0;  // IouringMgr doesn't use local file caching
+    }
+
+    size_t GetLocalSpaceLimit() const override
+    {
+        return 0;  // IouringMgr doesn't use local file caching
+    }
 
     void CleanManifest(const TableIdent &tbl_id) override;
 
@@ -433,6 +494,17 @@ public:
     {
         return shard_local_space_limit_ - used_local_space_;
     }
+    /**
+     * @brief Get the current size of locally cached files in bytes.
+     * @return Total size in bytes.
+     */
+    size_t GetLocalSpaceUsed() const override;
+
+    /**
+     * @brief Get the local space limit for this shard in bytes.
+     * @return Local space limit in bytes.
+     */
+    size_t GetLocalSpaceLimit() const override;
     size_t ActivePrewarmTasks() const
     {
         return active_prewarm_tasks_;
@@ -606,6 +678,26 @@ public:
                           uint64_t ts) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
+
+    size_t GetOpenFileCount() const override
+    {
+        return 0;  // MemStoreMgr doesn't use file descriptors
+    }
+
+    size_t GetOpenFileLimit() const override
+    {
+        return 0;  // MemStoreMgr doesn't use file descriptors
+    }
+
+    size_t GetLocalSpaceUsed() const override
+    {
+        return 0;  // MemStoreMgr doesn't use local file caching
+    }
+
+    size_t GetLocalSpaceLimit() const override
+    {
+        return 0;  // MemStoreMgr doesn't use local file caching
+    }
 
     void CleanManifest(const TableIdent &tbl_id) override;
 

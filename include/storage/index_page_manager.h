@@ -68,6 +68,18 @@ public:
     AsyncIoManager *IoMgr() const;
     MappingArena *MapperArena();
 
+    /**
+     * @brief Get current buffer pool used size in bytes.
+     * @return Current size of allocated index pages in bytes.
+     */
+    size_t GetBufferPoolUsed() const;
+
+    /**
+     * @brief Get buffer pool size limit in bytes.
+     * @return Total buffer pool size limit in bytes.
+     */
+    size_t GetBufferPoolLimit() const;
+
     void EvictRootIfEmpty(const TableIdent &tbl_id);
 
 private:

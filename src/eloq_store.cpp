@@ -537,6 +537,20 @@ void EloqStore::InitializeMetrics(metrics::MetricsRegistry *metrics_registry,
                                         "archive",
                                         "compact",
                                         "clean_expired"}}});
+        metrics_meters_[i]->Register(
+            metrics::NAME_ELOQSTORE_INDEX_BUFFER_POOL_USED,
+            metrics::Type::Gauge);
+        metrics_meters_[i]->Register(
+            metrics::NAME_ELOQSTORE_INDEX_BUFFER_POOL_LIMIT,
+            metrics::Type::Gauge);
+        metrics_meters_[i]->Register(metrics::NAME_ELOQSTORE_OPEN_FILE_COUNT,
+                                     metrics::Type::Gauge);
+        metrics_meters_[i]->Register(metrics::NAME_ELOQSTORE_OPEN_FILE_LIMIT,
+                                     metrics::Type::Gauge);
+        metrics_meters_[i]->Register(metrics::NAME_ELOQSTORE_LOCAL_SPACE_USED,
+                                     metrics::Type::Gauge);
+        metrics_meters_[i]->Register(metrics::NAME_ELOQSTORE_LOCAL_SPACE_LIMIT,
+                                     metrics::Type::Gauge);
     }
 
     enable_eloqstore_metrics_ = true;
