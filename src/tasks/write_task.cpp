@@ -11,6 +11,7 @@
 
 #include "absl/container/flat_hash_set.h"
 #include "async_io_manager.h"
+#include "coding.h"
 #include "error.h"
 #include "file_gc.h"
 #include "storage/data_page.h"
@@ -23,6 +24,20 @@
 
 namespace eloqstore
 {
+namespace
+{
+uint64_t DictOffset(FilePageId max_fp_id, const DictMeta &meta)
+{
+    if (!meta.HasDictionary())
+    {
+        return 0;
+    }
+    // Dict bytes are stored after max_fp_id and dict metadata in snapshot.
+    return ManifestBuilder::header_bytes + Varint64Size(max_fp_id) +
+           Varint32Size(meta.dict_len) + Varint64Size(meta.dict_checksum);
+}
+}  // namespace
+
 const TableIdent &WriteTask::TableId() const
 {
     return tbl_ident_;
@@ -238,12 +253,18 @@ KvError WriteTask::FlushManifest()
     uint64_t manifest_size = cow_meta_.manifest_size_;
     std::string_view dict_bytes;
     CHECK(cow_meta_.compression_ != nullptr);
+    DictMeta dict_meta = cow_meta_.dict_meta_;
+    const bool dict_dirty = cow_meta_.compression_->Dirty();
     if (cow_meta_.compression_->HasDictionary())
     {
         const std::string &dict_vec = cow_meta_.compression_->DictionaryBytes();
         dict_bytes = {dict_vec.data(), dict_vec.size()};
+        // Only recompute metadata when the dictionary is newly built.
+        if (dict_dirty)
+        {
+            dict_meta = DictMeta::FromCompression(*cow_meta_.compression_);
+        }
     }
-    const bool dict_dirty = cow_meta_.compression_->Dirty();
 
     if (need_empty_snapshot)
     {
@@ -251,16 +272,24 @@ KvError WriteTask::FlushManifest()
         MappingSnapshot *mapping = cow_meta_.mapper_->GetMapping();
         FilePageId max_fp_id =
             cow_meta_.mapper_->FilePgAllocator()->MaxFilePageId();
+        dict_meta.dict_offset = DictOffset(max_fp_id, dict_meta);
         std::string_view snapshot =
             wal_builder_.Snapshot(cow_meta_.root_id_,
                                   cow_meta_.ttl_root_id_,
                                   mapping,
                                   max_fp_id,
+                                  dict_meta,
                                   dict_bytes);
         err = IoMgr()->SwitchManifest(tbl_ident_, snapshot);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
-        cow_meta_.compression_->ClearDirty();
+        cow_meta_.dict_meta_ = dict_meta;
+        if (dict_dirty)
+        {
+            cow_meta_.compression_->ClearDirty();
+            shard->IndexManager()->CompressionMgr()->UpdateDictionary(
+                tbl_ident_, cow_meta_.compression_, cow_meta_.dict_meta_);
+        }
         return KvError::NoError;
     }
 
@@ -281,16 +310,24 @@ KvError WriteTask::FlushManifest()
         MappingSnapshot *mapping = cow_meta_.mapper_->GetMapping();
         FilePageId max_fp_id =
             cow_meta_.mapper_->FilePgAllocator()->MaxFilePageId();
+        dict_meta.dict_offset = DictOffset(max_fp_id, dict_meta);
         std::string_view snapshot =
             wal_builder_.Snapshot(cow_meta_.root_id_,
                                   cow_meta_.ttl_root_id_,
                                   mapping,
                                   max_fp_id,
+                                  dict_meta,
                                   dict_bytes);
         err = IoMgr()->SwitchManifest(tbl_ident_, snapshot);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
-        cow_meta_.compression_->ClearDirty();
+        cow_meta_.dict_meta_ = dict_meta;
+        if (dict_dirty)
+        {
+            cow_meta_.compression_->ClearDirty();
+            shard->IndexManager()->CompressionMgr()->UpdateDictionary(
+                tbl_ident_, cow_meta_.compression_, cow_meta_.dict_meta_);
+        }
     }
     return KvError::NoError;
 }

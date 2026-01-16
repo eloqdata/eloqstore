@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "async_io_manager.h"
+#include "compression.h"
 #include "error.h"
 #include "kv_options.h"
 #include "replayer.h"
@@ -22,7 +23,9 @@
 namespace eloqstore
 {
 IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
-    : io_manager_(io_manager), mapping_arena_(Options()->mapping_arena_size)
+    : io_manager_(io_manager),
+      mapping_arena_(Options()->mapping_arena_size),
+      compression_mgr_(io_manager, Options())
 {
     active_head_.EnqueNext(&active_tail_);
 }
@@ -132,9 +135,13 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
         meta->Pin();
         meta->manifest_size_ = replayer.file_size_;
         meta->next_expire_ts_ = 0;
-        if (!replayer.dict_bytes_.empty())
+        meta->dict_meta_ = replayer.dict_meta_;
+        if (meta->dict_meta_.dict_len > 0)
         {
-            meta->compression_->LoadDictionary(std::move(replayer.dict_bytes_));
+            auto [dict_handle, dict_err] = compression_mgr_.GetOrLoadFromBytes(
+                tbl_id, meta->dict_meta_, replayer.dict_bytes_);
+            CHECK_KV_ERR(dict_err);
+            meta->compression_ = dict_handle.Shared();
         }
         if (meta->ttl_root_id_ != MaxPageId)
         {
@@ -199,7 +206,13 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
         cow_meta.old_mapping_ = meta->mapper_->GetMappingSnapshot();
         cow_meta.manifest_size_ = meta->manifest_size_;
         cow_meta.next_expire_ts_ = meta->next_expire_ts_;
-        if (meta->compression_->Dirty())
+        cow_meta.dict_meta_ = meta->dict_meta_;
+        auto [dict_handle, dict_err] =
+            compression_mgr_.GetOrLoad(tbl_ident, cow_meta.dict_meta_);
+        CHECK_KV_ERR(dict_err);
+        cow_meta.compression_ = dict_handle.Shared();
+        meta->compression_ = cow_meta.compression_;
+        if (cow_meta.compression_ && cow_meta.compression_->Dirty())
         {
             // This only happens when the dictionary is built from values with
             // expired timestamps. If eloqstore stops before any new value
@@ -208,7 +221,6 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
             // subsequent values.
             assert(cow_meta.manifest_size_ == 0);
         }
-        cow_meta.compression_ = meta->compression_;
     }
     else if (err == KvError::NotFound)
     {
@@ -224,10 +236,14 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
         cow_meta.old_mapping_ = std::move(mapping);
         cow_meta.manifest_size_ = 0;
         cow_meta.next_expire_ts_ = 0;
-        cow_meta.compression_ =
-            std::make_shared<compression::DictCompression>();
+        cow_meta.dict_meta_ = {};
+        auto [dict_handle, dict_err] =
+            compression_mgr_.GetOrLoad(tbl_ident, cow_meta.dict_meta_);
+        CHECK_KV_ERR(dict_err);
+        cow_meta.compression_ = dict_handle.Shared();
         meta = &tbl_it->second;
         meta->Pin();
+        meta->compression_ = cow_meta.compression_;
     }
     else
     {
@@ -255,7 +271,8 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
     meta.mapper_ = std::move(new_meta.mapper_);
     meta.manifest_size_ = new_meta.manifest_size_;
     meta.next_expire_ts_ = new_meta.next_expire_ts_;
-    meta.compression_ = std::move(new_meta.compression_);
+    meta.dict_meta_ = new_meta.dict_meta_;
+    meta.compression_ = new_meta.compression_;
 }
 
 std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
@@ -510,6 +527,32 @@ AsyncIoManager *IndexPageManager::IoMgr() const
 MappingArena *IndexPageManager::MapperArena()
 {
     return &mapping_arena_;
+}
+
+CompressionManager *IndexPageManager::CompressionMgr()
+{
+    return &compression_mgr_;
+}
+
+std::pair<std::shared_ptr<compression::DictCompression>, KvError>
+IndexPageManager::GetOrLoadDict(const TableIdent &tbl_ident, RootMeta *meta)
+{
+    CHECK(meta != nullptr);
+    CHECK(meta->dict_meta_.dict_len > 0);
+
+    if (auto cached = meta->compression_.lock())
+    {
+        return {std::move(cached), KvError::NoError};
+    }
+    auto [handle, err] =
+        compression_mgr_.GetOrLoad(tbl_ident, meta->dict_meta_);
+    if (err != KvError::NoError)
+    {
+        return {{}, err};
+    }
+    auto shared = handle.Shared();
+    meta->compression_ = shared;
+    return {std::move(shared), KvError::NoError};
 }
 
 }  // namespace eloqstore

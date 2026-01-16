@@ -34,7 +34,10 @@ DEFINE_string(db_path, "data/stress_test", "Path to database");
 DEFINE_string(shared_state_path,
               "data/db_stress_helper",
               "Path to shared state directory");
-DEFINE_uint32(n_tables, 10, "nums of threads/tables");
+DEFINE_bool(clean_data_dir_on_start,
+            true,
+            "clean db_path  and shared_state_path when starting db_stress");
+DEFINE_uint32(n_tables, 1, "nums of threads/tables");
 DEFINE_uint32(n_partitions, 10, "nums of partitions");
 // I think it is better to set a large value for ops_per_partition
 DEFINE_uint64(ops_per_partition,
@@ -78,11 +81,15 @@ DEFINE_bool(syn_scan, true, "choose scan syn or asyn");
 DEFINE_uint32(shortest_value, 1024, "minimum value size in bytes");
 DEFINE_uint32(longest_value, 40960, "maximum value size in bytes");
 // random params for crash_test
-DEFINE_uint32(num_threads, 8, "Amount of threads");
+DEFINE_uint32(num_threads, 1, "Amount of threads");
 DEFINE_uint32(data_page_restart_interval, 16, "interval of datapage restart");
 DEFINE_uint32(index_page_restart_interval, 16, "interval of indexpage restart");
 DEFINE_uint32(init_page_count, 1 << 15, "nums of init page");
-DEFINE_uint32(buffer_pool_size, 1 << 15, "size of shared buffer pool in bytes");
+DEFINE_uint32(buffer_pool_size, 1 << 30, "size of shared buffer pool in bytes");
+DEFINE_bool(enable_compression, false, "enable dictionary compression");
+DEFINE_uint64(dict_cache_size,
+              64ULL << 20,
+              "max size of cached compression dictionaries (bytes)");
 DEFINE_uint64(manifest_limit, 16 << 20, "limit of manifest");
 DEFINE_uint32(fd_limit, 10000, "limit of fd");
 DEFINE_uint32(io_queue_size, 4096, "size of io_queue");

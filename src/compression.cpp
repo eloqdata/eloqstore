@@ -166,7 +166,14 @@ void DictCompression::LoadDictionary(std::string &&dict_bytes)
     has_dictionary_ = true;
     if (!EnsureZstdObjects())
     {
-        LOG(FATAL) << "Manifest is corrupted";
+        // Fallback to empty dictionary if memory is insufficient.
+        has_dictionary_ = false;
+        dictionary_.clear();
+        if (!EnsureZstdObjects())
+        {
+            // Failed to init zstd objects even with empty dictionary.
+            LOG(FATAL) << "Fail to init zstd objects";
+        }
     }
 }
 
@@ -250,9 +257,6 @@ size_t DictCompression::SampleCount()
 
 void DictCompression::BuildDictionary()
 {
-    has_dictionary_ = true;
-    dirty_ = true;
-
     std::string dict_buffer(kMaxDictBytes, '\0');
     const size_t trained = ZDICT_trainFromBuffer(dict_buffer.data(),
                                                  kMaxDictBytes,
@@ -262,18 +266,50 @@ void DictCompression::BuildDictionary()
     ClearSamples();
     if (ZDICT_isError(trained) != 0)
     {
-        dict_buffer = "";
+        // Training failed, keep dictionary disabled.
+        LOG(ERROR) << "ZDICT is Error";
+        has_dictionary_ = false;
+        dirty_ = false;
+        dictionary_.clear();
+        return;
     }
+    has_dictionary_ = true;
+    dirty_ = true;
     dictionary_ = std::move(dict_buffer);
     if (!EnsureZstdObjects())
     {
         // In case that zstd objects cannot be created, use empty dictionary.
-        dictionary_ = "";
+        has_dictionary_ = false;
+        dirty_ = false;
+        dictionary_.clear();
         if (!EnsureZstdObjects())
         {
-            LOG(FATAL) << "Fail to init zstd objects with empty dictionary";
+            LOG(ERROR) << "Fail to init zstd objects with empty dictionary";
         }
     }
+}
+
+size_t DictCompression::MemoryUsage() const
+{
+    size_t size = dictionary_.capacity() + sample_data_.capacity() +
+                  sample_sizes_.capacity() * sizeof(size_t);
+    if (cctx_)
+    {
+        size += ZSTD_sizeof_CCtx(cctx_.get());
+    }
+    if (dctx_)
+    {
+        size += ZSTD_sizeof_DCtx(dctx_.get());
+    }
+    if (cdict_)
+    {
+        size += ZSTD_sizeof_CDict(cdict_.get());
+    }
+    if (ddict_)
+    {
+        size += ZSTD_sizeof_DDict(ddict_.get());
+    }
+    return size;
 }
 
 bool DictCompression::Compress(std::string_view input,

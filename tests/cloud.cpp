@@ -283,6 +283,7 @@ TEST_CASE("cloud reuse cache enforces budgets across restarts",
     options.store_path = {local_base + std::string("/") + suffix};
     options.cloud_store_path.push_back('/');
     options.cloud_store_path += suffix;
+    options.enable_compression = false;
 
     CleanupStore(options);
 
@@ -716,6 +717,7 @@ TEST_CASE("cloud prewarm logs accurate completion statistics",
         options.pages_per_file_shift = 1;
         options.local_space_limit = 50ULL << 20;  // 50MB
         options.num_threads = 1;
+        options.enable_compression = false;
 
         eloqstore::EloqStore *store = InitStore(options);
 
@@ -812,6 +814,7 @@ TEST_CASE("cloud prewarm logs accurate completion statistics",
         options.pages_per_file_shift = 1;
         options.local_space_limit = 3ULL << 20;  // Only 3MB
         options.num_threads = 1;
+        options.enable_compression = false;
 
         eloqstore::EloqStore *store = InitStore(options);
 

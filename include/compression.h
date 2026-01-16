@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 
+#include "external/xxhash.h"
 #include "types.h"
 
 namespace eloqstore::compression
@@ -70,6 +71,8 @@ public:
     bool Compress(std::string_view input, std::string &output) const;
     bool Decompress(std::string_view input, std::string &output) const;
 
+    size_t MemoryUsage() const;
+
 private:
     bool EnsureZstdObjects();
 
@@ -98,3 +101,33 @@ PreparedValue Prepare(std::string_view value,
                       std::string &scratch);
 
 }  // namespace eloqstore::compression
+
+namespace eloqstore
+{
+struct DictMeta
+{
+    uint32_t dict_len{0};
+    uint64_t dict_offset{0};
+    uint64_t dict_checksum{0};
+
+    bool HasDictionary() const
+    {
+        return dict_len > 0;
+    }
+
+    static DictMeta FromCompression(
+        const compression::DictCompression &compression)
+    {
+        DictMeta meta;
+        if (compression.HasDictionary())
+        {
+            const std::string &dict_bytes = compression.DictionaryBytes();
+            meta.dict_len = static_cast<uint32_t>(dict_bytes.size());
+            // DictMeta is derived from the in-memory dictionary bytes.
+            meta.dict_checksum =
+                XXH3_64bits(dict_bytes.data(), dict_bytes.size());
+        }
+        return meta;
+    }
+};
+}  // namespace eloqstore

@@ -65,9 +65,9 @@ There are two groups of knobs:
   - `--db_path`, `--cloud_store_path`, `--num_threads`
   - `--data_append_mode`, `--pages_per_file_shift`, `--data_page_size`
   - `--buffer_pool_size`, `--io_queue_size`, `--fd_limit`
+  - `--enable_compression`, `--dict_cache_size`
   - `--manifest_limit`, `--init_page_count`
   - `--max_inflight_write`, `--max_write_batch_pages`
   - `--file_amplify_factor`, `--local_space_limit`, `--reserve_space_ratio`
   - `--overflow_pointers`, `--data_page_restart_interval`,
     `--index_page_restart_interval`
-

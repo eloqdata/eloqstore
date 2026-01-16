@@ -9,12 +9,18 @@
 #include "comparator.h"
 #include "error.h"
 #include "kv_options.h"
+#include "storage/compression_manager.h"
 #include "storage/mem_index_page.h"
 #include "storage/root_meta.h"
 #include "types.h"
 
 namespace eloqstore
 {
+namespace compression
+{
+class DictCompression;
+}  // namespace compression
+
 class KvTask;
 class PageMapper;
 
@@ -67,6 +73,10 @@ public:
     const KvOptions *Options() const;
     AsyncIoManager *IoMgr() const;
     MappingArena *MapperArena();
+    CompressionManager *CompressionMgr();
+
+    std::pair<std::shared_ptr<compression::DictCompression>, KvError>
+    GetOrLoadDict(const TableIdent &tbl_ident, RootMeta *meta);
 
     /**
      * @brief Get current buffer pool used size in bytes.
@@ -131,5 +141,6 @@ private:
 
     AsyncIoManager *io_manager_;
     MappingArena mapping_arena_;
+    CompressionManager compression_mgr_;
 };
 }  // namespace eloqstore

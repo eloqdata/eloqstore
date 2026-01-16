@@ -10,6 +10,7 @@
 #include "async_io_manager.h"
 #include "coding.h"
 #include "error.h"
+#include "external/xxhash.h"
 #include "kv_options.h"
 #include "storage/index_page_manager.h"
 #include "storage/page.h"
@@ -31,12 +32,21 @@ KvError Replayer::Replay(ManifestFile *file)
     mapping_tbl_.reserve(opts_->init_page_count);
     file_size_ = 0;
     max_fp_id_ = MaxFilePageId;
+    dict_meta_ = {};
     dict_bytes_.clear();
 
     KvError err = ParseNextRecord(file);
     CHECK_KV_ERR(err);
     assert(!payload_.empty());
     DeserializeSnapshot(payload_);
+    if (dict_meta_.HasDictionary() && dict_meta_.dict_checksum != 0)
+    {
+        uint64_t actual = XXH3_64bits(dict_bytes_.data(), dict_bytes_.size());
+        if (actual != dict_meta_.dict_checksum)
+        {
+            return KvError::Corrupted;
+        }
+    }
 
     while (true)
     {
@@ -57,6 +67,8 @@ KvError Replayer::Replay(ManifestFile *file)
 KvError Replayer::ParseNextRecord(ManifestFile *file)
 {
     constexpr uint16_t header_len = ManifestBuilder::header_bytes;
+    // Track current record offset so dict_offset can be computed.
+    record_start_offset_ = file_size_;
     log_buf_.resize(header_len);
     KvError err = file->Read(log_buf_.data(), header_len);
     if (err != KvError::NoError)
@@ -101,20 +113,28 @@ KvError Replayer::ParseNextRecord(ManifestFile *file)
 
 void Replayer::DeserializeSnapshot(std::string_view snapshot)
 {
+    const std::string_view snapshot_start = snapshot;
     [[maybe_unused]] bool ok = GetVarint64(&snapshot, &max_fp_id_);
     assert(ok);
 
-    uint32_t dict_len = 0;
-    ok = GetVarint32(&snapshot, &dict_len);
+    ok = GetVarint32(&snapshot, &dict_meta_.dict_len);
     assert(ok);
-    if (dict_len > 0)
+
+    ok = GetVarint64(&snapshot, &dict_meta_.dict_checksum);
+    assert(ok);
+
+    const size_t payload_offset = snapshot_start.size() - snapshot.size();
+    if (dict_meta_.dict_len > 0)
     {
-        assert(snapshot.size() >= dict_len);
-        dict_bytes_.assign(snapshot.data(), snapshot.data() + dict_len);
-        snapshot = snapshot.substr(dict_len);
+        dict_meta_.dict_offset = record_start_offset_ +
+                                 ManifestBuilder::header_bytes + payload_offset;
+        assert(snapshot.size() >= dict_meta_.dict_len);
+        dict_bytes_.assign(snapshot.data(), dict_meta_.dict_len);
+        snapshot = snapshot.substr(dict_meta_.dict_len);
     }
     else
     {
+        dict_meta_.dict_offset = 0;
         dict_bytes_.clear();
     }
 
@@ -126,6 +146,52 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
         assert(ok);
         mapping_tbl_.push_back(value);
     }
+}
+
+KvError Replayer::ReadSnapshotDict(ManifestFile *file,
+                                   const DictMeta &meta,
+                                   std::string &dict_bytes)
+{
+    dict_bytes.clear();
+    if (meta.dict_len == 0)
+    {
+        return KvError::NoError;
+    }
+    if (meta.dict_offset == 0)
+    {
+        return KvError::Corrupted;
+    }
+
+    size_t to_skip = meta.dict_offset;
+    char skip_buf[4096];
+    while (to_skip > 0)
+    {
+        size_t chunk = std::min(sizeof(skip_buf), to_skip);
+        KvError err = file->Read(skip_buf, chunk);
+        CHECK_KV_ERR(err);
+        to_skip -= chunk;
+    }
+
+    dict_bytes.resize(meta.dict_len);
+    size_t to_read = meta.dict_len;
+    size_t off = 0;
+    while (to_read > 0)
+    {
+        size_t chunk = std::min<size_t>(to_read, sizeof(skip_buf));
+        KvError err = file->Read(dict_bytes.data() + off, chunk);
+        CHECK_KV_ERR(err);
+        off += chunk;
+        to_read -= chunk;
+    }
+    if (meta.dict_checksum != 0)
+    {
+        uint64_t actual = XXH3_64bits(dict_bytes.data(), dict_bytes.size());
+        if (actual != meta.dict_checksum)
+        {
+            return KvError::Corrupted;
+        }
+    }
+    return KvError::NoError;
 }
 
 void Replayer::ReplayLog()
