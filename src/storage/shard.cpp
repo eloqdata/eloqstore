@@ -430,8 +430,8 @@ void Shard::ProcessReq(KvRequest *req)
 void Shard::ProcessCloudReadyTasks()
 {
     KvTask *ready_tasks[128];
-    size_t nready =
-        cloud_ready_tasks_.try_dequeue_bulk(ready_tasks, std::size(ready_tasks));
+    size_t nready = cloud_ready_tasks_.try_dequeue_bulk(ready_tasks,
+                                                        std::size(ready_tasks));
     if (nready == 0)
     {
         return;

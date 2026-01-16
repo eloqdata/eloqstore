@@ -1,7 +1,5 @@
 #include "storage/object_store.h"
 
-#include "cloud_storage_service.h"
-
 #include <aws/core/Aws.h>
 #include <aws/core/auth/AWSCredentialsProvider.h>
 #include <aws/core/auth/signer/AWSAuthV4Signer.h>
@@ -29,6 +27,7 @@
 #include <vector>
 
 #include "async_io_manager.h"
+#include "cloud_storage_service.h"
 #include "storage/shard.h"
 #include "tasks/task.h"
 #include "utils.h"
