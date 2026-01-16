@@ -25,11 +25,7 @@ namespace eloqstore
 IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
     : io_manager_(io_manager),
       mapping_arena_(Options()->mapping_arena_size),
-      compression_mgr_(io_manager,
-                       Options(),
-                       Options()->num_threads > 0
-                           ? Options()->dict_cache_size / Options()->num_threads
-                           : Options()->dict_cache_size)
+      compression_mgr_(io_manager, Options())
 {
     active_head_.EnqueNext(&active_tail_);
 }
@@ -140,13 +136,10 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
         meta->manifest_size_ = replayer.file_size_;
         meta->next_expire_ts_ = 0;
         meta->dict_meta_ = replayer.dict_meta_;
-        if (meta->dict_meta_.HasDictionary())
+        if (meta->dict_meta_.dict_len > 0)
         {
-            auto [dict_handle, dict_err] =
-                replayer.dict_bytes_.empty()
-                    ? compression_mgr_.GetOrLoad(tbl_id, meta->dict_meta_)
-                    : compression_mgr_.GetOrLoadFromBytes(
-                          tbl_id, meta->dict_meta_, replayer.dict_bytes_);
+            auto [dict_handle, dict_err] = compression_mgr_.GetOrLoadFromBytes(
+                tbl_id, meta->dict_meta_, replayer.dict_bytes_);
             CHECK_KV_ERR(dict_err);
             meta->compression_ = dict_handle.Shared();
         }

@@ -66,9 +66,7 @@ public:
         std::shared_ptr<compression::DictCompression> compression_{};
     };
 
-    CompressionManager(AsyncIoManager *io_mgr,
-                       const KvOptions *options,
-                       size_t capacity_bytes);
+    CompressionManager(AsyncIoManager *io_mgr, const KvOptions *options);
 
     // ManifestFile *manifest is used to load the dictionary in FindRoot
     // function.
