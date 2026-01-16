@@ -22,12 +22,13 @@ public:
     ManifestBuilder();
     void UpdateMapping(PageId page_id, FilePageId file_page_id);
     void DeleteMapping(PageId page_id);
+    void AppendFileIdTermMapping(std::string_view file_term_mapping);
     std::string_view Snapshot(PageId root_id,
                               PageId ttl_root,
                               const MappingSnapshot *mapping,
                               FilePageId max_fp_id,
                               std::string_view dict_bytes,
-                              const FileIdTermMapping &file_term_mapping);
+                              std::string_view file_term_mapping);
 
     std::string_view Finalize(PageId new_root, PageId ttl_root);
     static bool ValidateChecksum(std::string_view record);

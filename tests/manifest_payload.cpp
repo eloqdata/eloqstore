@@ -1,5 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -43,18 +44,21 @@ TEST_CASE(
     const std::string dict_bytes = "DICT_BYTES";
     const eloqstore::FilePageId max_fp_id = 123456;
 
+    std::string file_term_mapping_str;
+    eloqstore::SerializeFileIdTermMapping(file_id_term, file_term_mapping_str);
     eloqstore::ManifestBuilder builder;
     std::string_view manifest = builder.Snapshot(/*root_id=*/1,
                                                  /*ttl_root=*/2,
                                                  &mapping_snapshot,
                                                  max_fp_id,
                                                  dict_bytes,
-                                                 file_id_term);
+                                                 file_term_mapping_str);
     REQUIRE(manifest.size() > eloqstore::ManifestBuilder::header_bytes);
 
     // Strip manifest header; inspect the payload layout:
     // [checksum][root_id][ttl_root][payload_len]
-    // [max_fp_id][dict_len][dict_bytes][FileIdTermMapping][mapping_tbl_...]
+    // [max_fp_id][dict_len][dict_bytes][mapping_len(4B)][mapping_tbl_...]
+    // [file_term_mapping_len(4B)][file_term_mapping...]
     const uint32_t payload_len = eloqstore::DecodeFixed32(
         manifest.data() + eloqstore::ManifestBuilder::offset_len);
     std::string_view payload =
@@ -75,24 +79,31 @@ TEST_CASE(
     REQUIRE(parsed_dict == dict_bytes);
     payload.remove_prefix(parsed_dict_len);
 
-    // 3) FileIdTermMapping section (count + pairs), then mapping table.
+    // 3) mapping_len (Fixed32, 4 bytes)
+    const uint32_t mapping_len = eloqstore::DecodeFixed32(payload.data());
+    payload.remove_prefix(4);
+    std::string_view mapping_view = payload.substr(0, mapping_len);
+
+    // 4) mapping table
+    std::vector<uint64_t> parsed_tbl;
+    while (!mapping_view.empty())
+    {
+        uint64_t val = 0;
+        REQUIRE(eloqstore::GetVarint64(&mapping_view, &val));
+        parsed_tbl.push_back(val);
+    }
+    REQUIRE(parsed_tbl == mapping_snapshot.mapping_tbl_.Base());
+
+    // 5) file_term_mapping
+    std::string_view file_term_mapping_view = payload.substr(mapping_len);
     eloqstore::FileIdTermMapping parsed_mapping;
-    REQUIRE(eloqstore::DeserializeFileIdTermMapping(payload, parsed_mapping));
+    REQUIRE(eloqstore::DeserializeFileIdTermMapping(file_term_mapping_view,
+                                                    parsed_mapping));
     REQUIRE(parsed_mapping.size() == file_id_term.size());
     for (const auto &[fid, term] : file_id_term)
     {
         REQUIRE(parsed_mapping.at(fid) == term);
     }
-
-    // 4) Remaining payload should be serialized mapping_tbl_.
-    std::vector<uint64_t> parsed_tbl;
-    while (!payload.empty())
-    {
-        uint64_t val = 0;
-        REQUIRE(eloqstore::GetVarint64(&payload, &val));
-        parsed_tbl.push_back(val);
-    }
-    REQUIRE(parsed_tbl == mapping_snapshot.mapping_tbl_.Base());
 
     mapping_snapshot.mapping_tbl_.clear();
 }
@@ -118,17 +129,20 @@ TEST_CASE(
     eloqstore::ManifestBuilder builder;
     // Pass empty FileIdTermMapping: should still write a count=0.
     eloqstore::FileIdTermMapping empty_mapping;
+    std::string file_term_mapping_str;
+    eloqstore::SerializeFileIdTermMapping(empty_mapping, file_term_mapping_str);
     std::string_view manifest = builder.Snapshot(/*root_id=*/3,
                                                  /*ttl_root=*/4,
                                                  &mapping_snapshot,
                                                  max_fp_id,
                                                  dict_bytes,
-                                                 empty_mapping);
+                                                 file_term_mapping_str);
 
     REQUIRE(manifest.size() > eloqstore::ManifestBuilder::header_bytes);
     // Strip manifest header; inspect the payload layout:
     // [checksum][root_id][ttl_root][payload_len]
-    // [max_fp_id][dict_len][dict_bytes][FileIdTermMapping][mapping_tbl_...]
+    // [max_fp_id][dict_len][dict_bytes][mapping_len(4B)][mapping_tbl_...]
+    // [file_term_mapping_len(4B)][file_term_mapping...]
     const uint32_t payload_len = eloqstore::DecodeFixed32(
         manifest.data() + eloqstore::ManifestBuilder::offset_len);
     std::string_view payload =
@@ -149,20 +163,30 @@ TEST_CASE(
     REQUIRE(parsed_dict == dict_bytes);
     payload.remove_prefix(parsed_dict_len);
 
-    // 3) FileIdTermMapping section should be present and decode to empty map.
-    eloqstore::FileIdTermMapping parsed_mapping;
-    REQUIRE(eloqstore::DeserializeFileIdTermMapping(payload, parsed_mapping));
-    REQUIRE(parsed_mapping.empty());
+    // 3) mapping_len (Fixed32, 4 bytes)
+    const uint32_t mapping_len = eloqstore::DecodeFixed32(payload.data());
+    payload.remove_prefix(4);
+    std::string_view mapping_view = payload.substr(0, mapping_len);
 
-    // 4) Remaining payload is mapping table.
+    // 4) mapping table
     std::vector<uint64_t> parsed_tbl;
-    while (!payload.empty())
+    while (!mapping_view.empty())
     {
         uint64_t val = 0;
-        REQUIRE(eloqstore::GetVarint64(&payload, &val));
+        REQUIRE(eloqstore::GetVarint64(&mapping_view, &val));
         parsed_tbl.push_back(val);
     }
-    REQUIRE(parsed_tbl == mapping_snapshot.mapping_tbl_.Base());
+    REQUIRE(parsed_tbl.size() == 2);
+    REQUIRE(parsed_tbl[0] == MockEncodeFilePageId(42));
+    REQUIRE(parsed_tbl[1] == MockEncodeFilePageId(43));
 
+    // 5) file_term_mapping
+    std::string_view file_term_mapping_view = payload.substr(mapping_len);
+    eloqstore::FileIdTermMapping parsed_mapping;
+    REQUIRE(eloqstore::DeserializeFileIdTermMapping(file_term_mapping_view,
+                                                    parsed_mapping));
+    REQUIRE(parsed_mapping.empty());
+
+    mapping_snapshot.mapping_tbl_.clear();
     builder.Reset();
 }

@@ -2,6 +2,7 @@
 #include <memory>
 #include <string_view>
 
+#include "../include/common.h"
 #include "../include/kv_options.h"
 #include "../include/replayer.h"
 #include "../include/storage/index_page_manager.h"
@@ -40,12 +41,14 @@ TEST_CASE(
     // file_id=1, next boundary => 32 for shift=4
     const eloqstore::FilePageId max_fp_id = 17;
     eloqstore::FileIdTermMapping empty_mapping;
+    std::string term_buf;
+    eloqstore::SerializeFileIdTermMapping(empty_mapping, term_buf);
     std::string_view snapshot = builder.Snapshot(eloqstore::MaxPageId,
                                                  eloqstore::MaxPageId,
                                                  &mapping,
                                                  max_fp_id,
                                                  {},
-                                                 empty_mapping);
+                                                 term_buf);
 
     eloqstore::MemStoreMgr::Manifest file(snapshot);
     eloqstore::Replayer replayer(&opts);
@@ -77,12 +80,14 @@ TEST_CASE("Replayer allocator bumping does not occur when terms match",
     eloqstore::MappingSnapshot mapping(&idx_mgr, &tbl_id, {});
     const eloqstore::FilePageId max_fp_id = 17;
     eloqstore::FileIdTermMapping empty_mapping;
+    std::string term_buf;
+    eloqstore::SerializeFileIdTermMapping(empty_mapping, term_buf);
     std::string_view snapshot = builder.Snapshot(eloqstore::MaxPageId,
                                                  eloqstore::MaxPageId,
                                                  &mapping,
                                                  max_fp_id,
                                                  {},
-                                                 empty_mapping);
+                                                 term_buf);
 
     eloqstore::MemStoreMgr::Manifest file(snapshot);
     eloqstore::Replayer replayer(&opts);
@@ -108,12 +113,14 @@ TEST_CASE("Replayer allocator bumping does not occur when expect_term==0",
     eloqstore::MappingSnapshot mapping(&idx_mgr, &tbl_id, {});
     const eloqstore::FilePageId max_fp_id = 17;
     eloqstore::FileIdTermMapping empty_mapping;
+    std::string term_buf;
+    eloqstore::SerializeFileIdTermMapping(empty_mapping, term_buf);
     std::string_view snapshot = builder.Snapshot(eloqstore::MaxPageId,
                                                  eloqstore::MaxPageId,
                                                  &mapping,
                                                  max_fp_id,
                                                  {},
-                                                 empty_mapping);
+                                                 term_buf);
 
     eloqstore::MemStoreMgr::Manifest file(snapshot);
     eloqstore::Replayer replayer(&opts);
@@ -135,12 +142,14 @@ TEST_CASE("Replayer allocator bumping does not occur in local mode",
     eloqstore::MappingSnapshot mapping(&idx_mgr, &tbl_id, {});
     const eloqstore::FilePageId max_fp_id = 17;
     eloqstore::FileIdTermMapping empty_mapping;
+    std::string term_buf;
+    eloqstore::SerializeFileIdTermMapping(empty_mapping, term_buf);
     std::string_view snapshot = builder.Snapshot(eloqstore::MaxPageId,
                                                  eloqstore::MaxPageId,
                                                  &mapping,
                                                  max_fp_id,
                                                  {},
-                                                 empty_mapping);
+                                                 term_buf);
 
     eloqstore::MemStoreMgr::Manifest file(snapshot);
     eloqstore::Replayer replayer(&opts);

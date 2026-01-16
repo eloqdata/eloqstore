@@ -6,6 +6,7 @@
 #include <map>
 #include <string>
 
+#include "common.h"
 #include "eloq_store.h"
 #include "storage/index_page_manager.h"
 

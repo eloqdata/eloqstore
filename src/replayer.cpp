@@ -119,36 +119,46 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
         dict_bytes_.clear();
     }
 
-    // Deserialize FileIdTermMapping section (always present: count then pairs)
-    if (!DeserializeFileIdTermMapping(snapshot, *file_id_term_mapping_))
-    {
-        LOG(FATAL) << "Failed to deserialize FileIdTermMapping from snapshot, "
-                      "treating mapping as empty.";
-    }
-
+    // Read mapping_len (Fixed32, 4 bytes) - it's before mapping_tbl
+    assert(snapshot.size() >= 8);
+    const uint32_t mapping_len = DecodeFixed32(snapshot.data());
+    std::string_view mapping_view = snapshot.substr(4, mapping_len);
+    std::string_view file_term_mapping_view = snapshot.substr(4 + mapping_len);
     mapping_tbl_.reserve(opts_->init_page_count);
-    while (!snapshot.empty())
+    while (!mapping_view.empty())
     {
         uint64_t value;
-        ok = GetVarint64(&snapshot, &value);
+        ok = GetVarint64(&mapping_view, &value);
         assert(ok);
         mapping_tbl_.push_back(value);
+    }
+
+    // Deserialize FileIdTermMapping section
+    if (!DeserializeFileIdTermMapping(file_term_mapping_view,
+                                      *file_id_term_mapping_))
+    {
+        LOG(FATAL) << "Failed to deserialize FileIdTermMapping from snapshot.";
     }
 }
 
 void Replayer::ReplayLog()
 {
-    while (!payload_.empty())
+    assert(payload_.size() > 4);
+    uint32_t mapping_len = DecodeFixed32(payload_.data());
+    std::string_view mapping_view = payload_.substr(4, mapping_len);
+    std::string_view file_term_mapping_view = payload_.substr(4 + mapping_len);
+
+    while (!mapping_view.empty())
     {
         PageId page_id;
-        [[maybe_unused]] bool ok = GetVarint32(&payload_, &page_id);
+        [[maybe_unused]] bool ok = GetVarint32(&mapping_view, &page_id);
         assert(ok);
         while (page_id >= mapping_tbl_.size())
         {
             mapping_tbl_.emplace_back(MappingSnapshot::InvalidValue);
         }
         uint64_t value;
-        ok = GetVarint64(&payload_, &value);
+        ok = GetVarint64(&mapping_view, &value);
         assert(ok);
         mapping_tbl_[page_id] = value;
         if (MappingSnapshot::IsFilePageId(value))
@@ -156,6 +166,13 @@ void Replayer::ReplayLog()
             FilePageId fp_id = MappingSnapshot::DecodeId(value);
             max_fp_id_ = std::max(max_fp_id_, fp_id + 1);
         }
+    }
+
+    // Deserialize FileIdTermMapping section
+    if (!DeserializeFileIdTermMapping(file_term_mapping_view,
+                                      *file_id_term_mapping_))
+    {
+        LOG(FATAL) << "Failed to deserialize FileIdTermMapping from snapshot.";
     }
 }
 

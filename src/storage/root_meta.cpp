@@ -13,7 +13,11 @@ namespace eloqstore
 
 ManifestBuilder::ManifestBuilder()
 {
-    buff_.resize(header_bytes);
+    // For appending log, the structure is:
+    // Checksum(8B) | Root(4B) | TTL Root(4B) | Payload Len(4B) |
+    // mapping_len(4B) | mapping_tbl(varint64...) |
+    // file_term_mapping_len(4B) | file_term_mapping(varint64...)
+    buff_.resize(header_bytes + 4);
 }
 
 void ManifestBuilder::UpdateMapping(PageId page_id, FilePageId file_page_id)
@@ -28,22 +32,45 @@ void ManifestBuilder::DeleteMapping(PageId page_id)
     buff_.AppendVarint64(MappingSnapshot::InvalidValue);
 }
 
-std::string_view ManifestBuilder::Snapshot(
-    PageId root_id,
-    PageId ttl_root,
-    const MappingSnapshot *mapping,
-    FilePageId max_fp_id,
-    std::string_view dict_bytes,
-    const FileIdTermMapping &file_term_mapping)
+void ManifestBuilder::AppendFileIdTermMapping(
+    std::string_view file_term_mapping)
 {
+    // update the mapping_len(4B)
+    uint32_t mapping_len =
+        static_cast<uint32_t>(buff_.size() - header_bytes - 4);
+    EncodeFixed32(buff_.data() + header_bytes + 4, mapping_len);
+    // append the serialized file_term_mapping
+    buff_.append(file_term_mapping);
+}
+
+std::string_view ManifestBuilder::Snapshot(PageId root_id,
+                                           PageId ttl_root,
+                                           const MappingSnapshot *mapping,
+                                           FilePageId max_fp_id,
+                                           std::string_view dict_bytes,
+                                           std::string_view file_term_mapping)
+{
+    // For snapshot, the structure is:
+    // Checksum(8B) | Root(4B) | TTL Root(4B) | Payload Len(4B) |
+    // MaxFpId(8B) | DictLen(4B) | dict_bytes(bytes) | mapping_len(4B) |
+    // mapping_tbl(varint64...) | file_term_mapping_len(4B) |
+    // file_term_mapping(varint64...)
     Reset();
     buff_.reserve(4 + 8 * (mapping->mapping_tbl_.size() + 1));
     buff_.AppendVarint64(max_fp_id);
     buff_.AppendVarint32(dict_bytes.size());
     buff_.append(dict_bytes.data(), dict_bytes.size());
-    // Serialize FileIdTermMapping before mapping table
-    SerializeFileIdTermMapping(file_term_mapping, buff_);
+    // mapping_bytes_len(4B)
+    buff_.resize(buff_.size() + 4);
+    size_t buff_size = buff_.size();
+    // mapping_tbl
     mapping->Serialize(buff_);
+    // update the mapping_bytes_len
+    uint32_t mapping_bytes_len =
+        static_cast<uint32_t>(buff_.size() - buff_size);
+    EncodeFixed32(buff_.data() + buff_size - 4, mapping_bytes_len);
+    // file_term_mapping
+    buff_.append(file_term_mapping);
     return Finalize(root_id, ttl_root);
 }
 
