@@ -92,11 +92,14 @@ void CompressionManager::Handle::Clear()
 }
 
 CompressionManager::CompressionManager(AsyncIoManager *io_mgr,
-                                       const KvOptions *options,
-                                       size_t capacity_bytes)
+                                       const KvOptions *options)
     : io_mgr_(io_mgr), options_(options)
 {
-    capacity_bytes_ = capacity_bytes;
+    capacity_bytes_ = options->dict_cache_size;
+    if (options->num_threads > 0)
+    {
+        capacity_bytes_ /= options->num_threads;
+    }
     lru_head_.next_ = &lru_tail_;
     lru_tail_.prev_ = &lru_head_;
 }
@@ -118,13 +121,12 @@ std::pair<CompressionManager::Handle, KvError> CompressionManager::GetOrLoad(
         (entry->meta_.dict_checksum != meta.dict_checksum ||
          entry->meta_.dict_len != meta.dict_len))
     {
-        LOG(INFO) << "dict version mismatch for " << tbl_id.ToString()
-                  << " old_len=" << entry->meta_.dict_len
-                  << " new_len=" << meta.dict_len;
-        used_bytes_ -= entry->bytes_;
-        entry->compression_ = std::make_shared<compression::DictCompression>();
-        entry->meta_ = meta;
-        entry->bytes_ = 0;
+        LOG(ERROR) << "dict version mismatch for " << tbl_id.ToString()
+                   << " old_len=" << entry->meta_.dict_len
+                   << " new_len=" << meta.dict_len;
+        // The dictionary is trained only once. If the version mismatches,
+        // it means the dictionary is corrupted.
+        return {{}, KvError::Corrupted};
     }
 
     Handle handle(entry, this);
