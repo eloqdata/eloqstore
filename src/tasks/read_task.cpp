@@ -50,12 +50,8 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
         compression_guard = std::move(dict);
     }
     std::string value_storage;
-    auto [val_view, fetch_err] =
-        ResolveValue(tbl_id,
-                     mapping.get(),
-                     iter,
-                     value_storage,
-                     compression_guard.get());
+    auto [val_view, fetch_err] = ResolveValue(
+        tbl_id, mapping.get(), iter, value_storage, compression_guard.get());
     CHECK_KV_ERR(fetch_err);
     value = value_storage.empty() ? val_view : std::move(value_storage);
     timestamp = iter.Timestamp();
@@ -112,12 +108,8 @@ KvError ReadTask::Floor(const TableIdent &tbl_id,
         compression_guard = std::move(dict);
     }
     std::string value_storage;
-    auto [val_view, fetch_err] =
-        ResolveValue(tbl_id,
-                     mapping.get(),
-                     iter,
-                     value_storage,
-                     compression_guard.get());
+    auto [val_view, fetch_err] = ResolveValue(
+        tbl_id, mapping.get(), iter, value_storage, compression_guard.get());
     CHECK_KV_ERR(fetch_err);
     value = value_storage.empty() ? val_view : std::move(value_storage);
     timestamp = iter.Timestamp();
