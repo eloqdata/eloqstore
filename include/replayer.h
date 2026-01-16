@@ -6,8 +6,8 @@
 #include <vector>
 
 #include "async_io_manager.h"
-#include "error.h"
 #include "compression.h"
+#include "error.h"
 #include "storage/page_mapper.h"
 
 namespace eloqstore

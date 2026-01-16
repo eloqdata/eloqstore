@@ -41,8 +41,7 @@ KvError Replayer::Replay(ManifestFile *file)
     DeserializeSnapshot(payload_);
     if (dict_meta_.HasDictionary() && dict_meta_.dict_checksum != 0)
     {
-        uint64_t actual =
-            XXH3_64bits(dict_bytes_.data(), dict_bytes_.size());
+        uint64_t actual = XXH3_64bits(dict_bytes_.data(), dict_bytes_.size());
         if (actual != dict_meta_.dict_checksum)
         {
             return KvError::Corrupted;
@@ -128,8 +127,7 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
     if (dict_meta_.dict_len > 0)
     {
         dict_meta_.dict_offset = record_start_offset_ +
-                                 ManifestBuilder::header_bytes +
-                                 payload_offset;
+                                 ManifestBuilder::header_bytes + payload_offset;
         assert(snapshot.size() >= dict_meta_.dict_len);
         dict_bytes_.assign(snapshot.data(), dict_meta_.dict_len);
         snapshot = snapshot.substr(dict_meta_.dict_len);
@@ -187,8 +185,7 @@ KvError Replayer::ReadSnapshotDict(ManifestFile *file,
     }
     if (meta.dict_checksum != 0)
     {
-        uint64_t actual =
-            XXH3_64bits(dict_bytes.data(), dict_bytes.size());
+        uint64_t actual = XXH3_64bits(dict_bytes.data(), dict_bytes.size());
         if (actual != meta.dict_checksum)
         {
             return KvError::Corrupted;

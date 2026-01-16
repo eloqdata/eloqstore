@@ -313,13 +313,8 @@ KvError BackgroundWrite::CreateArchive()
             dict_bytes = dict->DictionaryBytes();
         }
     }
-    std::string_view snapshot =
-        wal_builder_.Snapshot(root,
-                              ttl_root,
-                              mapping,
-                              max_fp_id,
-                              meta->dict_meta_,
-                              dict_bytes);
+    std::string_view snapshot = wal_builder_.Snapshot(
+        root, ttl_root, mapping, max_fp_id, meta->dict_meta_, dict_bytes);
 
     uint64_t current_ts = utils::UnixTs<chrono::microseconds>();
     err = IoMgr()->CreateArchive(tbl_ident_, snapshot, current_ts);
