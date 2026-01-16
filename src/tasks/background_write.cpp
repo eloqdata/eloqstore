@@ -279,7 +279,7 @@ KvError BackgroundWrite::CompactDataFile()
     CHECK_KV_ERR(err);
     moving_cached.Finish();
     TriggerFileGC();
-    LOG(INFO) << "finish compaction on " << this->tbl_ident_;
+    LOG(INFO) << "finish compaction on " << tbl_ident_;
     return KvError::NoError;
 }
 

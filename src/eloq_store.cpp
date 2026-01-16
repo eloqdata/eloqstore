@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "async_io_manager.h"
+#include "cloud_storage_service.h"
 #include "common.h"
 #include "file_gc.h"
 #include "storage/shard.h"
@@ -62,6 +63,23 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
 
     if (!opts.cloud_store_path.empty())
     {
+        if (opts.max_cloud_concurrency == 0)
+        {
+            LOG(ERROR)
+                << "max_cloud_concurrency must be greater than 0 in cloud mode";
+            return false;
+        }
+        if (opts.max_upload_batch == 0)
+        {
+            LOG(ERROR) << "max_upload_batch must be greater than 0";
+            return false;
+        }
+        if (opts.max_upload_batch >= opts.max_cloud_concurrency)
+        {
+            LOG(ERROR) << "max_upload_batch must be smaller than "
+                       << "max_cloud_concurrency";
+            return false;
+        }
         if (opts.local_space_limit == 0)
         {
             opts.local_space_limit = size_t(1) * TB;
@@ -135,6 +153,10 @@ EloqStore::EloqStore(const KvOptions &opts) : options_(opts), stopped_(true)
     {
         LOG(FATAL) << "Invalid KvOptions configuration";
     }
+    if (!options_.cloud_store_path.empty())
+    {
+        cloud_service_ = std::make_unique<CloudStorageService>(this);
+    }
 }
 
 EloqStore::~EloqStore()
@@ -180,6 +202,11 @@ KvError EloqStore::Start()
         }
         KvError err = shards_[i]->Init();
         CHECK_KV_ERR(err);
+    }
+
+    if (cloud_service_)
+    {
+        cloud_service_->Start();
     }
 
     // Start threads.
@@ -466,6 +493,11 @@ void EloqStore::Stop()
     for (auto &shard : shards_)
     {
         shard->Stop();
+    }
+
+    if (cloud_service_)
+    {
+        cloud_service_->Stop();
     }
 
     // Start clear resources after all threads stopped.

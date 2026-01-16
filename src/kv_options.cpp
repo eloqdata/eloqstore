@@ -196,6 +196,16 @@ int KvOptions::LoadFromIni(const char *path)
         max_upload_batch =
             reader.GetUnsigned(sec_run, "max_upload_batch", max_upload_batch);
     }
+    if (reader.HasValue(sec_run, "max_cloud_concurrency"))
+    {
+        max_cloud_concurrency = reader.GetUnsigned(
+            sec_run, "max_cloud_concurrency", max_cloud_concurrency);
+    }
+    if (reader.HasValue(sec_run, "cloud_request_threads"))
+    {
+        cloud_request_threads = reader.GetUnsigned(
+            sec_run, "cloud_request_threads", cloud_request_threads);
+    }
     if (reader.HasValue(sec_run, "direct_io_buffer_pool_size"))
     {
         direct_io_buffer_pool_size = reader.GetUnsigned(
@@ -334,6 +344,8 @@ bool KvOptions::operator==(const KvOptions &other) const
            local_space_limit == other.local_space_limit &&
            reserve_space_ratio == other.reserve_space_ratio &&
            max_upload_batch == other.max_upload_batch &&
+           max_cloud_concurrency == other.max_cloud_concurrency &&
+           cloud_request_threads == other.cloud_request_threads &&
            direct_io_buffer_pool_size == other.direct_io_buffer_pool_size &&
            allow_reuse_local_caches == other.allow_reuse_local_caches &&
            prewarm_cloud_cache == other.prewarm_cloud_cache &&

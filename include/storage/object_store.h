@@ -34,18 +34,17 @@ class KvTask;
 class CloudStoreMgr;
 class AsyncHttpManager;
 class AsyncIoManager;
+class Shard;
+class CloudStorageService;
 
 using DirectIoBufferPool = Pool<DirectIoBuffer>;
 class ObjectStore
 {
 public:
-    explicit ObjectStore(const KvOptions *options);
+    class Task;
+    explicit ObjectStore(const KvOptions *options,
+                         CloudStorageService *service);
     ~ObjectStore();
-
-    AsyncHttpManager *GetHttpManager()
-    {
-        return async_http_mgr_.get();
-    }
 
     KvError EnsureBucketExists();
 
@@ -55,6 +54,12 @@ public:
         std::vector<std::string> *objects,
         std::vector<utils::CloudObjectInfo> *infos,
         std::string *next_continuation_token = nullptr) const;
+
+    void SubmitTask(Task *task, Shard *owner_shard);
+
+    void StartHttpRequest(Task *task);
+    void RunHttpWork();
+    bool HttpWorkIdle() const;
 
     class Task
     {
@@ -79,7 +84,6 @@ public:
         DirectIoBuffer response_data_;
         std::string json_data_{};
         curl_slist *headers_{nullptr};
-        bool cloud_slot_acquired_{false};
 
         uint8_t retry_count_ = 0;
         uint8_t max_retries_ = 5;
@@ -90,6 +94,12 @@ public:
         void SetKvTask(KvTask *task)
         {
             kv_task_ = task;
+        }
+
+        Shard *owner_shard_{nullptr};
+        void SetOwnerShard(Shard *shard)
+        {
+            owner_shard_ = shard;
         }
 
     protected:
@@ -194,6 +204,7 @@ public:
 
 private:
     std::unique_ptr<AsyncHttpManager> async_http_mgr_;
+    CloudStorageService *cloud_service_{nullptr};
 };
 
 struct CloudPathInfo
@@ -239,7 +250,7 @@ public:
 class AsyncHttpManager
 {
 public:
-    AsyncHttpManager();
+    AsyncHttpManager(const KvOptions *options, CloudStorageService *service);
     ~AsyncHttpManager();
 
     void SubmitRequest(ObjectStore::Task *task);
@@ -279,6 +290,7 @@ private:
     bool IsHttpRetryable(int64_t response_code) const;
     KvError ClassifyHttpError(int64_t response_code) const;
     KvError ClassifyCurlError(CURLcode code) const;
+    void OnTaskFinished(ObjectStore::Task *task);
 
     static size_t WriteCallback(void *contents,
                                 size_t size,
@@ -287,8 +299,6 @@ private:
 
     static constexpr uint32_t kInitialRetryDelayMs = 10'000;
     static constexpr uint32_t kMaxRetryDelayMs = 40'000;
-    static constexpr uint32_t kCloudConcurrencyLimit = 20;
-
     CURLM *multi_handle_{nullptr};
     std::unordered_map<CURL *, ObjectStore::Task *> active_requests_;
     std::multimap<std::chrono::steady_clock::time_point, ObjectStore::Task *>
@@ -297,17 +307,12 @@ private:
 
     CloudPathInfo cloud_path_;
     std::unique_ptr<CloudBackend> backend_;
-    uint32_t cloud_inflight_{0};
-    WaitingZone cloud_waiting_;
+    CloudStorageService *cloud_service_{nullptr};
 
     std::string ComposeKey(const TableIdent *tbl_id,
                            std::string_view filename) const;
     std::string ComposeKeyFromRemote(std::string_view remote_path,
                                      bool ensure_trailing_slash) const;
-    bool AcquireCloudSlot(KvTask *task,
-                          ObjectStore::Task *store_task,
-                          bool is_retry);
-    void ReleaseCloudSlot(ObjectStore::Task *store_task);
 };
 
 }  // namespace eloqstore
