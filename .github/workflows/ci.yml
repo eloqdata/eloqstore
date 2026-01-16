@@ -2,68 +2,81 @@ name: CI
 
 on:
   pull_request:
+    types:
+      - opened
+      - synchronize
+      - labeled
+      - unlabeled
+      - ready_for_review
     branches:
       - main
 
 jobs:
   test:
+    if: ${{ github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'ci-approved') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write
     container:
       image: eloqdata/eloq-dev-ci-ubuntu2404:latest
       options: --user root --security-opt seccomp=unconfined
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
-    - name: Fix permissions
-      run: |
-        chmod -R a+rwx $GITHUB_WORKSPACE || true
+      - name: Fix permissions
+        run: |
+          chmod -R a+rwx $GITHUB_WORKSPACE || true
 
-    - name: Configure Git safe directory
-      run: |
-        git config --global --add safe.directory $GITHUB_WORKSPACE
+      - name: Configure Git safe directory
+        run: |
+          git config --global --add safe.directory $GITHUB_WORKSPACE
 
-    - name: Configure CMake
-      run: |
-        mkdir -p build
-        cmake -B build -S . \
-          -DCMAKE_BUILD_TYPE=Release
+      - name: Configure CMake
+        run: |
+          mkdir -p build
+          cmake -B build -S . \
+            -DCMAKE_BUILD_TYPE=Release
 
-    - name: Build
-      run: |
-        cmake --build build -j$(nproc)
+      - name: Build
+        run: |
+          cmake --build build -j$(nproc)
 
-    - name: Install and start MinIO
-      run: |
-        # Download MinIO server
-        wget -q https://dl.min.io/server/minio/release/linux-amd64/minio
-        chmod +x minio
-        # Download MinIO client
-        wget -q https://dl.min.io/client/mc/release/linux-amd64/mc
-        chmod +x mc
-        # Start MinIO server in background
-        mkdir -p /tmp/minio-data
-        ./minio server /tmp/minio-data --address :9900  --console-address ":9001" &
-        MINIO_PID=$!
-        # Wait for MinIO to be ready
-        sleep 5
-        # Configure MinIO client and create bucket (retry until MinIO is ready)
-        for i in {1..30}; do
-          if ./mc alias set myminio http://127.0.0.1:9900 minioadmin minioadmin 2>/dev/null; then
-            ./mc mb myminio/eloqstore || true
-            break
-          fi
-          sleep 1
-        done
-        echo "MINIO_PID=$MINIO_PID" >> $GITHUB_ENV
+      - name: Install and start MinIO
+        run: |
+          # Download MinIO server
+          wget -q https://dl.min.io/server/minio/release/linux-amd64/minio
+          chmod +x minio
+          # Download MinIO client
+          wget -q https://dl.min.io/client/mc/release/linux-amd64/mc
+          chmod +x mc
+          # Start MinIO server in background
+          mkdir -p /tmp/minio-data
+          ./minio server /tmp/minio-data --address :9900  --console-address ":9001" &
+          MINIO_PID=$!
+          # Wait for MinIO to be ready
+          sleep 5
+          # Configure MinIO client and create bucket (retry until MinIO is ready)
+          for i in {1..30}; do
+            if ./mc alias set myminio http://127.0.0.1:9900 minioadmin minioadmin 2>/dev/null; then
+              ./mc mb myminio/eloqstore || true
+              break
+            fi
+            sleep 1
+          done
+          echo "MINIO_PID=$MINIO_PID" >> $GITHUB_ENV
 
-    - name: Run unit tests
-      run: |
-        ctest --test-dir build/tests/ --output-on-failure -V
+      - name: Run unit tests
+        run: |
+          ctest --test-dir build/tests/ --output-on-failure -V
 
+      - name: Remove ci-approved label after run
+        if: ${{ always() }}
+        uses: actions-ecosystem/action-remove-labels@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          labels: ci-approved
