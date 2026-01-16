@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <iterator>
 #include <memory>
 #include <string>
@@ -111,6 +112,24 @@ void RunStressTest(int argc, char **argv)
     FLAGS_stderrthreshold = google::GLOG_WARNING;
     FLAGS_logbuflevel = google::GLOG_INFO;
 
+    if (FLAGS_clean_data_dir_on_start)
+    {
+        std::error_code ec;
+        std::filesystem::remove_all(FLAGS_db_path, ec);
+        if (ec)
+        {
+            LOG(WARNING) << "Failed to clean db_path: " << FLAGS_db_path
+                         << " error=" << ec.message();
+        }
+        std::filesystem::remove_all(FLAGS_shared_state_path, ec);
+        if (ec)
+        {
+            LOG(WARNING) << "Failed to clean shared_state_path: "
+                         << FLAGS_shared_state_path
+                         << " error=" << ec.message();
+        }
+    }
+
     eloqstore::KvOptions opts;
     if (!FLAGS_options.empty())
     {
@@ -129,6 +148,8 @@ void RunStressTest(int argc, char **argv)
         opts.data_page_restart_interval = FLAGS_data_page_restart_interval;
         opts.index_page_restart_interval = FLAGS_index_page_restart_interval;
         opts.buffer_pool_size = FLAGS_buffer_pool_size;
+        opts.enable_compression = FLAGS_enable_compression;
+        opts.dict_cache_size = FLAGS_dict_cache_size;
         opts.io_queue_size = FLAGS_io_queue_size;
         opts.fd_limit = FLAGS_fd_limit;
         opts.manifest_limit = FLAGS_manifest_limit;
