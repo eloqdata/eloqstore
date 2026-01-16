@@ -42,7 +42,8 @@ class ObjectStore
 {
 public:
     class Task;
-    explicit ObjectStore(const KvOptions *options, CloudStorageService *service);
+    explicit ObjectStore(const KvOptions *options,
+                         CloudStorageService *service);
     ~ObjectStore();
 
     KvError EnsureBucketExists();

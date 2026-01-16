@@ -1,8 +1,9 @@
 #include "cloud_storage_service.h"
 
+#include <glog/logging.h>
+
 #include <algorithm>
 #include <chrono>
-#include <glog/logging.h>
 
 #include "eloq_store.h"
 #include "storage/shard.h"
@@ -24,7 +25,8 @@ CloudStorageService::CloudStorageService(EloqStore *store) : store_(store)
     }
     shard_stores_.assign(shard_count, nullptr);
 
-    worker_count_ = std::max<size_t>(store_->Options().cloud_request_threads, 1);
+    worker_count_ =
+        std::max<size_t>(store_->Options().cloud_request_threads, 1);
     job_queues_.resize(worker_count_);
 }
 
@@ -118,7 +120,8 @@ void CloudStorageService::NotifyTaskFinished(ObjectStore::Task *task)
 void CloudStorageService::RunWorker(size_t worker_index)
 {
     const int64_t wait_timeout_us =
-        std::chrono::duration_cast<std::chrono::microseconds>(kIdleWait).count();
+        std::chrono::duration_cast<std::chrono::microseconds>(kIdleWait)
+            .count();
     while (true)
     {
         if (stopping_.load(std::memory_order_acquire))
