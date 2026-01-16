@@ -1,5 +1,6 @@
 #include "tasks/background_write.h"
 
+#include <algorithm>
 #include <string>
 
 #include "storage/shard.h"
@@ -44,9 +45,56 @@ private:
     std::vector<std::pair<MemIndexPage *, FilePageId>> pages_;
 };
 
+namespace
+{
+bool FilePageLess(const std::pair<FilePageId, PageId> &lhs,
+                  const std::pair<FilePageId, PageId> &rhs)
+{
+    if (lhs.first == rhs.first)
+    {
+        return lhs.second < rhs.second;
+    }
+    return lhs.first < rhs.first;
+}
+}  // namespace
+
+void BackgroundWrite::HeapSortFpIdsWithYield(
+    std::vector<std::pair<FilePageId, PageId>> &fp_ids)
+{
+    if (fp_ids.size() < 2)
+    {
+        return;
+    }
+
+    constexpr size_t push_batch = 256;
+    constexpr size_t pop_batch = 256;
+
+    size_t push_ops = 0;
+    for (size_t next = 1; next < fp_ids.size(); ++next)
+    {
+        std::push_heap(fp_ids.begin(), fp_ids.begin() + next + 1, FilePageLess);
+        push_ops++;
+        if (push_ops % push_batch == 0)
+        {
+            YieldToNextRound();
+        }
+    }
+
+    size_t pop_ops = 0;
+    for (size_t count = fp_ids.size(); count > 1; --count)
+    {
+        std::pop_heap(fp_ids.begin(), fp_ids.begin() + count, FilePageLess);
+        pop_ops++;
+        if (pop_ops % pop_batch == 0)
+        {
+            YieldToNextRound();
+        }
+    }
+}
+
 KvError BackgroundWrite::CompactDataFile()
 {
-    LOG(INFO) << "start CompactDataFile on " << this->tbl_ident_;
+    LOG(INFO) << "begin compaction on " << this->tbl_ident_;
     const KvOptions *opts = Options();
     assert(opts->data_append_mode);
     assert(opts->file_amplify_factor != 0);
@@ -105,14 +153,20 @@ KvError BackgroundWrite::CompactDataFile()
         {
             fp_ids.emplace_back(fp_id, page_id);
         }
+        if ((page_id & 0xFF) == 0)
+        {
+            YieldToNextRound();
+        }
     }
+    YieldToNextRound();
     assert(fp_ids.size() == mapping_cnt);
-    // Sort by file page id.
-    std::sort(fp_ids.begin(), fp_ids.end());
+    HeapSortFpIdsWithYield(fp_ids);
+    YieldToNextRound();
 
     constexpr uint8_t max_move_batch = max_read_pages_batch;
     std::vector<Page> move_batch_buf;
     move_batch_buf.reserve(max_move_batch);
+    YieldToNextRound();
     std::vector<FilePageId> move_batch_fp_ids;
     move_batch_fp_ids.reserve(max_move_batch);
     MovingCachedPages moving_cached(mapping_cnt);
@@ -125,11 +179,18 @@ KvError BackgroundWrite::CompactDataFile()
     const FileId end_file_id = allocator->CurrentFileId();
     FileId min_file_id = end_file_id;
     uint32_t empty_file_cnt = 0;
+    size_t round_cnt = 0;
     for (FileId file_id = begin_file_id; file_id < end_file_id; file_id++)
     {
+        if ((round_cnt & 0xFFFF) == 0)
+        {
+            YieldToNextRound();
+            round_cnt = 0;
+        }
         FilePageId end_fp_id = (file_id + 1) << opts->pages_per_file_shift;
         while (it_high != fp_ids.end() && it_high->first < end_fp_id)
         {
+            ++round_cnt;
             it_high++;
         }
         if (it_low == it_high)
@@ -218,6 +279,7 @@ KvError BackgroundWrite::CompactDataFile()
     CHECK_KV_ERR(err);
     moving_cached.Finish();
     TriggerFileGC();
+    LOG(INFO) << "finish compaction on " << this->tbl_ident_;
     return KvError::NoError;
 }
 

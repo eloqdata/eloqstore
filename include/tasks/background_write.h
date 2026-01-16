@@ -1,5 +1,8 @@
 #pragma once
 
+#include <utility>
+#include <vector>
+
 #include "tasks/write_task.h"
 
 namespace eloqstore
@@ -18,5 +21,9 @@ public:
     KvError CompactDataFile();
 
     KvError CreateArchive();
+
+private:
+    void HeapSortFpIdsWithYield(
+        std::vector<std::pair<FilePageId, PageId>> &fp_ids);
 };
 }  // namespace eloqstore

@@ -18,7 +18,7 @@ class ManifestBuilder;
 class ManifestBuffer;
 struct KvOptions;
 
-struct MappingSnapshot
+struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
 {
     class MappingTbl
     {

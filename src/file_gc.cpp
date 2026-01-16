@@ -8,6 +8,7 @@
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "async_io_manager.h"
 #include "common.h"
 #include "eloq_store.h"
@@ -20,7 +21,7 @@
 
 namespace eloqstore
 {
-void GetRetainedFiles(std::unordered_set<FileId> &result,
+void GetRetainedFiles(absl::flat_hash_set<FileId> &result,
                       const MappingSnapshot::MappingTbl &tbl,
                       uint8_t pages_per_file_shift)
 {
@@ -34,6 +35,10 @@ void GetRetainedFiles(std::unordered_set<FileId> &result,
             FileId file_id = fp_id >> pages_per_file_shift;
             result.emplace(file_id);
         }
+        if ((page_id & 0xFF) == 0)
+        {
+            ThdTask()->YieldToNextRound();
+        }
     }
 }
 
@@ -41,7 +46,7 @@ namespace FileGarbageCollector
 {
 
 KvError ExecuteLocalGC(const TableIdent &tbl_id,
-                       const std::unordered_set<FileId> &retained_files,
+                       const absl::flat_hash_set<FileId> &retained_files,
                        IouringMgr *io_mgr)
 {
     DLOG(INFO) << "ExecuteLocalGC: starting for table " << tbl_id.tbl_name_
@@ -366,7 +371,7 @@ KvError GetOrUpdateArchivedMaxFileId(
 KvError DeleteUnreferencedCloudFiles(
     const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
-    const std::unordered_set<FileId> &retained_files,
+    const absl::flat_hash_set<FileId> &retained_files,
     FileId least_not_archived_file_id,
     CloudStoreMgr *cloud_mgr)
 {
@@ -444,7 +449,7 @@ KvError DeleteUnreferencedCloudFiles(
 KvError DeleteUnreferencedLocalFiles(
     const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
-    const std::unordered_set<FileId> &retained_files,
+    const absl::flat_hash_set<FileId> &retained_files,
     FileId least_not_archived_file_id,
     IouringMgr *io_mgr)
 {
@@ -522,7 +527,7 @@ KvError DeleteUnreferencedLocalFiles(
 }
 
 KvError ExecuteCloudGC(const TableIdent &tbl_id,
-                       const std::unordered_set<FileId> &retained_files,
+                       const absl::flat_hash_set<FileId> &retained_files,
                        CloudStoreMgr *cloud_mgr)
 {
     // 1. list all files in cloud.

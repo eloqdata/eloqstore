@@ -7,7 +7,9 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
+#include "absl/container/flat_hash_set.h"
 #include "async_io_manager.h"
 #include "error.h"
 #include "file_gc.h"
@@ -352,7 +354,6 @@ void WriteTask::CompactIfNeeded(PageMapper *mapper) const
              static_cast<double>(opts->file_amplify_factor)))
     {
         shard->AddPendingCompact(tbl_ident_);
-        return;
     }
 }
 
@@ -389,11 +390,26 @@ void WriteTask::TriggerFileGC() const
         return;
     }
 
-    std::unordered_set<FileId> retained_files;
+    absl::flat_hash_set<FileId> retained_files;
     const uint8_t shift = Options()->pages_per_file_shift;
+    size_t approx_file_cnt = 0;
+    std::vector<std::shared_ptr<MappingSnapshot>> snapshot_array;
+    snapshot_array.reserve(meta->mapping_snapshots_.size());
     for (MappingSnapshot *mapping : meta->mapping_snapshots_)
     {
+        const size_t page_cnt = mapping->mapping_tbl_.size();
+        const size_t file_cnt = (page_cnt >> shift) + 1;
+        if (file_cnt > approx_file_cnt)
+        {
+            approx_file_cnt = file_cnt;
+        }
+        snapshot_array.emplace_back(mapping->shared_from_this());
+    }
+    retained_files.reserve(approx_file_cnt);
+    for (const std::shared_ptr<MappingSnapshot> &mapping : snapshot_array)
+    {
         GetRetainedFiles(retained_files, mapping->mapping_tbl_, shift);
+        ThdTask()->YieldToNextRound();
     }
 
     // Check if we're in cloud mode or local mode
