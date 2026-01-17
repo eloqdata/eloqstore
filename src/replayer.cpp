@@ -120,10 +120,17 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
     }
 
     // Read mapping_len (Fixed32, 4 bytes) - it's before mapping_tbl
-    assert(snapshot.size() >= 8);
+    CHECK(snapshot.size() >= 4)
+        << "DeserializeSnapshot failed, insufficient data for mapping_len, "
+           "expect >= 4, got "
+        << snapshot.size();
     const uint32_t mapping_len = DecodeFixed32(snapshot.data());
+
+    CHECK(mapping_len < snapshot.size() - 4)
+        << "DeserializeSnapshot failed, mapping_len " << mapping_len
+        << " exceeds available data " << snapshot.size() - 4;
     std::string_view mapping_view = snapshot.substr(4, mapping_len);
-    std::string_view file_term_mapping_view = snapshot.substr(4 + mapping_len);
+
     mapping_tbl_.reserve(opts_->init_page_count);
     while (!mapping_view.empty())
     {
@@ -134,6 +141,11 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
     }
 
     // Deserialize FileIdTermMapping section
+    std::string_view file_term_mapping_view = snapshot.substr(4 + mapping_len);
+    CHECK(file_term_mapping_view.size() >= 4)
+        << "DeserializeSnapshot failed, insufficient data for "
+           "file_term_mapping, expect >= 4, got "
+        << file_term_mapping_view.size();
     if (!DeserializeFileIdTermMapping(file_term_mapping_view,
                                       *file_id_term_mapping_))
     {
