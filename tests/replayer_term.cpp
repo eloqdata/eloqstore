@@ -64,7 +64,6 @@ TEST_CASE(
     replayer.file_id_term_mapping_->insert_or_assign(
         eloqstore::IouringMgr::LruFD::kManifest, 1);
 
-    // expect_term differs => bump to next file boundary
     auto mapper = replayer.GetMapper(&idx_mgr, &tbl_id, 1);
     REQUIRE(mapper != nullptr);
     REQUIRE(mapper->FilePgAllocator()->MaxFilePageId() == 17);

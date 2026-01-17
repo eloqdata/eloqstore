@@ -2996,7 +2996,7 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
     err = UploadFiles(tbl_id, {manifest_name});
     if (err != KvError::NoError)
     {
-        LOG(FATAL) << "can not upload manifest: ", ErrorString(err);
+        LOG(FATAL) << "can not upload manifest: " << ErrorString(err);
     }
 
     IouringMgr::Close(res);
