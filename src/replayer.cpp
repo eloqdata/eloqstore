@@ -84,13 +84,6 @@ KvError Replayer::ParseNextRecord(ManifestFile *file)
     content = content.substr(sizeof(PageId));
     ttl_root_ = DecodeFixed32(content.data());
     content = content.substr(sizeof(PageId));
-    // Validate that we have enough data for payload_len field and the payload
-    if (content.size() < sizeof(uint32_t) + payload_len)
-    {
-        LOG(ERROR) << "Manifest file corrupted, payload_len " << payload_len
-                   << " exceeds available data " << content.size();
-        return KvError::Corrupted;
-    }
     payload_ = content.substr(sizeof(uint32_t), payload_len);
     const size_t record_bytes = header_len + payload_len;
     file_size_ += record_bytes;
@@ -127,16 +120,8 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
     }
 
     // Read mapping_len (Fixed32, 4 bytes) - it's before mapping_tbl
-    if (snapshot.size() < 4)
-    {
-        LOG(FATAL) << "Failed to deserialize snapshot: insufficient data for mapping_len";
-    }
+    assert(snapshot.size() >= 8);
     const uint32_t mapping_len = DecodeFixed32(snapshot.data());
-    if (snapshot.size() < 4 + mapping_len)
-    {
-        LOG(FATAL) << "Failed to deserialize snapshot: mapping_len " << mapping_len
-                   << " exceeds available data " << snapshot.size();
-    }
     std::string_view mapping_view = snapshot.substr(4, mapping_len);
     std::string_view file_term_mapping_view = snapshot.substr(4 + mapping_len);
     mapping_tbl_.reserve(opts_->init_page_count);
@@ -158,16 +143,8 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
 
 void Replayer::ReplayLog()
 {
-    if (payload_.size() <= 4)
-    {
-        LOG(FATAL) << "Failed to replay log: insufficient data for mapping_len";
-    }
+    assert(payload_.size() > 4);
     uint32_t mapping_len = DecodeFixed32(payload_.data());
-    if (payload_.size() < 4 + mapping_len)
-    {
-        LOG(FATAL) << "Failed to replay log: mapping_len " << mapping_len
-                   << " exceeds available data " << payload_.size();
-    }
     std::string_view mapping_view = payload_.substr(4, mapping_len);
     std::string_view file_term_mapping_view = payload_.substr(4 + mapping_len);
 

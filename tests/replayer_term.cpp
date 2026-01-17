@@ -4,6 +4,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <utility>
 
 #include "../include/common.h"
 #include "../include/kv_options.h"
