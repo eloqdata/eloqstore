@@ -1,6 +1,7 @@
 #include "tasks/background_write.h"
 
 #include <algorithm>
+#include <memory>  // for std::shared_ptr
 #include <string>
 
 #include "storage/shard.h"
@@ -307,8 +308,15 @@ KvError BackgroundWrite::CreateArchive()
     {
         dict_bytes = meta->compression_->DictionaryBytes();
     }
-    std::string_view snapshot =
-        wal_builder_.Snapshot(root, ttl_root, mapping, max_fp_id, dict_bytes);
+    // Archive snapshot should also carry FileIdTermMapping for this table
+    std::string term_buf;
+    std::shared_ptr<FileIdTermMapping> file_term_mapping =
+        shard->IoManager()->GetOrCreateFileIdTermMapping(tbl_ident_);
+    file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
+                                        IoMgr()->ProcessTerm());
+    SerializeFileIdTermMapping(*file_term_mapping, term_buf);
+    std::string_view snapshot = wal_builder_.Snapshot(
+        root, ttl_root, mapping, max_fp_id, dict_bytes, term_buf);
 
     uint64_t current_ts = utils::UnixTs<chrono::microseconds>();
     err = IoMgr()->CreateArchive(tbl_ident_, snapshot, current_ts);

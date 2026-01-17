@@ -27,6 +27,8 @@ enum struct KvError : uint8_t
     NoPermission,
     CloudErr,
     IoFail,
+    ExpiredTerm,
+    CloudNoManifest,
 
 };
 
@@ -64,6 +66,10 @@ constexpr const char *ErrorString(KvError err)
         return "Operation timeout";
     case KvError::NoPermission:
         return "Operation not permitted";
+    case KvError::ExpiredTerm:
+        return "Expired term";
+    case KvError::CloudNoManifest:
+        return "No manifest found in cloud but the directory is not empty";
     }
     return "Unknown error";
 }

@@ -7,6 +7,7 @@
 #include <string_view>
 #include <unordered_set>
 
+#include "common.h"
 #include "compression.h"
 #include "manifest_buffer.h"
 #include "storage/mem_index_page.h"
@@ -15,17 +16,35 @@
 
 namespace eloqstore
 {
+
+// For Manifest snapshot, the structure is:
+// Header :  [ Checksum(8B) | Root(4B) | TTL Root(4B) | Payload Len(4B) ]
+// Body   :  [ MaxFpId(8B) | DictLen(4B) | dict_bytes(bytes) |
+//             mapping_bytes_len(4B) | mapping_tbl(varint64...) |
+//             Serialized FileIdTermMapping bytes(4B|varint64...) ]
+
+// For appended Manifest log, the structure is:
+// Header  :  [ Checksum(8B) | Root(4B) | TTL Root(4B) | Payload Len(4B) ]
+// LogBody :  [ mapping_bytes_len(4B) | mapping_bytes(varint64...) |
+//              | Serialized FileIdTermMapping bytes(4B|varint64...) ]
+
 class ManifestBuilder
 {
 public:
     ManifestBuilder();
     void UpdateMapping(PageId page_id, FilePageId file_page_id);
     void DeleteMapping(PageId page_id);
+    /*
+     * @brief Update the mapping_bytes_len and append file_term_mapping to
+     *         buff_.
+     */
+    void AppendFileIdTermMapping(std::string_view file_term_mapping);
     std::string_view Snapshot(PageId root_id,
                               PageId ttl_root,
                               const MappingSnapshot *mapping,
                               FilePageId max_fp_id,
-                              std::string_view dict_bytes);
+                              std::string_view dict_bytes,
+                              std::string_view file_term_mapping);
 
     std::string_view Finalize(PageId new_root, PageId ttl_root);
     static bool ValidateChecksum(std::string_view record);
@@ -44,6 +63,7 @@ public:
 private:
     static uint64_t CalcChecksum(std::string_view content);
     ManifestBuffer buff_;
+    bool resized_for_mapping_bytes_len_{false};
 };
 
 struct CowRootMeta

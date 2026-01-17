@@ -409,10 +409,14 @@ public:
     EloqStore(const EloqStore &) = delete;
     EloqStore(EloqStore &&) = delete;
     ~EloqStore();
-    KvError Start();
+    KvError Start(uint64_t term = 0);
     void Stop();
     bool IsStopped() const;
     const KvOptions &Options() const;
+    uint64_t Term() const
+    {
+        return term_;
+    }
 
     /**
      * @brief Validate KvOptions configuration.
@@ -465,6 +469,7 @@ private:
     std::vector<std::unique_ptr<metrics::Meter>> metrics_meters_;
 #endif
     std::atomic<bool> stopped_{true};
+    uint64_t term_{0};
 
     std::unique_ptr<ArchiveCrond> archive_crond_{nullptr};
     std::unique_ptr<PrewarmService> prewarm_service_{nullptr};

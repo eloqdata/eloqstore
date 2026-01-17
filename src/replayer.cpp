@@ -18,7 +18,8 @@
 namespace eloqstore
 {
 
-Replayer::Replayer(const KvOptions *opts) : opts_(opts)
+Replayer::Replayer(const KvOptions *opts)
+    : opts_(opts), file_id_term_mapping_(std::make_shared<FileIdTermMapping>())
 {
     log_buf_.resize(ManifestBuilder::header_bytes);
 }
@@ -118,29 +119,58 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
         dict_bytes_.clear();
     }
 
+    // Read mapping_len (Fixed32, 4 bytes) - it's before mapping_tbl
+    CHECK(snapshot.size() >= 4)
+        << "DeserializeSnapshot failed, insufficient data for mapping_len, "
+           "expect >= 4, got "
+        << snapshot.size();
+    const uint32_t mapping_len = DecodeFixed32(snapshot.data());
+
+    CHECK(mapping_len < snapshot.size() - 4)
+        << "DeserializeSnapshot failed, mapping_len " << mapping_len
+        << " exceeds available data " << snapshot.size() - 4;
+    std::string_view mapping_view = snapshot.substr(4, mapping_len);
+
     mapping_tbl_.reserve(opts_->init_page_count);
-    while (!snapshot.empty())
+    while (!mapping_view.empty())
     {
         uint64_t value;
-        ok = GetVarint64(&snapshot, &value);
+        ok = GetVarint64(&mapping_view, &value);
         assert(ok);
         mapping_tbl_.push_back(value);
+    }
+
+    // Deserialize FileIdTermMapping section
+    std::string_view file_term_mapping_view = snapshot.substr(4 + mapping_len);
+    CHECK(file_term_mapping_view.size() >= 4)
+        << "DeserializeSnapshot failed, insufficient data for "
+           "file_term_mapping, expect >= 4, got "
+        << file_term_mapping_view.size();
+    if (!DeserializeFileIdTermMapping(file_term_mapping_view,
+                                      *file_id_term_mapping_))
+    {
+        LOG(FATAL) << "Failed to deserialize FileIdTermMapping from snapshot.";
     }
 }
 
 void Replayer::ReplayLog()
 {
-    while (!payload_.empty())
+    assert(payload_.size() > 4);
+    uint32_t mapping_len = DecodeFixed32(payload_.data());
+    std::string_view mapping_view = payload_.substr(4, mapping_len);
+    std::string_view file_term_mapping_view = payload_.substr(4 + mapping_len);
+
+    while (!mapping_view.empty())
     {
         PageId page_id;
-        [[maybe_unused]] bool ok = GetVarint32(&payload_, &page_id);
+        [[maybe_unused]] bool ok = GetVarint32(&mapping_view, &page_id);
         assert(ok);
         while (page_id >= mapping_tbl_.size())
         {
             mapping_tbl_.emplace_back(MappingSnapshot::InvalidValue);
         }
         uint64_t value;
-        ok = GetVarint64(&payload_, &value);
+        ok = GetVarint64(&mapping_view, &value);
         assert(ok);
         mapping_tbl_[page_id] = value;
         if (MappingSnapshot::IsFilePageId(value))
@@ -149,10 +179,18 @@ void Replayer::ReplayLog()
             max_fp_id_ = std::max(max_fp_id_, fp_id + 1);
         }
     }
+
+    // Deserialize FileIdTermMapping section
+    if (!DeserializeFileIdTermMapping(file_term_mapping_view,
+                                      *file_id_term_mapping_))
+    {
+        LOG(FATAL) << "Failed to deserialize FileIdTermMapping from snapshot.";
+    }
 }
 
 std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
-                                                const TableIdent *tbl_ident)
+                                                const TableIdent *tbl_ident,
+                                                uint64_t expect_term)
 {
     auto mapping = std::make_shared<MappingSnapshot>(
         idx_mgr,
@@ -197,6 +235,23 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
 
     if (opts_->data_append_mode)
     {
+        // In cloud mode, when manifest term differs from process term, bump
+        // the allocator to the next file boundary to avoid cross-term
+        // collisions.
+        uint64_t manifest_term = 0;
+        auto it = file_id_term_mapping_->find(IouringMgr::LruFD::kManifest);
+        if (it != file_id_term_mapping_->end())
+        {
+            manifest_term = it->second;
+        }
+        const bool cloud_mode = !opts_->cloud_store_path.empty();
+        if (cloud_mode && manifest_term != expect_term)
+        {
+            FileId next_file_id =
+                (max_fp_id_ >> opts_->pages_per_file_shift) + 1;
+            max_fp_id_ = next_file_id << opts_->pages_per_file_shift;
+        }
+
         if (using_fp_ids.empty())
         {
             FileId min_file_id = max_fp_id_ >> opts_->pages_per_file_shift;
@@ -220,6 +275,7 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
                 }
                 cur_file_id = file_id;
             }
+
             assert(using_fp_ids.back() < max_fp_id_);
             mapper->file_page_allocator_ = std::make_unique<AppendAllocator>(
                 opts_, min_file_id, max_fp_id_, hole_cnt);

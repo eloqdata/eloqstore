@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -34,6 +35,7 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     write_err_ = KvError::NoError;
     wal_builder_.Reset();
     batch_pages_.clear();
+    file_id_term_mapping_dirty_ = false;
 }
 
 void WriteTask::Abort()
@@ -197,7 +199,27 @@ std::pair<PageId, FilePageId> WriteTask::AllocatePage(PageId page_id)
     {
         page_id = cow_meta_.mapper_->GetPage();
     }
+
+    FileId file_id_before_allocate =
+        cow_meta_.mapper_->FilePgAllocator()->CurrentFileId();
     FilePageId file_page_id = cow_meta_.mapper_->FilePgAllocator()->Allocate();
+    FileId file_id_after_allocate =
+        cow_meta_.mapper_->FilePgAllocator()->CurrentFileId();
+    if (!IoMgr()
+             ->GetFileIdTerm(tbl_ident_, file_id_before_allocate)
+             .has_value())
+    {
+        IoMgr()->SetFileIdTerm(
+            tbl_ident_, file_id_before_allocate, IoMgr()->ProcessTerm());
+        file_id_term_mapping_dirty_ = true;
+    }
+    if (file_id_before_allocate != file_id_after_allocate)
+    {
+        IoMgr()->SetFileIdTerm(
+            tbl_ident_, file_id_after_allocate, IoMgr()->ProcessTerm());
+        file_id_term_mapping_dirty_ = true;
+    }
+
     cow_meta_.mapper_->UpdateMapping(page_id, file_page_id);
     wal_builder_.UpdateMapping(page_id, file_page_id);
     return {page_id, file_page_id};
@@ -245,6 +267,14 @@ KvError WriteTask::FlushManifest()
     }
     const bool dict_dirty = cow_meta_.compression_->Dirty();
 
+    // Serialize FileIdTermMapping for this table.
+    std::string term_buf;
+    std::shared_ptr<FileIdTermMapping> file_term_mapping =
+        IoMgr()->GetOrCreateFileIdTermMapping(tbl_ident_);
+    file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
+                                        IoMgr()->ProcessTerm());
+    SerializeFileIdTermMapping(*file_term_mapping, term_buf);
+
     if (need_empty_snapshot)
     {
         // Write a snapshot with empty roots and empty mapping
@@ -256,7 +286,8 @@ KvError WriteTask::FlushManifest()
                                   cow_meta_.ttl_root_id_,
                                   mapping,
                                   max_fp_id,
-                                  dict_bytes);
+                                  dict_bytes,
+                                  term_buf);
         err = IoMgr()->SwitchManifest(tbl_ident_, snapshot);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
@@ -267,9 +298,12 @@ KvError WriteTask::FlushManifest()
     const size_t alignment = page_align;
     const uint64_t log_physical_size =
         (wal_builder_.CurrentSize() + alignment - 1) & ~(alignment - 1);
+
     if (!dict_dirty && manifest_size > 0 &&
-        manifest_size + log_physical_size <= opts->manifest_limit)
+        manifest_size + log_physical_size + term_buf.size() <=
+            opts->manifest_limit)
     {
+        wal_builder_.AppendFileIdTermMapping(term_buf);
         std::string_view blob =
             wal_builder_.Finalize(cow_meta_.root_id_, cow_meta_.ttl_root_id_);
         err = IoMgr()->AppendManifest(tbl_ident_, blob, manifest_size);
@@ -286,11 +320,13 @@ KvError WriteTask::FlushManifest()
                                   cow_meta_.ttl_root_id_,
                                   mapping,
                                   max_fp_id,
-                                  dict_bytes);
+                                  dict_bytes,
+                                  term_buf);
         err = IoMgr()->SwitchManifest(tbl_ident_, snapshot);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
         cow_meta_.compression_->ClearDirty();
+        file_id_term_mapping_dirty_ = false;
     }
     return KvError::NoError;
 }

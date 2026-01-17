@@ -67,6 +67,7 @@ struct PrewarmFile
 {
     TableIdent tbl_id;
     FileId file_id;
+    uint64_t term{0};
     size_t file_size;
     bool is_manifest;
     std::string mod_time;

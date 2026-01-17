@@ -1,9 +1,12 @@
 #pragma once
 
+#include <error.h>
+
 #include <cstdint>
 #include <map>
 #include <string>
 
+#include "common.h"
 #include "eloq_store.h"
 #include "storage/index_page_manager.h"
 
@@ -61,6 +64,8 @@ public:
               std::string_view end,
               size_t page_entries = SIZE_MAX,
               size_t page_size = SIZE_MAX);
+
+    eloqstore::KvError CheckKey(uint64_t key) const;
 
     void Validate();
     void SetAutoValidate(bool v);
@@ -181,5 +186,6 @@ private:
 
     eloqstore::ManifestBuilder builder_;
     std::string file_;
+    eloqstore::FileIdTermMapping term_mapping_;
 };
 }  // namespace test_util
