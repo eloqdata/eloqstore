@@ -19,7 +19,7 @@ uint64_t MockEncodeFilePageId(eloqstore::FilePageId file_page_id)
 }
 
 TEST_CASE(
-    "ManifestBuilder snapshot serializes FileIdTermMapping before mapping "
+    "ManifestBuilder snapshot serializes FileIdTermMapping after mapping "
     "table (non-empty)",
     "[manifest-payload]")
 {
