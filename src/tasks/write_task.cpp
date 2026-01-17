@@ -267,24 +267,27 @@ KvError WriteTask::FlushManifest()
     }
     const bool dict_dirty = cow_meta_.compression_->Dirty();
 
+    // Serialize FileIdTermMapping for this table.
+    std::string term_buf;
+    std::shared_ptr<FileIdTermMapping> file_term_mapping =
+        IoMgr()->GetOrCreateFileIdTermMapping(tbl_ident_);
+    file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
+                                        IoMgr()->ProcessTerm());
+    SerializeFileIdTermMapping(*file_term_mapping, term_buf);
+
     if (need_empty_snapshot)
     {
         // Write a snapshot with empty roots and empty mapping
         MappingSnapshot *mapping = cow_meta_.mapper_->GetMapping();
         FilePageId max_fp_id =
             cow_meta_.mapper_->FilePgAllocator()->MaxFilePageId();
-        // Serialize FileIdTermMapping for this table (if available)
-        std::shared_ptr<FileIdTermMapping> file_term_mapping =
-            IoMgr()->GetOrCreateFileIdTermMapping(tbl_ident_);
-        file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
-                                            IoMgr()->ProcessTerm());
         std::string_view snapshot =
             wal_builder_.Snapshot(cow_meta_.root_id_,
                                   cow_meta_.ttl_root_id_,
                                   mapping,
                                   max_fp_id,
                                   dict_bytes,
-                                  *file_term_mapping);
+                                  term_buf);
         err = IoMgr()->SwitchManifest(tbl_ident_, snapshot);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
@@ -295,9 +298,12 @@ KvError WriteTask::FlushManifest()
     const size_t alignment = page_align;
     const uint64_t log_physical_size =
         (wal_builder_.CurrentSize() + alignment - 1) & ~(alignment - 1);
-    if (!file_id_term_mapping_dirty_ && !dict_dirty && manifest_size > 0 &&
-        manifest_size + log_physical_size <= opts->manifest_limit)
+
+    if (!dict_dirty && manifest_size > 0 &&
+        manifest_size + log_physical_size + term_buf.size() <=
+            opts->manifest_limit)
     {
+        wal_builder_.AppendFileIdTermMapping(term_buf);
         std::string_view blob =
             wal_builder_.Finalize(cow_meta_.root_id_, cow_meta_.ttl_root_id_);
         err = IoMgr()->AppendManifest(tbl_ident_, blob, manifest_size);
@@ -309,17 +315,13 @@ KvError WriteTask::FlushManifest()
         MappingSnapshot *mapping = cow_meta_.mapper_->GetMapping();
         FilePageId max_fp_id =
             cow_meta_.mapper_->FilePgAllocator()->MaxFilePageId();
-        std::shared_ptr<FileIdTermMapping> file_term_mapping =
-            IoMgr()->GetOrCreateFileIdTermMapping(tbl_ident_);
-        file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
-                                            IoMgr()->ProcessTerm());
         std::string_view snapshot =
             wal_builder_.Snapshot(cow_meta_.root_id_,
                                   cow_meta_.ttl_root_id_,
                                   mapping,
                                   max_fp_id,
                                   dict_bytes,
-                                  *file_term_mapping);
+                                  term_buf);
         err = IoMgr()->SwitchManifest(tbl_ident_, snapshot);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
