@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <string>
@@ -22,28 +23,37 @@ using FileIdTermMapping = absl::flat_hash_map<FileId, uint64_t>;
 // Format: varint64(count) followed by count pairs of varint64(file_id)
 // varint64(term)
 inline void SerializeFileIdTermMapping(const FileIdTermMapping &mapping,
-                                       ManifestBuffer &dst)
+                                       std::string &dst)
 {
-    dst.AppendVarint64(mapping.size());
+    dst.reserve(mapping.size() * 4);
+    // bytes_len(4B)
+    dst.resize(4);
     for (const auto &[file_id, term] : mapping)
     {
-        dst.AppendVarint64(file_id);
-        dst.AppendVarint64(term);
+        PutVarint64(&dst, file_id);
+        PutVarint64(&dst, term);
     }
+    // update the bytes_len
+    uint32_t bytes_len = static_cast<uint32_t>(dst.size() - 4);
+    EncodeFixed32(dst.data(), bytes_len);
 }
 
 // Deserialize FileIdTermMapping from input; clears mapping on failure
 // Returns true on success, false on parse error
-inline bool DeserializeFileIdTermMapping(std::string_view &input,
+inline bool DeserializeFileIdTermMapping(std::string_view input,
                                          FileIdTermMapping &mapping)
 {
-    mapping.clear();
-    uint64_t count = 0;
-    if (!GetVarint64(&input, &count))
+    if (input.size() < 4)
     {
         return false;
     }
-    for (uint64_t i = 0; i < count; ++i)
+    uint32_t bytes_len = DecodeFixed32(input.data());
+    input = input.substr(4, bytes_len);
+    if (input.size() != bytes_len)
+    {
+        return false;
+    }
+    while (!input.empty())
     {
         uint64_t file_id = 0;
         uint64_t term = 0;

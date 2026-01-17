@@ -8,6 +8,7 @@
 #include <string>
 #include <utility>
 
+#include "common.h"
 #include "error.h"
 #include "replayer.h"
 #include "storage/page.h"
@@ -998,6 +999,9 @@ void ManifestVerifier::Finish()
             {
                 file_.resize(padded_size, '\0');
             }
+            std::string term_buf;
+            eloqstore::SerializeFileIdTermMapping(term_mapping_, term_buf);
+            builder_.AppendFileIdTermMapping(term_buf);
             std::string_view sv =
                 builder_.Finalize(root_id_, eloqstore::MaxPageId);
             file_.append(sv);
@@ -1013,12 +1017,15 @@ void ManifestVerifier::Snapshot()
 {
     eloqstore::FilePageId max_fp_id =
         answer_.FilePgAllocator()->MaxFilePageId();
+    // Serialize FileIdTermMapping to string_view
+    std::string term_buf;
+    eloqstore::SerializeFileIdTermMapping(term_mapping_, term_buf);
     std::string_view sv = builder_.Snapshot(root_id_,
                                             eloqstore::MaxPageId,
                                             answer_.GetMapping(),
                                             max_fp_id,
                                             std::string_view{},
-                                            term_mapping_);
+                                            term_buf);
     file_ = sv;
     const size_t alignment = eloqstore::page_align;
     const size_t padded_size =
