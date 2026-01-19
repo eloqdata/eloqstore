@@ -35,7 +35,7 @@ DEFINE_string(shared_state_path,
               "data/db_stress_helper",
               "Path to shared state directory");
 DEFINE_bool(clean_data_dir_on_start,
-            true,
+            false,
             "clean db_path  and shared_state_path when starting db_stress");
 DEFINE_uint32(n_tables, 1, "nums of threads/tables");
 DEFINE_uint32(n_partitions, 10, "nums of partitions");

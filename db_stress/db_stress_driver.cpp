@@ -25,6 +25,40 @@
 
 namespace StressTest
 {
+namespace
+{
+bool IsSafeRemoveAllPath(const std::string &path, std::string *normalized)
+{
+    if (path.empty())
+    {
+        return false;
+    }
+
+    std::filesystem::path fs_path(path);
+    fs_path = fs_path.lexically_normal();
+    if (fs_path.empty())
+    {
+        return false;
+    }
+
+    const std::string normalized_str = fs_path.string();
+    if (normalized_str == "." || normalized_str == "..")
+    {
+        return false;
+    }
+
+    if (fs_path == fs_path.root_path())
+    {
+        return false;
+    }
+
+    if (normalized != nullptr)
+    {
+        *normalized = normalized_str;
+    }
+    return true;
+}
+}  // namespace
 
 void print_test_params()
 {
@@ -114,19 +148,40 @@ void RunStressTest(int argc, char **argv)
 
     if (FLAGS_clean_data_dir_on_start)
     {
+        std::string safe_path;
         std::error_code ec;
-        std::filesystem::remove_all(FLAGS_db_path, ec);
-        if (ec)
+        if (IsSafeRemoveAllPath(FLAGS_db_path, &safe_path))
         {
-            LOG(WARNING) << "Failed to clean db_path: " << FLAGS_db_path
-                         << " error=" << ec.message();
+            std::filesystem::remove_all(safe_path, ec);
+            if (ec)
+            {
+                LOG(WARNING) << "Failed to clean db_path: " << FLAGS_db_path
+                             << " error=" << ec.message();
+            }
         }
-        std::filesystem::remove_all(FLAGS_shared_state_path, ec);
-        if (ec)
+        else
         {
-            LOG(WARNING) << "Failed to clean shared_state_path: "
-                         << FLAGS_shared_state_path
-                         << " error=" << ec.message();
+            LOG(WARNING) << "Skip cleaning db_path due to unsafe path: "
+                         << FLAGS_db_path;
+        }
+
+        ec.clear();
+        safe_path.clear();
+        if (IsSafeRemoveAllPath(FLAGS_shared_state_path, &safe_path))
+        {
+            std::filesystem::remove_all(safe_path, ec);
+            if (ec)
+            {
+                LOG(WARNING)
+                    << "Failed to clean shared_state_path: "
+                    << FLAGS_shared_state_path << " error=" << ec.message();
+            }
+        }
+        else
+        {
+            LOG(WARNING)
+                << "Skip cleaning shared_state_path due to unsafe path: "
+                << FLAGS_shared_state_path;
         }
     }
 

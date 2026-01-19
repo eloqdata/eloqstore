@@ -80,6 +80,7 @@ public:
         const TableIdent &tbl_id,
         const std::shared_ptr<compression::DictCompression> &compression,
         const DictMeta &meta);
+    void Erase(const TableIdent &tbl_id);
 
     size_t UsedBytes() const
     {

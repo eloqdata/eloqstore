@@ -131,6 +131,12 @@ int KvOptions::LoadFromIni(const char *path)
             reader.Get(sec_run, "dict_cache_size", "");
         dict_cache_size = ParseSizeWithUnit(dict_cache_size_str);
     }
+    if (reader.HasValue(sec_run, "enable_compression"))
+    {
+        enable_compression =
+            reader.GetBoolean(sec_run, "enable_compression", false);
+        DLOG(INFO) << "ENABLE:" << enable_compression;
+    }
     if (reader.HasValue(sec_run, "manifest_limit"))
     {
         manifest_limit = reader.GetUnsigned(sec_run, "manifest_limit", 8 * MB);
@@ -368,6 +374,7 @@ bool KvOptions::operator==(const KvOptions &other) const
            data_page_size == other.data_page_size &&
            pages_per_file_shift == other.pages_per_file_shift &&
            overflow_pointers == other.overflow_pointers &&
-           data_append_mode == other.data_append_mode;
+           data_append_mode == other.data_append_mode &&
+           enable_compression == other.enable_compression;
 }
 }  // namespace eloqstore

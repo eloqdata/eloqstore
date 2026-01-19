@@ -121,12 +121,9 @@ std::pair<CompressionManager::Handle, KvError> CompressionManager::GetOrLoad(
         (entry->meta_.dict_checksum != meta.dict_checksum ||
          entry->meta_.dict_len != meta.dict_len))
     {
-        LOG(ERROR) << "dict version mismatch for " << tbl_id.ToString()
+        LOG(FATAL) << "dict version mismatch for " << tbl_id.ToString()
                    << " old_len=" << entry->meta_.dict_len
                    << " new_len=" << meta.dict_len;
-        // The dictionary is trained only once. If the version mismatches,
-        // it means the dictionary is corrupted.
-        return {{}, KvError::Corrupted};
     }
 
     Handle handle(entry, this);
@@ -158,13 +155,9 @@ CompressionManager::GetOrLoadFromBytes(const TableIdent &tbl_id,
         (entry->meta_.dict_checksum != meta.dict_checksum ||
          entry->meta_.dict_len != meta.dict_len))
     {
-        LOG(INFO) << "dict version mismatch for " << tbl_id.ToString()
-                  << " old_len=" << entry->meta_.dict_len
-                  << " new_len=" << meta.dict_len;
-        used_bytes_ -= entry->bytes_;
-        entry->compression_ = std::make_shared<compression::DictCompression>();
-        entry->meta_ = meta;
-        entry->bytes_ = 0;
+        LOG(FATAL) << "dict version mismatch for " << tbl_id.ToString()
+                   << " old_len=" << entry->meta_.dict_len
+                   << " new_len=" << meta.dict_len;
     }
 
     Handle handle(entry, this);
@@ -176,6 +169,7 @@ CompressionManager::GetOrLoadFromBytes(const TableIdent &tbl_id,
                          << " expect=" << meta.dict_len
                          << " got=" << dict_bytes.size();
             handle.Clear();
+            assert(false && "dict bytes size mismatch");
             return {{}, KvError::Corrupted};
         }
         entry->compression_->LoadDictionary(
@@ -221,6 +215,32 @@ void CompressionManager::UpdateDictionary(
     }
     entry->bytes_ = new_bytes;
     EvictIfNeeded();
+}
+
+void CompressionManager::Erase(const TableIdent &tbl_id)
+{
+    auto it = entries_.find(tbl_id);
+    if (it == entries_.end())
+    {
+        return;
+    }
+
+    Entry *entry = &it->second;
+    assert(entry->ref_count_ == 0);
+    assert(entry->compression_.use_count() <= 1);
+    if (entry->in_lru_)
+    {
+        Dequeue(entry);
+    }
+    if (used_bytes_ >= entry->bytes_)
+    {
+        used_bytes_ -= entry->bytes_;
+    }
+    else
+    {
+        used_bytes_ = 0;
+    }
+    entries_.erase(it);
 }
 
 CompressionManager::Entry *CompressionManager::GetEntry(

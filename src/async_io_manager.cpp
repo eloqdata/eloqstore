@@ -39,6 +39,7 @@
 #include "eloq_store.h"
 #include "kill_point.h"
 #include "kv_options.h"
+#include "storage/index_page_manager.h"
 #include "storage/root_meta.h"
 #include "storage/shard.h"
 #include "tasks/task.h"
@@ -617,6 +618,11 @@ void IouringMgr::CleanManifest(const TableIdent &tbl_id)
     else
     {
         DLOG(INFO) << "Successfully deleted directory " << dir_name;
+    }
+
+    if (shard != nullptr)
+    {
+        shard->IndexManager()->CompressionMgr()->Erase(tbl_id);
     }
 }
 
@@ -2525,6 +2531,10 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
 
 void CloudStoreMgr::CleanManifest(const TableIdent &tbl_id)
 {
+    if (shard != nullptr)
+    {
+        shard->IndexManager()->CompressionMgr()->Erase(tbl_id);
+    }
 }
 
 KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
