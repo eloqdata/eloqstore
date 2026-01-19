@@ -15,10 +15,10 @@
 #include "error.h"
 #include "kv_options.h"
 #include "replayer.h"
+#include "storage/mem_index_page.h"
 #include "storage/object_store.h"
 #include "tasks/task.h"
 #include "utils.h"
-
 namespace eloqstore
 {
 void GetRetainedFiles(absl::flat_hash_set<FileId> &result,
@@ -34,6 +34,13 @@ void GetRetainedFiles(absl::flat_hash_set<FileId> &result,
             FilePageId fp_id = MappingSnapshot::DecodeId(val);
             FileId file_id = fp_id >> pages_per_file_shift;
             result.emplace(file_id);
+        }
+        else if (MappingSnapshot::IsSwizzlingPointer(val))
+        {
+            MemIndexPage *idx_page = reinterpret_cast<MemIndexPage *>(val);
+            FilePageId fp_id = idx_page->GetFilePageId();
+
+            result.emplace(fp_id >> pages_per_file_shift);
         }
         if ((page_id & 0xFF) == 0)
         {
