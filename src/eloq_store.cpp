@@ -65,8 +65,12 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
     {
         if (opts.max_cloud_concurrency == 0)
         {
-            LOG(ERROR)
-                << "max_cloud_concurrency must be greater than 0 in cloud mode";
+            LOG(ERROR) << "max_cloud_concurrency must be greater than 0";
+            return false;
+        }
+        if (opts.cloud_request_threads == 0)
+        {
+            LOG(ERROR) << "cloud_request_threads must be greater than 0";
             return false;
         }
         if (opts.max_upload_batch == 0)

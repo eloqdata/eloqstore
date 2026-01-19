@@ -50,7 +50,9 @@ private:
         ShardLock() = default;
         ShardLock(const ShardLock &) = delete;
         ShardLock &operator=(const ShardLock &) = delete;
-        ShardLock(ShardLock &&) noexcept {}
+        ShardLock(ShardLock &&) noexcept
+        {
+        }
         ShardLock &operator=(ShardLock &&) noexcept = delete;
         std::shared_mutex mutex;
     };
