@@ -42,6 +42,8 @@ private:
     bool ProcessHttpWork(size_t worker_index);
 
     EloqStore *store_{nullptr};
+    // One queue per request thread. Requests from a shard can only be processed
+    // by the same request thread to avoid concurrent operations on curl.
     std::vector<moodycamel::BlockingConcurrentQueue<PendingJob>> job_queues_;
     struct alignas(64) ShardLock
     {

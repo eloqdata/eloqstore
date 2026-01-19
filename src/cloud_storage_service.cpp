@@ -97,8 +97,6 @@ void CloudStorageService::UnregisterObjectStore(size_t shard_id)
 
 void CloudStorageService::Submit(ObjectStore *store, ObjectStore::Task *task)
 {
-    CHECK(task != nullptr);
-    CHECK(store != nullptr);
     Shard *owner = task->owner_shard_;
     CHECK(owner != nullptr) << "Cloud task missing owner shard";
     pending_jobs_.fetch_add(1, std::memory_order_relaxed);
