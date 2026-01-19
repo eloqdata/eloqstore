@@ -1,10 +1,7 @@
 #pragma once
 
 #include <atomic>
-#include <condition_variable>
-#include <cstdint>
 #include <memory>
-#include <mutex>
 #include <shared_mutex>
 #include <thread>
 #include <vector>
@@ -62,7 +59,6 @@ private:
 
     size_t worker_count_{1};
     std::vector<std::thread> workers_;
-    std::mutex mu_;
     std::atomic<bool> stopping_{true};
     std::atomic<uint64_t> pending_jobs_{0};
 };

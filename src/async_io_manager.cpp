@@ -2033,11 +2033,17 @@ KvError CloudStoreMgr::RestoreLocalCacheState()
                 return ToKvError(-ec.value());
             }
 
+            const std::string entry_name =
+                partition_it->path().filename().string();
+            if (entry_name == "lost+found")
+            {
+                continue;
+            }
             std::error_code type_ec;
             if (!partition_it->is_directory(type_ec) || type_ec)
             {
                 LOG(ERROR) << "Invalid files exist in store path: "
-                           << partition_it->path().filename().string();
+                           << entry_name;
                 return KvError::InvalidArgs;
             }
 
@@ -2046,7 +2052,7 @@ KvError CloudStoreMgr::RestoreLocalCacheState()
             if (!tbl_id.IsValid())
             {
                 LOG(ERROR) << "Invalid files exist in store path: "
-                           << partition_it->path().filename().string();
+                           << entry_name;
                 return KvError::InvalidArgs;
             }
             if (tbl_id.ShardIndex(num_shards) != shard_id_)

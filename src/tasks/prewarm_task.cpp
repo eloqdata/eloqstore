@@ -243,11 +243,14 @@ void PrewarmService::Start()
     {
         return;
     }
+    stop_requested_.store(false, std::memory_order_relaxed);
     thread_ = std::thread([this]() { PrewarmCloudCache(); });
 }
 
 void PrewarmService::Stop()
 {
+    stop_requested_.store(true, std::memory_order_release);
+    AbortPrewarmWorkers();
     if (thread_.joinable())
     {
         thread_.join();
@@ -335,9 +338,27 @@ void PrewarmService::PrewarmCloudCache()
     size_t api_call_count = 0;
     PrewarmStats::CompletionReason completion_reason =
         PrewarmStats::CompletionReason::Success;
+    auto should_abort = [&]()
+    {
+        if (stop_requested_.load(std::memory_order_acquire))
+        {
+            completion_reason = PrewarmStats::CompletionReason::Shutdown;
+            return true;
+        }
+        return false;
+    };
+
+    if (should_abort())
+    {
+        goto listing_done;
+    }
 
     do
     {
+        if (should_abort())
+        {
+            goto listing_done;
+        }
         // Log progress periodically
         if (api_call_count > 0 && api_call_count % 10 == 0)
         {
@@ -494,7 +515,16 @@ void PrewarmService::PrewarmCloudCache()
                           << " consumer after " << api_call_count
                           << " API calls. " << "Listed " << total_files_listed
                           << " files total.";
-                completion_reason = PrewarmStats::CompletionReason::DiskFull;
+                if (stop_requested_.load(std::memory_order_acquire))
+                {
+                    completion_reason =
+                        PrewarmStats::CompletionReason::Shutdown;
+                }
+                else
+                {
+                    completion_reason =
+                        PrewarmStats::CompletionReason::DiskFull;
+                }
 
                 // Mark all shards as complete
                 for (auto &shard : store_->shards_)
@@ -607,6 +637,31 @@ bool PrewarmService::ExtractPartition(const std::string &path,
         start = slash + 1;
     }
     return false;
+}
+
+void PrewarmService::AbortPrewarmWorkers()
+{
+    if (store_ == nullptr)
+    {
+        return;
+    }
+    for (auto &shard_ptr : store_->shards_)
+    {
+        if (shard_ptr == nullptr)
+        {
+            continue;
+        }
+        auto *cloud_mgr = static_cast<CloudStoreMgr *>(shard_ptr->IoManager());
+        if (cloud_mgr == nullptr)
+        {
+            continue;
+        }
+        cloud_mgr->GetPrewarmStats().completion_reason =
+            PrewarmStats::CompletionReason::Shutdown;
+        cloud_mgr->MarkPrewarmListingComplete();
+        cloud_mgr->ClearPrewarmFiles();
+        cloud_mgr->StopAllPrewarmTasks();
+    }
 }
 
 }  // namespace eloqstore

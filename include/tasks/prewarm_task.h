@@ -108,6 +108,7 @@ public:
 private:
     friend class EloqStore;
     friend class CloudStoreMgr;
+    void AbortPrewarmWorkers();
     void PrewarmCloudCache();
     bool ListCloudObjects(const std::string &remote_path,
                           std::vector<utils::CloudObjectInfo> &details,
@@ -119,5 +120,6 @@ private:
 
     EloqStore *store_;
     std::thread thread_;
+    std::atomic<bool> stop_requested_{false};
 };
 }  // namespace eloqstore
