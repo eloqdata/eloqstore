@@ -2608,7 +2608,6 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
         return {std::move(manifest), err};
     }
 
-    KvTask *current_task = ThdTask();
     uint64_t process_term = ProcessTerm();
 
     // Check and update term file
@@ -2648,12 +2647,14 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     // Loop to fetch all pages of results (S3 ListObjectsV2 returns max 1000
     // per page)
     std::string continuation_token;
+    KvTask *current_task = ThdTask();
     do
     {
         ObjectStore::ListTask list_task(remote_path, false);
         list_task.SetContinuationToken(continuation_token);
         list_task.SetKvTask(current_task);
-        obj_store_.GetHttpManager()->SubmitRequest(&list_task);
+        AcquireCloudSlot(current_task);
+        obj_store_.SubmitTask(&list_task, shard);
         current_task->WaitIo();
 
         if (list_task.error_ != KvError::NoError)
@@ -2815,7 +2816,8 @@ std::tuple<uint64_t, std::string, KvError> CloudStoreMgr::ReadTermFile(
     // Download CURRENT_TERM file
     ObjectStore::DownloadTask download_task(&tbl_id, CurrentTermFileName);
     download_task.SetKvTask(current_task);
-    obj_store_.GetHttpManager()->SubmitRequest(&download_task);
+    AcquireCloudSlot(current_task);
+    obj_store_.SubmitTask(&download_task, shard);
     current_task->WaitIo();
 
     if (download_task.error_ == KvError::NotFound)
@@ -2883,7 +2885,7 @@ KvError CloudStoreMgr::UpsertTermFile(const TableIdent &tbl_id,
 
             // Check if CAS conflict (412 or 409) - file already exists
             if (create_err == KvError::CloudErr &&
-                obj_store_.GetHttpManager()->IsCasRetryable(response_code))
+                (response_code == 412 || response_code == 409))
             {
                 // CAS conflict detected - file was created by another instance
                 // Retry by reading the file and continuing with update logic
@@ -2944,7 +2946,8 @@ KvError CloudStoreMgr::UpsertTermFile(const TableIdent &tbl_id,
         // 4. Check if CAS conflict (412 or 409 or 404)
         if (err == KvError::NotFound ||
             (err == KvError::CloudErr &&
-             obj_store_.GetHttpManager()->IsCasRetryable(response_code)))
+             (response_code == 412 || response_code == 409 ||
+              response_code == 404)))
         {
             ++attempt;
             // CAS conflict detected - retry with backoff
@@ -2981,7 +2984,8 @@ std::pair<KvError, int64_t> CloudStoreMgr::CasCreateTermFile(
     upload_task.if_none_match_ = "*";  // Only create if doesn't exist
     upload_task.SetKvTask(current_task);
 
-    obj_store_.GetHttpManager()->SubmitRequest(&upload_task);
+    AcquireCloudSlot(current_task);
+    obj_store_.SubmitTask(&upload_task, shard);
     current_task->WaitIo();
 
     return {upload_task.error_, upload_task.response_code_};
@@ -2998,7 +3002,8 @@ std::pair<KvError, int64_t> CloudStoreMgr::CasUpdateTermFileWithEtag(
     upload_task.if_match_ = etag;  // Only update if ETag matches
     upload_task.SetKvTask(current_task);
 
-    obj_store_.GetHttpManager()->SubmitRequest(&upload_task);
+    AcquireCloudSlot(current_task);
+    obj_store_.SubmitTask(&upload_task, shard);
     current_task->WaitIo();
 
     return {upload_task.error_, upload_task.response_code_};

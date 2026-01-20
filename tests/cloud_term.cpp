@@ -83,4 +83,6 @@ TEST_CASE("cloud start with different term", "[cloud][term]")
     tester.SetAutoClean(false);
 
     store->Stop();
+
+    CleanupStore(cloud_options);
 }

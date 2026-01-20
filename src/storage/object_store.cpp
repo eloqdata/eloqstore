@@ -1632,12 +1632,6 @@ bool AsyncHttpManager::IsHttpRetryable(int64_t response_code) const
     }
 }
 
-bool AsyncHttpManager::IsCasRetryable(int64_t response_code) const
-{
-    // Precondition Failed or Conflict
-    return response_code == 412 || response_code == 409 || response_code == 404;
-}
-
 KvError AsyncHttpManager::ClassifyHttpError(int64_t response_code) const
 {
     switch (response_code)

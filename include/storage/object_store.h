@@ -271,7 +271,6 @@ public:
 
     void SubmitRequest(ObjectStore::Task *task);
     void PerformRequests();
-    bool IsCasRetryable(int64_t response_code) const;
     void ProcessCompletedRequests();
 
     KvError EnsureBucketExists();
