@@ -71,7 +71,7 @@ private:
     {
         // No request in the queue and no active task(coroutine) and no active
         // io.
-        return req_queue_size_.load(std::memory_order_relaxed) == 0 &&
+        return req_queue_size_.load(std::memory_order_acquire) == 0 &&
                task_mgr_.NumActive() == 0 && io_mgr_->IsIdle() &&
                !io_mgr_->NeedPrewarm();
     }

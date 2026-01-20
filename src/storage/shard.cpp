@@ -175,7 +175,7 @@ bool Shard::AddKvRequest(KvRequest *req)
 #ifdef ELOQ_MODULE_ENABLED
     if (ret)
     {
-        auto s = req_queue_size_.fetch_add(1, std::memory_order_relaxed) + 1;
+        auto s = req_queue_size_.fetch_add(1, std::memory_order_release) + 1;
         LOG(INFO) << "req_queue_size " << s;
         // New request, notify the external processor directly.
         eloq::EloqModule::NotifyWorker(shard_id_);
