@@ -398,6 +398,7 @@ KvError EloqStore::CollectTablePartitions(
 
 void EloqStore::HandleDropTableRequest(DropTableRequest *req)
 {
+    LOG(INFO) << "HandleDropTableRequest";
     req->first_error_.store(static_cast<uint8_t>(KvError::NoError),
                             std::memory_order_relaxed);
     req->pending_.store(0, std::memory_order_relaxed);
@@ -449,6 +450,7 @@ void EloqStore::HandleDropTableRequest(DropTableRequest *req)
         trunc_req->SetArgs(partition, std::string_view{});
         TruncateRequest *ptr = trunc_req.get();
         req->truncate_reqs_.push_back(std::move(trunc_req));
+        LOG(INFO) << "drop table on " << partition;
         if (!ExecAsyn(ptr, 0, on_truncate_done))
         {
             LOG(ERROR)
