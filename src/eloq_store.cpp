@@ -437,11 +437,20 @@ void EloqStore::HandleDropTableRequest(DropTableRequest *req)
                 std::memory_order_relaxed,
                 std::memory_order_relaxed);
         }
+        LOG(INFO) << "HandleDropTableRequest one truncate done "
+                  << sub_req->TableId();
         if (req->pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
         {
             KvError final_err = static_cast<KvError>(
                 req->first_error_.load(std::memory_order_relaxed));
+            LOG(INFO) << "HandleDropTableRequest one truncate done finish "
+                      << sub_req->TableId() << ", err=" << (int) final_err;
             req->SetDone(final_err);
+        }
+        else
+        {
+            LOG(INFO) << "HandleDropTableRequest one truncate done not finished "
+                      << sub_req->TableId();
         }
     };
 
@@ -460,6 +469,7 @@ void EloqStore::HandleDropTableRequest(DropTableRequest *req)
             ptr->SetDone(KvError::NotRunning);
         }
     }
+    LOG(INFO) << "HandleDropTableRequest done";
 }
 
 bool EloqStore::SendRequest(KvRequest *req)
