@@ -504,10 +504,11 @@ void Shard::WorkOneRound()
     KvRequest *reqs[128];
     size_t nreqs = requests_.try_dequeue_bulk(reqs, std::size(reqs));
 
-    bool is_idle_round =
-        nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle();
+    bool is_idle_round = nreqs == 0 && task_mgr_.NumActive() == 0 &&
+                         io_mgr_->IsIdle() &&
+                         req_queue_size_.load(std::memory_order_relaxed);
     LOG(INFO) << "nreqs=" << nreqs << ", num_active=" << task_mgr_.NumActive()
-    << ", IsIdle()=" << io_mgr_->IsIdle();
+              << ", IsIdle()=" << io_mgr_->IsIdle();
     if (is_idle_round)
     {
         // No request and no active task and no active io.
