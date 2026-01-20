@@ -405,7 +405,9 @@ void EloqStore::HandleDropTableRequest(DropTableRequest *req)
     req->truncate_reqs_.clear();
 
     std::vector<TableIdent> partitions;
+    LOG(INFO) << "HandleDropTableRequest begin collect";
     KvError err = CollectTablePartitions(req->TableName(), partitions);
+    LOG(INFO) << "HandleDropTableRequest finish collect";
     if (err != KvError::NoError)
     {
         LOG(INFO) << "HandleDropTableRequest list fail";
