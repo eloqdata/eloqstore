@@ -15,7 +15,6 @@
 #include <cctype>
 #include <chrono>
 #include <cstdint>
-#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <ios>
@@ -496,16 +495,16 @@ public:
         : options_(options), cloud_path_(std::move(path))
     {
         credentials_provider_ = AwsCloudBackend::BuildCredentialsProvider();
-        client_config_ = AwsCloudBackend::BuildClientConfig();
+        const auto &client_config = GetClientConfig();
         s3_client_ = std::make_unique<Aws::S3::S3Client>(
             credentials_provider_,
-            client_config_,
+            client_config,
             Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
             AwsCloudBackend::UseVirtualAddressing());
         signer_ = std::make_unique<Aws::Client::AWSAuthV4Signer>(
             credentials_provider_,
             "s3",
-            client_config_.region,
+            client_config.region,
             Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
             false);
         bucket_url_ = BuildBucketUrl();
@@ -783,15 +782,26 @@ protected:
         }
     }
 
+    const Aws::Client::ClientConfiguration &GetClientConfig() const
+    {
+        std::call_once(client_config_once_, [this]() {
+            client_config_ = std::make_unique<Aws::Client::ClientConfiguration>(
+                BuildClientConfig());
+        });
+        return *client_config_;
+    }
+
     const KvOptions *options_;
     CloudPathInfo cloud_path_;
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentials_provider_;
-    Aws::Client::ClientConfiguration client_config_;
     std::unique_ptr<Aws::S3::S3Client> s3_client_;
     std::unique_ptr<Aws::Client::AWSAuthV4Signer> signer_;
     std::string bucket_url_;
-};
 
+    inline static std::once_flag client_config_once_;
+    inline static std::unique_ptr<Aws::Client::ClientConfiguration>
+        client_config_;
+};
 class GcsCloudBackend : public AwsCloudBackend
 {
 public:
