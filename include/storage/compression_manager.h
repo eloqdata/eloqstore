@@ -19,14 +19,14 @@ class CompressionManager
 public:
     struct Entry
     {
-        TableIdent tbl_id_{};
-        DictMeta meta_{};
-        std::shared_ptr<compression::DictCompression> compression_{};
-        uint32_t ref_count_{0};
-        size_t bytes_{0};
         bool in_lru_{false};
+        uint32_t ref_count_{0};
         Entry *prev_{nullptr};
         Entry *next_{nullptr};
+        DictMeta meta_{};
+        std::shared_ptr<compression::DictCompression> compression_{};
+        TableIdent tbl_id_{};
+        size_t bytes_{0};
     };
 
     class Handle

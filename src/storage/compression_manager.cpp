@@ -149,27 +149,9 @@ CompressionManager::GetOrLoadFromBytes(const TableIdent &tbl_id,
 {
     Entry *entry = GetEntry(tbl_id, meta);
 
-    // If checksum mismatch, reload dictionary.
-    if (entry->compression_->HasDictionary() &&
-        entry->meta_.dict_len != meta.dict_len)
-    {
-        LOG(FATAL) << "dict version mismatch for " << tbl_id.ToString()
-                   << " old_len=" << entry->meta_.dict_len
-                   << " new_len=" << meta.dict_len;
-    }
-
     Handle handle(entry, this);
-    if (meta.HasDictionary() && !entry->compression_->HasDictionary())
+    if (!entry->compression_->HasDictionary())
     {
-        if (dict_bytes.size() != meta.dict_len)
-        {
-            LOG(WARNING) << "dict bytes size mismatch for " << tbl_id.ToString()
-                         << " expect=" << meta.dict_len
-                         << " got=" << dict_bytes.size();
-            handle.Clear();
-            assert(false && "dict bytes size mismatch");
-            return {{}, KvError::Corrupted};
-        }
         entry->compression_->LoadDictionary(
             std::string(dict_bytes.data(), dict_bytes.size()));
         UpdateDictionary(entry->tbl_id_, entry->compression_, entry->meta_);
