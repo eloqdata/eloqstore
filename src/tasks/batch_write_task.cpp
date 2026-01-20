@@ -4,6 +4,7 @@
 #include <cassert>
 #include <limits>
 #include <memory>
+#include <butil/time.h>
 
 #include "coding.h"
 #include "compression.h"
@@ -254,6 +255,17 @@ void BatchWriteTask::Abort()
 
 KvError BatchWriteTask::Apply()
 {
+    struct Timer
+    {
+        Timer(TableIdent tbl_ident) : tbl_ident_(tbl_ident)
+        {}
+        ~Timer()
+        {
+            LOG(INFO) << "Apply cost " << butil::cpuwide_time_ms() - start << "ms, tbl:" << tbl_ident_;
+        }
+        int64_t start{butil::cpuwide_time_ms()};
+        TableIdent tbl_ident_;
+    } timer{tbl_ident_};
     KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
     cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     CHECK_KV_ERR(err);
