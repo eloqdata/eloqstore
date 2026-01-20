@@ -784,10 +784,14 @@ protected:
 
     const Aws::Client::ClientConfiguration &GetClientConfig() const
     {
-        std::call_once(client_config_once_, [this]() {
-            client_config_ = std::make_unique<Aws::Client::ClientConfiguration>(
-                BuildClientConfig());
-        });
+        std::call_once(
+            client_config_once_,
+            [this]
+            {
+                client_config_ =
+                    std::make_unique<Aws::Client::ClientConfiguration>(
+                        BuildClientConfig());
+            });
         return *client_config_;
     }
 
