@@ -106,7 +106,7 @@ KvError WriteTask::WritePage(VarPage page, FilePageId file_page_id)
         }
         else
         {
-            YieldToNextRound();
+            YieldToLowPQ();
         }
     }
     else
@@ -121,7 +121,7 @@ KvError WriteTask::WritePage(VarPage page, FilePageId file_page_id)
         }
         else
         {
-            YieldToNextRound();
+            YieldToLowPQ();
         }
     }
     return KvError::NoError;
@@ -445,7 +445,7 @@ void WriteTask::TriggerFileGC() const
     for (const std::shared_ptr<MappingSnapshot> &mapping : snapshot_array)
     {
         GetRetainedFiles(retained_files, mapping->mapping_tbl_, shift);
-        ThdTask()->YieldToNextRound();
+        ThdTask()->YieldToLowPQ();
     }
 
     // Check if we're in cloud mode or local mode

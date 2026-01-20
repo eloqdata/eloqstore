@@ -45,7 +45,7 @@ void GetRetainedFiles(absl::flat_hash_set<FileId> &result,
         }
         if ((page_id & 0xFF) == 0)
         {
-            ThdTask()->YieldToNextRound();
+            ThdTask()->YieldToLowPQ();
         }
     }
 }

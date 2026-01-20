@@ -77,7 +77,7 @@ void BackgroundWrite::HeapSortFpIdsWithYield(
         push_ops++;
         if (push_ops % push_batch == 0)
         {
-            YieldToNextRound();
+            YieldToLowPQ();
         }
     }
 
@@ -88,7 +88,7 @@ void BackgroundWrite::HeapSortFpIdsWithYield(
         pop_ops++;
         if (pop_ops % pop_batch == 0)
         {
-            YieldToNextRound();
+            YieldToLowPQ();
         }
     }
 }
@@ -156,18 +156,18 @@ KvError BackgroundWrite::CompactDataFile()
         }
         if ((page_id & 0xFF) == 0)
         {
-            YieldToNextRound();
+            YieldToLowPQ();
         }
     }
-    YieldToNextRound();
+    YieldToLowPQ();
     assert(fp_ids.size() == mapping_cnt);
     HeapSortFpIdsWithYield(fp_ids);
-    YieldToNextRound();
+    YieldToLowPQ();
 
     constexpr uint8_t max_move_batch = max_read_pages_batch;
     std::vector<Page> move_batch_buf;
     move_batch_buf.reserve(max_move_batch);
-    YieldToNextRound();
+    YieldToLowPQ();
     std::vector<FilePageId> move_batch_fp_ids;
     move_batch_fp_ids.reserve(max_move_batch);
     MovingCachedPages moving_cached(mapping_cnt);
@@ -185,7 +185,7 @@ KvError BackgroundWrite::CompactDataFile()
     {
         if ((round_cnt & 0xFFFF) == 0)
         {
-            YieldToNextRound();
+            YieldToLowPQ();
             round_cnt = 0;
         }
         FilePageId end_fp_id = (file_id + 1) << opts->pages_per_file_shift;
