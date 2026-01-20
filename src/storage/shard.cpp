@@ -509,7 +509,7 @@ void Shard::WorkOneRound()
                          req_queue_size_.load(std::memory_order_relaxed);
     LOG(INFO) << "nreqs=" << nreqs << ", num_active=" << task_mgr_.NumActive()
               << ", IsIdle()=" << io_mgr_->IsIdle() << ", req_queue_size="
-              << req_queue_size_.load(std::memory_order_relaxed);
+              << req_queue_size_.load(std::memory_order_acquire);
     if (is_idle_round)
     {
         // No request and no active task and no active io.
