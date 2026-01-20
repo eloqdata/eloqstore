@@ -170,11 +170,13 @@ void Shard::Stop()
 
 bool Shard::AddKvRequest(KvRequest *req)
 {
+    LOG(INFO) << "AddKvRequest " << typeid(*req).name();
     bool ret = requests_.enqueue(req);
 #ifdef ELOQ_MODULE_ENABLED
     if (ret)
     {
-        req_queue_size_.fetch_add(1, std::memory_order_relaxed);
+        auto s = req_queue_size_.fetch_add(1, std::memory_order_relaxed) + 1;
+        LOG(INFO) << "req_queue_size " << s;
         // New request, notify the external processor directly.
         eloq::EloqModule::NotifyWorker(shard_id_);
     }
@@ -529,6 +531,7 @@ void Shard::WorkOneRound()
 
     for (size_t i = 0; i < nreqs; i++)
     {
+        LOG(INFO) << "OnReceivedReq: " << typeid(*reqs[i]).name();
         OnReceivedReq(reqs[i]);
     }
 
