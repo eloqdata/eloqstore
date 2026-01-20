@@ -88,7 +88,7 @@ public:
         // ETag from response headers for CAS operations
         std::string etag_{};
         // HTTP response code for CAS conflict detection
-        int64_t response_code_{0};  
+        int64_t response_code_{0};
 
         uint8_t retry_count_ = 0;
         uint8_t max_retries_ = 5;
