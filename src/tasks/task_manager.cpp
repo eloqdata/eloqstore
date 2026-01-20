@@ -73,6 +73,7 @@ ScanTask *TaskManager::GetScanTask()
 ListObjectTask *TaskManager::GetListObjectTask()
 {
     num_active_++;
+    LOG(INFO) << "GetListObjectTask , numactive_: " << num_active_;
     return list_object_pool_.GetTask();
 }
 
