@@ -33,6 +33,8 @@
 #include <bthread/eloq_module.h>
 #endif
 
+#include <butil/time.h>
+
 #include "cloud_storage_service.h"
 #include "coding.h"
 #include "common.h"
@@ -3028,7 +3030,10 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
         for (ObjectStore::UploadTask *task : span)
         {
             DirectIoBuffer file_buffer = direct_io_buffer_pool_.Acquire();
+            auto read_ts = butil::cpuwide_time_us();
             read_err = ReadFile(tbl_id, task->filename_, file_buffer);
+            LOG(INFO) << "read for upload:" << task->filename_ << " cost "
+                      << butil::cpuwide_time_us() - read_ts << " us";
             if (read_err != KvError::NoError)
             {
                 break;
@@ -3043,6 +3048,7 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
             return read_err;
         }
 
+        auto acquire_ts = butil::cpuwide_time_us();
         for (size_t i = 0; i < span.size(); ++i)
         {
             ObjectStore::UploadTask *task = span[i];
@@ -3052,11 +3058,16 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
             AcquireCloudSlot(current_task);
             obj_store_.SubmitTask(task, shard);
         }
+        LOG(INFO) << "Submit task cost "
+                  << butil::cpuwide_time_us() - acquire_ts << " us";
         batch_contents.clear();
 
+        auto upload_ts = butil::cpuwide_time_us();
         if (!span.empty())
         {
             current_task->WaitIo();
+            LOG(INFO) << "Upload cost " << butil::cpuwide_time_us() - upload_ts
+                      << " us";
             inflight_upload_files_ -= span_size;
             upload_slots_waiting_.WakeAll();
             for (ObjectStore::UploadTask *task : span)
