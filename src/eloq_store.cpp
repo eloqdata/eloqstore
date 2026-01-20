@@ -180,13 +180,22 @@ KvError EloqStore::Start(uint64_t term)
         return KvError::NoError;
     }
 
-    term_ = term;
     eloq_store = this;
     // Initialize
     if (!options_.store_path.empty())
     {
         KvError err = InitStoreSpace();
         CHECK_KV_ERR(err);
+    }
+
+    if (options_.cloud_store_path.empty())
+    {
+        // local mode, set term to 0
+        term = 0;
+    }
+    else
+    {
+        term_ = term;
     }
 
     // There are files opened at very early stage like stdin/stdout/stderr, glog
