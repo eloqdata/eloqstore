@@ -408,6 +408,7 @@ void EloqStore::HandleDropTableRequest(DropTableRequest *req)
     KvError err = CollectTablePartitions(req->TableName(), partitions);
     if (err != KvError::NoError)
     {
+        LOG(INFO) << "HandleDropTableRequest list fail";
         req->SetDone(err);
         return;
     }
@@ -415,6 +416,7 @@ void EloqStore::HandleDropTableRequest(DropTableRequest *req)
     if (partitions.empty())
     {
         req->SetDone(KvError::NoError);
+        LOG(INFO) << "HandleDropTableRequest list empty";
         return;
     }
 
