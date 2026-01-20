@@ -6,6 +6,7 @@
 #include <cassert>
 #include <string>
 #include <thread>
+#include <mutex>
 #include <utility>
 #include <vector>
 
@@ -276,7 +277,14 @@ bool PrewarmService::ListCloudObjects(
     request.SetRecursive(true);
     request.SetContinuationToken(continuation_token);
     request.err_ = KvError::NoError;
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    {
+        std::lock_guard<bthread::Mutex> lk(request.mutex_);
+        request.done_ = false;
+    }
+#else
     request.done_.store(false, std::memory_order_relaxed);
+#endif
     request.callback_ = nullptr;
 
     // send request to a random shard

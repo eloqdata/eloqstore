@@ -1,8 +1,14 @@
 #pragma once
 
+#ifdef ELOQSTORE_WITH_TXSERVICE
+#include <bthread/condition_variable.h>
+#include <bthread/mutex.h>
+#endif
+
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -95,7 +101,13 @@ protected:
     TableIdent tbl_id_;
     uint64_t user_data_{0};
     std::function<void(KvRequest *)> callback_{nullptr};
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    mutable bthread::ConditionVariable cv_;
+    mutable bthread::Mutex mutex_;
+    bool done_{true};
+#else
     std::atomic<bool> done_{true};
+#endif
     KvError err_{KvError::NoError};
 
     friend class Shard;

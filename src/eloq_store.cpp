@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -379,7 +380,14 @@ KvError EloqStore::CollectTablePartitions(
     {
         std::vector<std::string> objects;
         ListObjectRequest list_object_request(&objects);
+#ifdef ELOQSTORE_WITH_TXSERVICE
+        {
+            std::lock_guard<bthread::Mutex> lk(list_object_request.mutex_);
+            list_object_request.done_ = false;
+        }
+#else
         list_object_request.done_.store(false, std::memory_order_relaxed);
+#endif
         shards_[utils::RandomInt(static_cast<int>(shards_.size()))]
             ->AddKvRequest(&list_object_request);
         list_object_request.Wait();
@@ -466,7 +474,14 @@ bool EloqStore::SendRequest(KvRequest *req)
     }
 
     req->err_ = KvError::NoError;
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    {
+        std::lock_guard<bthread::Mutex> lk(req->mutex_);
+        req->done_ = false;
+    }
+#else
     req->done_.store(false, std::memory_order_relaxed);
+#endif
 
     if (req->Type() == RequestType::DropTable)
     {
@@ -647,7 +662,15 @@ uint64_t KvRequest::UserData() const
 void KvRequest::Wait() const
 {
     CHECK(callback_ == nullptr);
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    std::unique_lock<bthread::Mutex> lk(mutex_);
+    while (!done_)
+    {
+        cv_.wait(lk);
+    }
+#else
     done_.wait(false, std::memory_order_acquire);
+#endif
 }
 
 void ReadRequest::SetArgs(TableIdent tbl_id, const char *key)
@@ -853,13 +876,25 @@ const TableIdent &KvRequest::TableId() const
 
 bool KvRequest::IsDone() const
 {
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    std::lock_guard<bthread::Mutex> lk(mutex_);
+    return done_;
+#else
     return done_.load(std::memory_order_acquire);
+#endif
 }
 
 void KvRequest::SetDone(KvError err)
 {
     err_ = err;
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    {
+        std::lock_guard<bthread::Mutex> lk(mutex_);
+        done_ = true;
+    }
+#else
     done_.store(true, std::memory_order_release);
+#endif
     if (callback_)
     {
         // Asynchronous request
@@ -868,7 +903,11 @@ void KvRequest::SetDone(KvError err)
     else
     {
         // Synchronous request
+#ifdef ELOQSTORE_WITH_TXSERVICE
+        cv_.notify_one();
+#else
         done_.notify_one();
+#endif
     }
 }
 
