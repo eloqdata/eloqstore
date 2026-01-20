@@ -166,14 +166,7 @@ void DictCompression::LoadDictionary(std::string &&dict_bytes)
     has_dictionary_ = true;
     if (!EnsureZstdObjects())
     {
-        // Fallback to empty dictionary if memory is insufficient.
-        has_dictionary_ = false;
-        dictionary_.clear();
-        if (!EnsureZstdObjects())
-        {
-            // Failed to init zstd objects even with empty dictionary.
-            LOG(FATAL) << "Fail to init zstd objects";
-        }
+        LOG(FATAL) << "Fail to init zstd objects for dictionary";
     }
 }
 

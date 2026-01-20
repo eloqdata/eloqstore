@@ -10,7 +10,6 @@
 #include "async_io_manager.h"
 #include "coding.h"
 #include "error.h"
-#include "external/xxhash.h"
 #include "kv_options.h"
 #include "storage/index_page_manager.h"
 #include "storage/page.h"
@@ -39,15 +38,6 @@ KvError Replayer::Replay(ManifestFile *file)
     CHECK_KV_ERR(err);
     assert(!payload_.empty());
     DeserializeSnapshot(payload_);
-    if (dict_meta_.HasDictionary() && dict_meta_.dict_checksum != 0)
-    {
-        uint64_t actual = XXH3_64bits(dict_bytes_.data(), dict_bytes_.size());
-        if (actual != dict_meta_.dict_checksum)
-        {
-            return KvError::Corrupted;
-        }
-    }
-
     while (true)
     {
         err = ParseNextRecord(file);
@@ -120,9 +110,6 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
     ok = GetVarint32(&snapshot, &dict_meta_.dict_len);
     assert(ok);
 
-    ok = GetVarint64(&snapshot, &dict_meta_.dict_checksum);
-    assert(ok);
-
     const size_t payload_offset = snapshot_start.size() - snapshot.size();
     if (dict_meta_.dict_len > 0)
     {
@@ -182,14 +169,6 @@ KvError Replayer::ReadSnapshotDict(ManifestFile *file,
         CHECK_KV_ERR(err);
         off += chunk;
         to_read -= chunk;
-    }
-    if (meta.dict_checksum != 0)
-    {
-        uint64_t actual = XXH3_64bits(dict_bytes.data(), dict_bytes.size());
-        if (actual != meta.dict_checksum)
-        {
-            return KvError::Corrupted;
-        }
     }
     return KvError::NoError;
 }

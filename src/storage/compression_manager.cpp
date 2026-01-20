@@ -118,8 +118,7 @@ std::pair<CompressionManager::Handle, KvError> CompressionManager::GetOrLoad(
 
     // If checksum mismatch, reload dictionary.
     if (entry->compression_->HasDictionary() &&
-        (entry->meta_.dict_checksum != meta.dict_checksum ||
-         entry->meta_.dict_len != meta.dict_len))
+        entry->meta_.dict_len != meta.dict_len)
     {
         LOG(FATAL) << "dict version mismatch for " << tbl_id.ToString()
                    << " old_len=" << entry->meta_.dict_len
@@ -152,8 +151,7 @@ CompressionManager::GetOrLoadFromBytes(const TableIdent &tbl_id,
 
     // If checksum mismatch, reload dictionary.
     if (entry->compression_->HasDictionary() &&
-        (entry->meta_.dict_checksum != meta.dict_checksum ||
-         entry->meta_.dict_len != meta.dict_len))
+        entry->meta_.dict_len != meta.dict_len)
     {
         LOG(FATAL) << "dict version mismatch for " << tbl_id.ToString()
                    << " old_len=" << entry->meta_.dict_len

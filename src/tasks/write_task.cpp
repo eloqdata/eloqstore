@@ -34,7 +34,7 @@ uint64_t DictOffset(FilePageId max_fp_id, const DictMeta &meta)
     }
     // Dict bytes are stored after max_fp_id and dict metadata in snapshot.
     return ManifestBuilder::header_bytes + Varint64Size(max_fp_id) +
-           Varint32Size(meta.dict_len) + Varint64Size(meta.dict_checksum);
+           Varint32Size(meta.dict_len);
 }
 }  // namespace
 
