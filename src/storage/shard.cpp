@@ -506,6 +506,8 @@ void Shard::WorkOneRound()
 
     bool is_idle_round =
         nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle();
+    LOG(INFO) << "nreqs=" << nreqs << ", num_active=" << task_mgr_.NumActive()
+    << ", IsIdle()=" << io_mgr_->IsIdle();
     if (is_idle_round)
     {
         // No request and no active task and no active io.
