@@ -6,6 +6,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstddef>
+#include <mutex>
 #include <string>
 #include <utility>
 
@@ -191,7 +192,14 @@ void Shard::AddPendingCompact(const TableIdent &tbl_id)
     PendingWriteQueue &pending_q = it->second;
     CompactRequest &req = pending_q.compact_req_;
     req.SetTableId(tbl_id);
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    {
+        std::lock_guard<bthread::Mutex> lk(req.mutex_);
+        req.done_ = false;
+    }
+#else
     req.done_.store(false, std::memory_order_relaxed);
+#endif
     pending_q.PushBack(&req);
 }
 
@@ -200,7 +208,12 @@ bool Shard::HasPendingCompact(const TableIdent &tbl_id)
     auto it = pending_queues_.find(tbl_id);
     assert(it != pending_queues_.end());
     PendingWriteQueue &pending_q = it->second;
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    std::lock_guard<bthread::Mutex> lk(pending_q.compact_req_.mutex_);
+    return !pending_q.compact_req_.done_;
+#else
     return !pending_q.compact_req_.done_.load(std::memory_order_relaxed);
+#endif
 }
 
 void Shard::AddPendingTTL(const TableIdent &tbl_id)
@@ -212,7 +225,14 @@ void Shard::AddPendingTTL(const TableIdent &tbl_id)
     PendingWriteQueue &pending_q = it->second;
     CleanExpiredRequest &req = pending_q.expire_req_;
     req.SetTableId(tbl_id);
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    {
+        std::lock_guard<bthread::Mutex> lk(req.mutex_);
+        req.done_ = false;
+    }
+#else
     req.done_.store(false, std::memory_order_relaxed);
+#endif
     pending_q.PushBack(&req);
 }
 
@@ -221,7 +241,12 @@ bool Shard::HasPendingTTL(const TableIdent &tbl_id)
     auto it = pending_queues_.find(tbl_id);
     assert(it != pending_queues_.end());
     PendingWriteQueue &pending_q = it->second;
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    std::lock_guard<bthread::Mutex> lk(pending_q.expire_req_.mutex_);
+    return !pending_q.expire_req_.done_;
+#else
     return !pending_q.expire_req_.done_.load(std::memory_order_relaxed);
+#endif
 }
 
 IndexPageManager *Shard::IndexManager()
