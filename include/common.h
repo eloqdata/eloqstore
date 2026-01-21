@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <string>
@@ -101,19 +102,11 @@ inline std::pair<std::string_view, std::string_view> ParseFileName(
 // Helper function to parse a number from string_view
 inline bool ParseUint64(std::string_view str, uint64_t &out)
 {
-    if (str.empty())
-        return false;
-    uint64_t result = 0;
-    for (char c : str)
+    out = std::strtoull(str.data(), nullptr, 10);
+    if (errno == ERANGE)
     {
-        if (c < '0' || c > '9')
-            return false;
-        uint64_t prev = result;
-        result = result * 10 + (c - '0');
-        if (result < prev)  // Overflow
-            return false;
+        return false;
     }
-    out = result;
     return true;
 }
 
