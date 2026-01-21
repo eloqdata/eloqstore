@@ -20,8 +20,8 @@ constexpr uint32_t num_reserved_fd = 100;
 using FileIdTermMapping = absl::flat_hash_map<FileId, uint64_t>;
 
 // Serialize FileIdTermMapping to dst (appends to dst)
-// Format: varint64(count) followed by count pairs of varint64(file_id)
-// varint64(term)
+// Format: Fixed32(bytes length) + pairs of {varint64(file_id) and
+// varint64(term)}
 inline void SerializeFileIdTermMapping(const FileIdTermMapping &mapping,
                                        std::string &dst)
 {

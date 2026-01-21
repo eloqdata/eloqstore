@@ -60,10 +60,9 @@ TEST_CASE(
     eloqstore::Replayer replayer(&opts);
     REQUIRE(replayer.Replay(&file) == eloqstore::KvError::NoError);
 
-    // Set manifest_term in file_id_term_mapping_ to trigger bumping
     replayer.file_id_term_mapping_->insert_or_assign(
         eloqstore::IouringMgr::LruFD::kManifest, 1);
-
+    // expect_term is equal to manifest_term => no bumping
     auto mapper = replayer.GetMapper(&idx_mgr, &tbl_id, 1);
     REQUIRE(mapper != nullptr);
     REQUIRE(mapper->FilePgAllocator()->MaxFilePageId() == 17);
