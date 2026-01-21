@@ -139,6 +139,10 @@ add_executable(page_checksum_tool tools/page_checksum_tool.cpp)
 target_include_directories(page_checksum_tool PUBLIC ${ELOQ_STORE_INCLUDE})
 target_link_libraries(page_checksum_tool PRIVATE eloqstore)
 
+add_executable(manifest_check_tool tools/manifest_check_tool.cpp)
+target_include_directories(manifest_check_tool PUBLIC ${ELOQ_STORE_INCLUDE})
+target_link_libraries(manifest_check_tool PRIVATE eloqstore)
+
 
 add_library(test_util STATIC src/test_utils.cpp)
 target_link_libraries(test_util PUBLIC eloqstore absl::flat_hash_map)
