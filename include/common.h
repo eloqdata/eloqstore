@@ -102,8 +102,14 @@ inline std::pair<std::string_view, std::string_view> ParseFileName(
 // Helper function to parse a number from string_view
 inline bool ParseUint64(std::string_view str, uint64_t &out)
 {
-    out = std::strtoull(str.data(), nullptr, 10);
-    if (errno == ERANGE)
+    if (str.empty())
+    {
+        return false;
+    }
+    errno = 0;
+    char *end = nullptr;
+    out = std::strtoull(str.data(), &end, 10);
+    if (errno != 0 || end != str.data() + str.size())
     {
         return false;
     }
