@@ -87,20 +87,19 @@ int main(int argc, char **argv)
         }
         offset += payload_len;
 
-        const bool checksum_ok =
-            ManifestBuilder::ValidateChecksum(std::string_view(record.data(),
-                                                               record.size()));
+        const bool checksum_ok = ManifestBuilder::ValidateChecksum(
+            std::string_view(record.data(), record.size()));
         const PageId root =
             DecodeFixed32(record.data() + ManifestBuilder::offset_root);
         const PageId ttl_root =
             DecodeFixed32(record.data() + ManifestBuilder::offset_ttl_root);
 
-        std::cout << "Log #" << log_index << " at offset " << record_offset << "\n";
+        std::cout << "Log #" << log_index << " at offset " << record_offset
+                  << "\n";
         std::cout << "  root: " << root << "\n";
         std::cout << "  ttl_root: " << ttl_root << "\n";
         std::cout << "  payload_bytes: " << payload_len << "\n";
-        std::cout << "  checksum: " << (checksum_ok ? "OK" : "FAILED")
-                  << "\n";
+        std::cout << "  checksum: " << (checksum_ok ? "OK" : "FAILED") << "\n";
 
         checksum_failed = checksum_failed || !checksum_ok;
 
