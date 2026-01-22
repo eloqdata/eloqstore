@@ -53,8 +53,7 @@ KvError Replayer::Replay(ManifestFile *file)
             }
             if (err == KvError::Corrupted)
             {
-                LOG(ERROR) << "Found corruption log at offset " << file_size_
-                           << ", ignoring the current log.";
+                LOG(ERROR) << "Ignoring the corrupted log, continuing.";
                 corrupted_log_found = true;
                 continue;
             }
@@ -91,6 +90,7 @@ KvError Replayer::ParseNextRecord(ManifestFile *file)
     if (!ManifestBuilder::ValidateChecksum(content))
     {
         LOG(ERROR) << "Manifest file corrupted, checksum mismatch.";
+        LOG(ERROR) << "Corruption found at offset " << file_size_;
         // Advance file_size_ and skip padding to position at next record
         const size_t record_bytes = header_len + payload_len;
         file_size_ += record_bytes;
