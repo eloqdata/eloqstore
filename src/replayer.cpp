@@ -39,6 +39,7 @@ KvError Replayer::Replay(ManifestFile *file)
     CHECK_KV_ERR(err);
     assert(!payload_.empty());
     DeserializeSnapshot(payload_);
+    bool corrupted_log_found = false;
 
     while (true)
     {
@@ -47,15 +48,21 @@ KvError Replayer::Replay(ManifestFile *file)
         {
             if (err == KvError::EndOfFile)
             {
+                LOG(INFO) << "End of File";
                 break;
             }
             if (err == KvError::Corrupted)
             {
-                LOG(ERROR) << "Manifest replay stopped at offset " << file_size_
-                           << ", ignoring trailing corrupted records.";
-                break;
+                LOG(ERROR) << "Found corruption log at offset " << file_size_
+                           << ", ignoring the current log.";
+                corrupted_log_found = true;
+                continue;
             }
             return err;
+        }
+        if (corrupted_log_found)
+        {
+            LOG(ERROR) << "Found corruption log between normal log";
         }
         ReplayLog();
     }

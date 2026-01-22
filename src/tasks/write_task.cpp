@@ -297,11 +297,11 @@ KvError WriteTask::FlushManifest()
 
     const size_t alignment = page_align;
     const uint64_t log_physical_size =
-        (wal_builder_.CurrentSize() + alignment - 1) & ~(alignment - 1);
+        (wal_builder_.CurrentSize() + term_buf.size() + alignment - 1) &
+        ~(alignment - 1);
 
     if (!dict_dirty && manifest_size > 0 &&
-        manifest_size + log_physical_size + term_buf.size() <=
-            opts->manifest_limit)
+        manifest_size + log_physical_size <= opts->manifest_limit)
     {
         wal_builder_.AppendFileIdTermMapping(term_buf);
         std::string_view blob =

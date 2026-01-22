@@ -1602,7 +1602,6 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
 {
     if (log.empty())
     {
-        LOG(INFO) << "AppendManifest tbl=" << tbl_id << ", empty return";
         return KvError::NoError;
     }
 
@@ -1613,15 +1612,24 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
     {
         SetFileIdTerm(tbl_id, LruFD::kManifest, manifest_term);
     }
+#ifndef NDEBUG
     const PageId root =
         DecodeFixed32(log.data() + ManifestBuilder::offset_root);
     const PageId ttl_root =
         DecodeFixed32(log.data() + ManifestBuilder::offset_ttl_root);
     const uint32_t payload_len =
         DecodeFixed32(log.data() + ManifestBuilder::offset_len);
+    const std::string_view record_view{
+        log.data(), ManifestBuilder::header_bytes + payload_len};
+    const uint64_t checksum = DecodeFixed64(log.data());
     DLOG(INFO) << "AppendManifest tbl=" << tbl_id << " offset=" << offset
                << " bytes=" << log.size() << " payload=" << payload_len
-               << " root=" << root << " ttl_root=" << ttl_root;
+               << " root=" << root << " ttl_root=" << ttl_root
+               << " checksum=" << checksum << " record size="
+               << ManifestBuilder::header_bytes + payload_len;
+    const bool checksum_ok = ManifestBuilder::ValidateChecksum(record_view);
+    assert(checksum_ok);
+#endif
     auto [fd_ref, err] = OpenFD(tbl_id, LruFD::kManifest, true, manifest_term);
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;

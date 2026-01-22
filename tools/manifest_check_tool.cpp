@@ -19,6 +19,19 @@ void PrintUsage(const char *prog)
     std::cerr << "Usage: " << prog << " <manifest_file_path>\n";
 }
 
+std::string BytesToHex(std::string_view payload)
+{
+    static constexpr char kHexDigits[] = "0123456789abcdef";
+    std::string hex;
+    hex.reserve(payload.size() * 2);
+    for (unsigned char byte : payload)
+    {
+        hex.push_back(kHexDigits[(byte >> 4) & 0xF]);
+        hex.push_back(kHexDigits[byte & 0xF]);
+    }
+    return hex;
+}
+
 bool SkipPadding(std::ifstream &file, size_t padding)
 {
     if (padding == 0)
@@ -76,8 +89,7 @@ int main(int argc, char **argv)
         const uint32_t payload_len =
             DecodeFixed32(record.data() + ManifestBuilder::offset_len);
         record.resize(header_size + payload_len);
-        file.read(record.data() + header_size,
-                  static_cast<std::streamsize>(payload_len));
+        file.read(record.data() + header_size, payload_len);
         const std::streamsize payload_read = file.gcount();
         if (payload_read != static_cast<std::streamsize>(payload_len))
         {
@@ -87,8 +99,8 @@ int main(int argc, char **argv)
         }
         offset += payload_len;
 
-        const bool checksum_ok = ManifestBuilder::ValidateChecksum(
-            std::string_view(record.data(), record.size()));
+        const std::string_view record_view(record.data(), record.size());
+        const bool checksum_ok = ManifestBuilder::ValidateChecksum(record_view);
         const PageId root =
             DecodeFixed32(record.data() + ManifestBuilder::offset_root);
         const PageId ttl_root =
@@ -96,10 +108,17 @@ int main(int argc, char **argv)
 
         std::cout << "Log #" << log_index << " at offset " << record_offset
                   << "\n";
+        std::cout << "  record size: " << record.size() << "\n";
         std::cout << "  root: " << root << "\n";
         std::cout << "  ttl_root: " << ttl_root << "\n";
         std::cout << "  payload_bytes: " << payload_len << "\n";
         std::cout << "  checksum: " << (checksum_ok ? "OK" : "FAILED") << "\n";
+        if (!checksum_ok)
+        {
+            const std::string payload_hex = BytesToHex(
+                std::string_view(record.data() + header_size, payload_len));
+            std::cout << "  payload_hex: " << payload_hex << "\n";
+        }
 
         checksum_failed = checksum_failed || !checksum_ok;
 
