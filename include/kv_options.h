@@ -61,11 +61,6 @@ struct KvOptions
      */
     uint32_t max_inflight_write = 32 << 10;
     /**
-     * @brief Limit number of table partitions that can execute writes
-     * concurrently on a shard. 0 disables the limit.
-     */
-    uint32_t max_concurrent_writes = 1;
-    /**
      * @brief The maximum number of pages per batch for the write task.
      */
     uint32_t max_write_batch_pages = 256;

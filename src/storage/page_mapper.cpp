@@ -198,7 +198,7 @@ PageMapper::PageMapper(const PageMapper &rhs)
     {
         size_t batch_size = std::min(kCopyBatchSize, src.size() - i);
         dst.insert(dst.end(), src.begin() + i, src.begin() + i + batch_size);
-        ThdTask()->YieldToNextRound();
+        ThdTask()->YieldToLowPQ();
     }
 
     src_tbl.ApplyPendingTo(mapping_->mapping_tbl_);
@@ -463,7 +463,7 @@ void MappingSnapshot::Serialize(ManifestBuffer &dst) const
         dst.AppendVarint64(val);
         if (can_yield && (i & 511) == 0)
         {
-            ThdTask()->YieldToNextRound();
+            ThdTask()->YieldToLowPQ();
         }
     }
 }

@@ -102,7 +102,7 @@ public:
         return Type() < TaskType::BatchWrite;
     }
     void Yield();
-    void YieldToNextRound();
+    void YieldToLowPQ();
     /**
      * @brief Re-schedules the task to run. Note: the resumed task does not run
      * in place.

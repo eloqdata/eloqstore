@@ -158,7 +158,7 @@ uint64_t ManifestBuilder::CalcChecksum(std::string_view content)
         agg_checksum *= kChecksumMixer;
         if (__builtin_expect(can_yield, 1))
         {
-            ThdTask()->YieldToNextRound();
+            ThdTask()->YieldToLowPQ();
         }
     }
     return agg_checksum;

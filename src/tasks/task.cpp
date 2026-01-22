@@ -26,9 +26,9 @@ void KvTask::Yield()
     shard->main_ = shard->main_.resume();
 }
 
-void KvTask::YieldToNextRound()
+void KvTask::YieldToLowPQ()
 {
-    shard->tasks_to_run_next_round_.Enqueue(this);
+    shard->low_priority_ready_tasks_.Enqueue(this);
     shard->main_ = shard->main_.resume();
 }
 
