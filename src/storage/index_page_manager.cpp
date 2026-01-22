@@ -145,6 +145,7 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
         meta->mapper_ = std::move(mapper);
         meta->mapping_snapshots_.insert(mapping);
         root_meta_mgr_.UpdateBytes(entry, RootMetaBytes(*meta));
+        root_meta_mgr_.EvictIfNeeded();
         meta->manifest_size_ = replayer.file_size_;
         meta->next_expire_ts_ = 0;
         if (!replayer.dict_bytes_.empty())
@@ -159,7 +160,8 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
         }
         replayer.file_id_term_mapping_->insert_or_assign(
             IouringMgr::LruFD::kManifest, IoMgr()->ProcessTerm());
-        IoMgr()->SetFileIdTermMapping(entry_tbl, replayer.file_id_term_mapping_);
+        IoMgr()->SetFileIdTermMapping(entry_tbl,
+                                      replayer.file_id_term_mapping_);
         return KvError::NoError;
     };
 
@@ -188,7 +190,6 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
             continue;
         }
 
-        root_meta_mgr_.Touch(entry);
         if (meta->mapper_ == nullptr)
         {
             // Partition not found. Possible causes:
@@ -254,11 +255,6 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
     }
     auto it = meta->mapping_snapshots_.insert(cow_meta.mapper_->GetMapping());
     CHECK(it.second);
-    auto *entry = root_meta_mgr_.Find(tbl_ident);
-    if (entry != nullptr)
-    {
-        root_meta_mgr_.UpdateBytes(entry, RootMetaBytes(*meta));
-    }
     return KvError::NoError;
 }
 

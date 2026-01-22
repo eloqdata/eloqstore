@@ -30,10 +30,10 @@ std::pair<RootMetaMgr::Entry *, bool> RootMetaMgr::GetOrCreate(
     if (inserted)
     {
         entry->tbl_id_ = tbl_id;
-        entry->in_lru_ = false;
         entry->prev_ = nullptr;
         entry->next_ = nullptr;
         entry->bytes_ = 0;
+        EnqueueFront(entry);
     }
     return {entry, inserted};
 }
@@ -70,6 +70,8 @@ void RootMetaMgr::Erase(const TableIdent &tbl_id)
 
 void RootMetaMgr::Pin(Entry *entry)
 {
+    CHECK(entry->meta_.ref_cnt_ != 0 || entry->prev_ != nullptr)
+        << "pinning root meta that is not in LRU: " << entry->tbl_id_;
     if (entry->meta_.ref_cnt_ == 0)
     {
         Dequeue(entry);
@@ -85,16 +87,6 @@ void RootMetaMgr::Unpin(Entry *entry)
     {
         EnqueueFront(entry);
     }
-}
-
-void RootMetaMgr::Touch(Entry *entry)
-{
-    if (!entry->in_lru_)
-    {
-        return;
-    }
-    Dequeue(entry);
-    EnqueueFront(entry);
 }
 
 void RootMetaMgr::UpdateBytes(Entry *entry, size_t bytes)
@@ -116,15 +108,10 @@ bool RootMetaMgr::EvictRootForCache(Entry *entry)
     const TableIdent &tbl_id = entry->tbl_id_;
     if (meta.locked_)
     {
-        LOG(INFO) << "EvictRootForCache skip: locked table " << tbl_id;
         return false;
     }
-    if (meta.ref_cnt_ != 0)
-    {
-        LOG(INFO) << "EvictRootForCache skip: ref_cnt " << meta.ref_cnt_
-                  << " table " << tbl_id;
-        return false;
-    }
+    CHECK(meta.ref_cnt_ == 0) << "EvictRootForCache: ref_cnt " << meta.ref_cnt_
+                              << " table " << tbl_id;
     if (meta.mapper_ == nullptr)
     {
         LOG(INFO) << "EvictRootForCache: mapper null table " << tbl_id;
@@ -132,12 +119,8 @@ bool RootMetaMgr::EvictRootForCache(Entry *entry)
     }
     for (MemIndexPage *page : meta.index_pages_)
     {
-        if (page->IsPinned())
-        {
-            LOG(INFO) << "EvictRootForCache skip: index page pinned table "
-                      << tbl_id;
-            return false;
-        }
+        CHECK(!page->IsPinned())
+            << "EvictRootForCache: index page pinned table " << tbl_id;
     }
     if (meta.mapper_->MappingCount() == 0 && meta.manifest_size_ > 0)
     {
@@ -173,7 +156,7 @@ void RootMetaMgr::EvictIfNeeded()
     {
         Entry *victim = cursor;
         cursor = cursor->prev_;
-        CHECK(victim->in_lru_)
+        CHECK(victim->prev_ != nullptr)
             << "Evict scan saw non-LRU entry for table " << victim->tbl_id_;
         if (!EvictRootForCache(victim))
         {
@@ -201,30 +184,24 @@ void RootMetaMgr::EvictIfNeeded()
 
 void RootMetaMgr::EnqueueFront(Entry *entry)
 {
-    if (entry->in_lru_)
-    {
-        return;
-    }
+    CHECK(entry->prev_ == nullptr && entry->next_ == nullptr)
+        << "enqueue root meta already in LRU: " << entry->tbl_id_;
     entry->prev_ = &lru_head_;
     entry->next_ = lru_head_.next_;
     lru_head_.next_->prev_ = entry;
     lru_head_.next_ = entry;
-    entry->in_lru_ = true;
 }
 
 void RootMetaMgr::Dequeue(Entry *entry)
 {
-    if (!entry->in_lru_)
-    {
-        return;
-    }
+    CHECK(entry->prev_ != nullptr && entry->next_ != nullptr)
+        << "dequeue root meta not in LRU: " << entry->tbl_id_;
     Entry *prev = entry->prev_;
     Entry *next = entry->next_;
     prev->next_ = next;
     next->prev_ = prev;
     entry->prev_ = nullptr;
     entry->next_ = nullptr;
-    entry->in_lru_ = false;
 }
 
 }  // namespace eloqstore

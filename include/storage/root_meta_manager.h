@@ -17,7 +17,6 @@ class RootMetaMgr
 public:
     struct Entry
     {
-        bool in_lru_{false};
         Entry *prev_{nullptr};
         Entry *next_{nullptr};
         TableIdent tbl_id_{};
@@ -84,7 +83,6 @@ public:
 
     void Pin(Entry *entry);
     void Unpin(Entry *entry);
-    void Touch(Entry *entry);
     void UpdateBytes(Entry *entry, size_t bytes);
     bool EvictRootForCache(Entry *entry);
 

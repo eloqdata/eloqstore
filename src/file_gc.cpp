@@ -57,9 +57,9 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
                        const absl::flat_hash_set<FileId> &retained_files,
                        IouringMgr *io_mgr)
 {
-    // DLOG(INFO) << "ExecuteLocalGC: starting for table " << tbl_id.tbl_name_
-    //            << ", partition " << tbl_id.partition_id_
-    //            << ", retained_files count=" << retained_files.size();
+    DLOG(INFO) << "ExecuteLocalGC: starting for table " << tbl_id.tbl_name_
+               << ", partition " << tbl_id.partition_id_
+               << ", retained_files count=" << retained_files.size();
 
     // 1. list all files in local directory.
     std::vector<std::string> local_files;
@@ -556,8 +556,8 @@ KvError DeleteUnreferencedLocalFiles(
             fs::path file_path = dir_path / file_name;
             files_to_delete.push_back(file_path.string());
             file_ids_to_close.push_back(file_id);
-            // DLOG(INFO) << "ExecuteLocalGC: marking file for deletion: "
-            //            << file_name << " (file_id=" << file_id << ")";
+            DLOG(INFO) << "ExecuteLocalGC: marking file for deletion: "
+                       << file_name << " (file_id=" << file_id << ")";
         }
         else
         {
@@ -569,8 +569,8 @@ KvError DeleteUnreferencedLocalFiles(
         }
     }
 
-    // DLOG(INFO) << "ExecuteLocalGC: total files to delete: "
-    //            << files_to_delete.size();
+    DLOG(INFO) << "ExecuteLocalGC: total files to delete: "
+               << files_to_delete.size();
     if (!files_to_delete.empty())
     {
         KvError close_err = io_mgr->CloseFiles(tbl_id, file_ids_to_close);
