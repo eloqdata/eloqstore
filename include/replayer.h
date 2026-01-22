@@ -21,10 +21,12 @@ public:
                                           const TableIdent *tbl_ident,
                                           uint64_t expect_term = 0);
 
+    bool corrupted_log_found_{false};
     PageId root_;
     PageId ttl_root_;
     std::vector<uint64_t> mapping_tbl_;
     FilePageId max_fp_id_;
+    uint64_t file_size_before_corrupted_log_;
     uint64_t file_size_;
     std::string dict_bytes_;
     std::shared_ptr<FileIdTermMapping> file_id_term_mapping_;

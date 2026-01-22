@@ -482,7 +482,7 @@ TEST_CASE("manifest tolerates trailing corruption", "[manifest]")
         CHECK(std::get<1>(result) == std::get<1>(baseline));
         CHECK(std::get<2>(result) == std::get<2>(baseline));
         CHECK(std::get<3>(result) == std::get<3>(baseline));
-        CHECK(std::get<4>(result) == manifest_prefix.size());
+        CHECK(std::get<4>(result) == manifest_full.size());
     }
 
     SECTION("snapshot corruption remains fatal")

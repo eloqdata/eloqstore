@@ -33,7 +33,6 @@ KvError Replayer::Replay(ManifestFile *file)
     file_size_ = 0;
     max_fp_id_ = MaxFilePageId;
     dict_bytes_.clear();
-    payload_ = {};
 
     KvError err = ParseNextRecord(file);
     CHECK_KV_ERR(err);
@@ -66,6 +65,10 @@ KvError Replayer::Replay(ManifestFile *file)
         }
         ReplayLog();
     }
+    if (corrupted_log_found_)
+    {
+        file_size_ = file_size_before_corrupted_log_;
+    }
     return KvError::NoError;
 }
 
@@ -91,6 +94,8 @@ KvError Replayer::ParseNextRecord(ManifestFile *file)
     {
         LOG(ERROR) << "Manifest file corrupted, checksum mismatch.";
         LOG(ERROR) << "Corruption found at offset " << file_size_;
+        corrupted_log_found_ = true;
+        file_size_before_corrupted_log_ = file_size_;
         // Advance file_size_ and skip padding to position at next record
         const size_t record_bytes = header_len + payload_len;
         file_size_ += record_bytes;
@@ -119,7 +124,11 @@ KvError Replayer::ParseNextRecord(ManifestFile *file)
     {
         const size_t padding = alignment - remainder;
         err = file->SkipPadding(padding);
-        CHECK(err == KvError::NoError) << "Manifest is corrupted";
+        if (err != KvError::NoError)
+        {
+            file_size_ += padding;
+            return KvError::EndOfFile;
+        }
         file_size_ += padding;
     }
 
