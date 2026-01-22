@@ -51,6 +51,7 @@
 namespace eloqstore
 {
 namespace fs = std::filesystem;
+std::atomic<int32_t> on_fly_upload_files = 0;
 
 char *VarPagePtr(const VarPage &page)
 {
@@ -3226,7 +3227,11 @@ KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
             filenames.emplace_back(ToFilename(file_id, term));
         }
     }
+    on_fly_upload_files.fetch_add(1, std::memory_order_acq_rel);
+    LOG(INFO) << ">> CloudStoreMgr::SyncFiles on_fly_upload_files: "
+              << on_fly_upload_files.load(std::memory_order_relaxed);
     err = UploadFiles(tbl_id, std::move(filenames));
+    on_fly_upload_files.fetch_sub(1, std::memory_order_relaxed);
     if (err != KvError::NoError)
     {
         return err;
