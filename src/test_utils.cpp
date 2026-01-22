@@ -1065,4 +1065,9 @@ void ManifestVerifier::Verify()
         CHECK(!eloqstore::MappingSnapshot::IsFilePageId(recovered_tbl.Get(i)));
     }
 }
+
+std::string ManifestVerifier::ManifestContent() const
+{
+    return file_;
+}
 }  // namespace test_util
