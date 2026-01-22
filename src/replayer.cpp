@@ -63,6 +63,7 @@ KvError Replayer::Replay(ManifestFile *file)
         if (corrupted_log_found)
         {
             LOG(ERROR) << "Found corruption log between normal log";
+            return KvError::Corrupted;
         }
         ReplayLog();
     }
