@@ -1619,9 +1619,9 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
         DecodeFixed32(log.data() + ManifestBuilder::offset_ttl_root);
     const uint32_t payload_len =
         DecodeFixed32(log.data() + ManifestBuilder::offset_len);
-    LOG(INFO) << "AppendManifest tbl=" << tbl_id << " offset=" << offset
-              << " bytes=" << log.size() << " payload=" << payload_len
-              << " root=" << root << " ttl_root=" << ttl_root;
+    DLOG(INFO) << "AppendManifest tbl=" << tbl_id << " offset=" << offset
+               << " bytes=" << log.size() << " payload=" << payload_len
+               << " root=" << root << " ttl_root=" << ttl_root;
     auto [fd_ref, err] = OpenFD(tbl_id, LruFD::kManifest, true, manifest_term);
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;
