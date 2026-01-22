@@ -71,16 +71,6 @@ public:
             return entry_ == nullptr ? nullptr : &entry_->meta_;
         }
 
-        RootMeta *operator->() const
-        {
-            return Get();
-        }
-
-        explicit operator bool() const
-        {
-            return Get() != nullptr;
-        }
-
     private:
         RootMetaMgr *mgr_{nullptr};
         Entry *entry_{nullptr};
