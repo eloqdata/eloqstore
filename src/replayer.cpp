@@ -91,6 +91,17 @@ KvError Replayer::ParseNextRecord(ManifestFile *file)
     if (!ManifestBuilder::ValidateChecksum(content))
     {
         LOG(ERROR) << "Manifest file corrupted, checksum mismatch.";
+        // Advance file_size_ and skip padding to position at next record
+        const size_t record_bytes = header_len + payload_len;
+        file_size_ += record_bytes;
+        const size_t alignment = page_align;
+        const size_t remainder = record_bytes & (alignment - 1);
+        if (remainder > 0)
+        {
+            const size_t padding = alignment - remainder;
+            (void) file->SkipPadding(padding);
+            file_size_ += padding;
+        }
         return KvError::Corrupted;
     }
     content = content.substr(checksum_bytes);
