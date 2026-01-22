@@ -30,6 +30,10 @@ namespace eloqstore
 std::once_flag Shard::tsc_frequency_initialized_;
 std::atomic<uint64_t> Shard::tsc_cycles_per_microsecond_{0};
 
+DEFINE_uint64(max_processing_time_microseconds,
+              50,
+              "Max processing time in microseconds for low priority tasks.");
+
 Shard::Shard(const EloqStore *store, size_t shard_id, uint32_t fd_limit)
     : store_(store),
       shard_id_(shard_id),
@@ -484,9 +488,7 @@ bool Shard::ExecuteReadyTasks()
         }
     }
 
-    uint64_t delta_us = DurationMicroseconds(start_us_fast);
-    while (delta_us < MAX_PROCESSING_TIME_MICROSECONDS &&
-           low_priority_ready_tasks_.Size() > 0)
+    while (low_priority_ready_tasks_.Size() > 0)
     {
         KvTask *task = low_priority_ready_tasks_.Peek();
         low_priority_ready_tasks_.Dequeue();
@@ -497,15 +499,11 @@ bool Shard::ExecuteReadyTasks()
         {
             OnTaskFinished(task);
         }
-        delta_us = DurationMicroseconds(start_us_fast);
-    }
-
-    while (low_priority_ready_tasks_.Size() > 0)
-    {
-        KvTask *task = low_priority_ready_tasks_.Peek();
-        low_priority_ready_tasks_.Dequeue();
-        task->status_ = TaskStatus::Ongoing;
-        ready_tasks_.Enqueue(task);
+        uint64_t delta_us = DurationMicroseconds(start_us_fast);
+        if (delta_us >= FLAGS_max_processing_time_microseconds)
+        {
+            break;
+        }
     }
 
     running_ = nullptr;
@@ -804,7 +802,7 @@ uint64_t Shard::DurationMicroseconds(uint64_t start_us)
     else
     {
         // Wraparound detected, use max value to break loop
-        return MAX_PROCESSING_TIME_MICROSECONDS;
+        return FLAGS_max_processing_time_microseconds;
     }
 }
 

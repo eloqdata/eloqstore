@@ -226,7 +226,6 @@ private:
     // TSC frequency in cycles per microsecond (measured at initialization)
     static std::once_flag tsc_frequency_initialized_;
     static std::atomic<uint64_t> tsc_cycles_per_microsecond_;
-    static constexpr uint64_t MAX_PROCESSING_TIME_MICROSECONDS = 50;
 
     friend class EloqStoreModule;
 };
