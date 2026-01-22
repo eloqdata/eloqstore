@@ -19,7 +19,7 @@ namespace eloqstore
 {
 
 Replayer::Replayer(const KvOptions *opts)
-    : opts_(opts), file_id_term_mapping_(std::make_shared<FileIdTermMapping>())
+    : file_id_term_mapping_(std::make_shared<FileIdTermMapping>()), opts_(opts)
 {
     log_buf_.resize(ManifestBuilder::header_bytes);
 }

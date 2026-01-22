@@ -165,8 +165,8 @@ public:
     public:
         explicit ListTask(std::string_view remote_path,
                           bool ensure_trailing_slash = true)
-            : remote_path_(remote_path),
-              ensure_trailing_slash_(ensure_trailing_slash)
+            : ensure_trailing_slash_(ensure_trailing_slash),
+              remote_path_(remote_path)
         {
         }
         void SetRecursive(bool recurse)
