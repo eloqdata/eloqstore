@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -322,103 +323,39 @@ TEST_CASE("enhanced rollback with mix operations", "[archive]")
     tester.Validate();
 }
 
-TEST_CASE("manifest deletion on rootmeta eviction", "[manifest][eviction]")
+TEST_CASE("rootmeta eviction with small cache across partitions",
+          "[manifest][rootmeta_eviction]")
 {
-    auto RunManifestEvictionTest = [&](const eloqstore::KvOptions &opts,
-                                       std::string_view mode,
-                                       bool has_archive)
+    eloqstore::KvOptions opts = append_opts;
+    opts.num_threads = 1;
+    opts.root_meta_cache_size = 256;
+    opts.init_page_count = 8;
+    opts.data_page_size = 4096;
+    const uint32_t value_size = 256;
+    const uint64_t batch_keys = 200;
+
+    eloqstore::EloqStore *store = InitStore(opts);
+
+    constexpr uint32_t partitions = 20;
+    std::vector<std::unique_ptr<MapVerifier>> verifiers;
+    verifiers.reserve(partitions);
+
+    for (uint32_t pid = 0; pid < partitions; ++pid)
     {
-        INFO("manifest-eviction mode=" << mode
-                                       << " has_archive=" << has_archive);
-
-        eloqstore::KvOptions case_opts = opts;
-        case_opts.buffer_pool_size = 15 * 4 * KB;
-        case_opts.file_amplify_factor = 2;
-        case_opts.data_append_mode = true;
-        if (case_opts.store_path.empty())
-        {
-            case_opts.store_path = {test_path};
-        }
-
-        eloqstore::EloqStore *store = InitStore(case_opts);
-        std::string table_prefix = "manifest-evict-";
-        table_prefix.append(has_archive ? "archive-" : "plain-");
-        table_prefix.append(mode);
-
-        eloqstore::TableIdent partition_a{table_prefix, 1};
-        eloqstore::TableIdent partition_b{table_prefix, 2};
-
-        MapVerifier verifier_a(partition_a, store, false);
-        MapVerifier verifier_b(partition_b, store, false);
-
-        const std::string base_path = case_opts.store_path.empty()
-                                          ? std::string(test_path)
-                                          : case_opts.store_path[0];
-        const fs::path partition_a_path =
-            fs::path(base_path) / partition_a.ToString();
-        const fs::path manifest_path =
-            partition_a_path / eloqstore::ManifestFileName(0);
-
-        verifier_a.Upsert(0, 100);
-        verifier_a.Validate();
-        REQUIRE(fs::exists(manifest_path));
-
-        fs::path archive_path;
-        if (has_archive)
-        {
-            archive_path = partition_a_path / ArchiveName(0, 123456789);
-            fs::copy_file(manifest_path,
-                          archive_path,
-                          fs::copy_options::overwrite_existing);
-            REQUIRE(fs::exists(archive_path));
-        }
-
-        verifier_a.Truncate(0, true);
-        verifier_a.Validate();
-        REQUIRE(fs::exists(manifest_path));
-
-        bool manifest_deleted = false;
-        const int max_iterations = 100;
-
-        for (int iteration = 0; iteration < max_iterations; iteration++)
-        {
-            int start_key = iteration * 50;
-            int end_key = start_key + 50;
-            verifier_b.Upsert(start_key, end_key);
-            verifier_b.Validate();
-
-            if (!fs::exists(manifest_path))
-            {
-                manifest_deleted = true;
-                break;
-            }
-        }
-
-        if (has_archive)
-        {
-            REQUIRE_FALSE(manifest_deleted);
-            REQUIRE(fs::exists(manifest_path));
-            REQUIRE(fs::exists(partition_a_path));
-            if (!archive_path.empty())
-            {
-                REQUIRE(fs::exists(archive_path));
-                fs::remove(archive_path);
-            }
-        }
-        else
-        {
-            REQUIRE(manifest_deleted);
-            REQUIRE_FALSE(fs::exists(manifest_path));
-            REQUIRE_FALSE(fs::exists(partition_a_path));
-        }
-
-        verifier_b.Validate();
-        verifier_a.Upsert(0, 100);
-        verifier_a.Validate();
-    };
-
-    RunManifestEvictionTest(default_opts, "local", false);
-    RunManifestEvictionTest(default_opts, "local", true);
+        eloqstore::TableIdent tbl_id{"rootmeta", pid};
+        auto verifier = std::make_unique<MapVerifier>(tbl_id, store, true);
+        verifier->SetValueSize(value_size);
+        verifier->SetAutoClean(false);
+        verifier->Upsert(0, batch_keys);
+        verifier->Read(0);
+        verifier->Read(1);
+        verifiers.emplace_back(std::move(verifier));
+    }
+    for (uint32_t pid = 0; pid < partitions; ++pid)
+    {
+        verifiers[pid]->Read(0);
+        verifiers[pid]->Read(2);
+    }
 }
 
 TEST_CASE("manifest tolerates trailing corruption", "[manifest]")

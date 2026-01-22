@@ -125,6 +125,12 @@ int KvOptions::LoadFromIni(const char *path)
             reader.Get(sec_run, "buffer_pool_size", "");
         buffer_pool_size = ParseSizeWithUnit(buffer_pool_size_str);
     }
+    if (reader.HasValue(sec_run, "root_meta_cache_size"))
+    {
+        std::string root_meta_cache_size_str =
+            reader.Get(sec_run, "root_meta_cache_size", "");
+        root_meta_cache_size = ParseSizeWithUnit(root_meta_cache_size_str);
+    }
     if (reader.HasValue(sec_run, "manifest_limit"))
     {
         manifest_limit = reader.GetUnsigned(sec_run, "manifest_limit", 8 * MB);
@@ -325,6 +331,7 @@ bool KvOptions::operator==(const KvOptions &other) const
            init_page_count == other.init_page_count &&
            skip_verify_checksum == other.skip_verify_checksum &&
            buffer_pool_size == other.buffer_pool_size &&
+           root_meta_cache_size == other.root_meta_cache_size &&
            manifest_limit == other.manifest_limit &&
            fd_limit == other.fd_limit && io_queue_size == other.io_queue_size &&
            max_inflight_write == other.max_inflight_write &&

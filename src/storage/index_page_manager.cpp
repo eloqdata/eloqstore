@@ -21,18 +21,30 @@
 
 namespace eloqstore
 {
+namespace
+{
+size_t RootMetaBytes(const RootMeta &meta)
+{
+    if (meta.mapper_ == nullptr)
+    {
+        return 0;
+    }
+    const auto &base = meta.mapper_->GetMapping()->mapping_tbl_.Base();
+    return base.capacity() * sizeof(uint64_t);
+}
+}  // namespace
+
 IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
-    : io_manager_(io_manager), mapping_arena_(Options()->mapping_arena_size)
+    : io_manager_(io_manager),
+      mapping_arena_(Options()->mapping_arena_size),
+      root_meta_mgr_(this, Options())
 {
     active_head_.EnqueNext(&active_tail_);
 }
 
 IndexPageManager::~IndexPageManager()
 {
-    for (auto &[tbl_id, meta] : tbl_roots_)
-    {
-        meta.mapper_ = nullptr;
-    }
+    root_meta_mgr_.ReleaseMappers();
 }
 
 const Comparator *IndexPageManager::GetComparator() const
@@ -105,13 +117,15 @@ size_t IndexPageManager::GetBufferPoolLimit() const
     return Options()->buffer_pool_size;
 }
 
-std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
+std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
     const TableIdent &tbl_id)
 {
-    auto load_meta = [this](const TableIdent &tbl_id, RootMeta *meta)
+    auto load_meta = [this](RootMetaMgr::Entry *entry)
     {
+        RootMeta *meta = &entry->meta_;
+        const TableIdent &entry_tbl = entry->tbl_id_;
         // load manifest file
-        auto [manifest, err] = IoMgr()->GetManifest(tbl_id);
+        auto [manifest, err] = IoMgr()->GetManifest(entry_tbl);
         CHECK_KV_ERR(err);
 
         // replay
@@ -125,11 +139,12 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
 
         meta->root_id_ = replayer.root_;
         meta->ttl_root_id_ = replayer.ttl_root_;
-        auto mapper = replayer.GetMapper(this, &tbl_id, IoMgr()->ProcessTerm());
+        auto mapper =
+            replayer.GetMapper(this, &entry_tbl, IoMgr()->ProcessTerm());
         MappingSnapshot *mapping = mapper->GetMapping();
         meta->mapper_ = std::move(mapper);
         meta->mapping_snapshots_.insert(mapping);
-        meta->Pin();
+        root_meta_mgr_.UpdateBytes(entry, RootMetaBytes(*meta));
         meta->manifest_size_ = replayer.file_size_;
         meta->next_expire_ts_ = 0;
         if (!replayer.dict_bytes_.empty())
@@ -144,25 +159,25 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
         }
         replayer.file_id_term_mapping_->insert_or_assign(
             IouringMgr::LruFD::kManifest, IoMgr()->ProcessTerm());
-        IoMgr()->SetFileIdTermMapping(tbl_id, replayer.file_id_term_mapping_);
+        IoMgr()->SetFileIdTermMapping(entry_tbl, replayer.file_id_term_mapping_);
         return KvError::NoError;
     };
 
     while (true)
     {
-        auto [it, inserted] = tbl_roots_.try_emplace(tbl_id);
-        RootMeta *meta = &it->second;
+        auto [entry, inserted] = root_meta_mgr_.GetOrCreate(tbl_id);
+        RootMeta *meta = &entry->meta_;
 
         if (inserted)
         {
             // Try to load metadata from persistent storage.
             meta->locked_ = true;
-            KvError err = load_meta(it->first, meta);
+            KvError err = load_meta(entry);
             meta->waiting_.WakeAll();
             if (err != KvError::NoError)
             {
-                tbl_roots_.erase(tbl_id);
-                return {nullptr, err};
+                root_meta_mgr_.Erase(tbl_id);
+                return {RootMetaMgr::Handle(), err};
             }
             meta->locked_ = false;
         }
@@ -173,6 +188,7 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
             continue;
         }
 
+        root_meta_mgr_.Touch(entry);
         if (meta->mapper_ == nullptr)
         {
             // Partition not found. Possible causes:
@@ -181,19 +197,21 @@ std::pair<RootMeta *, KvError> IndexPageManager::FindRoot(
             // 2. A MemIndexPage referencing this stub RootMeta is created.
             // 3. WriteTask aborts, but the stub RootMeta cannot be cleared
             //    because it is still referenced by the MemIndexPage.
-            return {meta, KvError::NotFound};
+            return {RootMetaMgr::Handle(&root_meta_mgr_, entry),
+                    KvError::NotFound};
         }
-        return {meta, KvError::NoError};
+        return {RootMetaMgr::Handle(&root_meta_mgr_, entry),
+                KvError::NoError};
     }
 }
 
 KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
                                       CowRootMeta &cow_meta)
 {
-    auto [meta, err] = FindRoot(tbl_ident);
+    auto [root_handle, err] = FindRoot(tbl_ident);
+    RootMeta *meta = root_handle.Get();
     if (err == KvError::NoError)
     {
-        meta->Pin();
         // Makes a copy of the mapper.
         auto new_mapper = std::make_unique<PageMapper>(*meta->mapper_);
         cow_meta.root_id_ = meta->root_id_;
@@ -217,8 +235,8 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
     {
         // It is the WriteTask's responsibility to clean up this stub RootMeta
         // if it aborted.
-        auto [tbl_it, _] = tbl_roots_.try_emplace(tbl_ident);
-        const TableIdent *tbl_id = &tbl_it->first;
+        auto [entry, _] = root_meta_mgr_.GetOrCreate(tbl_ident);
+        const TableIdent *tbl_id = &entry->tbl_id_;
         auto mapper = std::make_unique<PageMapper>(this, tbl_id);
         std::shared_ptr<MappingSnapshot> mapping = mapper->GetMappingSnapshot();
         cow_meta.root_id_ = MaxPageId;
@@ -229,8 +247,7 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
         cow_meta.next_expire_ts_ = 0;
         cow_meta.compression_ =
             std::make_shared<compression::DictCompression>();
-        meta = &tbl_it->second;
-        meta->Pin();
+        meta = &entry->meta_;
     }
     else
     {
@@ -238,15 +255,20 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
     }
     auto it = meta->mapping_snapshots_.insert(cow_meta.mapper_->GetMapping());
     CHECK(it.second);
+    auto *entry = root_meta_mgr_.Find(tbl_ident);
+    if (entry != nullptr)
+    {
+        root_meta_mgr_.UpdateBytes(entry, RootMetaBytes(*meta));
+    }
     return KvError::NoError;
 }
 
 void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
                                   CowRootMeta new_meta)
 {
-    auto tbl_it = tbl_roots_.find(tbl_ident);
-    assert(tbl_it != tbl_roots_.end());
-    RootMeta &meta = tbl_it->second;
+    auto *entry = root_meta_mgr_.Find(tbl_ident);
+    assert(entry != nullptr);
+    RootMeta &meta = entry->meta_;
     meta.root_id_ = new_meta.root_id_;
     meta.ttl_root_id_ = new_meta.ttl_root_id_;
     if (meta.mapper_ != nullptr && !Options()->data_append_mode)
@@ -259,6 +281,8 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
     meta.manifest_size_ = new_meta.manifest_size_;
     meta.next_expire_ts_ = new_meta.next_expire_ts_;
     meta.compression_ = std::move(new_meta.compression_);
+    root_meta_mgr_.UpdateBytes(entry, RootMetaBytes(meta));
+    root_meta_mgr_.EvictIfNeeded();
 }
 
 std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
@@ -312,12 +336,12 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
 void IndexPageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
 {
     const TableIdent &tbl = *mapping->tbl_ident_;
-    auto tbl_it = tbl_roots_.find(tbl);
-    if (tbl_it == tbl_roots_.end())
+    auto *entry = root_meta_mgr_.Find(tbl);
+    if (entry == nullptr)
     {
         return;
     }
-    RootMeta &meta = tbl_it->second;
+    RootMeta &meta = entry->meta_;
     // Puts back file pages freed in this mapping snapshot
     if (!mapping->to_free_file_pages_.empty())
     {
@@ -329,8 +353,6 @@ void IndexPageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
     }
     auto n = meta.mapping_snapshots_.erase(mapping);
     CHECK(n == 1);
-    meta.Unpin();
-    EvictRootIfEmpty(tbl_it);
 }
 
 bool IndexPageManager::Evict()
@@ -357,92 +379,24 @@ bool IndexPageManager::Evict()
     return true;
 }
 
-void IndexPageManager::EvictRootIfEmpty(const TableIdent &tbl_id)
-{
-    auto it = tbl_roots_.find(tbl_id);
-    if (it != tbl_roots_.end())
-    {
-        EvictRootIfEmpty(it);
-    }
-}
-
-void IndexPageManager::EvictRootIfEmpty(
-    std::unordered_map<TableIdent, RootMeta>::iterator root_it)
-{
-    RootMeta &meta = root_it->second;
-
-    if (meta.mapper_ == nullptr)
-    {
-        return;
-    }
-    CHECK(meta.ref_cnt_ != 0);
-
-    if (meta.ref_cnt_ == 1)
-    {
-        if (meta.mapper_->UseCount() == 1)
-        {
-            // Check if mapping table is empty (no data pages)
-            if (meta.mapper_->MappingCount() == 0 && meta.manifest_size_ > 0)
-            {
-                // Lock the rootmeta to prevent other FindRoot operations
-                meta.locked_ = true;
-
-                const TableIdent &tbl_id = root_it->first;
-
-                // Clean up the table from io manager first
-
-                // Note: it will also clean manifest when data_append = false
-                // although it is not remove datafile
-                // Manifest record max file page id, deleting it can lead to
-                // creating existing files.
-                IoMgr()->CleanManifest(tbl_id);
-
-                // Wake up any waiting threads before erasing
-                meta.waiting_.WakeAll();
-
-                // Erase from memory - this will automatically destroy
-                // meta.mapper_ and trigger MappingSnapshot destructor, but
-                // FreeMappingSnapshot will return early since the table is
-                // already erased
-                tbl_roots_.erase(root_it);
-
-                // Note: No need to unlock since we've erased the entry
-                return;
-            }
-
-            // If mapping is not empty, we can directly erase the root since
-            // ref_cnt == 1 means only the mapper itself holds the reference
-
-            DLOG(INFO) << "metadata of " << root_it->first
-                       << " is evicted (ref_cnt == 1)";
-            tbl_roots_.erase(root_it);
-        }
-        else
-        {
-            // This is rare.
-            DLOG(INFO) << "ref_cnt == 1 but mapper use count :"
-                       << meta.mapper_->UseCount();
-        }
-    }
-}
-
 bool IndexPageManager::RecyclePage(MemIndexPage *page)
 {
     assert(!page->IsPinned());
-    auto tbl_it = tbl_roots_.find(*page->tbl_ident_);
-    assert(tbl_it != tbl_roots_.end());
-    RootMeta &meta = tbl_it->second;
-    // Unswizzling the page pointer in all mapping snapshots.
-    auto &mappings = meta.mapping_snapshots_;
-    for (auto &mapping : mappings)
+    RootMetaMgr::Entry *entry = root_meta_mgr_.Find(*page->tbl_ident_);
+    if (entry != nullptr)
     {
-        mapping->Unswizzling(page);
+        RootMeta &meta = entry->meta_;
+        // Unswizzling the page pointer in all mapping snapshots.
+        auto &mappings = meta.mapping_snapshots_;
+        for (auto &mapping : mappings)
+        {
+            mapping->Unswizzling(page);
+        }
+        meta.index_pages_.erase(page);
     }
-    meta.Unpin();
 
     // Removes the page from the active list.
     page->Deque();
-    EvictRootIfEmpty(tbl_it);
     assert(page->page_id_ != MaxPageId);
     assert(page->file_page_id_ != MaxFilePageId);
     page->page_id_ = MaxPageId;
@@ -459,15 +413,10 @@ void IndexPageManager::FinishIo(MappingSnapshot *mapping,
     idx_page->tbl_ident_ = mapping->tbl_ident_;
     mapping->AddSwizzling(idx_page->GetPageId(), idx_page);
 
-    if (idx_page->IsDetached())
+    auto *entry = root_meta_mgr_.Find(*mapping->tbl_ident_);
+    if (entry != nullptr)
     {
-        auto tbl_it = tbl_roots_.find(*mapping->tbl_ident_);
-        assert(tbl_it != tbl_roots_.end());
-        tbl_it->second.Pin();
-    }
-    else
-    {
-        // index page is moved on physical position.
+        entry->meta_.index_pages_.insert(idx_page);
     }
     EnqueueIndexPage(idx_page);
 }
@@ -513,6 +462,11 @@ AsyncIoManager *IndexPageManager::IoMgr() const
 MappingArena *IndexPageManager::MapperArena()
 {
     return &mapping_arena_;
+}
+
+RootMetaMgr *IndexPageManager::RootMetaManager()
+{
+    return &root_meta_mgr_;
 }
 
 }  // namespace eloqstore

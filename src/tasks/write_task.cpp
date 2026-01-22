@@ -53,11 +53,6 @@ void WriteTask::Abort()
         cow_meta_.old_mapping_ = nullptr;
     }
     cow_meta_.mapper_ = nullptr;
-    if (cow_meta_.manifest_size_ == 0)
-    {
-        // MakeCowRoot will create a empty RootMeta if partition not found
-        shard->IndexManager()->EvictRootIfEmpty(tbl_ident_);
-    }
 }
 
 KvError WriteTask::WritePage(DataPage &&page)
@@ -400,11 +395,12 @@ void WriteTask::TriggerTTL()
         return;
     }
 
-    auto [meta, err] = shard->IndexManager()->FindRoot(tbl_ident_);
+    auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_ident_);
     if (err != KvError::NoError)
     {
         return;
     }
+    RootMeta *meta = root_handle.Get();
     if (meta->next_expire_ts_ == 0)
     {
         return;
@@ -420,11 +416,12 @@ void WriteTask::TriggerFileGC() const
 {
     assert(Options()->data_append_mode);
 
-    auto [meta, err] = shard->IndexManager()->FindRoot(tbl_ident_);
+    auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_ident_);
     if (err != KvError::NoError)
     {
         return;
     }
+    RootMeta *meta = root_handle.Get();
 
     absl::flat_hash_set<FileId> retained_files;
     const uint8_t shift = Options()->pages_per_file_shift;
@@ -471,7 +468,7 @@ void WriteTask::TriggerFileGC() const
     else
     {
         // Local mode: execute GC directly
-        DLOG(INFO) << "Begin GC in Local mode";
+        // DLOG(INFO) << "Begin GC in Local mode";
         IouringMgr *io_mgr = static_cast<IouringMgr *>(shard->IoManager());
         KvError gc_err = FileGarbageCollector::ExecuteLocalGC(
             tbl_ident_, retained_files, io_mgr);

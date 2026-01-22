@@ -100,8 +100,9 @@ KvError BackgroundWrite::CompactDataFile()
     assert(opts->data_append_mode);
     assert(opts->file_amplify_factor != 0);
 
-    auto [meta, err] = shard->IndexManager()->FindRoot(tbl_ident_);
+    auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_ident_);
     CHECK_KV_ERR(err);
+    RootMeta *meta = root_handle.Get();
 
     auto allocator =
         static_cast<AppendAllocator *>(meta->mapper_->FilePgAllocator());
@@ -292,8 +293,9 @@ KvError BackgroundWrite::CreateArchive()
     KvError compact_err = CompactDataFile();
     CHECK_KV_ERR(compact_err);
 
-    auto [meta, err] = shard->IndexManager()->FindRoot(tbl_ident_);
+    auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_ident_);
     CHECK_KV_ERR(err);
+    RootMeta *meta = root_handle.Get();
     PageId root = meta->root_id_;
     if (root == MaxPageId)
     {

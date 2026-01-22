@@ -44,6 +44,10 @@ struct KvOptions
      */
     uint64_t buffer_pool_size = 32 * MB;
     /**
+     * @brief Max size of cached RootMeta mappings (global, in bytes).
+     */
+    uint64_t root_meta_cache_size = 1 * GB;
+    /**
      * @brief Limit manifest file size.
      */
     uint32_t manifest_limit = 8 * MB;

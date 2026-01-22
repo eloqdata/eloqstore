@@ -8,6 +8,7 @@
 
 #include "error.h"
 #include "storage/data_page.h"
+#include "storage/root_meta_manager.h"
 #include "storage/mem_index_page.h"
 #include "tasks/task.h"
 #include "types.h"
@@ -42,6 +43,7 @@ private:
     const TableIdent tbl_id_;
     size_t prefetch_page_num_;
     PageId root_id_{MaxPageId};
+    RootMetaMgr::Handle root_handle_{};
     std::shared_ptr<MappingSnapshot> mapping_;
     DataPage data_page_;
     DataPageIter iter_;

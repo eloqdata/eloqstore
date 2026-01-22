@@ -118,6 +118,7 @@ set(ELOQ_STORE_SOURCES
         src/storage/page.cpp
         src/storage/page_mapper.cpp
         src/storage/root_meta.cpp
+        src/storage/root_meta_manager.cpp
         src/storage/shard.cpp
         src/tasks/archive_crond.cpp
         src/tasks/background_write.cpp
