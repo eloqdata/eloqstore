@@ -200,8 +200,7 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
             return {RootMetaMgr::Handle(&root_meta_mgr_, entry),
                     KvError::NotFound};
         }
-        return {RootMetaMgr::Handle(&root_meta_mgr_, entry),
-                KvError::NoError};
+        return {RootMetaMgr::Handle(&root_meta_mgr_, entry), KvError::NoError};
     }
 }
 

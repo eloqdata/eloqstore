@@ -86,7 +86,6 @@ public:
      */
     size_t GetBufferPoolLimit() const;
 
-
 private:
     /**
      * @brief Returns if memory is full. TODO: Replaces with a reasonable

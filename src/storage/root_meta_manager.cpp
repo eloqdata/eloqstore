@@ -56,10 +56,7 @@ void RootMetaMgr::Erase(const TableIdent &tbl_id)
         return;
     }
     Entry *entry = &it->second;
-    if (entry->in_lru_)
-    {
-        Dequeue(entry);
-    }
+    Dequeue(entry);
     if (used_bytes_ >= entry->bytes_)
     {
         used_bytes_ -= entry->bytes_;
@@ -73,7 +70,7 @@ void RootMetaMgr::Erase(const TableIdent &tbl_id)
 
 void RootMetaMgr::Pin(Entry *entry)
 {
-    if (entry->meta_.ref_cnt_ == 0 && entry->in_lru_)
+    if (entry->meta_.ref_cnt_ == 0)
     {
         Dequeue(entry);
     }
