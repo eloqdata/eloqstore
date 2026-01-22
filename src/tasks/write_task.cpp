@@ -468,7 +468,7 @@ void WriteTask::TriggerFileGC() const
     else
     {
         // Local mode: execute GC directly
-        // DLOG(INFO) << "Begin GC in Local mode";
+        DLOG(INFO) << "Begin GC in Local mode";
         IouringMgr *io_mgr = static_cast<IouringMgr *>(shard->IoManager());
         KvError gc_err = FileGarbageCollector::ExecuteLocalGC(
             tbl_ident_, retained_files, io_mgr);

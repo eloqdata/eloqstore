@@ -114,6 +114,9 @@ bool RootMetaMgr::EvictRootForCache(Entry *entry)
                               << " table " << tbl_id;
     if (meta.mapper_ == nullptr)
     {
+        CHECK(meta.index_pages_.empty())
+            << "EvictRootForCache: mapper null but index pages exist for table "
+            << tbl_id;
         LOG(INFO) << "EvictRootForCache: mapper null table " << tbl_id;
         return true;
     }
@@ -158,6 +161,15 @@ void RootMetaMgr::EvictIfNeeded()
         cursor = cursor->prev_;
         CHECK(victim->prev_ != nullptr)
             << "Evict scan saw non-LRU entry for table " << victim->tbl_id_;
+        if (victim->prev_ == &lru_head_ && cursor == &lru_head_)
+        {
+            LOG(WARNING)
+                << "EvictIfNeeded: only one root meta cached, over limit "
+                   "used_bytes "
+                << used_bytes_ << " capacity_bytes_ " << capacity_bytes_
+                << " table " << victim->tbl_id_;
+            break;
+        }
         if (!EvictRootForCache(victim))
         {
             continue;
