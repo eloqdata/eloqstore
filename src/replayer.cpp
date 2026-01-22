@@ -47,7 +47,6 @@ KvError Replayer::Replay(ManifestFile *file)
         {
             if (err == KvError::EndOfFile)
             {
-                LOG(INFO) << "End of File";
                 break;
             }
             if (err == KvError::Corrupted)
