@@ -94,8 +94,11 @@ KvError Replayer::ParseNextRecord(ManifestFile *file)
     {
         LOG(ERROR) << "Manifest file corrupted, checksum mismatch.";
         LOG(ERROR) << "Corruption found at offset " << file_size_;
+        if (!corrupted_log_found_)
+        {
+            file_size_before_corrupted_log_ = file_size_;
+        }
         corrupted_log_found_ = true;
-        file_size_before_corrupted_log_ = file_size_;
         // Advance file_size_ and skip padding to position at next record
         const size_t record_bytes = header_len + payload_len;
         file_size_ += record_bytes;
@@ -126,6 +129,8 @@ KvError Replayer::ParseNextRecord(ManifestFile *file)
         err = file->SkipPadding(padding);
         if (err != KvError::NoError)
         {
+            // This is the last log and checksum is correct. Can be accepted.
+            LOG(WARNING) << "Manifest is truncated. Ignore the missed padding";
             file_size_ += padding;
             return KvError::EndOfFile;
         }
