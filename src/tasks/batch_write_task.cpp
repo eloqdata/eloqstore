@@ -784,6 +784,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
 
 std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
 {
+ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->step_ = 110;
     if (stack_.empty())
     {
         return {nullptr, KvError::NoError};
@@ -804,6 +806,8 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
 
     idx_page_builder_.Reset();
 
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->step_ = 112;
     const Comparator *cmp = shard->IndexManager()->GetComparator();
     std::vector<IndexOp> &changes = stack_entry->changes_;
     MemIndexPage *stack_page = stack_entry->idx_page_;
@@ -850,6 +854,8 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         }
         return KvError::NoError;
     };
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->step_ = 113;
 
     while (is_base_iter_valid && cit != changes.end())
     {
@@ -923,6 +929,8 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
             break;
         }
     }
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->step_ = 114;
 
     while (is_base_iter_valid)
     {
@@ -935,6 +943,8 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         }
         AdvanceIndexPageIter(base_page_iter, is_base_iter_valid);
     }
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->step_ = 115;
 
     while (cit != changes.end())
     {
@@ -950,6 +960,8 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         }
         ++cit;
     }
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->step_ = 116;
 
     MemIndexPage *new_root = nullptr;
     if (idx_page_builder_.IsEmpty())
@@ -985,6 +997,8 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         }
         prev_page.page_ = nullptr;
     }
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->step_ = 117;
 
     if (stack_page != nullptr)
     {
