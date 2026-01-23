@@ -29,22 +29,20 @@ size_t RootMetaBytes(const RootMeta &meta)
     {
         return 0;
     }
-    const auto &base = meta.mapper_->GetMapping()->mapping_tbl_.Base();
-    size_t bytes = base.capacity() * sizeof(uint64_t);
-    if (meta.compression_ != nullptr)
-    {
-        bytes += meta.compression_->DictionaryMemoryBytes();
-    }
+    const auto &tbl = meta.mapper_->GetMapping()->mapping_tbl_;
+    size_t bytes = tbl.capacity() * sizeof(uint64_t);
+    CHECK(meta.compression_ != nullptr);
+    bytes += meta.compression_->DictionaryMemoryBytes();
     return bytes;
 }
 }  // namespace
 
 IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
-    : io_manager_(io_manager),
-      mapping_arena_(Options()->mapping_arena_size),
-      root_meta_mgr_(this, Options())
+    : io_manager_(io_manager), root_meta_mgr_(this, Options())
 {
     active_head_.EnqueNext(&active_tail_);
+    index_pages_.reserve(Options()->buffer_pool_size /
+                         Options()->data_page_size);
 }
 
 IndexPageManager::~IndexPageManager()
@@ -184,6 +182,11 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
             meta->waiting_.WakeAll();
             if (err != KvError::NoError)
             {
+                if (err != KvError::NotFound)
+                {
+                    LOG(ERROR)
+                        << "load meta failed, err: " << static_cast<int>(err);
+                }
                 root_meta_mgr_.Erase(tbl_id);
                 return {RootMetaMgr::Handle(), err};
             }
@@ -475,6 +478,11 @@ AsyncIoManager *IndexPageManager::IoMgr() const
 MappingArena *IndexPageManager::MapperArena()
 {
     return &mapping_arena_;
+}
+
+MappingChunkArena *IndexPageManager::MapperChunkArena()
+{
+    return &mapping_chunk_arena_;
 }
 
 RootMetaMgr *IndexPageManager::RootMetaManager()

@@ -269,6 +269,7 @@ KvError WriteTask::FlushManifest()
     file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
                                         IoMgr()->ProcessTerm());
     SerializeFileIdTermMapping(*file_term_mapping, term_buf);
+    YieldToLowPQ();
 
     if (need_empty_snapshot)
     {

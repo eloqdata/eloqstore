@@ -83,13 +83,24 @@ char *Page::Ptr() const
 }
 
 PagesPool::PagesPool(const KvOptions *options)
-    : options_(options), free_head_(nullptr), free_cnt_(0)
+    : options_(options),
+      initial_pages_(options->buffer_pool_size / options->data_page_size),
+      free_head_(nullptr),
+      free_cnt_(0),
+      initialized_(false)
 {
-    // Initially allocate only enough pages for the io_uring buffer ring and
-    // grow lazily on demand when the pool runs out of free pages.
-    size_t initial_pages =
-        options->buf_ring_size > 0 ? options->buf_ring_size : 1;
-    Extend(initial_pages);
+}
+
+void PagesPool::Init()
+{
+    if (initialized_)
+    {
+        return;
+    }
+    // Allocate the initial batch for io_uring buffer ring before background
+    // jobs start using the pool.
+    Extend(initial_pages_);
+    initialized_ = true;
 }
 
 void PagesPool::Extend(size_t pages)
@@ -98,6 +109,7 @@ void PagesPool::Extend(size_t pages)
     uint16_t page_size = options_->data_page_size;
     const size_t chunk_size = pages * page_size;
     char *ptr = (char *) std::aligned_alloc(page_align, chunk_size);
+    memset(ptr, 0, chunk_size);
     assert(ptr);
     chunks_.emplace_back(UPtr(ptr, &std::free), chunk_size);
 
@@ -111,7 +123,8 @@ char *PagesPool::Allocate()
 {
     if (free_head_ == nullptr)
     {
-        Extend(1024);  // Extend the pool with 1024 pages if free list is empty.
+        Extend(8);  // Extend the pool with 1024 pages if free list is empty.
+        LOG(INFO) << "Extend";
         assert(free_head_ != nullptr);
     }
     FreePage *head = free_head_;

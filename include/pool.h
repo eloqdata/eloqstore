@@ -1,5 +1,7 @@
 #pragma once
 
+#include <glog/logging.h>
+
 #include <utility>
 #include <vector>
 
@@ -10,10 +12,7 @@ template <typename T>
 class Pool
 {
 public:
-    explicit Pool(size_t max_cached = 0) : max_cached_(max_cached)
-    {
-        pool_.reserve(max_cached_);
-    }
+    explicit Pool(size_t max_cached = 0) : max_cached_(max_cached) {};
 
     T Acquire()
     {
@@ -29,7 +28,7 @@ public:
 
     void Release(T &&value)
     {
-        if (max_cached_ == 0 || pool_.size() >= max_cached_)
+        if (max_cached_ != 0 && pool_.size() >= max_cached_)
         {
             return;
         }
@@ -38,7 +37,7 @@ public:
 
 private:
     size_t max_cached_;
-    std::vector<T> pool_;
+    std::deque<T> pool_;
 };
 
 }  // namespace eloqstore

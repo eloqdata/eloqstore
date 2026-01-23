@@ -221,11 +221,17 @@ KvError ToKvError(int err_no);
 class IouringMgr : public AsyncIoManager
 {
 public:
+    int resize_time_ = 0;
     IouringMgr(const KvOptions *opts, uint32_t fd_limit);
     ~IouringMgr() override;
     KvError Init(Shard *shard) override;
+    bool BackgroundJobInited() override
+    {
+        return ring_inited_;
+    }
     void Submit() override;
     void PollComplete() override;
+    void InitBackgroundJob() override;
 
     std::pair<Page, KvError> ReadPage(const TableIdent &tbl_id,
                                       FilePageId fp_id,
@@ -537,6 +543,9 @@ public:
     io_uring ring_;
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};
+    uint32_t compaction_in_progress_{0};
+
+    KvError BootstrapRing(Shard *shard);
 };
 
 class CloudStoreMgr : public IouringMgr

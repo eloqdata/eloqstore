@@ -67,15 +67,15 @@ void BackgroundWrite::HeapSortFpIdsWithYield(
         return;
     }
 
-    constexpr size_t push_batch = 256;
-    constexpr size_t pop_batch = 256;
+    constexpr size_t push_batch = 1 << 8;
+    constexpr size_t pop_batch = 1 << 8;
 
     size_t push_ops = 0;
     for (size_t next = 1; next < fp_ids.size(); ++next)
     {
         std::push_heap(fp_ids.begin(), fp_ids.begin() + next + 1, FilePageLess);
         push_ops++;
-        if (push_ops % push_batch == 0)
+        if ((push_ops & (push_batch - 1)) == 0)
         {
             YieldToLowPQ();
         }
@@ -86,7 +86,7 @@ void BackgroundWrite::HeapSortFpIdsWithYield(
     {
         std::pop_heap(fp_ids.begin(), fp_ids.begin() + count, FilePageLess);
         pop_ops++;
-        if (pop_ops % pop_batch == 0)
+        if ((pop_ops & (pop_batch - 1)) == 0)
         {
             YieldToLowPQ();
         }
@@ -95,6 +95,25 @@ void BackgroundWrite::HeapSortFpIdsWithYield(
 
 KvError BackgroundWrite::CompactDataFile()
 {
+    struct Guard
+    {
+        Guard()
+        {
+            auto *io_mgr = reinterpret_cast<IouringMgr *>(IoMgr());
+            while (io_mgr->compaction_in_progress_ >=
+                   Options()->max_compaction_in_progress)
+            {
+                ThdTask()->YieldToLowPQ();
+            }
+            ++io_mgr->compaction_in_progress_;
+        }
+
+        ~Guard()
+        {
+            auto *io_mgr = reinterpret_cast<IouringMgr *>(IoMgr());
+            --io_mgr->compaction_in_progress_;
+        }
+    } guard;
     LOG(INFO) << "begin compaction on " << this->tbl_ident_;
     const KvOptions *opts = Options();
     assert(opts->data_append_mode);
@@ -184,7 +203,7 @@ KvError BackgroundWrite::CompactDataFile()
     size_t round_cnt = 0;
     for (FileId file_id = begin_file_id; file_id < end_file_id; file_id++)
     {
-        if ((round_cnt & 0xFFFF) == 0)
+        if ((round_cnt & 0xFF) == 0)
         {
             YieldToLowPQ();
             round_cnt = 0;
@@ -221,6 +240,7 @@ KvError BackgroundWrite::CompactDataFile()
         // Compact this data file, copy all pages in this file to the back.
         for (auto it = it_low; it < it_high; it += max_move_batch)
         {
+            YieldToLowPQ();
             uint32_t batch_size = std::min(long(max_move_batch), it_high - it);
             const std::span<std::pair<FilePageId, PageId>> batch_ids(
                 it, batch_size);

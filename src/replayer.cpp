@@ -28,7 +28,7 @@ KvError Replayer::Replay(ManifestFile *file)
 {
     root_ = MaxPageId;
     ttl_root_ = MaxPageId;
-    mapping_tbl_.resize(0);
+    mapping_tbl_.clear();
     mapping_tbl_.reserve(opts_->init_page_count);
     file_size_ = 0;
     max_fp_id_ = MaxFilePageId;
@@ -176,7 +176,7 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
         uint64_t value;
         ok = GetVarint64(&mapping_view, &value);
         assert(ok);
-        mapping_tbl_.push_back(value);
+        mapping_tbl_.PushBack(value);
     }
 
     // Deserialize FileIdTermMapping section
@@ -206,12 +206,12 @@ void Replayer::ReplayLog()
         assert(ok);
         while (page_id >= mapping_tbl_.size())
         {
-            mapping_tbl_.emplace_back(MappingSnapshot::InvalidValue);
+            mapping_tbl_.PushBack(MappingSnapshot::InvalidValue);
         }
         uint64_t value;
         ok = GetVarint64(&mapping_view, &value);
         assert(ok);
-        mapping_tbl_[page_id] = value;
+        mapping_tbl_.Set(page_id, value);
         if (MappingSnapshot::IsFilePageId(value))
         {
             FilePageId fp_id = MappingSnapshot::DecodeId(value);
@@ -235,6 +235,7 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
         idx_mgr,
         tbl_ident,
         MappingSnapshot::MappingTbl(std::move(mapping_tbl_)));
+    mapping->mapping_tbl_.SetChunkArena(idx_mgr->MapperChunkArena());
     auto mapper = std::make_unique<PageMapper>(std::move(mapping));
     auto &m_table = mapper->GetMapping()->mapping_tbl_;
 

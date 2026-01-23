@@ -6,6 +6,7 @@
 #include <liburing.h>
 #include <liburing/io_uring.h>
 #include <linux/openat2.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -137,7 +138,19 @@ IouringMgr::~IouringMgr()
 
 KvError IouringMgr::Init(Shard *shard)
 {
+    (void) shard;
+    return KvError::NoError;
+}
+
+KvError IouringMgr::BootstrapRing(Shard *shard)
+{
+    if (ring_inited_)
+    {
+        return KvError::NoError;
+    }
+
     io_uring_params params = {};
+    params.flags |= (IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN);
     const uint32_t sq_size = options_->io_queue_size;
     int ret = io_uring_queue_init_params(sq_size, &ring_, &params);
     if (ret < 0)
@@ -154,6 +167,7 @@ KvError IouringMgr::Init(Shard *shard)
         {
             LOG(ERROR) << "failed to reserve register file slots: " << ret;
             io_uring_queue_exit(&ring_);
+            ring_inited_ = false;
             return KvError::OpenFileLimit;
         }
         free_reg_slots_.reserve(fd_limit_);
@@ -168,6 +182,7 @@ KvError IouringMgr::Init(Shard *shard)
         LOG(ERROR) << "failed to initialize buffer ring: " << ret;
         io_uring_unregister_files(&ring_);
         io_uring_queue_exit(&ring_);
+        ring_inited_ = false;
         return KvError::OutOfMem;
     }
     int mask = io_uring_buf_ring_mask(num_bufs);
@@ -181,6 +196,24 @@ KvError IouringMgr::Init(Shard *shard)
     io_uring_buf_ring_advance(buf_ring_, num_bufs);
 
     return KvError::NoError;
+}
+
+void IouringMgr::InitBackgroundJob()
+{
+    if (ring_inited_)
+    {
+        return;
+    }
+
+    Shard *target_shard = shard;
+    CHECK(target_shard != nullptr)
+        << "Shard must be set before initializing io_uring";
+    KvError err = BootstrapRing(target_shard);
+    if (err != KvError::NoError)
+    {
+        LOG(FATAL) << "failed to initialize io queue in background thread: "
+                   << ErrorString(err);
+    }
 }
 
 std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
@@ -440,6 +473,7 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
                                   uint32_t offset,
                                   std::span<iovec> iov)
     {
+        size_t num_pages = pages.size();
         auto [fd, registered] = fd_ref.FdPair();
         io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
         if (registered)
@@ -447,7 +481,6 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
             sqe->flags |= IOSQE_FIXED_FILE;
         }
 
-        size_t num_pages = pages.size();
         for (size_t i = 0; i < num_pages; i++)
         {
             iov[i].iov_base = VarPagePtr(pages[i]);
@@ -920,7 +953,7 @@ void IouringMgr::Submit()
         return;
     }
     int ret = io_uring_submit(&ring_);
-    if (ret < 0)
+    if (__builtin_expect(ret < 0, 0))
     {
         LOG(ERROR) << "iouring submit failed " << ret;
     }
@@ -1648,16 +1681,33 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
     assert((offset & (alignment - 1)) == 0);
     assert((log.size() & (alignment - 1)) == 0);
 
-    int wres = Write(fd_ref.FdPair(), log.data(), log.size(), offset);
-    if (wres < 0)
+    const size_t write_batch_size = page_align;
+    size_t remaining = log.size();
+    size_t written = 0;
+    FdIdx fd_idx = fd_ref.FdPair();
+    while (remaining > 0)
     {
-        LOG(ERROR) << "append manifest failed " << tbl_id;
-        return ToKvError(wres);
-    }
-    if (wres < static_cast<int>(log.size()))
-    {
-        LOG(ERROR) << "append manifest less than expected " << tbl_id;
-        return KvError::TryAgain;
+        size_t batch = std::min(write_batch_size, remaining);
+        int wres = Write(fd_idx, log.data() + written, batch, offset + written);
+        if (wres < 0)
+        {
+            LOG(ERROR) << "append manifest failed " << tbl_id;
+            return ToKvError(wres);
+        }
+        if (wres == 0)
+        {
+            LOG(ERROR) << "append manifest wrote zero bytes " << tbl_id;
+            return KvError::TryAgain;
+        }
+        written += static_cast<size_t>(wres);
+        if (remaining >= static_cast<size_t>(wres))
+        {
+            remaining -= static_cast<size_t>(wres);
+        }
+        else
+        {
+            remaining = 0;
+        }
     }
 
     TEST_KILL_POINT_WEIGHT("AppendManifest:Sync", 10)
@@ -1683,22 +1733,39 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
     [[maybe_unused]] const size_t alignment = page_align;
     assert((io_size & (alignment - 1)) == 0);
     assert((reinterpret_cast<uintptr_t>(write_ptr) & (alignment - 1)) == 0);
-    int res = Write({tmp_fd, false}, write_ptr, io_size, 0);
-    if (res < 0)
+    FdIdx tmp_fd_idx{tmp_fd, false};
+    const size_t write_batch_size = page_align;
+    size_t remaining = io_size;
+    size_t written = 0;
+    while (remaining > 0)
     {
-        Close(tmp_fd);
-        LOG(ERROR) << "write temporary file failed " << strerror(-res);
-        return res;
-    }
-    if (res < static_cast<int>(io_size))
-    {
-        Close(tmp_fd);
-        LOG(ERROR) << "write temporary file less than expected.";
-        return -EIO;
+        size_t batch = std::min(write_batch_size, remaining);
+        int res = Write(tmp_fd_idx, write_ptr + written, batch, written);
+        if (res < 0)
+        {
+            Close(tmp_fd);
+            LOG(ERROR) << "write temporary file failed " << strerror(-res);
+            return res;
+        }
+        if (res == 0)
+        {
+            Close(tmp_fd);
+            LOG(ERROR) << "write temporary file wrote zero bytes.";
+            return -EIO;
+        }
+        written += static_cast<size_t>(res);
+        if (remaining >= static_cast<size_t>(res))
+        {
+            remaining -= static_cast<size_t>(res);
+        }
+        else
+        {
+            remaining = 0;
+        }
     }
 
     TEST_KILL_POINT("AtomicWriteFile:Sync")
-    res = Fdatasync({tmp_fd, false});
+    int res = Fdatasync({tmp_fd, false});
     if (res < 0)
     {
         Close(tmp_fd);
@@ -3312,6 +3379,7 @@ inline bool CloudStoreMgr::BackgroundJobInited()
 
 void CloudStoreMgr::InitBackgroundJob()
 {
+    IouringMgr::InitBackgroundJob();
     background_job_inited_ = true;
     shard->running_ = &file_cleaner_;
     file_cleaner_.coro_ = boost::context::callcc(
@@ -3501,8 +3569,16 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
         file_size = static_cast<size_t>(stx.stx_size);
     }
 
+    int64_t resize_time = butil::cpuwide_time_ns();
     buffer.resize(file_size);
-    constexpr size_t read_batch_size = 1ULL << 20;
+    resize_time = butil::cpuwide_time_ns() - resize_time;
+    if (resize_time > 1000000)
+    {
+        resize_time_++;
+        LOG(ERROR) << "resize cost " << resize_time
+                   << ", resize_time=" << resize_time_;
+    }
+    const size_t read_batch_size = page_align;
     size_t remaining = buffer.padded_size();
     size_t read_offset = 0;
     FdIdx fd_idx{fd, false};

@@ -47,7 +47,13 @@ void ManifestBuilder::DeleteMapping(PageId page_id)
     if (!resized_for_mapping_bytes_len_)
     {
         CHECK(buff_.size() == header_bytes);
+        int64_t start = butil::cpuwide_time_ns();
         buff_.resize(buff_.size() + 4);
+        int64_t diff = butil::cpuwide_time_ns() - start;
+        if (diff > 500000)
+        {
+            LOG(ERROR) << "DeleteMapping " << diff;
+        }
         resized_for_mapping_bytes_len_ = true;
     }
 

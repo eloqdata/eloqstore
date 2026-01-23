@@ -52,14 +52,17 @@ public:
     const EloqStore *store_;
     const size_t shard_id_{0};
     boost::context::continuation main_;
-    KvTask *running_;
+    uint64_t ts_{};
+    KvTask *running_{};
     CircularQueue<KvTask *> ready_tasks_;
     CircularQueue<KvTask *> low_priority_ready_tasks_;
     size_t running_writing_tasks_{};
     bool oss_enabled_{false};
+    bool low_priority_tasks_io_submitted_{false};
 
 private:
     void WorkLoop();
+    void InitBackgroundJob();
     bool ExecuteReadyTasks();
     void OnTaskFinished(KvTask *task);
     void OnReceivedReq(KvRequest *req);
