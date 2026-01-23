@@ -232,7 +232,7 @@ struct KvOptions
     /**
      * @brief Size of mapping arena.
      */
-    size_t mapping_arena_size = 128;
+    size_t mapping_arena_size = 10000;
 
     /**
      * @brief Filter function to determine which partitions belong to this
