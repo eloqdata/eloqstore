@@ -784,7 +784,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
 
 std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
 {
-ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
     ThdTask()->step_ = 110;
     if (stack_.empty())
     {
@@ -1078,8 +1078,14 @@ KvError BatchWriteTask::FlushIndexPage(MemIndexPage *idx_page,
         }
 
         IndexStackEntry *parent_entry = stack_[stack_.size() - 2].get();
+        int64_t start = butil::cpuwide_time_ns();
         parent_entry->changes_.emplace_back(
             std::move(idx_page_key), idx_page->GetPageId(), WriteOp::Upsert);
+        int64_t diff = butil::cpuwide_time_ns() - start;
+        if (diff > 200000)
+        {
+            LOG(ERROR) << "FlushIndexPage " << diff << "ns";
+        }
     }
     return KvError::NoError;
 }
