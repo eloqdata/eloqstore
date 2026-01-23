@@ -345,16 +345,19 @@ KvError WriteTask::UpdateMeta()
         CHECK_KV_ERR(err);
     }
 
+    step_ = 7;
     err = IoMgr()->SyncData(tbl_ident_);
     CHECK_KV_ERR(err);
 
     // Update meta data in storage and then in memory.
+    step_ = 8;
     err = FlushManifest();
     CHECK_KV_ERR(err);
 
     // Hooks after modified partition.
     CompactIfNeeded(cow_meta_.mapper_.get());
 
+    step_ = 9;
     shard->IndexManager()->UpdateRoot(tbl_ident_, std::move(cow_meta_));
     return KvError::NoError;
 }
