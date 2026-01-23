@@ -603,7 +603,7 @@ void Shard::WorkOneRound()
 
     io_mgr_->PollComplete();
     delta_us = DurationMicroseconds(ts_);
-    unt64_t us_after_poll_complete = delta_us;
+    uint64_t us_after_poll_complete = delta_us;
     if (delta_us >= FLAGS_max_processing_time_microseconds)
     {
         LOG(WARNING) << "after PollCompete cost " << delta_us;
