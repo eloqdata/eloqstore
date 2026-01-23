@@ -3501,8 +3501,16 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
         file_size = static_cast<size_t>(stx.stx_size);
     }
 
+    int64_t resize_time = butil::cpuwide_time_ns();
     buffer.resize(file_size);
-    constexpr size_t read_batch_size = 1ULL << 20;
+    resize_time = butil::cpuwide_time_ns() - resize_time;
+    if (resize_time > 1000000)
+    {
+        resize_time_++;
+        LOG(ERROR) << "resize cost " << resize_time
+                   << ", resize_time=" << resize_time_;
+    }
+    const size_t read_batch_size = page_align;
     size_t remaining = buffer.padded_size();
     size_t read_offset = 0;
     FdIdx fd_idx{fd, false};
