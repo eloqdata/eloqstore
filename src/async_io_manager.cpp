@@ -3502,7 +3502,7 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
     }
 
     buffer.resize(file_size);
-    constexpr size_t read_batch_size = 1ULL << 20;
+    constexpr size_t read_batch_size = 64ULL << 10;
     size_t remaining = buffer.padded_size();
     size_t read_offset = 0;
     FdIdx fd_idx{fd, false};
