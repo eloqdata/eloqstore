@@ -486,6 +486,11 @@ bool Shard::ExecuteReadyTasks()
         {
             OnTaskFinished(task);
         }
+        uint64_t delta_us = DurationMicroseconds(start_us_fast);
+        if (delta_us >= FLAGS_max_processing_time_microseconds)
+        {
+            goto finish;
+        }
     }
 
     while (low_priority_ready_tasks_.Size() > 0)
@@ -502,10 +507,11 @@ bool Shard::ExecuteReadyTasks()
         uint64_t delta_us = DurationMicroseconds(start_us_fast);
         if (delta_us >= FLAGS_max_processing_time_microseconds)
         {
-            break;
+            goto finish;
         }
     }
 
+finish:
     running_ = nullptr;
     return busy;
 }
