@@ -254,14 +254,21 @@ void BatchWriteTask::Abort()
 
 KvError BatchWriteTask::Apply()
 {
+    Record(500000);
+    step_ = 0;
     KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
+    step_ = 1;
     cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     CHECK_KV_ERR(err);
+    step_ = 2;
     err = ApplyBatch(cow_meta_.root_id_, true);
+    step_ = 3;
     CHECK_KV_ERR(err);
     err = ApplyTTLBatch();
+    step_ = 4;
     CHECK_KV_ERR(err);
     err = UpdateMeta();
+    step_ = 5;
     CHECK_KV_ERR(err);
     TriggerTTL();
     return KvError::NoError;
