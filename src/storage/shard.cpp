@@ -469,6 +469,7 @@ void Shard::ProcessReq(KvRequest *req)
 
 bool Shard::ExecuteReadyTasks()
 {
+    int cnt = 0;
     if (oss_enabled_)
     {
         auto *cloud_mgr = reinterpret_cast<CloudStoreMgr *>(io_mgr_.get());
@@ -493,7 +494,6 @@ bool Shard::ExecuteReadyTasks()
         }
     }
 
-    int cnt = 0;
     while (low_priority_ready_tasks_.Size() > 0)
     {
         ++cnt;
