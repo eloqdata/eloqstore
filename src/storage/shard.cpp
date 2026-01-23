@@ -581,6 +581,7 @@ void Shard::WorkOneRound()
     {
         io_mgr_->InitBackgroundJob();
     }
+    ExecuteReadyTasks();
     KvRequest *reqs[128];
     size_t nreqs = requests_.try_dequeue_bulk(reqs, std::size(reqs));
 
