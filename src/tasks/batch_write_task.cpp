@@ -261,7 +261,7 @@ KvError BatchWriteTask::Apply()
     step_ = 1;
     cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     CHECK_KV_ERR(err);
-    ts_ = butil::cpuwide_time_ns();
+    YieldToLowPQ();
     step_ = 2;
     err = ApplyBatch(cow_meta_.root_id_, true);
     step_ = 3;
@@ -300,7 +300,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
                                    bool update_ttl,
                                    uint64_t now_ts)
 {
-    ts_ = butil::cpuwide_time_ns();
+    YieldToLowPQ();
     step_ = 10;
     do_update_ttl_ = update_ttl;
     assert(!update_ttl || ttl_batch_.empty());
@@ -324,38 +324,38 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
     size_t cidx = 0;
     const uint64_t now_ms =
         now_ts != 0 ? now_ts : utils::UnixTs<chrono::milliseconds>();
-    ts_ = butil::cpuwide_time_ns();
+    YieldToLowPQ();
     step_ = 11;
     while (cidx < data_batch_.size())
     {
-        ts_ = butil::cpuwide_time_ns();
+        YieldToLowPQ();
         step_ = 21;
         std::string_view batch_start_key = {data_batch_[cidx].key_.data(),
                                             data_batch_[cidx].key_.size()};
         if (stack_.size() > 1)
         {
-            ts_ = butil::cpuwide_time_ns();
+            YieldToLowPQ();
             step_ = 25;
             err = SeekStack(batch_start_key);
             CHECK_KV_ERR(err);
         }
-        ts_ = butil::cpuwide_time_ns();
+        YieldToLowPQ();
         step_ = 22;
         auto [page_id, err] = Seek(batch_start_key);
         CHECK_KV_ERR(err);
         if (page_id != MaxPageId)
         {
-            ts_ = butil::cpuwide_time_ns();
+            YieldToLowPQ();
             step_ = 24;
             err = LoadApplyingPage(page_id);
             CHECK_KV_ERR(err);
         }
-        ts_ = butil::cpuwide_time_ns();
+        YieldToLowPQ();
         step_ = 23;
         err = ApplyOnePage(cidx, now_ms);
         CHECK_KV_ERR(err);
     }
-    ts_ = butil::cpuwide_time_ns();
+    YieldToLowPQ();
     step_ = 12;
     // Flush all dirty leaf data pages in leaf_triple_.
     assert(TripleElement(2) == nullptr);
@@ -379,7 +379,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
 
 KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
 {
-    ts_ = butil::cpuwide_time_ns();
+    YieldToLowPQ();
     step_ = 60;
     assert(page_id != MaxPageId);
     // Now we are going to fetch a data page before execute ApplyOnePage.
@@ -394,13 +394,13 @@ KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
     }
     else
     {
-        ts_ = butil::cpuwide_time_ns();
+        YieldToLowPQ();
         step_ = 64;
         auto [page, err] = LoadDataPage(page_id);
         CHECK_KV_ERR(err);
         applying_page_ = std::move(page);
     }
-    ts_ = butil::cpuwide_time_ns();
+    YieldToLowPQ();
     step_ = 61;
     assert(TypeOfPage(applying_page_.PagePtr()) == PageType::Data);
 
@@ -410,7 +410,7 @@ KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
         KvError err = ShiftLeafLink();
         CHECK_KV_ERR(err);
     }
-    ts_ = butil::cpuwide_time_ns();
+    YieldToLowPQ();
     step_ = 62;
     if (TripleElement(0) &&
         TripleElement(0)->GetPageId() != applying_page_.PrevPageId())
@@ -448,7 +448,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     DataPageIter base_page_iter{base_page, Options()};
     bool is_base_iter_valid = false;
     AdvanceDataPageIter(base_page_iter, is_base_iter_valid);
-    ts_ = butil::cpuwide_time_ns();
+    YieldToLowPQ();
     step_ = 32;
 
     data_page_builder_.Reset();
@@ -481,7 +481,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     std::string prev_key;
     std::string_view page_key = stack_.back()->idx_page_iter_.Key();
     std::string curr_page_key{page_key.data(), page_key.size()};
-    ts_ = butil::cpuwide_time_ns();
+    YieldToLowPQ();
     step_ = 33;
 
     PageId page_id = MaxPageId;
@@ -546,7 +546,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             prev_key = key;
             return KvError::NoError;
         });
-    ts_ = butil::cpuwide_time_ns();
+    YieldToLowPQ();
     step_ = 34;
     while (is_base_iter_valid && change_it != change_end_it)
     {
@@ -695,7 +695,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             break;
         }
     }
-    ts_ = butil::cpuwide_time_ns();
+    YieldToLowPQ();
     step_ = 35;
 
     while (is_base_iter_valid)
@@ -711,7 +711,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         CHECK_KV_ERR(err);
         AdvanceDataPageIter(base_page_iter, is_base_iter_valid);
     }
-    ts_ = butil::cpuwide_time_ns();
+    YieldToLowPQ();
     step_ = 36;
 
     while (change_it != change_end_it)
@@ -748,7 +748,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         }
         ++change_it;
     }
-    ts_ = butil::cpuwide_time_ns();
+    YieldToLowPQ();
     step_ = 37;
 
     if (data_page_builder_.IsEmpty())
@@ -766,25 +766,25 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     }
     else
     {
-        ts_ = butil::cpuwide_time_ns();
+        YieldToLowPQ();
         step_ = 39;
         err = FinishDataPage(std::move(curr_page_key), page_id);
         CHECK_KV_ERR(err);
     }
     assert(!TripleElement(1));
     leaf_triple_[1] = std::move(leaf_triple_[2]);
-    // ts_ = butil::cpuwide_time_ns();
+    // YieldToLowPQ();
     step_ = 38;
 
     cidx = cidx + std::distance(data_batch_.begin() + cidx, change_end_it);
-    // ts_ = butil::cpuwide_time_ns();
+    // YieldToLowPQ();
     // step_ = 40;
     return KvError::NoError;
 }
 
 std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
 {
-    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->YieldToLowPQ();
     ThdTask()->step_ = 110;
     if (stack_.empty())
     {
@@ -806,7 +806,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
 
     idx_page_builder_.Reset();
 
-    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->YieldToLowPQ();
     ThdTask()->step_ = 112;
     const Comparator *cmp = shard->IndexManager()->GetComparator();
     std::vector<IndexOp> &changes = stack_entry->changes_;
@@ -854,7 +854,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         }
         return KvError::NoError;
     };
-    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->YieldToLowPQ();
     ThdTask()->step_ = 113;
 
     while (is_base_iter_valid && cit != changes.end())
@@ -929,7 +929,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
             break;
         }
     }
-    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->YieldToLowPQ();
     ThdTask()->step_ = 114;
 
     while (is_base_iter_valid)
@@ -943,7 +943,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         }
         AdvanceIndexPageIter(base_page_iter, is_base_iter_valid);
     }
-    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->YieldToLowPQ();
     ThdTask()->step_ = 115;
 
     while (cit != changes.end())
@@ -960,7 +960,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         }
         ++cit;
     }
-    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->YieldToLowPQ();
     ThdTask()->step_ = 116;
 
     MemIndexPage *new_root = nullptr;
@@ -983,7 +983,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         {
             return {nullptr, err};
         }
-        ThdTask()->ts_ = butil::cpuwide_time_ns();
+        ThdTask()->YieldToLowPQ();
         ThdTask()->step_ = 118;
         err = FlushIndexPage(prev_page.page_,
                              std::move(prev_page.key_),
@@ -999,7 +999,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         }
         prev_page.page_ = nullptr;
     }
-    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->YieldToLowPQ();
     ThdTask()->step_ = 117;
 
     if (stack_page != nullptr)
@@ -1013,7 +1013,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
 KvError BatchWriteTask::FinishIndexPage(DirtyIndexPage &prev,
                                         std::string cur_page_key)
 {
-    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->YieldToLowPQ();
     ThdTask()->step_ = 130;
     assert(!idx_page_builder_.IsEmpty());
     const uint16_t cur_page_len = idx_page_builder_.CurrentSizeEstimate();
@@ -1029,7 +1029,7 @@ KvError BatchWriteTask::FinishIndexPage(DirtyIndexPage &prev,
             prev.page_->RestartNum() > 1 &&
             prev.page_->ContentLength() > three_quarter)
         {
-            ThdTask()->ts_ = butil::cpuwide_time_ns();
+            ThdTask()->YieldToLowPQ();
             ThdTask()->step_ = 131;
             page_view = Redistribute(prev.page_, page_view, cur_page_key);
         }
@@ -1040,14 +1040,14 @@ KvError BatchWriteTask::FinishIndexPage(DirtyIndexPage &prev,
         prev.page_ = nullptr;
         prev.page_id_ = MaxPageId;
     }
-    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->YieldToLowPQ();
     ThdTask()->step_ = 132;
     MemIndexPage *cur_page = shard->IndexManager()->AllocIndexPage();
     if (cur_page == nullptr)
     {
         return KvError::OutOfMem;
     }
-    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->YieldToLowPQ();
     ThdTask()->step_ = 133;
     memcpy(cur_page->PagePtr(), page_view.data(), page_view.size());
     prev.page_ = cur_page;
@@ -1102,7 +1102,7 @@ KvError BatchWriteTask::FlushIndexPage(MemIndexPage *idx_page,
 
 KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
 {
-    ts_ = butil::cpuwide_time_ns();
+    YieldToLowPQ();
     step_ = 70;
     const uint16_t cur_page_len = data_page_builder_.CurrentSizeEstimate();
     std::string_view page_view = data_page_builder_.Finish();
@@ -1117,7 +1117,7 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
         const uint16_t one_quarter = Options()->data_page_size >> 2;
         const uint16_t three_quarter = Options()->data_page_size - one_quarter;
         DataPage *prev_page = TripleElement(0);
-        ts_ = butil::cpuwide_time_ns();
+        YieldToLowPQ();
         step_ = 71;
         if (cur_page_len < one_quarter && prev_page != nullptr &&
             prev_page->RestartNum() > 1 &&
@@ -1137,7 +1137,7 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
             new_data_page.SetPage(Page(true));
             memcpy(new_data_page.PagePtr(), page_view.data(), page_view.size());
         }
-        ts_ = butil::cpuwide_time_ns();
+        YieldToLowPQ();
         step_ = 72;
 
         // This is a new data page that does not exist in the tree and has a new
@@ -1150,12 +1150,12 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
                stack_.back()->changes_.back().key_ < page_key);
         stack_.back()->changes_.emplace_back(
             std::move(page_key), page_id, WriteOp::Upsert);
-        ts_ = butil::cpuwide_time_ns();
+        YieldToLowPQ();
         step_ = 73;
     }
     else
     {
-        ts_ = butil::cpuwide_time_ns();
+        YieldToLowPQ();
         step_ = 74;
         DataPage new_page(page_id);
         memcpy(new_page.PagePtr(), page_view.data(), page_view.size());
