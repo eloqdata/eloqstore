@@ -1,5 +1,7 @@
 #pragma once
 
+#include <glog_error_logging.h>
+
 #include <utility>
 #include <vector>
 

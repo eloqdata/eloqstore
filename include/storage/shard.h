@@ -91,7 +91,21 @@ private:
                                                      task->Abort();
                                                  }
 
+                                                 {
+                                                     struct Timer
+                                                     {
+                                                         ~Timer()
+                                                         {
+                                                             int64_t diff = butil::cpuwide_time_ns() - start_;
+                                                             if (diff > 500000)
+                                                             {
+                                                                 LOG(ERROR) << "Set Done cost " << diff;
+                                                             }
+                                                         }
+                                                         int64_t start_{butil::cpuwide_time_ns()};
+                                                     } timer;
                                                  task->req_->SetDone(err);
+                                                 }
                                                  task->req_ = nullptr;
                                                  task->status_ =
                                                      TaskStatus::Finished;

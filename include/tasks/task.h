@@ -1,5 +1,7 @@
 #pragma once
 
+#include <butil/time.h>
+
 #include <boost/context/continuation.hpp>
 #include <string>
 #include <string_view>
@@ -122,6 +124,16 @@ public:
     KvRequest *req_{nullptr};
     continuation coro_;
     KvTask *next_{nullptr};
+    void SetRecord(int64_t threshold)
+    {
+        ts_ = butil::cpuwide_time_ns();
+        threshold_ = threshold;
+        record_ = true;
+    }
+    bool record_{false};
+    int step_{0};
+    int64_t ts_;
+    int64_t threshold_{0};
 };
 
 class WaitingZone

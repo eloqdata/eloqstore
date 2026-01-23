@@ -65,6 +65,7 @@ KvError BatchWriteTask::SeekStack(std::string_view search_key)
             auto [_, err] = Pop();
             CHECK_KV_ERR(err);
         }
+        YieldToNextRound();
     }
     return KvError::NoError;
 }
@@ -254,16 +255,24 @@ void BatchWriteTask::Abort()
 
 KvError BatchWriteTask::Apply()
 {
+    SetRecord(800000);
     KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
+    ++step_;  // 1
     cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     CHECK_KV_ERR(err);
+    ++step_;  // 2
     err = ApplyBatch(cow_meta_.root_id_, true);
+    ++step_;  // 7
     CHECK_KV_ERR(err);
     err = ApplyTTLBatch();
     CHECK_KV_ERR(err);
+    ++step_;  // 8
     err = UpdateMeta();
     CHECK_KV_ERR(err);
+    record_ = false;
+    ++step_;  // 9
     TriggerTTL();
+    step_ = 0;
     return KvError::NoError;
 }
 
@@ -308,6 +317,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         stack_.emplace_back(
             std::make_unique<IndexStackEntry>(nullptr, Options()));
     }
+    step_++;  // 3
 
     KvError err;
     size_t cidx = 0;
@@ -315,6 +325,8 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         now_ts != 0 ? now_ts : utils::UnixTs<chrono::milliseconds>();
     while (cidx < data_batch_.size())
     {
+        step_ = 4;
+        ts_ = butil::cpuwide_time_ns();
         std::string_view batch_start_key = {data_batch_[cidx].key_.data(),
                                             data_batch_[cidx].key_.size()};
         if (stack_.size() > 1)
@@ -322,22 +334,27 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
             err = SeekStack(batch_start_key);
             CHECK_KV_ERR(err);
         }
+        step_ = 5;
         auto [page_id, err] = Seek(batch_start_key);
         CHECK_KV_ERR(err);
+        step_ = 6;
         if (page_id != MaxPageId)
         {
             err = LoadApplyingPage(page_id);
             CHECK_KV_ERR(err);
         }
+        step_ = 7;
         err = ApplyOnePage(cidx, now_ms);
         CHECK_KV_ERR(err);
     }
+    step_ = 8;  // 8
     // Flush all dirty leaf data pages in leaf_triple_.
     assert(TripleElement(2) == nullptr);
     err = ShiftLeafLink();
     CHECK_KV_ERR(err);
     err = ShiftLeafLink();
     CHECK_KV_ERR(err);
+    step_++;  // 9
 
     assert(!stack_.empty());
     MemIndexPage *new_root = nullptr;
@@ -348,6 +365,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         new_root = new_page;
     }
     root_id = new_root == nullptr ? MaxPageId : new_root->GetPageId();
+    step_++;  // 10
 
     return KvError::NoError;
 }

@@ -9,6 +9,7 @@
 #include "pool.h"
 #include "tasks/task.h"
 #include "types.h"
+#include <glog_error_logging.h>
 
 namespace eloqstore
 {

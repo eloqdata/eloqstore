@@ -1,5 +1,6 @@
 #include "tasks/task.h"
 
+#include <butil/time.h>
 #include <glog/logging.h>
 
 #include <cassert>
@@ -23,13 +24,37 @@ void KvTask::Yield()
         << reinterpret_cast<void *>(shard->running_)
         << ", this=" << reinterpret_cast<void *>(this)
         << ". Yield() must only be called from within a coroutine.";
+    if (record_)
+    {
+        int64_t diff = butil::cpuwide_time_ns() - ts_;
+        if (diff > threshold_)
+        {
+            LOG(ERROR) << "cost " << diff << "ns, step:" << step_;
+        }
+    }
     shard->main_ = shard->main_.resume();
+    if (record_)
+    {
+        ts_ = butil::cpuwide_time_ns();
+    }
 }
 
 void KvTask::YieldToNextRound()
 {
     shard->tasks_to_run_next_round_.Enqueue(this);
+    if (record_)
+    {
+        int64_t diff = butil::cpuwide_time_ns() - ts_;
+        if (diff > threshold_)
+        {
+            LOG(ERROR) << "cost " << diff << "ns, step:" << step_;
+        }
+    }
     shard->main_ = shard->main_.resume();
+    if (record_)
+    {
+        ts_ = butil::cpuwide_time_ns();
+    }
 }
 
 void KvTask::Resume()
