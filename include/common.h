@@ -26,7 +26,7 @@ using FileIdTermMapping = absl::flat_hash_map<FileId, uint64_t>;
 inline void SerializeFileIdTermMapping(const FileIdTermMapping &mapping,
                                        std::string &dst)
 {
-    dst.reserve(mapping.size() * 4);
+    dst.reserve(mapping.size() << 3);
     // bytes_len(4B)
     dst.resize(4);
     for (const auto &[file_id, term] : mapping)

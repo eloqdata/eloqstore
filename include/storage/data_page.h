@@ -62,6 +62,10 @@ public:
     char *PagePtr() const;
     void SetPage(Page page);
     void Clear();
+    bool IsRegistered() const
+    {
+        return page_.IsRegistered();
+    }
 
 private:
     PageId page_id_{MaxPageId};
@@ -187,6 +191,10 @@ public:
     std::string_view GetValue() const;
     uint8_t NumPointers(const KvOptions *options) const;
     std::string_view GetEncodedPointers(const KvOptions *options) const;
+    bool IsRegistered() const
+    {
+        return page_.IsRegistered();
+    }
 
     /**
      * @brief Calculate the capacity of an overflow page.

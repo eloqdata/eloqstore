@@ -19,10 +19,6 @@ BatchWriteTask::BatchWriteTask()
 {
     overflow_ptrs_.reserve(Options()->overflow_pointers * 4);
 
-    if (Options()->data_append_mode)
-    {
-        batch_pages_.reserve(Options()->max_write_batch_pages);
-    }
 }
 
 KvError BatchWriteTask::SeekStack(std::string_view search_key)
@@ -254,10 +250,13 @@ void BatchWriteTask::Abort()
 
 KvError BatchWriteTask::Apply()
 {
+    // directly go to low priority queue and wait for scheduling
+    YieldToLowPQ();
     KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
     cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     CHECK_KV_ERR(err);
     err = ApplyBatch(cow_meta_.root_id_, true);
+    WaitWrite();
     CHECK_KV_ERR(err);
     err = ApplyTTLBatch();
     CHECK_KV_ERR(err);
@@ -331,6 +330,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         }
         err = ApplyOnePage(cidx, now_ms);
         CHECK_KV_ERR(err);
+        YieldToLowPQ();
     }
     // Flush all dirty leaf data pages in leaf_triple_.
     assert(TripleElement(2) == nullptr);
@@ -346,6 +346,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         auto [new_page, err] = Pop();
         CHECK_KV_ERR(err);
         new_root = new_page;
+        YieldToLowPQ();
     }
     root_id = new_root == nullptr ? MaxPageId : new_root->GetPageId();
 

@@ -104,7 +104,6 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
     // 4. delete unreferenced data files.
     err = DeleteUnreferencedLocalFiles(
         tbl_id, data_files, retained_files, least_not_archived_file_id, io_mgr);
-
     if (err != KvError::NoError)
     {
         LOG(ERROR)
@@ -201,6 +200,7 @@ void ClassifyFiles(const std::vector<std::string> &files,
     archive_timestamps.clear();
     data_files.clear();
     manifest_terms.clear();
+    data_files.reserve(files.size());
 
     for (const std::string &file_name : files)
     {
@@ -332,8 +332,9 @@ FileId ParseArchiveForMaxFileId(const std::string &archive_filename,
     FileId max_file_id = 0;
     const uint8_t pages_per_file_shift = Options()->pages_per_file_shift;
 
-    for (uint64_t val : replayer.mapping_tbl_)
+    for (PageId page_id = 0; page_id < replayer.mapping_tbl_.size(); ++page_id)
     {
+        uint64_t val = replayer.mapping_tbl_.Get(page_id);
         if (MappingSnapshot::IsFilePageId(val))
         {
             FilePageId fp_id = MappingSnapshot::DecodeId(val);
@@ -543,6 +544,7 @@ KvError DeleteUnreferencedLocalFiles(
 
     std::vector<std::string> files_to_delete;
     std::vector<FileId> file_ids_to_close;
+    files_to_delete.reserve(data_files.size());
     file_ids_to_close.reserve(data_files.size());
 
     for (const std::string &file_name : data_files)

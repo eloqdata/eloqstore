@@ -61,7 +61,6 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
         LOG(ERROR) << "Invalid option max_write_batch_pages";
         return false;
     }
-
     if (!opts.cloud_store_path.empty())
     {
         if (opts.max_cloud_concurrency == 0)
