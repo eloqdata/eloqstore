@@ -133,7 +133,7 @@ wget https://dl.min.io/server/minio/release/linux-amd64/minio
 chmod +x minio
 
 # Start MinIO server (runs on port 9000 by default)
-./minio server /tmp/minio-data --console-address ":9901"
+./minio server /tmp/minio-data --address :9900 --console-address :9901
 ```
 
 **2. Run unit tests:**
