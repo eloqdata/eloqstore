@@ -590,9 +590,9 @@ void Shard::WorkOneRound()
     for (size_t i = 0; i < nreqs; i++)
     {
         OnReceivedReq(reqs[i]);
-        uint64_t delta_us = DurationMicroseconds(ts_);
     }
 
+    uint64_t delta_us = DurationMicroseconds(ts_);
     if (delta_us >= FLAGS_max_processing_time_microseconds)
     {
         LOG(WARNING) << "after received req, cost " << delta_us;
@@ -604,7 +604,7 @@ void Shard::WorkOneRound()
     io_mgr_->PollComplete();
 
     ExecuteReadyTasks();
-    uint64_t delta_us = DurationMicroseconds(ts_);
+    delta_us = DurationMicroseconds(ts_);
     if (delta_us >= FLAGS_max_processing_time_microseconds)
     {
         LOG(WARNING) << "WorkOneRound cost " << delta_us;
