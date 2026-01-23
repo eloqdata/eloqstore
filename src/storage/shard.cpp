@@ -109,6 +109,8 @@ void Shard::WorkLoop()
 
     while (true)
     {
+        ts_ = ReadTimeMicroseconds();
+
 #ifdef ELOQSTORE_WITH_TXSERVICE
         // Metrics collection: start timing the round (one iteration = one
         // round)
@@ -467,8 +469,6 @@ void Shard::ProcessReq(KvRequest *req)
 
 bool Shard::ExecuteReadyTasks()
 {
-    uint64_t start_us_fast = ReadTimeMicroseconds();
-
     if (oss_enabled_)
     {
         auto *cloud_mgr = reinterpret_cast<CloudStoreMgr *>(io_mgr_.get());
@@ -486,7 +486,7 @@ bool Shard::ExecuteReadyTasks()
         {
             OnTaskFinished(task);
         }
-        uint64_t delta_us = DurationMicroseconds(start_us_fast);
+        uint64_t delta_us = DurationMicroseconds(ts_);
         if (delta_us >= FLAGS_max_processing_time_microseconds)
         {
             goto finish;
@@ -504,7 +504,7 @@ bool Shard::ExecuteReadyTasks()
         {
             OnTaskFinished(task);
         }
-        uint64_t delta_us = DurationMicroseconds(start_us_fast);
+        uint64_t delta_us = DurationMicroseconds(ts_);
         if (delta_us >= FLAGS_max_processing_time_microseconds)
         {
             goto finish;
@@ -547,6 +547,7 @@ void Shard::OnTaskFinished(KvTask *task)
 #ifdef ELOQ_MODULE_ENABLED
 void Shard::WorkOneRound()
 {
+    ts_ = ReadTimeMicroseconds();
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: start timing the round
     metrics::TimePoint round_start{};
