@@ -1648,16 +1648,34 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
     assert((offset & (alignment - 1)) == 0);
     assert((log.size() & (alignment - 1)) == 0);
 
-    int wres = Write(fd_ref.FdPair(), log.data(), log.size(), offset);
-    if (wres < 0)
+    const size_t write_batch_size = page_align;
+    size_t remaining = log.size();
+    size_t written = 0;
+    FdIdx fd_idx = fd_ref.FdPair();
+    while (remaining > 0)
     {
-        LOG(ERROR) << "append manifest failed " << tbl_id;
-        return ToKvError(wres);
-    }
-    if (wres < static_cast<int>(log.size()))
-    {
-        LOG(ERROR) << "append manifest less than expected " << tbl_id;
-        return KvError::TryAgain;
+        size_t batch = std::min(write_batch_size, remaining);
+        int wres =
+            Write(fd_idx, log.data() + written, batch, offset + written);
+        if (wres < 0)
+        {
+            LOG(ERROR) << "append manifest failed " << tbl_id;
+            return ToKvError(wres);
+        }
+        if (wres == 0)
+        {
+            LOG(ERROR) << "append manifest wrote zero bytes " << tbl_id;
+            return KvError::TryAgain;
+        }
+        written += static_cast<size_t>(wres);
+        if (remaining >= static_cast<size_t>(wres))
+        {
+            remaining -= static_cast<size_t>(wres);
+        }
+        else
+        {
+            remaining = 0;
+        }
     }
 
     TEST_KILL_POINT_WEIGHT("AppendManifest:Sync", 10)
@@ -1683,18 +1701,35 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
     [[maybe_unused]] const size_t alignment = page_align;
     assert((io_size & (alignment - 1)) == 0);
     assert((reinterpret_cast<uintptr_t>(write_ptr) & (alignment - 1)) == 0);
-    int res = Write({tmp_fd, false}, write_ptr, io_size, 0);
-    if (res < 0)
+    FdIdx tmp_fd_idx{tmp_fd, false};
+    const size_t write_batch_size = page_align;
+    size_t remaining = io_size;
+    size_t written = 0;
+    while (remaining > 0)
     {
-        Close(tmp_fd);
-        LOG(ERROR) << "write temporary file failed " << strerror(-res);
-        return res;
-    }
-    if (res < static_cast<int>(io_size))
-    {
-        Close(tmp_fd);
-        LOG(ERROR) << "write temporary file less than expected.";
-        return -EIO;
+        size_t batch = std::min(write_batch_size, remaining);
+        int res = Write(tmp_fd_idx, write_ptr + written, batch, written);
+        if (res < 0)
+        {
+            Close(tmp_fd);
+            LOG(ERROR) << "write temporary file failed " << strerror(-res);
+            return res;
+        }
+        if (res == 0)
+        {
+            Close(tmp_fd);
+            LOG(ERROR) << "write temporary file wrote zero bytes.";
+            return -EIO;
+        }
+        written += static_cast<size_t>(res);
+        if (remaining >= static_cast<size_t>(res))
+        {
+            remaining -= static_cast<size_t>(res);
+        }
+        else
+        {
+            remaining = 0;
+        }
     }
 
     TEST_KILL_POINT("AtomicWriteFile:Sync")
