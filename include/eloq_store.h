@@ -44,7 +44,8 @@ enum class RequestType : uint8_t
     DropTable,
     Archive,
     Compact,
-    CleanExpired
+    CleanExpired,
+    GlobalArchive
 };
 
 inline const char *RequestTypeToString(RequestType type)
@@ -71,6 +72,8 @@ inline const char *RequestTypeToString(RequestType type)
         return "compact";
     case RequestType::CleanExpired:
         return "clean_expired";
+    case RequestType::GlobalArchive:
+        return "global_archive";
     default:
         return "unknown";
     }
@@ -389,6 +392,46 @@ public:
     {
         return RequestType::Archive;
     }
+
+    void SetSnapshotTimestamp(uint64_t ts)
+    {
+        snapshot_ts_ = ts;
+    }
+
+    uint64_t GetSnapshotTimestamp() const
+    {
+        return snapshot_ts_;
+    }
+
+private:
+    uint64_t snapshot_ts_{0};
+};
+
+class GlobalArchiveRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::GlobalArchive;
+    }
+
+    void SetSnapshotTimestamp(uint64_t ts)
+    {
+        snapshot_ts_ = ts;
+    }
+
+    uint64_t GetSnapshotTimestamp() const
+    {
+        return snapshot_ts_;
+    }
+
+private:
+    uint64_t snapshot_ts_{0};
+    std::vector<std::unique_ptr<ArchiveRequest>> archive_reqs_;
+    std::atomic<uint32_t> pending_{0};
+    std::atomic<uint8_t> first_error_{static_cast<uint8_t>(KvError::NoError)};
+
+    friend class EloqStore;
 };
 
 class CompactRequest : public WriteRequest
@@ -475,6 +518,7 @@ public:
 private:
     bool SendRequest(KvRequest *req);
     void HandleDropTableRequest(DropTableRequest *req);
+    void HandleGlobalArchiveRequest(GlobalArchiveRequest *req);
     KvError CollectTablePartitions(const std::string &table_name,
                                    std::vector<TableIdent> &partitions) const;
     KvError InitStoreSpace();

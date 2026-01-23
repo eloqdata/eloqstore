@@ -20,7 +20,7 @@ public:
      */
     KvError CompactDataFile();
 
-    KvError CreateArchive();
+    KvError CreateArchive(uint64_t provided_ts = 0);
 
 private:
     void HeapSortFpIdsWithYield(

@@ -477,6 +477,201 @@ void EloqStore::HandleDropTableRequest(DropTableRequest *req)
     }
 }
 
+void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
+{
+    req->first_error_.store(static_cast<uint8_t>(KvError::NoError),
+                            std::memory_order_relaxed);
+    req->pending_.store(0, std::memory_order_relaxed);
+    req->archive_reqs_.clear();
+
+    uint64_t snapshot_ts = req->GetSnapshotTimestamp();
+    if (snapshot_ts == 0)
+    {
+        snapshot_ts = utils::UnixTs<chrono::microseconds>();
+    }
+
+    LOG(INFO) << "Creating global snapshot with timestamp " << snapshot_ts;
+
+    std::vector<TableIdent> all_partitions;
+    if (options_.cloud_store_path.empty())
+    {
+        for (const fs::path root : options_.store_path)
+        {
+            const fs::path db_path(root);
+            for (auto &ent : fs::directory_iterator{db_path})
+            {
+                if (!ent.is_directory())
+                {
+                    continue;
+                }
+
+                TableIdent tbl_id =
+                    TableIdent::FromString(ent.path().filename());
+                if (tbl_id.tbl_name_.empty())
+                {
+                    LOG(WARNING) << "unexpected partition " << ent.path();
+                    continue;
+                }
+
+                if (options_.partition_filter &&
+                    !options_.partition_filter(tbl_id))
+                {
+                    continue;
+                }
+
+                all_partitions.emplace_back(std::move(tbl_id));
+            }
+        }
+    }
+    else
+    {
+        std::vector<std::string> objects;
+        ListObjectRequest list_request(&objects);
+        list_request.SetRemotePath(std::string{});
+        list_request.SetRecursive(false);
+        ExecSync(&list_request);
+
+        if (list_request.Error() != KvError::NoError)
+        {
+            LOG(ERROR) << "Failed to list cloud objects for snapshot: "
+                       << static_cast<int>(list_request.Error());
+            req->SetDone(list_request.Error());
+            return;
+        }
+
+        all_partitions.reserve(objects.size());
+
+        for (auto &name : objects)
+        {
+            TableIdent tbl_id = TableIdent::FromString(name);
+            if (!tbl_id.IsValid())
+            {
+                continue;
+            }
+
+            if (options_.partition_filter && !options_.partition_filter(tbl_id))
+            {
+                continue;
+            }
+
+            all_partitions.emplace_back(std::move(tbl_id));
+        }
+    }
+
+    if (all_partitions.empty())
+    {
+        LOG(INFO) << "No partitions to snapshot (all filtered out or none "
+                     "exist)";
+        req->SetDone(KvError::NoError);
+        return;
+    }
+
+    LOG(INFO) << "Snapshotting " << all_partitions.size()
+              << " partitions with timestamp " << snapshot_ts;
+
+    req->archive_reqs_.reserve(all_partitions.size());
+    for (const TableIdent &partition : all_partitions)
+    {
+        auto archive_req = std::make_unique<ArchiveRequest>();
+        archive_req->SetTableId(partition);
+        archive_req->SetSnapshotTimestamp(snapshot_ts);
+        req->archive_reqs_.push_back(std::move(archive_req));
+    }
+
+    req->pending_.store(static_cast<uint32_t>(req->archive_reqs_.size()),
+                        std::memory_order_relaxed);
+
+    struct ArchiveScheduleState
+        : public std::enable_shared_from_this<ArchiveScheduleState>
+    {
+        EloqStore *store = nullptr;
+        GlobalArchiveRequest *req = nullptr;
+        size_t total = 0;
+        std::atomic<size_t> next_index{0};
+
+        bool HandleArchiveResult(KvError sub_err)
+        {
+            if (sub_err != KvError::NoError)
+            {
+                uint8_t expected = static_cast<uint8_t>(KvError::NoError);
+                uint8_t desired = static_cast<uint8_t>(sub_err);
+                req->first_error_.compare_exchange_strong(
+                    expected,
+                    desired,
+                    std::memory_order_relaxed,
+                    std::memory_order_relaxed);
+            }
+            if (req->pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+            {
+                KvError final_err = static_cast<KvError>(
+                    req->first_error_.load(std::memory_order_relaxed));
+                req->SetDone(final_err);
+                return true;
+            }
+            return false;
+        }
+
+        void OnArchiveDone(KvRequest *sub_req)
+        {
+            if (HandleArchiveResult(sub_req->Error()))
+            {
+                return;
+            }
+            ScheduleNext();
+        }
+
+        void ScheduleNext()
+        {
+            while (true)
+            {
+                size_t idx = next_index.fetch_add(1, std::memory_order_relaxed);
+                if (idx >= total)
+                {
+                    return;
+                }
+                ArchiveRequest *ptr = req->archive_reqs_[idx].get();
+                auto self = shared_from_this();
+                auto on_archive_done = [self](KvRequest *sub_req)
+                { self->OnArchiveDone(sub_req); };
+                if (store->ExecAsyn(ptr, 0, on_archive_done))
+                {
+                    return;
+                }
+
+                LOG(ERROR) << "Handle global archive request, enqueue archive "
+                              "request fail";
+                // Clear callback_ first so SetDone doesn't invoke it.
+                ptr->callback_ = nullptr;
+                ptr->SetDone(KvError::NotRunning);
+                if (HandleArchiveResult(KvError::NotRunning))
+                {
+                    return;
+                }
+            }
+        }
+    };
+
+    auto state = std::make_shared<ArchiveScheduleState>();
+    state->store = this;
+    state->req = req;
+    state->total = req->archive_reqs_.size();
+
+    size_t max_inflight = options_.max_archive_tasks;
+    if (max_inflight == 0)
+    {
+        max_inflight = 1;
+    }
+    if (max_inflight > state->total)
+    {
+        max_inflight = state->total;
+    }
+
+    for (size_t i = 0; i < max_inflight; ++i)
+    {
+        state->ScheduleNext();
+    }
+}
+
 bool EloqStore::SendRequest(KvRequest *req)
 {
     if (stopped_.load(std::memory_order_relaxed))
@@ -497,6 +692,12 @@ bool EloqStore::SendRequest(KvRequest *req)
     if (req->Type() == RequestType::DropTable)
     {
         HandleDropTableRequest(static_cast<DropTableRequest *>(req));
+        return true;
+    }
+
+    if (req->Type() == RequestType::GlobalArchive)
+    {
+        HandleGlobalArchiveRequest(static_cast<GlobalArchiveRequest *>(req));
         return true;
     }
 

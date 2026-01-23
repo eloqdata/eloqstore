@@ -285,7 +285,7 @@ KvError BackgroundWrite::CompactDataFile()
     return KvError::NoError;
 }
 
-KvError BackgroundWrite::CreateArchive()
+KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
 {
     assert(Options()->data_append_mode);
     assert(Options()->num_retained_archives > 0);
@@ -320,7 +320,8 @@ KvError BackgroundWrite::CreateArchive()
     std::string_view snapshot = wal_builder_.Snapshot(
         root, ttl_root, mapping, max_fp_id, dict_bytes, term_buf);
 
-    uint64_t current_ts = utils::UnixTs<chrono::microseconds>();
+    uint64_t current_ts =
+        provided_ts != 0 ? provided_ts : utils::UnixTs<chrono::microseconds>();
     err = IoMgr()->CreateArchive(tbl_ident_, snapshot, current_ts);
     CHECK_KV_ERR(err);
 

@@ -9,6 +9,8 @@
 #include <string_view>
 #include <thread>
 #include <tuple>
+#include <unordered_set>
+#include <vector>
 
 #include "common.h"
 #include "kv_options.h"
@@ -19,6 +21,33 @@
 using namespace test_util;
 using namespace eloqstore;
 namespace fs = std::filesystem;
+
+namespace
+{
+std::vector<uint64_t> CollectArchiveTimestamps(const fs::path &partition_path)
+{
+    std::vector<uint64_t> timestamps;
+    for (const auto &entry : fs::directory_iterator(partition_path))
+    {
+        if (!entry.is_regular_file())
+        {
+            continue;
+        }
+        std::string filename = entry.path().filename().string();
+        if (!eloqstore::IsArchiveFile(filename))
+        {
+            continue;
+        }
+        auto [type, suffix] = eloqstore::ParseFileName(filename);
+        uint64_t term = 0;
+        std::optional<uint64_t> ts;
+        REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, term, ts));
+        REQUIRE(ts.has_value());
+        timestamps.push_back(*ts);
+    }
+    return timestamps;
+}
+}  // namespace
 
 TEST_CASE("simple manifest recovery", "[manifest]")
 {
@@ -148,6 +177,105 @@ TEST_CASE("create archives", "[archive]")
     REQUIRE(archive_count >= 1);
 
     tester.Validate();
+}
+
+TEST_CASE("global archive shares timestamp and filters partitions",
+          "[archive][global]")
+{
+    eloqstore::KvOptions opts = archive_opts;
+    const std::string tbl_name = "global_archive";
+
+    std::vector<eloqstore::TableIdent> partitions;
+    for (uint32_t i = 0; i < 3; ++i)
+    {
+        partitions.emplace_back(tbl_name, i);
+    }
+
+    const std::unordered_set<uint32_t> included_ids = {
+        partitions[0].partition_id_,
+        partitions[2].partition_id_,
+    };
+    opts.partition_filter =
+        [included_ids](const eloqstore::TableIdent &tbl) -> bool
+    { return included_ids.count(tbl.partition_id_) != 0; };
+
+    eloqstore::EloqStore *store = InitStore(opts);
+    std::vector<std::unique_ptr<MapVerifier>> writers;
+    writers.reserve(partitions.size());
+    for (const auto &tbl_id : partitions)
+    {
+        auto writer = std::make_unique<MapVerifier>(tbl_id, store, false);
+        writer->SetAutoClean(false);
+        writer->SetValueSize(256);
+        writer->WriteRnd(0, 200);
+        writer->Validate();
+        writers.push_back(std::move(writer));
+    }
+
+    constexpr uint64_t kSnapshotTs = 123456789;
+    eloqstore::GlobalArchiveRequest global_req;
+    global_req.SetSnapshotTimestamp(kSnapshotTs);
+    store->ExecSync(&global_req);
+    REQUIRE(global_req.Error() == eloqstore::KvError::NoError);
+
+    for (const auto &tbl_id : partitions)
+    {
+        const fs::path partition_path = fs::path(test_path) / tbl_id.ToString();
+        auto timestamps = CollectArchiveTimestamps(partition_path);
+        if (included_ids.count(tbl_id.partition_id_) != 0)
+        {
+            REQUIRE(timestamps.size() == 1);
+            REQUIRE(timestamps.front() == kSnapshotTs);
+        }
+        else
+        {
+            REQUIRE(timestamps.empty());
+        }
+    }
+}
+
+TEST_CASE("global archive handles more partitions than max_archive_tasks",
+          "[archive][global]")
+{
+    eloqstore::KvOptions opts = archive_opts;
+    opts.max_archive_tasks = 2;
+    const std::string tbl_name = "global_archive_many";
+    const uint32_t partition_count =
+        static_cast<uint32_t>(opts.max_archive_tasks) + 3;
+
+    std::vector<eloqstore::TableIdent> partitions;
+    partitions.reserve(partition_count);
+    for (uint32_t i = 0; i < partition_count; ++i)
+    {
+        partitions.emplace_back(tbl_name, i);
+    }
+
+    eloqstore::EloqStore *store = InitStore(opts);
+    std::vector<std::unique_ptr<MapVerifier>> writers;
+    writers.reserve(partitions.size());
+    for (const auto &tbl_id : partitions)
+    {
+        auto writer = std::make_unique<MapVerifier>(tbl_id, store, false);
+        writer->SetAutoClean(false);
+        writer->SetValueSize(256);
+        writer->WriteRnd(0, 200);
+        writer->Validate();
+        writers.push_back(std::move(writer));
+    }
+
+    constexpr uint64_t kSnapshotTs = 987654321;
+    eloqstore::GlobalArchiveRequest global_req;
+    global_req.SetSnapshotTimestamp(kSnapshotTs);
+    store->ExecSync(&global_req);
+    REQUIRE(global_req.Error() == eloqstore::KvError::NoError);
+
+    for (const auto &tbl_id : partitions)
+    {
+        const fs::path partition_path = fs::path(test_path) / tbl_id.ToString();
+        auto timestamps = CollectArchiveTimestamps(partition_path);
+        REQUIRE(timestamps.size() == 1);
+        REQUIRE(timestamps.front() == kSnapshotTs);
+    }
 }
 
 TEST_CASE("easy rollback to archive", "[archive]")

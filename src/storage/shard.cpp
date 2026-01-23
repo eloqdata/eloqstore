@@ -443,9 +443,18 @@ void Shard::ProcessReq(KvRequest *req)
     }
     case RequestType::Archive:
     {
+        auto *archive_req = static_cast<ArchiveRequest *>(req);
         BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());
-        auto lbd = [task]() -> KvError { return task->CreateArchive(); };
+        uint64_t snapshot_ts = archive_req->GetSnapshotTimestamp();
+        auto lbd = [task, snapshot_ts]() -> KvError
+        { return task->CreateArchive(snapshot_ts); };
         StartTask(task, req, lbd);
+        break;
+    }
+    case RequestType::GlobalArchive:
+    {
+        LOG(ERROR) << "GlobalArchive request routed to shard unexpectedly";
+        req->SetDone(KvError::InvalidArgs);
         break;
     }
     case RequestType::Compact:

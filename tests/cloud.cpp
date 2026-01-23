@@ -361,7 +361,7 @@ TEST_CASE("cloud prewarm honors partition filter", "[cloud][prewarm]")
     options.prewarm_cloud_cache = true;
     options.local_space_limit = 2ULL << 30;
 
-    const std::string tbl_name = "prewarm_filter";
+    const std::string tbl_name = "partition_filter";
     std::vector<eloqstore::TableIdent> partitions;
     for (uint32_t i = 0; i < 3; ++i)
     {
@@ -372,7 +372,7 @@ TEST_CASE("cloud prewarm honors partition filter", "[cloud][prewarm]")
         partitions[0],
         partitions[1],
     };
-    options.prewarm_filter =
+    options.partition_filter =
         [included](const eloqstore::TableIdent &tbl) -> bool
     { return included.count(tbl) != 0; };
 
@@ -1004,6 +1004,113 @@ TEST_CASE("cloud gc preserves archived data after truncate",
     store->Start();
     tester.Validate();
     store->Stop();
+}
+
+TEST_CASE("cloud global archive shares timestamp and filters partitions",
+          "[cloud][archive][global]")
+{
+    using namespace std::chrono_literals;
+
+    eloqstore::KvOptions options = cloud_archive_opts;
+    const std::string tbl_name = "global_archive_cloud";
+
+    std::vector<eloqstore::TableIdent> partitions;
+    for (uint32_t i = 0; i < 3; ++i)
+    {
+        partitions.emplace_back(tbl_name, i);
+    }
+
+    const std::unordered_set<uint32_t> included_ids = {
+        partitions[0].partition_id_,
+        partitions[2].partition_id_,
+    };
+    options.partition_filter =
+        [included_ids](const eloqstore::TableIdent &tbl) -> bool
+    { return included_ids.count(tbl.partition_id_) != 0; };
+
+    eloqstore::EloqStore *store = InitStore(options);
+    std::vector<std::unique_ptr<MapVerifier>> writers;
+    writers.reserve(partitions.size());
+    for (const auto &tbl_id : partitions)
+    {
+        auto writer = std::make_unique<MapVerifier>(tbl_id, store, false);
+        writer->SetAutoClean(false);
+        writer->SetValueSize(4096);
+        writer->WriteRnd(0, 500);
+        writer->Validate();
+        writers.push_back(std::move(writer));
+    }
+
+    const std::string &cloud_root = options.cloud_store_path;
+    REQUIRE(WaitForCondition(
+        20s,
+        200ms,
+        [&]()
+        {
+            for (const auto &tbl_id : partitions)
+            {
+                auto files =
+                    ListCloudFiles(options, cloud_root, tbl_id.ToString());
+                if (files.empty())
+                {
+                    return false;
+                }
+            }
+            return true;
+        }));
+
+    constexpr uint64_t kSnapshotTs = 987654321;
+    eloqstore::GlobalArchiveRequest global_req;
+    global_req.SetSnapshotTimestamp(kSnapshotTs);
+    store->ExecSync(&global_req);
+    REQUIRE(global_req.Error() == eloqstore::KvError::NoError);
+
+    auto collect_archive_timestamps = [&](const eloqstore::TableIdent &tbl_id)
+    {
+        std::vector<uint64_t> timestamps;
+        auto files = ListCloudFiles(options, cloud_root, tbl_id.ToString());
+        for (const auto &filename : files)
+        {
+            if (!eloqstore::IsArchiveFile(filename))
+            {
+                continue;
+            }
+            auto [type, suffix] = eloqstore::ParseFileName(filename);
+            uint64_t term = 0;
+            std::optional<uint64_t> ts;
+            REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, term, ts));
+            REQUIRE(ts.has_value());
+            timestamps.push_back(*ts);
+        }
+        return timestamps;
+    };
+
+    auto wait_for_archive = [&](const eloqstore::TableIdent &tbl_id)
+    {
+        return WaitForCondition(
+            20s,
+            200ms,
+            [&]() { return !collect_archive_timestamps(tbl_id).empty(); });
+    };
+
+    for (const auto &tbl_id : partitions)
+    {
+        if (included_ids.count(tbl_id.partition_id_) != 0)
+        {
+            REQUIRE(wait_for_archive(tbl_id));
+            auto timestamps = collect_archive_timestamps(tbl_id);
+            REQUIRE_FALSE(timestamps.empty());
+            for (uint64_t ts : timestamps)
+            {
+                REQUIRE(ts == kSnapshotTs);
+            }
+        }
+        else
+        {
+            auto timestamps = collect_archive_timestamps(tbl_id);
+            REQUIRE(timestamps.empty());
+        }
+    }
 }
 
 TEST_CASE("cloud store with restart", "[cloud]")

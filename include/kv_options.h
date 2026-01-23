@@ -220,8 +220,8 @@ struct KvOptions
     bool enable_compression = false;
     /**
      * @brief Download recent files from cloud into local cache during startup.
-     * The filter returning true means that this table partition needs to be
-     * prewarmed.
+     * The partition filter returning true means that this table partition
+     * needs to be prewarmed.
      */
     bool prewarm_cloud_cache = false;
     /**
@@ -234,6 +234,15 @@ struct KvOptions
      */
     size_t mapping_arena_size = 128;
 
-    std::function<bool(const TableIdent &)> prewarm_filter;
+    /**
+     * @brief Filter function to determine which partitions belong to this
+     * instance.
+     * The filter returning true means that this table partition belongs to the
+     * current instance and should be included in operations like prewarming,
+     * snapshotting, etc.
+     * If not set (empty), all partitions are considered to belong to this
+     * instance.
+     */
+    std::function<bool(const TableIdent &)> partition_filter;
 };
 }  // namespace eloqstore
