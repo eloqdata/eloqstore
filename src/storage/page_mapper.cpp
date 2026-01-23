@@ -166,11 +166,15 @@ void MappingSnapshot::MappingTbl::EnsureSize(PageId page_id)
     {
         // TODO(chenzhao): change mapping to std::vector<std::array>
         int64_t start = butil::cpuwide_time_ns();
+        auto old_capacity = base_.capacity();
+        auto new_capacity = page_id + 1;
         base_.resize(page_id + 1, InvalidValue);
         int64_t diff = butil::cpuwide_time_ns() - start;
         if (diff > 500000)
         {
-            LOG(ERROR) << "EnsureSize cost " << diff;
+            LOG(ERROR) << "EnsureSize cost " << diff
+                       << ", old_capacity=" << old_capacity
+                       << ", new_capacity=" << new_capacity;
         }
     }
 }
