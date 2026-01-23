@@ -408,6 +408,7 @@ KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
 
 KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
 {
+    step_ = 31;
     assert(!stack_.empty());
     KvError err;
     DataPage *base_page = nullptr;
@@ -430,6 +431,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     DataPageIter base_page_iter{base_page, Options()};
     bool is_base_iter_valid = false;
     AdvanceDataPageIter(base_page_iter, is_base_iter_valid);
+    ts_ = butil::cpuwide_time_ns();
+    step_ = 32;
 
     data_page_builder_.Reset();
 
@@ -461,6 +464,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     std::string prev_key;
     std::string_view page_key = stack_.back()->idx_page_iter_.Key();
     std::string curr_page_key{page_key.data(), page_key.size()};
+    ts_ = butil::cpuwide_time_ns();
+    step_ = 33;
 
     PageId page_id = MaxPageId;
     if (base_page != nullptr)
@@ -524,6 +529,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             prev_key = key;
             return KvError::NoError;
         });
+    ts_ = butil::cpuwide_time_ns();
+    step_ = 34;
     while (is_base_iter_valid && change_it != change_end_it)
     {
         std::string_view base_key = base_page_iter.Key();
@@ -671,6 +678,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             break;
         }
     }
+    ts_ = butil::cpuwide_time_ns();
+    step_ = 35;
 
     while (is_base_iter_valid)
     {
@@ -685,6 +694,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         CHECK_KV_ERR(err);
         AdvanceDataPageIter(base_page_iter, is_base_iter_valid);
     }
+    ts_ = butil::cpuwide_time_ns();
+    step_ = 36;
 
     while (change_it != change_end_it)
     {
@@ -720,6 +731,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         }
         ++change_it;
     }
+    ts_ = butil::cpuwide_time_ns();
+    step_ = 37;
 
     if (data_page_builder_.IsEmpty())
     {
@@ -741,6 +754,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     }
     assert(!TripleElement(1));
     leaf_triple_[1] = std::move(leaf_triple_[2]);
+    ts_ = butil::cpuwide_time_ns();
+    step_ = 38;
 
     cidx = cidx + std::distance(data_batch_.begin() + cidx, change_end_it);
     return KvError::NoError;
