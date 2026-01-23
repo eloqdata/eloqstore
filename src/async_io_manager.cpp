@@ -1733,7 +1733,7 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
     }
 
     TEST_KILL_POINT("AtomicWriteFile:Sync")
-    res = Fdatasync({tmp_fd, false});
+    int res = Fdatasync({tmp_fd, false});
     if (res < 0)
     {
         Close(tmp_fd);
