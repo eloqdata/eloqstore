@@ -626,13 +626,10 @@ void Shard::WorkOneRound()
     io_mgr_->PollComplete();
     delta_us = DurationMicroseconds(ts_);
     uint64_t us_after_poll_complete = delta_us;
-    if (delta_us >= FLAGS_max_processing_time_microseconds)
+    if (delta_us < FLAGS_max_processing_time_microseconds)
     {
-        if (delta_us > 1000)
-            LOG(WARNING) << "after PollCompete cost " << delta_us;
+        ExecuteReadyTasks();
     }
-
-    ExecuteReadyTasks();
 
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: end of round
