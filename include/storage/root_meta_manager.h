@@ -30,10 +30,7 @@ public:
         Handle() = default;
         Handle(RootMetaMgr *mgr, Entry *entry) : mgr_(mgr), entry_(entry)
         {
-            if (mgr_ != nullptr && entry_ != nullptr)
-            {
-                mgr_->Pin(entry_);
-            }
+            mgr_->Pin(entry_);
         }
         Handle(const Handle &) = delete;
         Handle &operator=(const Handle &) = delete;
@@ -46,10 +43,8 @@ public:
         {
             if (this != &rhs)
             {
-                if (mgr_ != nullptr && entry_ != nullptr)
-                {
-                    mgr_->Unpin(entry_);
-                }
+                mgr_->Unpin(entry_);
+
                 mgr_ = rhs.mgr_;
                 entry_ = rhs.entry_;
                 rhs.mgr_ = nullptr;

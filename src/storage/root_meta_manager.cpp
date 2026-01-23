@@ -57,14 +57,8 @@ void RootMetaMgr::Erase(const TableIdent &tbl_id)
     }
     Entry *entry = &it->second;
     Dequeue(entry);
-    if (used_bytes_ >= entry->bytes_)
-    {
-        used_bytes_ -= entry->bytes_;
-    }
-    else
-    {
-        used_bytes_ = 0;
-    }
+    used_bytes_ -= entry->bytes_;
+    CHECK(used_bytes_ >= 0);
     entries_.erase(it);
 }
 
