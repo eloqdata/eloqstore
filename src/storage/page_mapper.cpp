@@ -174,7 +174,8 @@ void MappingSnapshot::MappingTbl::EnsureSize(PageId page_id)
         {
             LOG(ERROR) << "EnsureSize cost " << diff
                        << ", old_capacity=" << old_capacity
-                       << ", new_capacity=" << new_capacity;
+                       << ", new_capacity=" << new_capacity
+                       << ", actual capacity=" << base_.capacity();
         }
     }
 }
