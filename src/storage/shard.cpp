@@ -602,6 +602,11 @@ void Shard::WorkOneRound()
     io_mgr_->Submit();
 
     io_mgr_->PollComplete();
+    delta_us = DurationMicroseconds(ts_);
+    if (delta_us >= FLAGS_max_processing_time_microseconds)
+    {
+        LOG(WARNING) << "after PollCompete cost " << delta_us;
+    }
 
     ExecuteReadyTasks();
     delta_us = DurationMicroseconds(ts_);
