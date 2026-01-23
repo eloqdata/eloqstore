@@ -101,6 +101,7 @@ bool AsyncIoManager::IsIdle()
 IouringMgr::IouringMgr(const KvOptions *opts, uint32_t fd_limit)
     : AsyncIoManager(opts), fd_limit_(fd_limit)
 {
+    memset(&ring_, 0, sizeof(ring_));
     lru_fd_head_.next_ = &lru_fd_tail_;
     lru_fd_tail_.prev_ = &lru_fd_head_;
 
@@ -113,19 +114,25 @@ IouringMgr::IouringMgr(const KvOptions *opts, uint32_t fd_limit)
 
 IouringMgr::~IouringMgr()
 {
-    io_uring_unregister_files(&ring_);
-    for (auto &[_, tbl] : tables_)
+    if (ring_inited_)
     {
-        for (auto &[_, fd] : tbl.fds_)
+        io_uring_unregister_files(&ring_);
+        for (auto &[_, tbl] : tables_)
         {
-            close(fd.fd_);
+            for (auto &[_, fd] : tbl.fds_)
+            {
+                close(fd.fd_);
+            }
         }
+
+        if (buf_ring_ != nullptr)
+        {
+            io_uring_free_buf_ring(
+                &ring_, buf_ring_, options_->buf_ring_size, buf_group_);
+        }
+
+        io_uring_queue_exit(&ring_);
     }
-
-    io_uring_free_buf_ring(
-        &ring_, buf_ring_, options_->buf_ring_size, buf_group_);
-
-    io_uring_queue_exit(&ring_);
 }
 
 KvError IouringMgr::Init(Shard *shard)
@@ -138,6 +145,7 @@ KvError IouringMgr::Init(Shard *shard)
         LOG(ERROR) << "failed to initialize io queue: " << ret;
         return KvError::IoFail;
     }
+    ring_inited_ = true;
 
     if (fd_limit_ > 0)
     {

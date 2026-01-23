@@ -533,6 +533,7 @@ public:
     std::vector<Page> bufs_pool_;
     const int buf_group_{0};
 
+    bool ring_inited_{false};
     io_uring ring_;
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};
