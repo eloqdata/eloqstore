@@ -476,8 +476,7 @@ void Shard::ProcessReq(KvRequest *req)
 
 bool Shard::ExecuteReadyTasks()
 {
-    uint64_t start_us_fast = ReadTimeMicroseconds();
-
+    int cnt = 0;
     if (oss_enabled_)
     {
         auto *cloud_mgr = reinterpret_cast<CloudStoreMgr *>(io_mgr_.get());
@@ -486,6 +485,7 @@ bool Shard::ExecuteReadyTasks()
     bool busy = ready_tasks_.Size() > 0;
     while (ready_tasks_.Size() > 0)
     {
+        ++cnt;
         KvTask *task = ready_tasks_.Peek();
         ready_tasks_.Dequeue();
         assert(task->status_ == TaskStatus::Ongoing);
@@ -495,10 +495,20 @@ bool Shard::ExecuteReadyTasks()
         {
             OnTaskFinished(task);
         }
+        uint64_t delta_us = DurationMicroseconds(ts_);
+        if (delta_us >= FLAGS_max_processing_time_microseconds)
+        {
+            if (delta_us > 2000)
+                LOG(INFO) << "ExecuteReadyTasks cost " << delta_us
+                          << "us, cnt=" << cnt;
+            goto finish;
+        }
     }
 
+    cnt = 0;
     while (low_priority_ready_tasks_.Size() > 0)
     {
+        ++cnt;
         KvTask *task = low_priority_ready_tasks_.Peek();
         low_priority_ready_tasks_.Dequeue();
         task->status_ = TaskStatus::Ongoing;
@@ -508,16 +518,22 @@ bool Shard::ExecuteReadyTasks()
         {
             OnTaskFinished(task);
         }
-        uint64_t delta_us = DurationMicroseconds(start_us_fast);
+        uint64_t delta_us = DurationMicroseconds(ts_);
         if (delta_us >= FLAGS_max_processing_time_microseconds)
         {
-            break;
+            if (delta_us > 2000)
+                LOG(INFO) << "ExecuteReadyTasks LPQ cost " << delta_us
+                          << "us, cnt=" << cnt;
+            goto finish;
         }
     }
 
+finish:
     running_ = nullptr;
     return busy;
 }
+
+DEFINE_int32(run_size, 128, "run_size");
 
 void Shard::OnTaskFinished(KvTask *task)
 {
@@ -550,6 +566,7 @@ void Shard::OnTaskFinished(KvTask *task)
 #ifdef ELOQ_MODULE_ENABLED
 void Shard::WorkOneRound()
 {
+    ts_ = ReadTimeMicroseconds();
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: start timing the round
     metrics::TimePoint round_start{};
@@ -592,11 +609,23 @@ void Shard::WorkOneRound()
         OnReceivedReq(reqs[i]);
     }
 
+    uint64_t delta_us = DurationMicroseconds(ts_);
+    if (delta_us >= FLAGS_max_processing_time_microseconds)
+    {
+        LOG(WARNING) << "after received req, cost " << delta_us;
+    }
     req_queue_size_.fetch_sub(nreqs, std::memory_order_relaxed);
 
     io_mgr_->Submit();
 
     io_mgr_->PollComplete();
+    delta_us = DurationMicroseconds(ts_);
+    uint64_t us_after_poll_complete = delta_us;
+    if (delta_us >= FLAGS_max_processing_time_microseconds)
+    {
+        if (delta_us > 1000)
+        LOG(WARNING) << "after PollCompete cost " << delta_us;
+    }
 
     ExecuteReadyTasks();
 
@@ -804,7 +833,7 @@ uint64_t Shard::DurationMicroseconds(uint64_t start_us)
     // Check elapsed time (returns microseconds directly)
     uint64_t end_us = ReadTimeMicroseconds();
     // Handle potential wraparound (unlikely but safe)
-    if (end_us > start_us)
+    if (end_us >= start_us)
     {
         return end_us - start_us;
     }

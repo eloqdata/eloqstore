@@ -221,6 +221,7 @@ KvError ToKvError(int err_no);
 class IouringMgr : public AsyncIoManager
 {
 public:
+    int resize_time_ = 0;
     IouringMgr(const KvOptions *opts, uint32_t fd_limit);
     ~IouringMgr() override;
     KvError Init(Shard *shard) override;
