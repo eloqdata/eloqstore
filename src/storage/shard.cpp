@@ -495,6 +495,7 @@ bool Shard::ExecuteReadyTasks()
         }
     }
 
+    cnt = 0;
     while (low_priority_ready_tasks_.Size() > 0)
     {
         ++cnt;
