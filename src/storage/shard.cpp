@@ -603,6 +603,7 @@ void Shard::WorkOneRound()
 
     io_mgr_->PollComplete();
     delta_us = DurationMicroseconds(ts_);
+    unt64_t us_after_poll_complete = delta_us;
     if (delta_us >= FLAGS_max_processing_time_microseconds)
     {
         LOG(WARNING) << "after PollCompete cost " << delta_us;
@@ -610,9 +611,11 @@ void Shard::WorkOneRound()
 
     ExecuteReadyTasks();
     delta_us = DurationMicroseconds(ts_);
+    unt64_t us_after_execute = delta_us;
     if (delta_us >= FLAGS_max_processing_time_microseconds)
     {
-        LOG(WARNING) << "WorkOneRound cost " << delta_us;
+        LOG(WARNING) << "WorkOneRound cost " << delta_us << ", execute cost "
+                     << us_after_execute - us_after_poll_complete;
     }
 
 #ifdef ELOQSTORE_WITH_TXSERVICE
