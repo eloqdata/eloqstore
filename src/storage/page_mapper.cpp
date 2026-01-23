@@ -165,7 +165,13 @@ void MappingSnapshot::MappingTbl::EnsureSize(PageId page_id)
     if (page_id >= base_.size())
     {
         // TODO(chenzhao): change mapping to std::vector<std::array>
+        int64_t start = butil::cpuwide_time_ns();
         base_.resize(page_id + 1, InvalidValue);
+        int64_t diff = butil::cpuwide_time_ns() - start;
+        if (diff > 1000000)
+        {
+            LOG(ERROR) << "EnsureSize cost " << diff;
+        }
     }
 }
 

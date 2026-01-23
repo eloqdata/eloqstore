@@ -333,6 +333,8 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
                                             data_batch_[cidx].key_.size()};
         if (stack_.size() > 1)
         {
+            ts_ = butil::cpuwide_time_ns();
+            step_ = 25;
             err = SeekStack(batch_start_key);
             CHECK_KV_ERR(err);
         }
