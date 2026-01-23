@@ -336,15 +336,19 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
             err = SeekStack(batch_start_key);
             CHECK_KV_ERR(err);
         }
+        ts_ = butil::cpuwide_time_ns();
+        step_ = 22;
         auto [page_id, err] = Seek(batch_start_key);
         CHECK_KV_ERR(err);
         if (page_id != MaxPageId)
         {
+            ts_ = butil::cpuwide_time_ns();
+            step_ = 24;
             err = LoadApplyingPage(page_id);
             CHECK_KV_ERR(err);
         }
         ts_ = butil::cpuwide_time_ns();
-        step_ = 22;
+        step_ = 23;
         err = ApplyOnePage(cidx, now_ms);
         CHECK_KV_ERR(err);
     }
@@ -1075,6 +1079,7 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
             prev_page->ContentLength() > three_quarter)
         {
             // This page is too small, redistribute it with the previous page.
+            LOG(INFO) << "Redistribute";
             Page page = Redistribute(*prev_page, page_view);
             new_data_page.SetPage(std::move(page));
             DataPageIter iter(&new_data_page, Options());
