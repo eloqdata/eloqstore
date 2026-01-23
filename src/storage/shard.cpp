@@ -611,7 +611,7 @@ void Shard::WorkOneRound()
 
     ExecuteReadyTasks();
     delta_us = DurationMicroseconds(ts_);
-    unt64_t us_after_execute = delta_us;
+    uint64_t us_after_execute = delta_us;
     if (delta_us >= FLAGS_max_processing_time_microseconds)
     {
         LOG(WARNING) << "WorkOneRound cost " << delta_us << ", execute cost "
