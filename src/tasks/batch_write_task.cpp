@@ -327,6 +327,8 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
     step_ = 11;
     while (cidx < data_batch_.size())
     {
+        ts_ = butil::cpuwide_time_ns();
+        step_ = 21;
         std::string_view batch_start_key = {data_batch_[cidx].key_.data(),
                                             data_batch_[cidx].key_.size()};
         if (stack_.size() > 1)
@@ -749,6 +751,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     }
     else
     {
+        ts_ = butil::cpuwide_time_ns();
+        step_ = 39;
         err = FinishDataPage(std::move(curr_page_key), page_id);
         CHECK_KV_ERR(err);
     }
@@ -758,6 +762,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     step_ = 38;
 
     cidx = cidx + std::distance(data_batch_.begin() + cidx, change_end_it);
+    ts_ = butil::cpuwide_time_ns();
+    step_ = 40;
     return KvError::NoError;
 }
 
