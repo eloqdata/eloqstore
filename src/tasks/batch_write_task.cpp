@@ -65,6 +65,7 @@ KvError BatchWriteTask::SeekStack(std::string_view search_key)
             auto [_, err] = Pop();
             CHECK_KV_ERR(err);
         }
+        YieldToLowPQ();
     }
     return KvError::NoError;
 }
@@ -378,6 +379,8 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
 
 KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
 {
+    ts_ = butil::cpuwide_time_ns();
+    step_ = 60;
     assert(page_id != MaxPageId);
     // Now we are going to fetch a data page before execute ApplyOnePage.
     // But this page may already exists at leaf_triple_[1], because it may be
@@ -396,7 +399,7 @@ KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
         applying_page_ = std::move(page);
     }
     ts_ = butil::cpuwide_time_ns();
-    step_ = 60;
+    step_ = 61;
     assert(TypeOfPage(applying_page_.PagePtr()) == PageType::Data);
 
     if (TripleElement(1))
@@ -406,7 +409,7 @@ KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
         CHECK_KV_ERR(err);
     }
     ts_ = butil::cpuwide_time_ns();
-    step_ = 61;
+    step_ = 62;
     if (TripleElement(0) &&
         TripleElement(0)->GetPageId() != applying_page_.PrevPageId())
     {
