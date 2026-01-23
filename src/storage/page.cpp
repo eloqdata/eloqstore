@@ -111,7 +111,13 @@ char *PagesPool::Allocate()
 {
     if (free_head_ == nullptr)
     {
+        auto t = butil::cpuwide_time_ns();
         Extend(1024);  // Extend the pool with 1024 pages if free list is empty.
+        t = butil::cpuwide_time_ns() - t;
+        if (t > 500000)
+        {
+            LOG(INFO) << "Extent cost " << t;
+        }
         assert(free_head_ != nullptr);
     }
     FreePage *head = free_head_;
