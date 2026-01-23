@@ -476,6 +476,7 @@ void Shard::ProcessReq(KvRequest *req)
 
 bool Shard::ExecuteReadyTasks()
 {
+    auto start = ReadTimeMicroseconds();
     int cnt = 0;
     if (oss_enabled_)
     {
@@ -499,10 +500,14 @@ bool Shard::ExecuteReadyTasks()
         if (delta_us >= FLAGS_max_processing_time_microseconds)
         {
             if (delta_us > 2000)
-                LOG(INFO) << "ExecuteReadyTasks cost " << delta_us
-                          << "us, cnt=" << cnt;
+                LOG(INFO) << "ExecuteReadyTasks cost "
+                          << DurationMicroseconds(start) << "us, cnt=" << cnt;
             goto finish;
         }
+    }
+    if (DurationMicroseconds(ts_) >= FLAGS_max_processing_time_microseconds)
+    {
+        goto finish;
     }
 
     cnt = 0;
@@ -624,7 +629,7 @@ void Shard::WorkOneRound()
     if (delta_us >= FLAGS_max_processing_time_microseconds)
     {
         if (delta_us > 1000)
-        LOG(WARNING) << "after PollCompete cost " << delta_us;
+            LOG(WARNING) << "after PollCompete cost " << delta_us;
     }
 
     ExecuteReadyTasks();
