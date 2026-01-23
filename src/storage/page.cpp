@@ -97,9 +97,17 @@ void PagesPool::Extend(size_t pages)
     assert(pages > 0);
     uint16_t page_size = options_->data_page_size;
     const size_t chunk_size = pages * page_size;
+    auto a = butil::cpuwide_time_ns();
     char *ptr = (char *) std::aligned_alloc(page_align, chunk_size);
+    auto t1 = butil::cpuwide_time_ns() - a;
+    a = butil::cpuwide_time_ns();
     assert(ptr);
     chunks_.emplace_back(UPtr(ptr, &std::free), chunk_size);
+    auto t2 = butil::cpuwide_time_ns() - a;
+    if (t1 + t2 > 500000)
+    {
+    LOG(ERROR) << "Extent t1 = " << t1 << " t2 = " << t2;
+    }
 
     for (size_t i = 0; i < chunk_size; i += page_size)
     {
