@@ -591,12 +591,12 @@ void Shard::WorkOneRound()
     {
         OnReceivedReq(reqs[i]);
         uint64_t delta_us = DurationMicroseconds(ts_);
-        if (delta_us >= FLAGS_max_processing_time_microseconds)
-        {
-            LOG(WARNING) << "WorkOneRound cost " << delta_us << ", i=" << i;
-        }
     }
 
+    if (delta_us >= FLAGS_max_processing_time_microseconds)
+    {
+        LOG(WARNING) << "after received req, cost " << delta_us;
+    }
     req_queue_size_.fetch_sub(nreqs, std::memory_order_relaxed);
 
     io_mgr_->Submit();
@@ -814,7 +814,7 @@ uint64_t Shard::DurationMicroseconds(uint64_t start_us)
     // Check elapsed time (returns microseconds directly)
     uint64_t end_us = ReadTimeMicroseconds();
     // Handle potential wraparound (unlikely but safe)
-    if (end_us > start_us)
+    if (end_us >= start_us)
     {
         return end_us - start_us;
     }
