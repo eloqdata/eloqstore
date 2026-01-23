@@ -30,7 +30,12 @@ size_t RootMetaBytes(const RootMeta &meta)
         return 0;
     }
     const auto &base = meta.mapper_->GetMapping()->mapping_tbl_.Base();
-    return base.capacity() * sizeof(uint64_t);
+    size_t bytes = base.capacity() * sizeof(uint64_t);
+    if (meta.compression_ != nullptr)
+    {
+        bytes += meta.compression_->DictionaryMemoryBytes();
+    }
+    return bytes;
 }
 }  // namespace
 

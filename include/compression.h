@@ -67,6 +67,8 @@ public:
     size_t SampleCount();
     void BuildDictionary();
 
+    size_t DictionaryMemoryBytes() const;
+
     bool Compress(std::string_view input, std::string &output) const;
     bool Decompress(std::string_view input, std::string &output) const;
 

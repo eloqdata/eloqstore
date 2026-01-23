@@ -7,6 +7,7 @@
 #include <string_view>
 #include <unordered_set>
 
+#include "absl/container/flat_hash_set.h"
 #include "common.h"
 #include "compression.h"
 #include "manifest_buffer.h"
@@ -90,8 +91,8 @@ struct RootMeta
     PageId root_id_{MaxPageId};
     PageId ttl_root_id_{MaxPageId};
     std::unique_ptr<PageMapper> mapper_{nullptr};
-    std::unordered_set<MappingSnapshot *> mapping_snapshots_;
-    std::unordered_set<MemIndexPage *> index_pages_;
+    absl::flat_hash_set<MappingSnapshot *> mapping_snapshots_;
+    absl::flat_hash_set<MemIndexPage *> index_pages_;
     uint64_t manifest_size_{0};
     uint64_t next_expire_ts_{0};
     std::shared_ptr<compression::DictCompression> compression_{nullptr};

@@ -248,6 +248,20 @@ size_t DictCompression::SampleCount()
     return sample_sizes_.size();
 }
 
+size_t DictCompression::DictionaryMemoryBytes() const
+{
+    size_t bytes = dictionary_.capacity();
+    if (cdict_ != nullptr)
+    {
+        bytes += ZSTD_sizeof_CDict(cdict_.get());
+    }
+    if (ddict_ != nullptr)
+    {
+        bytes += ZSTD_sizeof_DDict(ddict_.get());
+    }
+    return bytes;
+}
+
 void DictCompression::BuildDictionary()
 {
     has_dictionary_ = true;
