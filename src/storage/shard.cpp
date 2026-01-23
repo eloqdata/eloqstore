@@ -478,6 +478,7 @@ bool Shard::ExecuteReadyTasks()
     bool busy = ready_tasks_.Size() > 0;
     while (ready_tasks_.Size() > 0)
     {
+        ++cnt;
         KvTask *task = ready_tasks_.Peek();
         ready_tasks_.Dequeue();
         assert(task->status_ == TaskStatus::Ongoing);
