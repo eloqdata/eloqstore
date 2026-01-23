@@ -487,6 +487,7 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
 
 KvError IouringMgr::SyncData(const TableIdent &tbl_id)
 {
+    ThdTask()->step_ = 11;
     auto it_tbl = tables_.find(tbl_id);
     if (it_tbl == tables_.end())
     {
@@ -494,6 +495,7 @@ KvError IouringMgr::SyncData(const TableIdent &tbl_id)
     }
 
     // Scan all dirty files/directory.
+    ThdTask()->step_ = 12;
     std::vector<FileId> dirty_ids;
     dirty_ids.reserve(32);
     for (auto &[file_id, fd] : it_tbl->second.fds_)
@@ -503,6 +505,7 @@ KvError IouringMgr::SyncData(const TableIdent &tbl_id)
             dirty_ids.emplace_back(file_id);
         }
     }
+    ThdTask()->step_ = 13;
     std::vector<LruFD::Ref> fds;
     fds.reserve(dirty_ids.size());
     for (FileId file_id : dirty_ids)
@@ -514,6 +517,7 @@ KvError IouringMgr::SyncData(const TableIdent &tbl_id)
         }
         fds.emplace_back(std::move(fd_ref));
     }
+    ThdTask()->step_ = 14;
     return SyncFiles(tbl_id, fds);
 }
 
@@ -1172,6 +1176,7 @@ KvError IouringMgr::FdatasyncFiles(const TableIdent &tbl_id,
                        << strerror(-req.res_);
         }
     }
+    ThdTask()->step_ = 15;
     return err;
 }
 
@@ -3225,6 +3230,7 @@ KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
     KvError err = FdatasyncFiles(tbl_id, fds);
     CHECK_KV_ERR(err);
     std::vector<std::string> filenames;
+    ThdTask()->step_ = 18;
     for (LruFD::Ref fd : fds)
     {
         FileId file_id = fd.Get()->file_id_;
@@ -3235,6 +3241,7 @@ KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
         }
     }
     err = UploadFiles(tbl_id, std::move(filenames));
+    ThdTask()->step_ = 22;
     if (err != KvError::NoError)
     {
         return err;
@@ -3567,6 +3574,7 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
 KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
                                    std::vector<std::string> filenames)
 {
+    ThdTask()->step_ = 24;
     if (filenames.empty())
     {
         return KvError::NoError;
@@ -3589,6 +3597,7 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
 
     size_t processed = 0;
     const size_t max_upload_batch = options_->max_upload_batch;
+    ThdTask()->step_ = 26;
     std::vector<DirectIoBuffer> batch_contents;
     batch_contents.reserve(max_upload_batch);
     while (processed < pending.size())
