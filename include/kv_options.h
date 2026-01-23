@@ -127,7 +127,7 @@ struct KvOptions
     /**
      * @brief Max cached DirectIO buffers per shard.
      */
-    uint32_t direct_io_buffer_pool_size = 10000;
+    uint32_t direct_io_buffer_pool_size = 1000;
     /**
      * @brief Reuse files already present in the local cache directory when the
      * store starts.

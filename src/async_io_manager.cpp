@@ -3597,6 +3597,7 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
 
     size_t processed = 0;
     const size_t max_upload_batch = options_->max_upload_batch;
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
     ThdTask()->step_ = 26;
     std::vector<DirectIoBuffer> batch_contents;
     batch_contents.reserve(max_upload_batch);
