@@ -516,6 +516,8 @@ finish:
     return busy;
 }
 
+DEFINE_int32(run_size, 128, "run_size");
+
 void Shard::OnTaskFinished(KvTask *task)
 {
     if (!task->ReadOnly())
@@ -558,7 +560,7 @@ void Shard::WorkOneRound()
         io_mgr_->InitBackgroundJob();
     }
     KvRequest *reqs[128];
-    size_t nreqs = requests_.try_dequeue_bulk(reqs, std::size(reqs));
+    size_t nreqs = requests_.try_dequeue_bulk(reqs, FLAGS_run_size);
 
     bool is_idle_round =
         nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle();
