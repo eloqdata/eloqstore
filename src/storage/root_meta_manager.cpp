@@ -146,7 +146,7 @@ void RootMetaMgr::ReleaseMappers()
     }
 }
 
-void RootMetaMgr::EvictIfNeeded()
+KvError RootMetaMgr::EvictIfNeeded()
 {
     Entry *cursor = lru_tail_.prev_;
     while (used_bytes_ > capacity_bytes_ && cursor != &lru_head_)
@@ -181,11 +181,13 @@ void RootMetaMgr::EvictIfNeeded()
         }
         entries_.erase(victim->tbl_id_);
     }
-    if (used_bytes_ > capacity_bytes_ && cursor == &lru_head_)
+    if (used_bytes_ > capacity_bytes_)
     {
-        LOG(WARNING) << "EvictIfNeeded exit: reached LRU head used_bytes "
+        LOG(WARNING) << "EvictIfNeeded exit: cache still over limit used_bytes "
                      << used_bytes_ << " capacity_bytes_ " << capacity_bytes_;
+        return KvError::OutOfMem;
     }
+    return KvError::NoError;
 }
 
 void RootMetaMgr::EnqueueFront(Entry *entry)

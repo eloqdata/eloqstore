@@ -150,7 +150,8 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
         meta->mapper_ = std::move(mapper);
         meta->mapping_snapshots_.insert(mapping);
         root_meta_mgr_.UpdateBytes(entry, RootMetaBytes(*meta));
-        root_meta_mgr_.EvictIfNeeded();
+        err = root_meta_mgr_.EvictIfNeeded();
+        CHECK_KV_ERR(err);
         meta->manifest_size_ = replayer.file_size_;
         meta->next_expire_ts_ = 0;
         if (!replayer.dict_bytes_.empty())

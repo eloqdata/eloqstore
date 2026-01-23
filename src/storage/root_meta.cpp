@@ -12,6 +12,11 @@
 namespace eloqstore
 {
 
+RootMeta::RootMeta()
+    : compression_(std::make_shared<compression::DictCompression>())
+{
+}
+
 ManifestBuilder::ManifestBuilder()
 {
     Reset();

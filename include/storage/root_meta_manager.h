@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <cstddef>
 #include <unordered_map>
 #include <utility>
@@ -30,6 +31,7 @@ public:
         Handle() = default;
         Handle(RootMetaMgr *mgr, Entry *entry) : mgr_(mgr), entry_(entry)
         {
+            assert(mgr != nullptr && entry != nullptr);
             mgr_->Pin(entry_);
         }
         Handle(const Handle &) = delete;
@@ -43,8 +45,8 @@ public:
         {
             if (this != &rhs)
             {
+                assert(mgr_ != nullptr && entry_ != nullptr);
                 mgr_->Unpin(entry_);
-
                 mgr_ = rhs.mgr_;
                 entry_ = rhs.entry_;
                 rhs.mgr_ = nullptr;
@@ -93,7 +95,7 @@ public:
 
     void ReleaseMappers();
 
-    void EvictIfNeeded();
+    KvError EvictIfNeeded();
 
 private:
     IndexPageManager *owner_;

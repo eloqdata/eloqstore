@@ -82,9 +82,7 @@ struct CowRootMeta
 
 struct RootMeta
 {
-    RootMeta() : compression_(std::make_shared<compression::DictCompression>())
-    {
-    }
+    RootMeta();
     RootMeta(const RootMeta &rhs) = delete;
     RootMeta(RootMeta &&rhs) = default;
 
