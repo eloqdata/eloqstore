@@ -176,7 +176,7 @@ void MappingSnapshot::MappingTbl::EnsureSize(PageId page_id)
                        << ", old_capacity=" << old_capacity
                        << ", new_capacity=" << new_capacity
                        << ", actual capacity=" << base_.capacity()
-                       << ", task=" << typeid(*ThdTask()).name();
+                       << ", base_ ptr=" << &base_;
         }
     }
 }
