@@ -12,6 +12,7 @@
 #include "compression.h"
 #include "manifest_buffer.h"
 #include "storage/mem_index_page.h"
+#include "storage/page_mapper.h"
 #include "tasks/task.h"
 
 namespace eloqstore
@@ -75,7 +76,7 @@ struct CowRootMeta
     PageId ttl_root_id_{MaxPageId};
     std::unique_ptr<PageMapper> mapper_{nullptr};
     uint64_t manifest_size_{};
-    std::shared_ptr<MappingSnapshot> old_mapping_{nullptr};
+    MappingSnapshot::Ref old_mapping_{nullptr};
     uint64_t next_expire_ts_{};
     std::shared_ptr<compression::DictCompression> compression_{nullptr};
 };

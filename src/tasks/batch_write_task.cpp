@@ -297,7 +297,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
     if (root_id != MaxPageId)
     {
         auto [root_page, err] = shard->IndexManager()->FindPage(
-            cow_meta_.old_mapping_.get(), root_id);
+            cow_meta_.old_mapping_.Get(), root_id);
         CHECK_KV_ERR(err);
         stack_.emplace_back(
             std::make_unique<IndexStackEntry>(root_page, Options()));

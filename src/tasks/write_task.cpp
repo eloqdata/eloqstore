@@ -426,7 +426,7 @@ void WriteTask::TriggerFileGC() const
     absl::flat_hash_set<FileId> retained_files;
     const uint8_t shift = Options()->pages_per_file_shift;
     size_t approx_file_cnt = 0;
-    std::vector<std::shared_ptr<MappingSnapshot>> snapshot_array;
+    std::vector<MappingSnapshot::Ref> snapshot_array;
     snapshot_array.reserve(meta->mapping_snapshots_.size());
     for (MappingSnapshot *mapping : meta->mapping_snapshots_)
     {
@@ -436,10 +436,10 @@ void WriteTask::TriggerFileGC() const
         {
             approx_file_cnt = file_cnt;
         }
-        snapshot_array.emplace_back(mapping->shared_from_this());
+        snapshot_array.emplace_back(MappingSnapshot::Ref(mapping));
     }
     retained_files.reserve(approx_file_cnt);
-    for (const std::shared_ptr<MappingSnapshot> &mapping : snapshot_array)
+    for (const MappingSnapshot::Ref &mapping : snapshot_array)
     {
         GetRetainedFiles(retained_files, mapping->mapping_tbl_, shift);
         ThdTask()->YieldToLowPQ();
