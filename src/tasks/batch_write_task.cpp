@@ -395,6 +395,8 @@ KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
         CHECK_KV_ERR(err);
         applying_page_ = std::move(page);
     }
+    ts_ = butil::cpuwide_time_ns();
+    step_ = 60;
     assert(TypeOfPage(applying_page_.PagePtr()) == PageType::Data);
 
     if (TripleElement(1))
@@ -403,6 +405,8 @@ KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
         KvError err = ShiftLeafLink();
         CHECK_KV_ERR(err);
     }
+    ts_ = butil::cpuwide_time_ns();
+    step_ = 61;
     if (TripleElement(0) &&
         TripleElement(0)->GetPageId() != applying_page_.PrevPageId())
     {
@@ -1063,6 +1067,8 @@ KvError BatchWriteTask::FlushIndexPage(MemIndexPage *idx_page,
 
 KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
 {
+    ts_ = butil::cpuwide_time_ns();
+    step_ = 70;
     const uint16_t cur_page_len = data_page_builder_.CurrentSizeEstimate();
     std::string_view page_view = data_page_builder_.Finish();
     if (page_id == MaxPageId)
@@ -1076,6 +1082,8 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
         const uint16_t one_quarter = Options()->data_page_size >> 2;
         const uint16_t three_quarter = Options()->data_page_size - one_quarter;
         DataPage *prev_page = TripleElement(0);
+        ts_ = butil::cpuwide_time_ns();
+        step_ = 71;
         if (cur_page_len < one_quarter && prev_page != nullptr &&
             prev_page->RestartNum() > 1 &&
             prev_page->ContentLength() > three_quarter)
@@ -1094,6 +1102,8 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
             new_data_page.SetPage(Page(true));
             memcpy(new_data_page.PagePtr(), page_view.data(), page_view.size());
         }
+        ts_ = butil::cpuwide_time_ns();
+        step_ = 72;
 
         // This is a new data page that does not exist in the tree and has a new
         // page Id.
@@ -1105,9 +1115,13 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
                stack_.back()->changes_.back().key_ < page_key);
         stack_.back()->changes_.emplace_back(
             std::move(page_key), page_id, WriteOp::Upsert);
+        ts_ = butil::cpuwide_time_ns();
+        step_ = 73;
     }
     else
     {
+        ts_ = butil::cpuwide_time_ns();
+        step_ = 74;
         DataPage new_page(page_id);
         memcpy(new_page.PagePtr(), page_view.data(), page_view.size());
         // This is an existing data page with updated content.
