@@ -45,8 +45,10 @@ public:
         {
             if (this != &rhs)
             {
-                assert(mgr_ != nullptr && entry_ != nullptr);
-                mgr_->Unpin(entry_);
+                if (mgr_ != nullptr && entry_ != nullptr)
+                {
+                    mgr_->Unpin(entry_);
+                }
                 mgr_ = rhs.mgr_;
                 entry_ = rhs.entry_;
                 rhs.mgr_ = nullptr;
