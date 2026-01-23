@@ -1,6 +1,5 @@
 #pragma once
 
-#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -18,8 +17,37 @@ class ManifestBuilder;
 class ManifestBuffer;
 struct KvOptions;
 
-struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
+struct MappingSnapshot
 {
+    class Ref
+    {
+    public:
+        Ref(MappingSnapshot *mapping = nullptr);
+        Ref(const Ref &other);
+        Ref(Ref &&other) noexcept;
+        Ref &operator=(const Ref &other);
+        Ref &operator=(Ref &&other) noexcept;
+        ~Ref();
+
+        MappingSnapshot *Get() const;
+        MappingSnapshot *operator->() const;
+        friend bool operator==(const Ref &lhs, std::nullptr_t)
+        {
+            return lhs.mapping_ == nullptr;
+        }
+        friend bool operator!=(const Ref &lhs, std::nullptr_t)
+        {
+            return lhs.mapping_ != nullptr;
+        }
+        explicit operator bool() const
+        {
+            return mapping_ != nullptr;
+        }
+
+    private:
+        void Clear();
+        MappingSnapshot *mapping_{nullptr};
+    };
     class MappingTbl
     {
     public:
@@ -111,8 +139,15 @@ struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
      * after the previous MappingSnapshot has been released. This ensures that
      * file pages are safely reused without risk of premature reclamation.
      */
-    std::shared_ptr<MappingSnapshot> next_snapshot_{nullptr};
+    Ref next_snapshot_{nullptr};
     MappingTbl mapping_tbl_;
+
+    void AddRef();
+    void Release();
+    size_t RefCount() const;
+
+private:
+    size_t ref_cnt_{0};
 };
 
 /**
@@ -216,7 +251,7 @@ private:
 class PageMapper
 {
 public:
-    explicit PageMapper(std::shared_ptr<MappingSnapshot> mapping)
+    explicit PageMapper(MappingSnapshot::Ref mapping)
         : mapping_(std::move(mapping)) {};
     PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident);
     PageMapper(const PageMapper &rhs);
@@ -231,7 +266,7 @@ public:
      */
     uint32_t MappingCount() const;
 
-    std::shared_ptr<MappingSnapshot> GetMappingSnapshot() const;
+    MappingSnapshot::Ref GetMappingSnapshot() const;
     MappingSnapshot *GetMapping() const;
     void UpdateMapping(PageId page_id, FilePageId file_page_id);
     uint32_t UseCount() const;
@@ -242,7 +277,7 @@ private:
     const KvOptions *Options() const;
     MappingSnapshot::MappingTbl &Mapping();
 
-    std::shared_ptr<MappingSnapshot> mapping_;
+    MappingSnapshot::Ref mapping_;
     PageId free_page_head_{MaxPageId};
     uint32_t free_page_cnt_{0};
     std::unique_ptr<FilePageAllocator> file_page_allocator_{nullptr};

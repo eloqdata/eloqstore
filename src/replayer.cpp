@@ -231,10 +231,10 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
                                                 const TableIdent *tbl_ident,
                                                 uint64_t expect_term)
 {
-    auto mapping = std::make_shared<MappingSnapshot>(
+    auto mapping = MappingSnapshot::Ref(new MappingSnapshot(
         idx_mgr,
         tbl_ident,
-        MappingSnapshot::MappingTbl(std::move(mapping_tbl_)));
+        MappingSnapshot::MappingTbl(std::move(mapping_tbl_))));
     auto mapper = std::make_unique<PageMapper>(std::move(mapping));
     auto &m_table = mapper->GetMapping()->mapping_tbl_;
 
