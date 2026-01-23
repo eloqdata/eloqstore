@@ -44,7 +44,6 @@ DECLARE_uint32(buffer_pool_size);
 DECLARE_uint64(manifest_limit);
 DECLARE_uint32(fd_limit);
 DECLARE_uint32(io_queue_size);
-DECLARE_uint32(buf_ring_size);
 DECLARE_uint32(coroutine_stack_size);
 DECLARE_uint32(data_page_size);
 DECLARE_uint32(pages_per_file_shift);

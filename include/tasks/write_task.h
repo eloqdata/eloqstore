@@ -1,7 +1,5 @@
 #pragma once
 
-#include <vector>
-
 #include "error.h"
 #include "storage/data_page.h"
 #include "storage/index_page_manager.h"
@@ -63,19 +61,6 @@ protected:
     KvError WritePage(OverflowPage &&page);
     KvError WritePage(MemIndexPage *page);
     KvError WritePage(VarPage page, FilePageId file_page_id);
-
-    KvError FlushBatchPages();
-    /**
-     * @brief When the append-only mode is enabled, the pages ready to be
-     * written are put into this batch. The batch is then sequentially
-     * written to the disk when it is full or when a data file switch is
-     * required.
-     */
-    std::vector<VarPage> batch_pages_;
-    /**
-     * @brief First file page id of this batch of pages.
-     */
-    FilePageId batch_fp_id_{MaxFilePageId};
 
     // Track whether FileIdTermMapping changed in this write task.
     // If it changed, we must force a full snapshot (WAL append doesn't include

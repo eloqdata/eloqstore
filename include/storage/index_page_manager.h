@@ -19,7 +19,6 @@ class KvTask;
 class PageMapper;
 class IndexPageManager;
 
-using MappingArena = Pool<MappingSnapshot::MappingTbl>;
 class IndexPageManager
 {
     friend class RootMetaMgr;
@@ -71,6 +70,7 @@ public:
     const KvOptions *Options() const;
     AsyncIoManager *IoMgr() const;
     MappingArena *MapperArena();
+    MappingChunkArena *MapperChunkArena();
     RootMetaMgr *RootMetaManager();
 
     /**
@@ -117,6 +117,7 @@ private:
 
     AsyncIoManager *io_manager_;
     MappingArena mapping_arena_;
+    MappingChunkArena mapping_chunk_arena_;
     RootMetaMgr root_meta_mgr_;
 };
 }  // namespace eloqstore

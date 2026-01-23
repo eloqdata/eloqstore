@@ -88,10 +88,6 @@ public:
     virtual void InitBackgroundJob()
     {
     }
-    virtual bool BackgroundJobInited()
-    {
-        return true;
-    }
     virtual void RunPrewarm() {};
 
     /** These methods are provided for kv task. */
@@ -105,9 +101,6 @@ public:
     virtual KvError WritePage(const TableIdent &tbl_id,
                               VarPage page,
                               FilePageId file_page_id) = 0;
-    virtual KvError WritePages(const TableIdent &tbl_id,
-                               std::span<VarPage> pages,
-                               FilePageId first_fp_id) = 0;
     virtual KvError SyncData(const TableIdent &tbl_id) = 0;
     virtual KvError AbortWrite(const TableIdent &tbl_id) = 0;
 
@@ -226,6 +219,7 @@ public:
     KvError Init(Shard *shard) override;
     void Submit() override;
     void PollComplete() override;
+    void InitBackgroundJob() override;
 
     std::pair<Page, KvError> ReadPage(const TableIdent &tbl_id,
                                       FilePageId fp_id,
@@ -237,9 +231,6 @@ public:
     KvError WritePage(const TableIdent &tbl_id,
                       VarPage page,
                       FilePageId file_page_id) override;
-    KvError WritePages(const TableIdent &tbl_id,
-                       std::span<VarPage> pages,
-                       FilePageId first_fp_id) override;
     KvError SyncData(const TableIdent &tbl_id) override;
     KvError AbortWrite(const TableIdent &tbl_id) override;
 
@@ -431,6 +422,8 @@ public:
     uint32_t AllocRegisterIndex();
     void FreeRegisterIndex(uint32_t idx);
 
+    inline uint16_t LookupRegisteredBufferIndex(const char *ptr) const;
+
     // Low-level io operation. Very simple wrap on syscall.
     io_uring_sqe *GetSQE(UserDataType type, const void *user_ptr);
     int MakeDir(FdIdx dir_fd, const char *path);
@@ -448,8 +441,6 @@ public:
     int UnregisterFile(int idx);
     int Fallocate(FdIdx fd, uint64_t size);
     int UnlinkAt(FdIdx dir_fd, const char *path, bool rmdir);
-    Page SwapPage(Page page, uint16_t buf_id);
-
     /**
      * @brief Write content to a file with given name in the directory.
      * This is often used to write snapshot of manifest atomically.
@@ -529,14 +520,18 @@ public:
     uint32_t alloc_reg_slot_{0};
     std::vector<uint32_t> free_reg_slots_;
 
-    io_uring_buf_ring *buf_ring_{nullptr};
-    std::vector<Page> bufs_pool_;
-    const int buf_group_{0};
-
     bool ring_inited_{false};
+    bool buffers_registered_{false};
+    char *registered_buf_base_{nullptr};
+    size_t registered_buf_stride_{0};
+    uint8_t registered_buf_shift_{0};
+    uint16_t registered_buf_count_{0};
+    size_t registered_last_slice_size_{0};
     io_uring ring_;
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};
+
+    KvError BootstrapRing(Shard *shard);
 };
 
 class CloudStoreMgr : public IouringMgr
@@ -680,7 +675,6 @@ private:
     static std::string ToFilename(FileId file_id, uint64_t term = 0);
     size_t EstimateFileSize(FileId file_id) const;
     size_t EstimateFileSize(std::string_view filename) const;
-    bool BackgroundJobInited() override;
     void InitBackgroundJob() override;
     KvError RestoreLocalCacheState();
     KvError RestoreFilesForTable(const TableIdent &tbl_id,
@@ -743,7 +737,6 @@ private:
         bool killed_{false};
     };
 
-    bool background_job_inited_{false};
     FileCleaner file_cleaner_;
     std::vector<std::unique_ptr<Prewarmer>> prewarmers_;
     size_t active_prewarm_tasks_{0};
@@ -798,9 +791,6 @@ public:
     KvError WritePage(const TableIdent &tbl_id,
                       VarPage page,
                       FilePageId file_page_id) override;
-    KvError WritePages(const TableIdent &tbl_id,
-                       std::span<VarPage> pages,
-                       FilePageId first_fp_id) override;
     KvError SyncData(const TableIdent &tbl_id) override;
     KvError AbortWrite(const TableIdent &tbl_id) override;
 

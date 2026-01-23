@@ -102,6 +102,11 @@ public:
      */
     std::string String(const KvOptions *opts) const;
 
+    bool IsRegistered() const
+    {
+        return page_.IsRegistered();
+    }
+
 private:
     /**
      * @brief The page ID is 0, if the page is newly created in memory and has

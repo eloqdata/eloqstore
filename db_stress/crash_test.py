@@ -145,7 +145,6 @@ def randomize_dynamic_params():
         "io_queue_size": random.choice([2048, 4096, 8192]),
         "max_inflight_write": random.choice([2048, 4096, 8192]),
         "max_write_batch_pages": random.choice([32, 64, 128]),
-        "buf_ring_size": lambda: random.choice([1<<9, 1<<10, 1<<11, 1<<12]),
         # "coroutine_stack_size": lambda: random.choice([1<<13, 1<<14, 1<<15]),
         "file_amplify_factor": random.choice([2]),
         "reserve_space_ratio": random.choice([50, 100, 150, 200]),
@@ -166,7 +165,7 @@ def init_csv_file(test_type):
                 'start_time', 'end_time', 'duration_seconds', 'exit_code', 'hit_timeout',
                 'num_threads', 'data_page_restart_interval', 'index_page_restart_interval',
                 'buffer_pool_size', 'fd_limit', 'io_queue_size', 'max_inflight_write',
-                'max_write_batch_pages', 'buf_ring_size', 'file_amplify_factor',
+                'max_write_batch_pages', 'file_amplify_factor',
                 'reserve_space_ratio', 'open_wfile','command'
             ]
             
@@ -203,7 +202,6 @@ def record_test_result(test_type, start_time, end_time, exit_code, hit_timeout, 
         'io_queue_size': cmd_params.get('io_queue_size', ''),
         'max_inflight_write': cmd_params.get('max_inflight_write', ''),
         'max_write_batch_pages': cmd_params.get('max_write_batch_pages', ''),
-        'buf_ring_size': cmd_params.get('buf_ring_size', ''),
         'file_amplify_factor': cmd_params.get('file_amplify_factor', ''),
         'reserve_space_ratio': cmd_params.get('reserve_space_ratio', ''),
         'open_wfile': cmd_params.get('open_wfile', ''),
@@ -234,7 +232,6 @@ default_params = {
     "manifest_limit" : lambda:16 <<20,#default 8<<20
     "fd_limit" : 1000,#default 10000
     "io_queue_size" : 4096,#default 4096
-    "buf_ring_size" :lambda:1 << 10,#default 1<<10
 #    "coroutine_stack_size" :lambda:1<<14,#default 8*1024
     "max_inflight_write":4096,#default 4096
     "file_amplify_factor":4,#default 4

@@ -123,7 +123,6 @@ void RunStressTest(int argc, char **argv)
     {
         opts.store_path = {FLAGS_db_path};
         opts.cloud_store_path = FLAGS_cloud_store_path;
-        opts.buf_ring_size = FLAGS_buf_ring_size;
         opts.coroutine_stack_size = FLAGS_coroutine_stack_size;
         opts.data_page_size = FLAGS_data_page_size;
         opts.data_page_restart_interval = FLAGS_data_page_restart_interval;

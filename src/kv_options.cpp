@@ -153,10 +153,6 @@ int KvOptions::LoadFromIni(const char *path)
         max_write_batch_pages =
             reader.GetUnsigned(sec_run, "max_write_batch_pages", 64);
     }
-    if (reader.HasValue(sec_run, "buf_ring_size"))
-    {
-        buf_ring_size = reader.GetUnsigned(sec_run, "buf_ring_size", 1 << 10);
-    }
     if (reader.HasValue(sec_run, "coroutine_stack_size"))
     {
         coroutine_stack_size =
@@ -336,7 +332,6 @@ bool KvOptions::operator==(const KvOptions &other) const
            fd_limit == other.fd_limit && io_queue_size == other.io_queue_size &&
            max_inflight_write == other.max_inflight_write &&
            max_write_batch_pages == other.max_write_batch_pages &&
-           buf_ring_size == other.buf_ring_size &&
            coroutine_stack_size == other.coroutine_stack_size &&
            num_retained_archives == other.num_retained_archives &&
            archive_interval_secs == other.archive_interval_secs &&

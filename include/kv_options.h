@@ -69,12 +69,7 @@ struct KvOptions
     /**
      * @brief The maximum number of pages per batch for the write task.
      */
-    uint32_t max_write_batch_pages = 256;
-    /**
-     * @brief Size of io-uring selected buffer ring.
-     * It must be a power-of 2, and can be up to 32768.
-     */
-    uint16_t buf_ring_size = 1 << 12;
+    uint32_t max_write_batch_pages = 32;
     /**
      * @brief Size of coroutine stack.
      * According to the latest test results, at least 16KB is required.
@@ -129,7 +124,7 @@ struct KvOptions
     /**
      * @brief Max cached DirectIO buffers per shard.
      */
-    uint32_t direct_io_buffer_pool_size = 4;
+    uint32_t direct_io_buffer_pool_size = 128;
     /**
      * @brief Reuse files already present in the local cache directory when the
      * store starts.
@@ -236,10 +231,6 @@ struct KvOptions
      * enabled.
      */
     uint16_t prewarm_task_count = 3;
-    /**
-     * @brief Size of mapping arena.
-     */
-    size_t mapping_arena_size = 128;
 
     /**
      * @brief Filter function to determine which partitions belong to this
