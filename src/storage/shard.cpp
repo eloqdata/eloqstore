@@ -590,6 +590,11 @@ void Shard::WorkOneRound()
     for (size_t i = 0; i < nreqs; i++)
     {
         OnReceivedReq(reqs[i]);
+        uint64_t delta_us = DurationMicroseconds(ts_);
+        if (delta_us >= FLAGS_max_processing_time_microseconds)
+        {
+            LOG(WARNING) << "WorkOneRound cost " << delta_us << ", i=" << i;
+        }
     }
 
     req_queue_size_.fetch_sub(nreqs, std::memory_order_relaxed);
@@ -599,6 +604,11 @@ void Shard::WorkOneRound()
     io_mgr_->PollComplete();
 
     ExecuteReadyTasks();
+    uint64_t delta_us = DurationMicroseconds(ts_);
+    if (delta_us >= FLAGS_max_processing_time_microseconds)
+    {
+        LOG(WARNING) << "WorkOneRound cost " << delta_us;
+    }
 
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: end of round
