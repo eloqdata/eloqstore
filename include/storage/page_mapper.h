@@ -64,7 +64,10 @@ struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
         static constexpr size_t kChunkSize = 1ULL << kChunkShift;
         static constexpr size_t kChunkMask = kChunkSize - 1;
 
+    public:
         using Chunk = std::array<uint64_t, kChunkSize>;
+
+    private:
 
         void EnsureSize(PageId page_id);
         size_t RequiredChunks(size_t n) const;
