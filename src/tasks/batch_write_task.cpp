@@ -260,6 +260,7 @@ KvError BatchWriteTask::Apply()
     step_ = 1;
     cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     CHECK_KV_ERR(err);
+    ts_ = butil::cpuwide_time_ns();
     step_ = 2;
     err = ApplyBatch(cow_meta_.root_id_, true);
     step_ = 3;
@@ -298,6 +299,8 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
                                    bool update_ttl,
                                    uint64_t now_ts)
 {
+    ts_ = butil::cpuwide_time_ns();
+    step_ = 10;
     do_update_ttl_ = update_ttl;
     assert(!update_ttl || ttl_batch_.empty());
 
@@ -320,6 +323,8 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
     size_t cidx = 0;
     const uint64_t now_ms =
         now_ts != 0 ? now_ts : utils::UnixTs<chrono::milliseconds>();
+    ts_ = butil::cpuwide_time_ns();
+    step_ = 11;
     while (cidx < data_batch_.size())
     {
         std::string_view batch_start_key = {data_batch_[cidx].key_.data(),
@@ -336,9 +341,13 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
             err = LoadApplyingPage(page_id);
             CHECK_KV_ERR(err);
         }
+        ts_ = butil::cpuwide_time_ns();
+        step_ = 22;
         err = ApplyOnePage(cidx, now_ms);
         CHECK_KV_ERR(err);
     }
+    ts_ = butil::cpuwide_time_ns();
+    step_ = 12;
     // Flush all dirty leaf data pages in leaf_triple_.
     assert(TripleElement(2) == nullptr);
     err = ShiftLeafLink();
