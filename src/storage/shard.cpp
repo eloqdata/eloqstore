@@ -581,7 +581,6 @@ void Shard::WorkOneRound()
     {
         io_mgr_->InitBackgroundJob();
     }
-    ExecuteReadyTasks();
     KvRequest *reqs[128];
     size_t nreqs = requests_.try_dequeue_bulk(reqs, std::size(reqs));
 
@@ -610,9 +609,33 @@ void Shard::WorkOneRound()
 #endif
     }
 
-    for (size_t i = 0; i < nreqs; i++)
+    size_t processed_reqs = 0;
+    for (size_t i = 0; i < nreqs; ++i)
     {
         OnReceivedReq(reqs[i]);
+        processed_reqs++;
+        uint64_t delta_us = DurationMicroseconds(ts_);
+        if (delta_us >= FLAGS_max_processing_time_microseconds)
+        {
+            size_t remaining = nreqs - (i + 1);
+            if (remaining > 0)
+            {
+                bool requeued =
+                    requests_.enqueue_bulk(reqs + i + 1, remaining);
+                if (!requeued)
+                {
+                    LOG(ERROR)
+                        << "failed to enqueue bulk for remaining requests";
+                    for (size_t j = i + 1; j < nreqs; ++j)
+                    {
+                        bool single_enqueue = requests_.enqueue(reqs[j]);
+                        CHECK(single_enqueue)
+                            << "failed to re-enqueue request after time limit";
+                    }
+                }
+            }
+            break;
+        }
     }
 
     uint64_t delta_us = DurationMicroseconds(ts_);
@@ -620,7 +643,7 @@ void Shard::WorkOneRound()
     {
         LOG(WARNING) << "after received req, cost " << delta_us;
     }
-    req_queue_size_.fetch_sub(nreqs, std::memory_order_relaxed);
+    req_queue_size_.fetch_sub(processed_reqs, std::memory_order_relaxed);
 
     io_mgr_->Submit();
 
