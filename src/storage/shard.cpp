@@ -511,6 +511,7 @@ bool Shard::ExecuteReadyTasks()
     }
 
     cnt = 0;
+    start = ReadTimeMicroseconds();
     while (low_priority_ready_tasks_.Size() > 0)
     {
         ++cnt;
@@ -527,8 +528,8 @@ bool Shard::ExecuteReadyTasks()
         if (delta_us >= FLAGS_max_processing_time_microseconds)
         {
             if (delta_us > 2000)
-                LOG(INFO) << "ExecuteReadyTasks LPQ cost " << delta_us
-                          << "us, cnt=" << cnt;
+                LOG(INFO) << "ExecuteReadyTasks LPQ cost "
+                          << DurationMicroseconds(start) << "us, cnt=" << cnt;
             goto finish;
         }
     }
@@ -620,8 +621,7 @@ void Shard::WorkOneRound()
             size_t remaining = nreqs - (i + 1);
             if (remaining > 0)
             {
-                bool requeued =
-                    requests_.enqueue_bulk(reqs + i + 1, remaining);
+                bool requeued = requests_.enqueue_bulk(reqs + i + 1, remaining);
                 if (!requeued)
                 {
                     LOG(ERROR)
