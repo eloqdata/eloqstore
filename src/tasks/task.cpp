@@ -106,6 +106,8 @@ std::pair<Page, KvError> LoadPage(const TableIdent &tbl_id,
                                   FilePageId file_page_id)
 {
     assert(file_page_id != MaxFilePageId);
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->step_ = 90;
     auto [page, err] = IoMgr()->ReadPage(tbl_id, file_page_id, Page(true));
     if (err != KvError::NoError)
     {
@@ -118,7 +120,11 @@ std::pair<DataPage, KvError> LoadDataPage(const TableIdent &tbl_id,
                                           PageId page_id,
                                           FilePageId file_page_id)
 {
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->step_ = 80;
     auto [page, err] = LoadPage(tbl_id, file_page_id);
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->step_ = 81;
     if (err != KvError::NoError)
     {
         return {DataPage(), err};
