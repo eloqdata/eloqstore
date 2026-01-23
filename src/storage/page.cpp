@@ -104,14 +104,16 @@ void PagesPool::Extend(size_t pages)
     assert(ptr);
     chunks_.emplace_back(UPtr(ptr, &std::free), chunk_size);
     auto t2 = butil::cpuwide_time_ns() - a;
-    if (t1 + t2 > 500000)
-    {
-    LOG(ERROR) << "Extent t1 = " << t1 << " t2 = " << t2;
-    }
+    a = butil::cpuwide_time_ns();
 
     for (size_t i = 0; i < chunk_size; i += page_size)
     {
         Free(ptr + i);
+    }
+    auto t3 = butil::cpuwide_time_ns() - a;
+    if (t1 + t2 + t3> 500000)
+    {
+    LOG(ERROR) << "Extent t1 = " << t1 << " t2 = " << t2 << " t3 = " << t3;
     }
 }
 
