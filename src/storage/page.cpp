@@ -111,9 +111,9 @@ void PagesPool::Extend(size_t pages)
         Free(ptr + i);
     }
     auto t3 = butil::cpuwide_time_ns() - a;
-    if (t1 + t2 + t3> 500000)
+    if (t1 + t2 + t3 > 500000)
     {
-    LOG(ERROR) << "Extent t1 = " << t1 << " t2 = " << t2 << " t3 = " << t3;
+        LOG(ERROR) << "Extent t1 = " << t1 << " t2 = " << t2 << " t3 = " << t3;
     }
 }
 
@@ -141,6 +141,7 @@ void PagesPool::Free(char *ptr)
 #ifndef NDEBUG
     // Fill with junk data for debugging purposes.
     memset(ptr, 123, options_->data_page_size);
+    LOG(WARNING) << "Call memset";
 #endif
     FreePage *free_page = new (ptr) FreePage;
     free_page->next_ = free_head_;
