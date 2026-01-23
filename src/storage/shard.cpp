@@ -493,8 +493,10 @@ bool Shard::ExecuteReadyTasks()
         }
     }
 
+    int cnt = 0;
     while (low_priority_ready_tasks_.Size() > 0)
     {
+        ++cnt;
         KvTask *task = low_priority_ready_tasks_.Peek();
         low_priority_ready_tasks_.Dequeue();
         task->status_ = TaskStatus::Ongoing;
@@ -507,6 +509,7 @@ bool Shard::ExecuteReadyTasks()
         uint64_t delta_us = DurationMicroseconds(ts_);
         if (delta_us >= FLAGS_max_processing_time_microseconds)
         {
+            LOG(INFO) << "ExecuteReadyTasks cost " << delta_us << "us, cnt=" << cnt;
             goto finish;
         }
     }
