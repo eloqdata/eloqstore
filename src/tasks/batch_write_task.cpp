@@ -394,6 +394,8 @@ KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
     }
     else
     {
+        ts_ = butil::cpuwide_time_ns();
+        step_ = 64;
         auto [page, err] = LoadDataPage(page_id);
         CHECK_KV_ERR(err);
         applying_page_ = std::move(page);
