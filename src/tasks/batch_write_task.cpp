@@ -773,12 +773,12 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     }
     assert(!TripleElement(1));
     leaf_triple_[1] = std::move(leaf_triple_[2]);
-    ts_ = butil::cpuwide_time_ns();
+    // ts_ = butil::cpuwide_time_ns();
     step_ = 38;
 
     cidx = cidx + std::distance(data_batch_.begin() + cidx, change_end_it);
-    ts_ = butil::cpuwide_time_ns();
-    step_ = 40;
+    // ts_ = butil::cpuwide_time_ns();
+    // step_ = 40;
     return KvError::NoError;
 }
 
@@ -983,6 +983,8 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         {
             return {nullptr, err};
         }
+        ThdTask()->ts_ = butil::cpuwide_time_ns();
+        ThdTask()->step_ = 118;
         err = FlushIndexPage(prev_page.page_,
                              std::move(prev_page.key_),
                              prev_page.page_id_,
@@ -1011,6 +1013,8 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
 KvError BatchWriteTask::FinishIndexPage(DirtyIndexPage &prev,
                                         std::string cur_page_key)
 {
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->step_ = 130;
     assert(!idx_page_builder_.IsEmpty());
     const uint16_t cur_page_len = idx_page_builder_.CurrentSizeEstimate();
     std::string_view page_view = idx_page_builder_.Finish();
@@ -1025,6 +1029,8 @@ KvError BatchWriteTask::FinishIndexPage(DirtyIndexPage &prev,
             prev.page_->RestartNum() > 1 &&
             prev.page_->ContentLength() > three_quarter)
         {
+            ThdTask()->ts_ = butil::cpuwide_time_ns();
+            ThdTask()->step_ = 131;
             page_view = Redistribute(prev.page_, page_view, cur_page_key);
         }
 
@@ -1034,11 +1040,15 @@ KvError BatchWriteTask::FinishIndexPage(DirtyIndexPage &prev,
         prev.page_ = nullptr;
         prev.page_id_ = MaxPageId;
     }
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->step_ = 132;
     MemIndexPage *cur_page = shard->IndexManager()->AllocIndexPage();
     if (cur_page == nullptr)
     {
         return KvError::OutOfMem;
     }
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->step_ = 133;
     memcpy(cur_page->PagePtr(), page_view.data(), page_view.size());
     prev.page_ = cur_page;
     prev.key_ = std::move(cur_page_key);

@@ -392,13 +392,7 @@ PageId MappingSnapshot::GetNextFree(PageId page_id) const
 void MappingSnapshot::AddFreeFilePage(FilePageId file_page)
 {
     assert(file_page != MaxFilePageId);
-    int64_t start = butil::cpuwide_time_ns();
     to_free_file_pages_.emplace_back(file_page);
-    int64_t diff = butil::cpuwide_time_ns() - start;
-    if (diff > 500000)
-    {
-        LOG(INFO) << "AddFreeFilePage " << diff << " ns";
-    }
 }
 
 void MappingSnapshot::ClearFreeFilePage()
