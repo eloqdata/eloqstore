@@ -19,6 +19,7 @@ public:
     {
         if (pool_.empty())
         {
+            LOG(INFO) << "Pool Acquire";
             return T();
         }
         T value = std::move(pool_.back());
@@ -31,6 +32,7 @@ public:
     {
         if (max_cached_ == 0 || pool_.size() >= max_cached_)
         {
+            LOG(INFO) << "Pool Release";
             return;
         }
         pool_.push_back(std::move(value));
