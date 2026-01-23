@@ -2,6 +2,7 @@
 
 #include <utility>
 #include <vector>
+#include <glog/logging.h>
 
 namespace eloqstore
 {
