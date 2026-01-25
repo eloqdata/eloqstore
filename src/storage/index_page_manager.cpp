@@ -29,8 +29,8 @@ size_t RootMetaBytes(const RootMeta &meta)
     {
         return 0;
     }
-    const auto &base = meta.mapper_->GetMapping()->mapping_tbl_.Base();
-    size_t bytes = base.capacity() * sizeof(uint64_t);
+    const auto &tbl = meta.mapper_->GetMapping()->mapping_tbl_;
+    size_t bytes = tbl.capacity() * sizeof(uint64_t);
     if (meta.compression_ != nullptr)
     {
         bytes += meta.compression_->DictionaryMemoryBytes();
