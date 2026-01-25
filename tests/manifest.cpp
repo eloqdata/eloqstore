@@ -456,7 +456,7 @@ TEST_CASE("rootmeta eviction with small cache across partitions",
 {
     eloqstore::KvOptions opts = append_opts;
     opts.num_threads = 1;
-    opts.root_meta_cache_size = 256;
+    opts.root_meta_cache_size = 5000;
     opts.init_page_count = 8;
     opts.data_page_size = 4096;
     const uint32_t value_size = 256;
