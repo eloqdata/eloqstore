@@ -31,10 +31,8 @@ size_t RootMetaBytes(const RootMeta &meta)
     }
     const auto &tbl = meta.mapper_->GetMapping()->mapping_tbl_;
     size_t bytes = tbl.capacity() * sizeof(uint64_t);
-    if (meta.compression_ != nullptr)
-    {
-        bytes += meta.compression_->DictionaryMemoryBytes();
-    }
+    CHECK(meta.compression_ != nullptr);
+    bytes += meta.compression_->DictionaryMemoryBytes();
     return bytes;
 }
 }  // namespace
@@ -187,6 +185,11 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
             meta->waiting_.WakeAll();
             if (err != KvError::NoError)
             {
+                if (err != KvError::NotFound)
+                {
+                    LOG(ERROR)
+                        << "load meta failed, err: " << static_cast<int>(err);
+                }
                 root_meta_mgr_.Erase(tbl_id);
                 return {RootMetaMgr::Handle(), err};
             }
