@@ -13,7 +13,10 @@ class Pool
 public:
     explicit Pool(size_t max_cached = 0) : max_cached_(max_cached)
     {
-        pool_.reserve(max_cached_);
+        if (max_cached_ != 0)
+        {
+            pool_.reserve(max_cached_);
+        }
     }
 
     T Acquire()
@@ -31,7 +34,7 @@ public:
 
     void Release(T &&value)
     {
-        if (max_cached_ == 0 || pool_.size() >= max_cached_)
+        if (max_cached_ != 0 && pool_.size() >= max_cached_)
         {
             LOG(INFO) << "Pool Release";
             return;

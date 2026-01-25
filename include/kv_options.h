@@ -230,9 +230,9 @@ struct KvOptions
      */
     uint16_t prewarm_task_count = 3;
     /**
-     * @brief Size of mapping arena.
+     * @brief Size of mapping arena. 0 means unlimited pooling.
      */
-    size_t mapping_arena_size = 128;
+    size_t mapping_arena_size = 0;
 
     std::function<bool(const TableIdent &)> prewarm_filter;
 };
