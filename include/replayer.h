@@ -24,7 +24,7 @@ public:
     bool corrupted_log_found_{false};
     PageId root_;
     PageId ttl_root_;
-    std::vector<uint64_t> mapping_tbl_;
+    MappingSnapshot::MappingTbl mapping_tbl_;
     FilePageId max_fp_id_;
     uint64_t file_size_before_corrupted_log_;
     uint64_t file_size_;

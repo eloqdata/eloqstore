@@ -194,25 +194,6 @@ uint64_t MappingSnapshot::MappingTbl::Get(PageId page_id) const
     return (*base_[chunk_idx])[chunk_offset];
 }
 
-void MappingSnapshot::MappingTbl::CopyTo(std::vector<uint64_t> &dst) const
-{
-    dst.resize(logical_size_);
-    size_t copied = 0;
-    for (size_t chunk_idx = 0; chunk_idx < base_.size(); ++chunk_idx)
-    {
-        const size_t remain = logical_size_ - copied;
-        if (remain == 0)
-        {
-            break;
-        }
-        const size_t copy_elems = std::min(kChunkSize, remain);
-        std::memcpy(dst.data() + copied,
-                    base_[chunk_idx]->data(),
-                    copy_elems * sizeof(uint64_t));
-        copied += copy_elems;
-    }
-}
-
 void MappingSnapshot::MappingTbl::AssignFrom(const std::vector<uint64_t> &src)
 {
     clear();
@@ -275,6 +256,22 @@ void MappingSnapshot::MappingTbl::ApplyPendingTo(MappingTbl &dst) const
     {
         dst.Set(entry.first, entry.second);
     }
+}
+
+bool MappingSnapshot::MappingTbl::operator==(const MappingTbl &rhs) const
+{
+    if (logical_size_ != rhs.logical_size_)
+    {
+        return false;
+    }
+    for (PageId page_id = 0; page_id < logical_size_; ++page_id)
+    {
+        if (Get(page_id) != rhs.Get(page_id))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 void MappingSnapshot::MappingTbl::EnsureSize(PageId page_id)

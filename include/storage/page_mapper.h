@@ -54,10 +54,14 @@ struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
         void Set(PageId page_id, uint64_t value);
         PageId PushBack(uint64_t value);
         uint64_t Get(PageId page_id) const;
-        void CopyTo(std::vector<uint64_t> &dst) const;
         void AssignFrom(const std::vector<uint64_t> &src);
         void CopyFrom(const MappingTbl &src);
         void ApplyPendingTo(MappingTbl &dst) const;
+        bool operator==(const MappingTbl &rhs) const;
+        bool operator!=(const MappingTbl &rhs) const
+        {
+            return !(*this == rhs);
+        }
 
     private:
         static constexpr size_t kChunkShift = 9;

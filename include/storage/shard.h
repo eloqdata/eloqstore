@@ -53,7 +53,7 @@ public:
     const size_t shard_id_{0};
     boost::context::continuation main_;
     uint64_t ts_{};
-    KvTask *running_;
+    KvTask *running_{};
     CircularQueue<KvTask *> ready_tasks_;
     CircularQueue<KvTask *> low_priority_ready_tasks_;
     size_t running_writing_tasks_{};

@@ -598,7 +598,7 @@ TEST_CASE("manifest tolerates trailing corruption", "[manifest]")
         REQUIRE(err == eloqstore::KvError::NoError);
         return std::tuple{replayer.root_,
                           replayer.ttl_root_,
-                          replayer.mapping_tbl_,
+                          std::move(replayer.mapping_tbl_),
                           replayer.max_fp_id_,
                           replayer.file_size_};
     };

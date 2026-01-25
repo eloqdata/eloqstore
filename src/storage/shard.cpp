@@ -30,9 +30,15 @@ namespace eloqstore
 std::once_flag Shard::tsc_frequency_initialized_;
 std::atomic<uint64_t> Shard::tsc_cycles_per_microsecond_{0};
 
+#ifdef NDEBUG
 DEFINE_uint64(max_processing_time_microseconds,
               50,
               "Max processing time in microseconds for low priority tasks.");
+#else
+DEFINE_uint64(max_processing_time_microseconds,
+              UINT64_MAX,
+              "Max processing time in microseconds for low priority tasks.");
+#endif
 
 Shard::Shard(const EloqStore *store, size_t shard_id, uint32_t fd_limit)
     : store_(store),
