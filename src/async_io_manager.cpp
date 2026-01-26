@@ -246,6 +246,7 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
             }
             sqe->buf_group = buf_group_;
             sqe->flags |= IOSQE_BUFFER_SELECT;
+            read_++;
             io_uring_prep_read(sqe, fd.first, NULL, 0, offset);
             res = ThdTask()->WaitIoResult();
             if (ThdTask()->io_flags_ & IORING_CQE_F_BUFFER)
@@ -337,6 +338,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
         }
         sqe->buf_group = buf_group_;
         sqe->flags |= IOSQE_BUFFER_SELECT;
+        read_++;
         io_uring_prep_read(sqe, fd, NULL, 0, req->offset_);
     };
 
@@ -968,7 +970,7 @@ void IouringMgr::Submit()
     {
         LOG(INFO) << "IoUring submit cost " << diff
                   << "ns, tasks=" << prepared_sqe_ << ", write=" << write_
-                  << ", writev=" << writev_;
+                  << ", writev=" << writev_ << ", read=" << read_;
     }
     if (ret < 0)
     {
@@ -979,6 +981,7 @@ void IouringMgr::Submit()
         prepared_sqe_ -= ret;
         write_ = 0;
         writev_ = 0;
+        read_ = 0;
     }
 }
 
@@ -1146,6 +1149,7 @@ int IouringMgr::Read(FdIdx fd, char *dst, size_t n, uint64_t offset)
     {
         sqe->flags |= IOSQE_FIXED_FILE;
     }
+    read_++;
     io_uring_prep_read(sqe, fd.first, dst, n, offset);
     return ThdTask()->WaitIoResult();
 }
