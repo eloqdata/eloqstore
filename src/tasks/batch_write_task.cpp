@@ -328,17 +328,19 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         CHECK_KV_ERR(err);
         if (page_id != MaxPageId)
         {
-            auto load_start_time = std::chrono::high_resolution_clock::now();
             err = LoadApplyingPage(page_id);
-            auto load_stop_time = std::chrono::high_resolution_clock::now();
-            LOG(INFO) << "LoadApplyingPage time: "
-                      << std::chrono::duration_cast<std::chrono::milliseconds>(
-                             load_stop_time - load_start_time)
-                             .count()
-                      << " ms, page id = " << page_id;
             CHECK_KV_ERR(err);
         }
+        auto apply_start_time = std::chrono::high_resolution_clock::now();
         err = ApplyOnePage(cidx, now_ms);
+        auto apply_stop_time = std::chrono::high_resolution_clock::now();
+        LOG(INFO) << "ApplyOnePage time: "
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(
+                         apply_stop_time - apply_start_time)
+                         .count()
+                  << " ms, cidx = " << cidx
+                  << ", batch size = " << data_batch_.size();
+
         CHECK_KV_ERR(err);
     }
 
