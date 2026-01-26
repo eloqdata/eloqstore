@@ -242,6 +242,7 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
         std::memcpy(base_[chunk_idx]->data(),
                     src.base_[chunk_idx]->data(),
                     copy_elems * sizeof(uint64_t));
+        ThdTask()->YieldToLowPQ();
     }
 }
 
@@ -412,12 +413,7 @@ PageMapper::PageMapper(const PageMapper &rhs)
     auto &src_tbl = rhs.mapping_->mapping_tbl_;
     src_tbl.StartCopying();
     mapping_->mapping_tbl_.CopyFrom(src_tbl);
-
-    static constexpr size_t kCopyBatchSize = 512;
-    for (size_t i = 0; i < mapping_->mapping_tbl_.size(); i += kCopyBatchSize)
-    {
-        ThdTask()->YieldToLowPQ();
-    }
+    ThdTask()->YieldToLowPQ();
 
     src_tbl.ApplyPendingTo(mapping_->mapping_tbl_);
     src_tbl.FinishCopying();
