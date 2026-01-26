@@ -344,8 +344,7 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
         logical_size_ = new_size;
         return;
     }
-    ThdTask()->ts_ = butil::cpuwide_time_ns();
-    ThdTask()->step_ = 207;
+    ThdTask()->YieldToLowPQ();
 
     EnsureChunkCount(required_chunks);
 
