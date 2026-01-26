@@ -44,26 +44,6 @@ MappingSnapshot::MappingTbl::MappingTbl(MappingChunkArena *arena)
 {
 }
 
-MappingSnapshot::MappingTbl::MappingTbl(std::vector<uint64_t> tbl)
-{
-    AssignFrom(tbl);
-}
-
-MappingSnapshot::MappingTbl::MappingTbl(std::vector<uint64_t> tbl,
-                                        MappingArena *vector_arena,
-                                        MappingChunkArena *chunk_arena)
-    : MappingTbl(vector_arena, chunk_arena)
-{
-    AssignFrom(tbl);
-}
-
-MappingSnapshot::MappingTbl::MappingTbl(std::vector<uint64_t> tbl,
-                                        MappingChunkArena *arena)
-    : MappingTbl(nullptr, arena)
-{
-    AssignFrom(tbl);
-}
-
 MappingSnapshot::MappingTbl::~MappingTbl()
 {
     clear();
@@ -194,30 +174,6 @@ uint64_t MappingSnapshot::MappingTbl::Get(PageId page_id) const
     return (*base_[chunk_idx])[chunk_offset];
 }
 
-void MappingSnapshot::MappingTbl::AssignFrom(const std::vector<uint64_t> &src)
-{
-    clear();
-    if (src.empty())
-    {
-        return;
-    }
-    ResizeInternal(src.size());
-    size_t copied = 0;
-    for (size_t chunk_idx = 0; chunk_idx < base_.size(); ++chunk_idx)
-    {
-        const size_t remain = src.size() - copied;
-        if (remain == 0)
-        {
-            break;
-        }
-        const size_t copy_elems = std::min(kChunkSize, remain);
-        std::memcpy(base_[chunk_idx]->data(),
-                    src.data() + copied,
-                    copy_elems * sizeof(uint64_t));
-        copied += copy_elems;
-    }
-}
-
 void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
 {
     ThdTask()->step_ = 204;
@@ -227,6 +183,8 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
         return;
     }
     clear();
+    ThdTask()->step_ = 205;
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
     if (src.logical_size_ == 0)
     {
         return;
@@ -234,7 +192,7 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
     ThdTask()->YieldToLowPQ();
     ResizeInternal(src.logical_size_);
     ThdTask()->YieldToLowPQ();
-    ThdTask()->step_ = 205;
+    ThdTask()->step_ = 206;
     for (size_t chunk_idx = 0; chunk_idx < base_.size(); ++chunk_idx)
     {
         size_t offset = chunk_idx << kChunkShift;

@@ -30,11 +30,6 @@ struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
         MappingTbl();
         MappingTbl(MappingArena *vector_arena, MappingChunkArena *chunk_arena);
         explicit MappingTbl(MappingChunkArena *arena);
-        explicit MappingTbl(std::vector<uint64_t> tbl);
-        MappingTbl(std::vector<uint64_t> tbl,
-                    MappingArena *vector_arena,
-                    MappingChunkArena *chunk_arena);
-        MappingTbl(std::vector<uint64_t> tbl, MappingChunkArena *arena);
         ~MappingTbl();
         MappingTbl(MappingTbl &&) = default;
         MappingTbl &operator=(MappingTbl &&) = default;
