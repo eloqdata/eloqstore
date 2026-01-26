@@ -665,13 +665,7 @@ void Shard::WorkOneRound()
     }
     req_queue_size_.fetch_sub(processed_reqs, std::memory_order_relaxed);
 
-    int64_t before_submit = butil::cpuwide_time_ns();
     io_mgr_->Submit();
-    auto diff = butil::cpuwide_time_ns() - before_submit;
-    if (diff > 300000)
-    {
-        LOG(INFO) << "IoUring submit cost " << diff << "ns";
-    }
 
     io_mgr_->PollComplete();
     delta_us = DurationMicroseconds(ts_);
