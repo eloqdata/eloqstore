@@ -298,6 +298,7 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
     ThdTask()->YieldToLowPQ();
 
     EnsureChunkCount(required_chunks);
+    ThdTask()->YieldToLowPQ();
 
     auto start = butil::cpuwide_time_ns();
     size_t old_size = logical_size_;
@@ -310,6 +311,7 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
         std::fill_n(
             base_[chunk_idx]->data() + chunk_offset, fill, InvalidValue);
         old_size += fill;
+        ThdTask()->YieldToLowPQ();
     }
     auto diff = butil::cpuwide_time_ns() - start;
     if (diff > 500000)
