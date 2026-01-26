@@ -232,6 +232,8 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
     ThdTask()->ts_ = butil::cpuwide_time_ns();
     ThdTask()->step_ = 205;
     ResizeInternal(src.logical_size_);
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->step_ = 206;
     for (size_t chunk_idx = 0; chunk_idx < base_.size(); ++chunk_idx)
     {
         size_t offset = chunk_idx << kChunkShift;
