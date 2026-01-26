@@ -138,6 +138,7 @@ IouringMgr::~IouringMgr()
 KvError IouringMgr::Init(Shard *shard)
 {
     io_uring_params params = {};
+    params.flags |= (IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN);
     const uint32_t sq_size = options_->io_queue_size;
     int ret = io_uring_queue_init_params(sq_size, &ring_, &params);
     if (ret < 0)
@@ -1663,8 +1664,7 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
     while (remaining > 0)
     {
         size_t batch = std::min(write_batch_size, remaining);
-        int wres =
-            Write(fd_idx, log.data() + written, batch, offset + written);
+        int wres = Write(fd_idx, log.data() + written, batch, offset + written);
         if (wres < 0)
         {
             LOG(ERROR) << "append manifest failed " << tbl_id;
