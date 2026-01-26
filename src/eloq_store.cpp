@@ -495,18 +495,38 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
     std::vector<TableIdent> all_partitions;
     if (options_.cloud_store_path.empty())
     {
+        std::error_code ec;
         for (const fs::path root : options_.store_path)
         {
             const fs::path db_path(root);
-            for (auto &ent : fs::directory_iterator{db_path})
+            fs::directory_iterator dir_it(db_path, ec);
+            if (ec)
             {
-                if (!ent.is_directory())
+                req->SetDone(ToKvError(-ec.value()));
+                return;
+            }
+            fs::directory_iterator end;
+            for (; dir_it != end; dir_it.increment(ec))
+            {
+                if (ec)
+                {
+                    req->SetDone(ToKvError(-ec.value()));
+                    return;
+                }
+                const fs::directory_entry &ent = *dir_it;
+                const fs::path ent_path = ent.path();
+                bool is_dir = fs::is_directory(ent_path, ec);
+                if (ec)
+                {
+                    req->SetDone(ToKvError(-ec.value()));
+                    return;
+                }
+                if (!is_dir)
                 {
                     continue;
                 }
 
-                TableIdent tbl_id =
-                    TableIdent::FromString(ent.path().filename());
+                TableIdent tbl_id = TableIdent::FromString(ent_path.filename());
                 if (tbl_id.tbl_name_.empty())
                 {
                     LOG(WARNING) << "unexpected partition " << ent.path();
@@ -529,33 +549,47 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
         ListObjectRequest list_request(&objects);
         list_request.SetRemotePath(std::string{});
         list_request.SetRecursive(false);
-        ExecSync(&list_request);
-
-        if (list_request.Error() != KvError::NoError)
+        do
         {
-            LOG(ERROR) << "Failed to list cloud objects for snapshot: "
-                       << static_cast<int>(list_request.Error());
-            req->SetDone(list_request.Error());
-            return;
-        }
+            objects.clear();
+            ExecSync(&list_request);
 
-        all_partitions.reserve(objects.size());
-
-        for (auto &name : objects)
-        {
-            TableIdent tbl_id = TableIdent::FromString(name);
-            if (!tbl_id.IsValid())
+            if (list_request.Error() != KvError::NoError)
             {
-                continue;
+                LOG(ERROR) << "Failed to list cloud objects for snapshot: "
+                           << static_cast<int>(list_request.Error());
+                req->SetDone(list_request.Error());
+                return;
             }
 
-            if (options_.partition_filter && !options_.partition_filter(tbl_id))
+            if (all_partitions.empty())
             {
-                continue;
+                all_partitions.reserve(objects.size());
             }
 
-            all_partitions.emplace_back(std::move(tbl_id));
-        }
+            for (auto &name : objects)
+            {
+                TableIdent tbl_id = TableIdent::FromString(name);
+                if (!tbl_id.IsValid())
+                {
+                    continue;
+                }
+
+                if (options_.partition_filter &&
+                    !options_.partition_filter(tbl_id))
+                {
+                    continue;
+                }
+
+                all_partitions.emplace_back(std::move(tbl_id));
+            }
+
+            if (list_request.HasMoreResults())
+            {
+                list_request.SetContinuationToken(
+                    *list_request.GetNextContinuationToken());
+            }
+        } while (list_request.HasMoreResults());
     }
 
     if (all_partitions.empty())
