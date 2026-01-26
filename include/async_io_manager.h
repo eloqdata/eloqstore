@@ -227,6 +227,7 @@ public:
     KvError Init(Shard *shard) override;
     void Submit() override;
     void PollComplete() override;
+    void InitBackgroundJob() override;
 
     std::pair<Page, KvError> ReadPage(const TableIdent &tbl_id,
                                       FilePageId fp_id,
@@ -538,6 +539,8 @@ public:
     io_uring ring_;
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};
+
+    KvError BootstrapRing(Shard *shard);
 };
 
 class CloudStoreMgr : public IouringMgr
