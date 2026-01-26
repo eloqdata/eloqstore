@@ -538,6 +538,7 @@ public:
     io_uring_buf_ring *buf_ring_{nullptr};
     std::vector<Page> bufs_pool_;
     const int buf_group_{0};
+    bool buffers_registered_{false};
 
     bool ring_inited_{false};
     io_uring ring_;

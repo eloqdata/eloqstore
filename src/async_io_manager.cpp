@@ -7,6 +7,7 @@
 #include <liburing/io_uring.h>
 #include <linux/openat2.h>
 #include <unistd.h>
+#include <sys/uio.h>
 
 #include <algorithm>
 #include <array>
@@ -116,6 +117,11 @@ IouringMgr::~IouringMgr()
 {
     if (ring_inited_)
     {
+        if (buffers_registered_)
+        {
+            io_uring_unregister_buffers(&ring_);
+            buffers_registered_ = false;
+        }
         io_uring_unregister_files(&ring_);
         for (auto &[_, tbl] : tables_)
         {
@@ -186,13 +192,29 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
     }
     int mask = io_uring_buf_ring_mask(num_bufs);
     bufs_pool_.reserve(num_bufs);
+    std::vector<iovec> iovecs(num_bufs);
     for (uint16_t i = 0; i < num_bufs; i++)
     {
         Page page(shard->PagePool()->Allocate());
         io_uring_buf_ring_add(buf_ring_, page.Ptr(), buf_size, i, mask, i);
+        iovecs[i].iov_base = page.Ptr();
+        iovecs[i].iov_len = buf_size;
         bufs_pool_.emplace_back(std::move(page));
     }
     io_uring_buf_ring_advance(buf_ring_, num_bufs);
+
+    ret = io_uring_register_buffers(&ring_, iovecs.data(), iovecs.size());
+    if (ret < 0)
+    {
+        LOG(ERROR) << "failed to register buffers: " << ret;
+        io_uring_free_buf_ring(
+            &ring_, buf_ring_, options_->buf_ring_size, buf_group_);
+        io_uring_unregister_files(&ring_);
+        io_uring_queue_exit(&ring_);
+        ring_inited_ = false;
+        return KvError::OutOfMem;
+    }
+    buffers_registered_ = true;
 
     return KvError::NoError;
 }
