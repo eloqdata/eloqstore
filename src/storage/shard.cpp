@@ -585,7 +585,26 @@ void Shard::WorkOneRound()
 
     req_queue_size_.fetch_sub(nreqs, std::memory_order_relaxed);
 
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    // Metrics collection: start timing io submit
+    metrics::Clock::time_point io_submit_start;
+    if (store_->EnableMetrics() && !is_idle_round)
+    {
+        io_submit_start = metrics::Clock::now();
+    }
+#endif
+
     io_mgr_->Submit();
+
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    // Metrics collection: collect io submit duration
+    if (store_->EnableMetrics() && !is_idle_round)
+    {
+        metrics::Meter *meter = store_->GetMetricsMeter(shard_id_);
+        meter->CollectDuration(metrics::NAME_ELOQSTORE_IO_SUBMIT_DURATION,
+                               io_submit_start);
+    }
+#endif
 
     io_mgr_->PollComplete();
 
