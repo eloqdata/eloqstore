@@ -176,8 +176,10 @@ uint64_t MappingSnapshot::MappingTbl::Get(PageId page_id) const
 
 void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
 {
+    #ifndef WITH_TEST
     ThdTask()->step_ = 204;
     ThdTask()->ts_ = butil::cpuwide_time_ns();
+    #endif
     if (this == &src)
     {
         return;
@@ -186,13 +188,17 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
     {
         return;
     }
+    #ifndef WITH_TEST
     ThdTask()->step_ = 205;
     ThdTask()->ts_ = butil::cpuwide_time_ns();
     ThdTask()->YieldToLowPQ();
     ThdTask()->step_ = 206;
+    #endif
     ResizeInternal(src.logical_size_);
+    #ifndef WITH_TEST
     ThdTask()->YieldToLowPQ();
     ThdTask()->step_ = 207;
+    #endif
     for (size_t chunk_idx = 0; chunk_idx < base_.size(); ++chunk_idx)
     {
         size_t offset = chunk_idx << kChunkShift;
@@ -205,7 +211,9 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
         std::memcpy(base_[chunk_idx]->data(),
                     src.base_[chunk_idx]->data(),
                     copy_elems * sizeof(uint64_t));
+        #ifndef WITH_TEST
         ThdTask()->YieldToLowPQ();
+        #endif
     }
 }
 
@@ -295,13 +303,17 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
         logical_size_ = new_size;
         return;
     }
+    #ifndef WITH_TEST
     ThdTask()->step_ = 209;
     ThdTask()->YieldToLowPQ();
+    #endif
 
     EnsureChunkCount(required_chunks);
+    #ifndef WITH_TEST
     ThdTask()->step_ = 210;
     ThdTask()->YieldToLowPQ();
     ThdTask()->step_ = 211;
+    #endif
 
     size_t old_size = logical_size_;
     while (old_size < new_size)
@@ -313,7 +325,9 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
         std::fill_n(
             base_[chunk_idx]->data() + chunk_offset, fill, InvalidValue);
         old_size += fill;
+        #ifndef WITH_TEST
         ThdTask()->YieldToLowPQ();
+        #endif
     }
     logical_size_ = new_size;
 }
@@ -372,7 +386,9 @@ PageMapper::PageMapper(const PageMapper &rhs)
     auto &src_tbl = rhs.mapping_->mapping_tbl_;
     src_tbl.StartCopying();
     mapping_->mapping_tbl_.CopyFrom(src_tbl);
+    #ifndef WITH_TEST
     ThdTask()->YieldToLowPQ();
+    #endif
 
     src_tbl.ApplyPendingTo(mapping_->mapping_tbl_);
     src_tbl.FinishCopying();

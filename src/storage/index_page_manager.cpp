@@ -42,8 +42,7 @@ IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
       root_meta_mgr_(this, Options())
 {
     active_head_.EnqueNext(&active_tail_);
-    index_pages_.reserve(Options()->buffer_pool_size /
-                         Options()->data_page_size);
+    index_pages_.reserve(MaxIndexBufferBytes() / Options()->data_page_size);
 }
 
 IndexPageManager::~IndexPageManager()
@@ -108,7 +107,7 @@ bool IndexPageManager::IsFull() const
 {
     // Calculate current total memory usage
     size_t current_size = index_pages_.size() * Options()->data_page_size;
-    return current_size >= Options()->buffer_pool_size;
+    return current_size >= MaxIndexBufferBytes();
 }
 
 size_t IndexPageManager::GetBufferPoolUsed() const
@@ -118,7 +117,25 @@ size_t IndexPageManager::GetBufferPoolUsed() const
 
 size_t IndexPageManager::GetBufferPoolLimit() const
 {
-    return Options()->buffer_pool_size;
+    return MaxIndexBufferBytes();
+}
+
+size_t IndexPageManager::MaxIndexBufferBytes() const
+{
+    size_t pool_size = Options()->buffer_pool_size;
+    size_t limit = (pool_size * 95) / 100;
+    if (limit == 0 && pool_size > 0)
+    {
+        if (pool_size > Options()->data_page_size)
+        {
+            limit = pool_size - Options()->data_page_size;
+        }
+        else
+        {
+            limit = pool_size;
+        }
+    }
+    return limit;
 }
 
 std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(

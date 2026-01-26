@@ -1,5 +1,7 @@
 #include "storage/page.h"
 
+#include <glog/logging.h>
+
 #include "storage/shard.h"
 
 namespace eloqstore
@@ -34,22 +36,23 @@ Page::Page(bool alloc)
 {
     if (alloc)
     {
-        ptr_ = shard->PagePool()->Allocate();
+        char *ptr = shard->PagePool()->Allocate();
+        bool registered = shard->PagePool()->IsRegistered(ptr);
+        ptr_ = reinterpret_cast<uintptr_t>(ptr);
+        if (!registered)
+        {
+            ptr_ |= unregistered_ptr_mask;
+        }
     }
     else
     {
-        ptr_ = nullptr;
+        ptr_ = 0;
     }
-}
-
-Page::Page(char *ptr)
-{
-    ptr_ = ptr;
 }
 
 Page::Page(Page &&other) noexcept : ptr_(other.ptr_)
 {
-    other.ptr_ = nullptr;
+    other.ptr_ = 0;
 }
 
 Page &Page::operator=(Page &&other) noexcept
@@ -58,7 +61,7 @@ Page &Page::operator=(Page &&other) noexcept
     {
         Free();
         ptr_ = other.ptr_;
-        other.ptr_ = nullptr;
+        other.ptr_ = 0;
     }
     return *this;
 }
@@ -70,29 +73,51 @@ Page::~Page()
 
 void Page::Free()
 {
-    if (ptr_ != nullptr && shard != nullptr)
+    if (ptr_ != 0 && shard != nullptr)
     {
-        shard->PagePool()->Free(ptr_);
-        ptr_ = nullptr;
+        shard->PagePool()->Free(Ptr());
+        ptr_ = 0;
     }
 }
 
 char *Page::Ptr() const
 {
-    return ptr_;
+    if (ptr_ == 0)
+    {
+        return nullptr;
+    }
+    return reinterpret_cast<char *>(ptr_ & ~unregistered_ptr_mask);
+}
+
+bool Page::IsRegistered() const
+{
+    return ptr_ != 0 && ((ptr_ & unregistered_ptr_mask) == 0);
 }
 
 PagesPool::PagesPool(const KvOptions *options)
-    : options_(options), free_head_(nullptr), free_cnt_(0)
+    : options_(options),
+      free_head_(nullptr),
+      free_cnt_(0),
+      registered_base_(nullptr),
+      registered_bytes_(0),
+      registered_pages_(0),
+      page_shift_(0)
 {
-    // Initially allocate only enough pages for the io_uring buffer ring and
-    // grow lazily on demand when the pool runs out of free pages.
-    size_t initial_pages =
-        options->buf_ring_size > 0 ? options->buf_ring_size : 1;
-    Extend(initial_pages);
+    size_t page_size = options_->data_page_size;
+    CHECK(page_size && ((page_size & (page_size - 1)) == 0))
+        << "data_page_size must be power of two";
+    page_shift_ = static_cast<uint8_t>(__builtin_ctzll(page_size));
+    size_t initial_pages = options_->buffer_pool_size / page_size;
+    if (initial_pages == 0)
+    {
+        initial_pages = 1;
+    }
+    registered_pages_ = initial_pages;
+    registered_bytes_ = initial_pages * page_size;
+    Extend(initial_pages, true);
 }
 
-void PagesPool::Extend(size_t pages)
+void PagesPool::Extend(size_t pages, bool registered)
 {
     assert(pages > 0);
     uint16_t page_size = options_->data_page_size;
@@ -103,6 +128,14 @@ void PagesPool::Extend(size_t pages)
     a = butil::cpuwide_time_ns();
     assert(ptr);
     chunks_.emplace_back(UPtr(ptr, &std::free), chunk_size);
+    if (registered)
+    {
+        CHECK(registered_base_ == nullptr)
+            << "Registered chunk can only be allocated once";
+        registered_base_ = ptr;
+        registered_bytes_ = chunk_size;
+        registered_pages_ = pages;
+    }
     auto t2 = butil::cpuwide_time_ns() - a;
     a = butil::cpuwide_time_ns();
 
@@ -123,7 +156,7 @@ char *PagesPool::Allocate()
     if (free_head_ == nullptr)
     {
         auto t = butil::cpuwide_time_ns();
-        Extend(16);  // Extend the pool with 1024 pages if free list is empty.
+        Extend(16, false);
         t = butil::cpuwide_time_ns() - t;
         if (t > 500000)
         {
@@ -147,5 +180,43 @@ void PagesPool::Free(char *ptr)
     free_page->next_ = free_head_;
     free_head_ = free_page;
     free_cnt_++;
+}
+
+bool PagesPool::IsRegistered(const char *ptr) const
+{
+    if (registered_base_ == nullptr || ptr == nullptr)
+    {
+        return false;
+    }
+    uintptr_t base = reinterpret_cast<uintptr_t>(registered_base_);
+    uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
+    return addr >= base && addr < base + registered_bytes_;
+}
+
+size_t PagesPool::RegisteredPages() const
+{
+    return registered_pages_;
+}
+
+size_t PagesPool::RegisteredBytes() const
+{
+    return registered_bytes_;
+}
+
+char *PagesPool::RegisteredBase() const
+{
+    return registered_base_;
+}
+
+std::optional<uint32_t> PagesPool::RegisteredIndex(const char *ptr) const
+{
+    if (!IsRegistered(ptr))
+    {
+        return std::nullopt;
+    }
+    uintptr_t base = reinterpret_cast<uintptr_t>(registered_base_);
+    uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
+    uint32_t idx = static_cast<uint32_t>((addr - base) >> page_shift_);
+    return idx;
 }
 }  // namespace eloqstore

@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "external/xxhash.h"
@@ -26,12 +27,13 @@ void SetChecksum(std::string_view blob);
 bool ValidateChecksum(std::string_view blob);
 
 inline static size_t page_align = sysconf(_SC_PAGESIZE);
+inline constexpr uintptr_t unregistered_ptr_mask =
+    uintptr_t(1) << (sizeof(uintptr_t) * 8 - 1);
 
 class Page
 {
 public:
-    Page(bool alloc);
-    Page(char *ptr);
+    explicit Page(bool alloc);
     Page(Page &&other) noexcept;
     Page &operator=(Page &&other) noexcept;
     Page(const Page &) = delete;
@@ -43,9 +45,10 @@ public:
     }
     void Free();
     char *Ptr() const;
+    bool IsRegistered() const;
 
 private:
-    char *ptr_;
+    uintptr_t ptr_{};
 };
 
 struct KvOptions;
@@ -57,9 +60,14 @@ public:
     PagesPool(const KvOptions *options);
     char *Allocate();
     void Free(char *ptr);
+    bool IsRegistered(const char *ptr) const;
+    size_t RegisteredPages() const;
+    size_t RegisteredBytes() const;
+    char *RegisteredBase() const;
+    std::optional<uint32_t> RegisteredIndex(const char *ptr) const;
 
 private:
-    void Extend(size_t pages);
+    void Extend(size_t pages, bool registered);
 
     struct FreePage
     {
@@ -76,6 +84,10 @@ private:
     std::vector<MemChunk> chunks_;
     FreePage *free_head_;
     size_t free_cnt_;
+    char *registered_base_;
+    size_t registered_bytes_;
+    size_t registered_pages_;
+    uint8_t page_shift_;
 };
 
 }  // namespace eloqstore

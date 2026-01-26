@@ -454,7 +454,7 @@ public:
     int UnregisterFile(int idx);
     int Fallocate(FdIdx fd, uint64_t size);
     int UnlinkAt(FdIdx dir_fd, const char *path, bool rmdir);
-    Page SwapPage(Page page, uint16_t buf_id);
+    std::optional<uint32_t> GetBufferIndex(const Page &page) const;
 
     /**
      * @brief Write content to a file with given name in the directory.
@@ -535,9 +535,7 @@ public:
     uint32_t alloc_reg_slot_{0};
     std::vector<uint32_t> free_reg_slots_;
 
-    io_uring_buf_ring *buf_ring_{nullptr};
-    std::vector<Page> bufs_pool_;
-    const int buf_group_{0};
+    bool buffers_registered_{false};
 
     bool ring_inited_{false};
     io_uring ring_;

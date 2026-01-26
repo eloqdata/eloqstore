@@ -150,6 +150,7 @@ target_link_libraries(test_util PUBLIC eloqstore absl::flat_hash_map)
 option(WITH_UNIT_TESTS "build with unit tests" ON)
 if (WITH_UNIT_TESTS)
     add_subdirectory(tests)
+    add_compile_definitions(WITH_TEST)
 endif ()
 
 option(WITH_EXAMPLE "build with example" ON)

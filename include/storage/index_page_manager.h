@@ -99,6 +99,8 @@ private:
 
     bool RecyclePage(MemIndexPage *page);
 
+    size_t MaxIndexBufferBytes() const;
+
     /**
      * @brief Reserved head and tail for the active list. The head points to the
      * most-recently accessed, and the tail points to the least-recently
