@@ -137,6 +137,17 @@ IouringMgr::~IouringMgr()
 
 KvError IouringMgr::Init(Shard *shard)
 {
+    (void) shard;
+    return KvError::NoError;
+}
+
+KvError IouringMgr::BootstrapRing(Shard *shard)
+{
+    if (ring_inited_)
+    {
+        return KvError::NoError;
+    }
+
     io_uring_params params = {};
     params.flags |= (IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN);
     const uint32_t sq_size = options_->io_queue_size;
@@ -155,6 +166,7 @@ KvError IouringMgr::Init(Shard *shard)
         {
             LOG(ERROR) << "failed to reserve register file slots: " << ret;
             io_uring_queue_exit(&ring_);
+            ring_inited_ = false;
             return KvError::OpenFileLimit;
         }
         free_reg_slots_.reserve(fd_limit_);
@@ -169,6 +181,7 @@ KvError IouringMgr::Init(Shard *shard)
         LOG(ERROR) << "failed to initialize buffer ring: " << ret;
         io_uring_unregister_files(&ring_);
         io_uring_queue_exit(&ring_);
+        ring_inited_ = false;
         return KvError::OutOfMem;
     }
     int mask = io_uring_buf_ring_mask(num_bufs);
@@ -182,6 +195,23 @@ KvError IouringMgr::Init(Shard *shard)
     io_uring_buf_ring_advance(buf_ring_, num_bufs);
 
     return KvError::NoError;
+}
+
+void IouringMgr::InitBackgroundJob()
+{
+    if (ring_inited_)
+    {
+        return;
+    }
+
+    Shard *target_shard = shard;
+    CHECK(target_shard != nullptr) << "Shard must be set before initializing io_uring";
+    KvError err = BootstrapRing(target_shard);
+    if (err != KvError::NoError)
+    {
+        LOG(FATAL) << "failed to initialize io queue in background thread: "
+                   << ErrorString(err);
+    }
 }
 
 std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
@@ -3355,6 +3385,7 @@ inline bool CloudStoreMgr::BackgroundJobInited()
 
 void CloudStoreMgr::InitBackgroundJob()
 {
+    IouringMgr::InitBackgroundJob();
     background_job_inited_ = true;
     shard->running_ = &file_cleaner_;
     file_cleaner_.coro_ = boost::context::callcc(
