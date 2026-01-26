@@ -835,6 +835,7 @@ void Shard::InitializeTscFrequency()
 
 uint64_t Shard::ReadTimeMicroseconds()
 {
+    return butil::cpuwide_time_us();
 #if defined(__x86_64__) || defined(_M_X64)
     uint64_t cycles_per_us =
         tsc_cycles_per_microsecond_.load(std::memory_order_relaxed);
