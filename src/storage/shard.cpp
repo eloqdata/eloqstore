@@ -636,6 +636,7 @@ void Shard::WorkOneRound()
         uint64_t delta_us = DurationMicroseconds(ts_);
         if (delta_us >= FLAGS_max_processing_time_microseconds)
         {
+            LOG(ERROR) << "OnReceivedReq cost " << delta_us << "us, cnt = " << i;
             size_t remaining = nreqs - (i + 1);
             if (remaining > 0)
             {
