@@ -578,6 +578,18 @@ void Shard::OnTaskFinished(KvTask *task)
 #ifdef ELOQ_MODULE_ENABLED
 void Shard::WorkOneRound()
 {
+    struct Timer
+    {
+        ~Timer()
+        {
+            auto diff = butil::cpuwide_time_ns() - start;
+            if (diff > 1000000)
+            {
+                LOG(INFO) << "work one round metrics cost " << diff;
+            }
+        }
+        int64_t start{butil::cpuwide_time_ns()};
+    } timer;
     ts_ = ReadTimeMicroseconds();
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: start timing the round
@@ -665,18 +677,6 @@ void Shard::WorkOneRound()
     // Metrics collection: end of round
     if (store_->EnableMetrics() && !is_idle_round)
     {
-        struct Timer
-        {
-        ~Timer()
-        {
-            auto diff = butil::cpuwide_time_ns() - start;
-            if (diff > 10000)
-            {
-            LOG(INFO) << "collect metrics cost " << diff;
-            }
-        }
-            int64_t start{butil::cpuwide_time_ns()};
-        } timer;
         metrics::Meter *meter = store_->GetMetricsMeter(shard_id_);
         meter->CollectDuration(metrics::NAME_ELOQSTORE_WORK_ONE_ROUND_DURATION,
                                round_start);
