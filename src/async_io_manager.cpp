@@ -967,7 +967,7 @@ void IouringMgr::Submit()
     int64_t before_submit = butil::cpuwide_time_ns();
     int ret = io_uring_submit(&ring_);
     auto diff = butil::cpuwide_time_ns() - before_submit;
-    if (diff > 300000)
+    if (diff > 500000)
     {
         LOG(INFO) << "IoUring submit cost " << diff
                   << "ns, tasks=" << prepared_sqe_ << ", write=" << write_
