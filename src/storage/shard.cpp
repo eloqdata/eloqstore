@@ -673,6 +673,12 @@ void Shard::WorkOneRound()
         ExecuteReadyTasks();
     }
 
+    delta_us = DurationMicroseconds(ts_);
+    if (delta_us >= 1000000)
+    {
+        LOG(ERROR) << "after ExecuteReadyTasks, took:" << delta_us;
+    }
+
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: end of round
     if (store_->EnableMetrics() && !is_idle_round)
