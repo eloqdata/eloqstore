@@ -585,7 +585,7 @@ void Shard::WorkOneRound()
             auto diff = butil::cpuwide_time_ns() - start;
             if (diff > 1000000)
             {
-                LOG(INFO) << "work one round metrics cost " << diff;
+                LOG(INFO) << "work one round cost " << diff;
             }
         }
         int64_t start{butil::cpuwide_time_ns()};
