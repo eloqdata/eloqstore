@@ -11,7 +11,6 @@
 #include "storage/mem_index_page.h"
 #include "storage/page_mapper.h"
 #include "storage/root_meta.h"
-#include "storage/root_meta_manager.h"
 #include "types.h"
 
 namespace eloqstore

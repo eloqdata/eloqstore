@@ -214,10 +214,12 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
 KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
                                       CowRootMeta &cow_meta)
 {
-    auto [root_handle, err] = FindRoot(tbl_ident);
-    RootMeta *meta = root_handle.Get();
+    cow_meta.root_handle_ = RootMetaMgr::Handle();
+    auto [found_handle, err] = FindRoot(tbl_ident);
+    RootMeta *meta = found_handle.Get();
     if (err == KvError::NoError)
     {
+        cow_meta.root_handle_ = std::move(found_handle);
         // Makes a copy of the mapper.
         auto new_mapper = std::make_unique<PageMapper>(*meta->mapper_);
         cow_meta.root_id_ = meta->root_id_;
@@ -241,7 +243,17 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
     {
         // It is the WriteTask's responsibility to clean up this stub RootMeta
         // if it aborted.
-        auto [entry, _] = root_meta_mgr_.GetOrCreate(tbl_ident);
+        RootMetaMgr::Entry *entry = found_handle.EntryPtr();
+        if (entry == nullptr)
+        {
+            auto [created_entry, _] = root_meta_mgr_.GetOrCreate(tbl_ident);
+            entry = created_entry;
+            cow_meta.root_handle_ = RootMetaMgr::Handle(&root_meta_mgr_, entry);
+        }
+        else
+        {
+            cow_meta.root_handle_ = std::move(found_handle);
+        }
         const TableIdent *tbl_id = &entry->tbl_id_;
         auto mapper = std::make_unique<PageMapper>(this, tbl_id);
         std::shared_ptr<MappingSnapshot> mapping = mapper->GetMappingSnapshot();

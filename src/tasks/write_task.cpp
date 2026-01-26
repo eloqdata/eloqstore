@@ -36,6 +36,7 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     wal_builder_.Reset();
     batch_pages_.clear();
     file_id_term_mapping_dirty_ = false;
+    cow_meta_ = CowRootMeta();
 }
 
 void WriteTask::Abort()
@@ -50,9 +51,8 @@ void WriteTask::Abort()
     {
         // Cancel all free file page operations.
         cow_meta_.old_mapping_->ClearFreeFilePage();
-        cow_meta_.old_mapping_ = nullptr;
     }
-    cow_meta_.mapper_ = nullptr;
+    cow_meta_ = CowRootMeta();
 }
 
 KvError WriteTask::WritePage(DataPage &&page)

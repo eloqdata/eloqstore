@@ -9,7 +9,7 @@
 #include "error.h"
 #include "storage/data_page.h"
 #include "storage/mem_index_page.h"
-#include "storage/root_meta_manager.h"
+#include "storage/root_meta.h"
 #include "tasks/task.h"
 #include "types.h"
 

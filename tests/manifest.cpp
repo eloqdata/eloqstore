@@ -358,6 +358,88 @@ TEST_CASE("rootmeta eviction with small cache across partitions",
     }
 }
 
+TEST_CASE("rootmeta eviction tolerates active writers",
+          "[manifest][rootmeta_eviction]")
+{
+    eloqstore::KvOptions opts = append_opts;
+    opts.num_threads = 1;
+    opts.root_meta_cache_size = 2000;
+    opts.init_page_count = 1024;
+    opts.data_page_size = 4096;
+    const uint32_t value_size = 256;
+    const uint32_t writer_batch = 2000;
+    const uint32_t evictor_batch = 2000;
+    const uint32_t iterations = 10;
+
+    eloqstore::EloqStore *store = InitStore(opts);
+
+    auto make_batch = [&](uint64_t start_key, uint32_t count)
+    {
+        std::vector<eloqstore::WriteDataEntry> entries;
+        entries.reserve(count);
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            uint64_t key_id = start_key + i;
+            entries.emplace_back(Key(key_id),
+                                 Value(key_id, value_size),
+                                 key_id,
+                                 WriteOp::Upsert);
+        }
+        return entries;
+    };
+
+    struct PartitionConfig
+    {
+        uint32_t partition;
+        uint32_t batch_size;
+        uint64_t start_key;
+    };
+    const std::vector<PartitionConfig> configs = {
+        PartitionConfig{0, writer_batch, 0},
+        PartitionConfig{1, evictor_batch, 1},
+    };
+
+    std::vector<std::vector<KvError>> thread_errors(configs.size());
+    for (auto &errors : thread_errors)
+    {
+        errors.reserve(iterations);
+    }
+
+    std::vector<std::thread> workers;
+    workers.reserve(configs.size());
+    for (size_t idx = 0; idx < configs.size(); ++idx)
+    {
+        workers.emplace_back(
+            [&, idx]()
+            {
+                const auto &cfg = configs[idx];
+                const eloqstore::TableIdent tbl{"rootmeta-writer",
+                                                cfg.partition};
+                for (uint32_t iter = 0; iter < iterations; ++iter)
+                {
+                    auto entries = make_batch(cfg.start_key, cfg.batch_size);
+                    eloqstore::BatchWriteRequest req;
+                    req.SetArgs(tbl, std::move(entries));
+                    store->ExecSync(&req);
+                    thread_errors[idx].push_back(req.Error());
+                }
+            });
+    }
+
+    for (auto &worker : workers)
+    {
+        worker.join();
+    }
+
+    for (const auto &errors : thread_errors)
+    {
+        REQUIRE(errors.size() == iterations);
+        for (KvError err : errors)
+        {
+            REQUIRE((err == KvError::NoError || err == KvError::OutOfMem));
+        }
+    }
+}
 TEST_CASE("manifest tolerates trailing corruption", "[manifest]")
 {
     eloqstore::KvOptions opts;
