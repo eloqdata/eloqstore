@@ -98,7 +98,7 @@ KvError ScanIterator::BuildIndexStack(std::string_view key)
     while (true)
     {
         auto [node, err] =
-            shard->IndexManager()->FindPage(mapping_.get(), page_id);
+            shard->IndexManager()->FindPage(mapping_.Get(), page_id);
         if (err != KvError::NoError)
         {
             ClearIndexStack();
@@ -139,7 +139,7 @@ KvError ScanIterator::AdvanceToNextLeaf()
             while (true)
             {
                 auto [node, err] =
-                    shard->IndexManager()->FindPage(mapping_.get(), descend_id);
+                    shard->IndexManager()->FindPage(mapping_.Get(), descend_id);
                 if (err != KvError::NoError)
                 {
                     ClearIndexStack();
@@ -277,7 +277,7 @@ std::pair<std::string_view, KvError> ScanIterator::ResolveValue(
     std::string &storage)
 {
     return eloqstore::ResolveValue(
-        tbl_id_, mapping_.get(), iter_, storage, compression_);
+        tbl_id_, mapping_.Get(), iter_, storage, compression_);
 }
 
 uint64_t ScanIterator::ExpireTs() const
@@ -292,7 +292,7 @@ uint64_t ScanIterator::Timestamp() const
 
 MappingSnapshot *ScanIterator::Mapping() const
 {
-    return mapping_.get();
+    return mapping_.Get();
 }
 
 KvError ScanTask::Scan()

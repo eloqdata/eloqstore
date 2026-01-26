@@ -44,7 +44,7 @@ private:
     size_t prefetch_page_num_;
     PageId root_id_{MaxPageId};
     RootMetaMgr::Handle root_handle_{};
-    std::shared_ptr<MappingSnapshot> mapping_;
+    MappingSnapshot::Ref mapping_;
     DataPage data_page_;
     DataPageIter iter_;
     std::vector<DataPage> *prefetched_pages_;

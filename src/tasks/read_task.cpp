@@ -28,7 +28,7 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
 
     PageId page_id;
     err = shard->IndexManager()->SeekIndex(
-        mapping.get(), meta->root_id_, search_key, page_id);
+        mapping.Get(), meta->root_id_, search_key, page_id);
     CHECK_KV_ERR(err);
     FilePageId file_page = mapping->ToFilePage(page_id);
     auto [page, err_load] = LoadDataPage(tbl_id, page_id, file_page);
@@ -43,7 +43,7 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
 
     std::string value_storage;
     auto [val_view, fetch_err] = ResolveValue(
-        tbl_id, mapping.get(), iter, value_storage, meta->compression_.get());
+        tbl_id, mapping.Get(), iter, value_storage, meta->compression_.get());
     CHECK_KV_ERR(fetch_err);
     value = value_storage.empty() ? val_view : std::move(value_storage);
     timestamp = iter.Timestamp();
@@ -69,7 +69,7 @@ KvError ReadTask::Floor(const TableIdent &tbl_id,
 
     PageId page_id;
     err = shard->IndexManager()->SeekIndex(
-        mapping.get(), meta->root_id_, search_key, page_id);
+        mapping.Get(), meta->root_id_, search_key, page_id);
     CHECK_KV_ERR(err);
     FilePageId file_page = mapping->ToFilePage(page_id);
     auto [page, err_load] = LoadDataPage(tbl_id, page_id, file_page);
@@ -94,7 +94,7 @@ KvError ReadTask::Floor(const TableIdent &tbl_id,
     floor_key = iter.Key();
     std::string value_storage;
     auto [val_view, fetch_err] = ResolveValue(
-        tbl_id, mapping.get(), iter, value_storage, meta->compression_.get());
+        tbl_id, mapping.Get(), iter, value_storage, meta->compression_.get());
     CHECK_KV_ERR(fetch_err);
     value = value_storage.empty() ? val_view : std::move(value_storage);
     timestamp = iter.Timestamp();

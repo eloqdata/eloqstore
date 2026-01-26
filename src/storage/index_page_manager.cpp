@@ -258,7 +258,7 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
         }
         const TableIdent *tbl_id = &entry->tbl_id_;
         auto mapper = std::make_unique<PageMapper>(this, tbl_id);
-        std::shared_ptr<MappingSnapshot> mapping = mapper->GetMappingSnapshot();
+        MappingSnapshot::Ref mapping = mapper->GetMappingSnapshot();
         cow_meta.root_id_ = MaxPageId;
         cow_meta.ttl_root_id_ = MaxPageId;
         cow_meta.mapper_ = std::move(mapper);

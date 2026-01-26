@@ -174,8 +174,8 @@ PageMapper::PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident)
     auto *arena = idx_mgr->MapperArena();
     MappingSnapshot::MappingTbl tbl =
         arena == nullptr ? MappingSnapshot::MappingTbl() : arena->Acquire();
-    mapping_ =
-        std::make_shared<MappingSnapshot>(idx_mgr, tbl_ident, std::move(tbl));
+    mapping_ = MappingSnapshot::Ref(
+        new MappingSnapshot(idx_mgr, tbl_ident, std::move(tbl)));
 
     auto &mapping_tbl = mapping_->mapping_tbl_;
     mapping_tbl.reserve(idx_mgr->Options()->init_page_count);
@@ -190,8 +190,8 @@ PageMapper::PageMapper(const PageMapper &rhs)
     auto *arena = shard->IndexManager()->MapperArena();
     MappingSnapshot::MappingTbl tbl =
         arena == nullptr ? MappingSnapshot::MappingTbl() : arena->Acquire();
-    mapping_ = std::make_shared<MappingSnapshot>(
-        rhs.mapping_->idx_mgr_, rhs.mapping_->tbl_ident_, std::move(tbl));
+    mapping_ = MappingSnapshot::Ref(new MappingSnapshot(
+        rhs.mapping_->idx_mgr_, rhs.mapping_->tbl_ident_, std::move(tbl)));
 
     auto &src_tbl = rhs.mapping_->mapping_tbl_;
     src_tbl.StartCopying();
@@ -258,19 +258,19 @@ uint32_t PageMapper::MappingCount() const
     return mapping_->mapping_tbl_.size() - free_page_cnt_;
 }
 
-std::shared_ptr<MappingSnapshot> PageMapper::GetMappingSnapshot() const
+MappingSnapshot::Ref PageMapper::GetMappingSnapshot() const
 {
     return mapping_;
 }
 
 MappingSnapshot *PageMapper::GetMapping() const
 {
-    return mapping_.get();
+    return mapping_.Get();
 }
 
 uint32_t PageMapper::UseCount() const
 {
-    return mapping_.use_count();
+    return mapping_ ? mapping_->RefCount() : 0;
 }
 
 const KvOptions *PageMapper::Options() const
@@ -558,6 +558,95 @@ FilePageId PooledFilePages::Allocate()
 void PooledFilePages::Free(std::vector<FilePageId> fp_ids)
 {
     free_ids_.insert(free_ids_.end(), fp_ids.begin(), fp_ids.end());
+}
+
+MappingSnapshot::Ref::Ref(MappingSnapshot *mapping) : mapping_(mapping)
+{
+    if (mapping_ != nullptr)
+    {
+        mapping_->AddRef();
+    }
+}
+
+MappingSnapshot::Ref::Ref(const Ref &other) : mapping_(other.mapping_)
+{
+    if (mapping_ != nullptr)
+    {
+        mapping_->AddRef();
+    }
+}
+
+MappingSnapshot::Ref::Ref(Ref &&other) noexcept : mapping_(other.mapping_)
+{
+    other.mapping_ = nullptr;
+}
+
+MappingSnapshot::Ref &MappingSnapshot::Ref::operator=(const Ref &other)
+{
+    if (this != &other)
+    {
+        Clear();
+        mapping_ = other.mapping_;
+        if (mapping_ != nullptr)
+        {
+            mapping_->AddRef();
+        }
+    }
+    return *this;
+}
+
+MappingSnapshot::Ref &MappingSnapshot::Ref::operator=(Ref &&other) noexcept
+{
+    if (this != &other)
+    {
+        Clear();
+        mapping_ = other.mapping_;
+        other.mapping_ = nullptr;
+    }
+    return *this;
+}
+
+MappingSnapshot::Ref::~Ref()
+{
+    Clear();
+}
+
+MappingSnapshot *MappingSnapshot::Ref::Get() const
+{
+    return mapping_;
+}
+
+MappingSnapshot *MappingSnapshot::Ref::operator->() const
+{
+    return mapping_;
+}
+
+void MappingSnapshot::Ref::Clear()
+{
+    if (mapping_ != nullptr)
+    {
+        mapping_->Release();
+        mapping_ = nullptr;
+    }
+}
+
+void MappingSnapshot::AddRef()
+{
+    ++ref_cnt_;
+}
+
+void MappingSnapshot::Release()
+{
+    assert(ref_cnt_ > 0);
+    if (--ref_cnt_ == 0)
+    {
+        delete this;
+    }
+}
+
+size_t MappingSnapshot::RefCount() const
+{
+    return ref_cnt_;
 }
 
 }  // namespace eloqstore
