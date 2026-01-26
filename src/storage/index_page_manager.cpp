@@ -230,8 +230,6 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
         cow_meta.root_handle_ = std::move(found_handle);
         // Makes a copy of the mapper.
         auto new_mapper = std::make_unique<PageMapper>(*meta->mapper_);
-        ThdTask()->ts_ = butil::cpuwide_time_ns();
-        ThdTask()->step_ = 204;
         cow_meta.root_id_ = meta->root_id_;
         cow_meta.ttl_root_id_ = meta->ttl_root_id_;
         cow_meta.mapper_ = std::move(new_mapper);

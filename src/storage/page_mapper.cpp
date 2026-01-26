@@ -220,6 +220,8 @@ void MappingSnapshot::MappingTbl::AssignFrom(const std::vector<uint64_t> &src)
 
 void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
 {
+    ThdTask()->step_ = 204;
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
     if (this == &src)
     {
         return;
@@ -232,6 +234,7 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
     ThdTask()->YieldToLowPQ();
     ResizeInternal(src.logical_size_);
     ThdTask()->YieldToLowPQ();
+    ThdTask()->step_ = 205;
     for (size_t chunk_idx = 0; chunk_idx < base_.size(); ++chunk_idx)
     {
         size_t offset = chunk_idx << kChunkShift;
