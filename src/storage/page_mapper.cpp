@@ -229,10 +229,12 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
     {
         return;
     }
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
+    ThdTask()->step_ = 205;
     ResizeInternal(src.logical_size_);
     for (size_t chunk_idx = 0; chunk_idx < base_.size(); ++chunk_idx)
     {
-        size_t offset = chunk_idx * kChunkSize;
+        size_t offset = chunk_idx << kChunkShift;
         if (offset >= src.logical_size_)
         {
             break;
@@ -389,7 +391,7 @@ PageMapper::PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident)
     MappingSnapshot::MappingTbl tbl(vector_arena, chunk_arena);
     mapping_ =
         std::make_shared<MappingSnapshot>(idx_mgr, tbl_ident, std::move(tbl));
-    
+
     auto &mapping_tbl = mapping_->mapping_tbl_;
     mapping_tbl.reserve(idx_mgr->Options()->init_page_count);
     file_page_allocator_ = FilePageAllocator::Instance(idx_mgr->Options());
@@ -402,10 +404,8 @@ PageMapper::PageMapper(const PageMapper &rhs)
 {
     MappingArena *vector_arena =
         shard != nullptr ? shard->IndexManager()->MapperArena() : nullptr;
-    MappingChunkArena *chunk_arena = shard != nullptr
-                                         ? shard->IndexManager()
-                                               ->MapperChunkArena()
-                                         : nullptr;
+    MappingChunkArena *chunk_arena =
+        shard != nullptr ? shard->IndexManager()->MapperChunkArena() : nullptr;
     MappingSnapshot::MappingTbl tbl(vector_arena, chunk_arena);
     mapping_ = std::make_shared<MappingSnapshot>(
         rhs.mapping_->idx_mgr_, rhs.mapping_->tbl_ident_, std::move(tbl));
