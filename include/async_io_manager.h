@@ -543,6 +543,7 @@ public:
     io_uring ring_;
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};
+    uint32_t read_{0};
     uint32_t write_{0};
     uint32_t writev_{0};
 
