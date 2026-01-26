@@ -229,11 +229,9 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
     {
         return;
     }
-    ThdTask()->ts_ = butil::cpuwide_time_ns();
-    ThdTask()->step_ = 205;
+    ThdTask()->YieldToLowPQ();
     ResizeInternal(src.logical_size_);
-    ThdTask()->ts_ = butil::cpuwide_time_ns();
-    ThdTask()->step_ = 206;
+    ThdTask()->YieldToLowPQ();
     for (size_t chunk_idx = 0; chunk_idx < base_.size(); ++chunk_idx)
     {
         size_t offset = chunk_idx << kChunkShift;
