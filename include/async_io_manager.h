@@ -225,6 +225,10 @@ public:
     IouringMgr(const KvOptions *opts, uint32_t fd_limit);
     ~IouringMgr() override;
     KvError Init(Shard *shard) override;
+    bool BackgroundJobInited() override
+    {
+        return ring_inited_;
+    }
     void Submit() override;
     void PollComplete() override;
     void InitBackgroundJob() override;
