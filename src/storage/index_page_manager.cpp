@@ -39,8 +39,6 @@ size_t RootMetaBytes(const RootMeta &meta)
 
 IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
     : io_manager_(io_manager),
-      mapping_arena_(Options()->mapping_arena_size),
-      mapping_chunk_arena_(Options()->mapping_arena_size),
       root_meta_mgr_(this, Options())
 {
     active_head_.EnqueNext(&active_tail_);
