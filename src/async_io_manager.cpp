@@ -205,7 +205,8 @@ void IouringMgr::InitBackgroundJob()
     }
 
     Shard *target_shard = shard;
-    CHECK(target_shard != nullptr) << "Shard must be set before initializing io_uring";
+    CHECK(target_shard != nullptr)
+        << "Shard must be set before initializing io_uring";
     KvError err = BootstrapRing(target_shard);
     if (err != KvError::NoError)
     {
@@ -493,6 +494,8 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
             iov[i].iov_len = options_->data_page_size;
         }
         io_uring_prep_writev(sqe, fd, iov.data(), num_pages, offset);
+        write_++;
+        writev_ += num_pages;
 
         int ret = ThdTask()->WaitIoResult();
         if (ret < 0)
@@ -958,7 +961,15 @@ void IouringMgr::Submit()
     {
         return;
     }
+    int64_t before_submit = butil::cpuwide_time_ns();
     int ret = io_uring_submit(&ring_);
+    auto diff = butil::cpuwide_time_ns() - before_submit;
+    if (diff > 300000)
+    {
+        LOG(INFO) << "IoUring submit cost " << diff
+                  << "ns, tasks=" << prepared_sqe_ << ", write=" << write_
+                  << ", writev=" << writev_;
+    }
     if (ret < 0)
     {
         LOG(ERROR) << "iouring submit failed " << ret;
@@ -966,6 +977,8 @@ void IouringMgr::Submit()
     else
     {
         prepared_sqe_ -= ret;
+        write_ = 0;
+        writev_ = 0;
     }
 }
 
