@@ -309,6 +309,8 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
             std::make_unique<IndexStackEntry>(nullptr, Options()));
     }
 
+    auto start_time = std::chrono::high_resolution_clock::now();
+
     KvError err;
     size_t cidx = 0;
     const uint64_t now_ms =
@@ -332,6 +334,14 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         err = ApplyOnePage(cidx, now_ms);
         CHECK_KV_ERR(err);
     }
+
+    auto stop_time = std::chrono::high_resolution_clock::now();
+    LOG(INFO) << "ApplyBatch time: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(
+                     stop_time - start_time)
+                     .count()
+              << " ms";
+
     // Flush all dirty leaf data pages in leaf_triple_.
     assert(TripleElement(2) == nullptr);
     err = ShiftLeafLink();
