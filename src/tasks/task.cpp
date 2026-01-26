@@ -40,7 +40,6 @@ void KvTask::Yield()
 
 void KvTask::YieldToLowPQ()
 {
-    shard->low_priority_ready_tasks_.Enqueue(this);
     if (record_)
     {
         auto diff = butil::cpuwide_time_ns() - ts_;
@@ -49,6 +48,7 @@ void KvTask::YieldToLowPQ()
             LOG(WARNING) << "yield cost " << diff << ", step " << step_;
         }
     }
+    shard->low_priority_ready_tasks_.Enqueue(this);
     shard->main_ = shard->main_.resume();
     if (record_)
     {
