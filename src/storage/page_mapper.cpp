@@ -286,17 +286,8 @@ void MappingSnapshot::MappingTbl::EnsureSize(PageId page_id)
         return;
     }
 
-    int64_t start = butil::cpuwide_time_ns();
-    auto old_capacity = capacity();
     const size_t new_size = static_cast<size_t>(page_id) + 1;
     ResizeInternal(new_size);
-    int64_t diff = butil::cpuwide_time_ns() - start;
-    if (diff > 500000)
-    {
-        LOG(ERROR) << "EnsureSize cost " << diff
-                   << ", old_capacity=" << old_capacity
-                   << ", new_capacity=" << capacity();
-    }
 }
 
 size_t MappingSnapshot::MappingTbl::RequiredChunks(size_t n) const
