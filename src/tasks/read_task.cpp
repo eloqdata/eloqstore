@@ -17,9 +17,8 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
                        uint64_t &timestamp,
                        uint64_t &expire_ts)
 {
-    auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_id);
+    auto [meta, err] = shard->IndexManager()->FindRoot(tbl_id);
     CHECK_KV_ERR(err);
-    RootMeta *meta = root_handle.Get();
     if (meta->root_id_ == MaxPageId)
     {
         return KvError::NotFound;
@@ -58,9 +57,8 @@ KvError ReadTask::Floor(const TableIdent &tbl_id,
                         uint64_t &timestamp,
                         uint64_t &expire_ts)
 {
-    auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_id);
+    auto [meta, err] = shard->IndexManager()->FindRoot(tbl_id);
     CHECK_KV_ERR(err);
-    RootMeta *meta = root_handle.Get();
     if (meta->root_id_ == MaxPageId)
     {
         return KvError::NotFound;

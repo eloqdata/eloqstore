@@ -12,11 +12,6 @@
 namespace eloqstore
 {
 
-RootMeta::RootMeta()
-    : compression_(std::make_shared<compression::DictCompression>())
-{
-}
-
 ManifestBuilder::ManifestBuilder()
 {
     Reset();
@@ -167,6 +162,17 @@ uint64_t ManifestBuilder::CalcChecksum(std::string_view content)
         }
     }
     return agg_checksum;
+}
+
+void RootMeta::Pin()
+{
+    ref_cnt_++;
+}
+
+void RootMeta::Unpin()
+{
+    assert(ref_cnt_ > 0);
+    ref_cnt_--;
 }
 
 }  // namespace eloqstore

@@ -56,7 +56,10 @@ struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
 
     MappingSnapshot(IndexPageManager *idx_mgr,
                     const TableIdent *tbl_id,
-                    MappingTbl tbl);
+                    MappingTbl tbl)
+        : idx_mgr_(idx_mgr), tbl_ident_(tbl_id), mapping_tbl_(std::move(tbl))
+    {
+    }
     ~MappingSnapshot();
 
     static constexpr uint8_t TypeBits = 3;

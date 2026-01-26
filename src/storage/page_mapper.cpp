@@ -18,13 +18,6 @@
 
 namespace eloqstore
 {
-MappingSnapshot::MappingSnapshot(IndexPageManager *idx_mgr,
-                                 const TableIdent *tbl_id,
-                                 MappingTbl tbl)
-    : idx_mgr_(idx_mgr), tbl_ident_(tbl_id), mapping_tbl_(std::move(tbl))
-{
-}
-
 MappingSnapshot::MappingTbl::MappingTbl(std::vector<uint64_t> tbl)
     : base_(std::move(tbl)), logical_size_(base_.size())
 {

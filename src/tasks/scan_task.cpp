@@ -42,10 +42,8 @@ KvError ScanIterator::Seek(std::string_view key, bool ttl)
 {
     ResetPrefetchState();
     ClearIndexStack();
-    auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_id_);
+    auto [meta, err] = shard->IndexManager()->FindRoot(tbl_id_);
     CHECK_KV_ERR(err);
-    root_handle_ = std::move(root_handle);
-    RootMeta *meta = root_handle_.Get();
     root_id_ = ttl ? meta->ttl_root_id_ : meta->root_id_;
     if (root_id_ == MaxPageId)
     {

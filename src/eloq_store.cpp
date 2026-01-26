@@ -570,6 +570,8 @@ void EloqStore::InitializeMetrics(metrics::MetricsRegistry *metrics_registry,
         metrics_meters_[i]->Register(
             metrics::NAME_ELOQSTORE_WORK_ONE_ROUND_DURATION,
             metrics::Type::Histogram);
+        metrics_meters_[i]->Register(metrics::NAME_ELOQSTORE_IO_SUBMIT_DURATION,
+                                     metrics::Type::Histogram);
         metrics_meters_[i]->Register(
             metrics::NAME_ELOQSTORE_TASK_MANAGER_ACTIVE_TASKS,
             metrics::Type::Gauge);

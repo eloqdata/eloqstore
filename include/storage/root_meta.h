@@ -7,15 +7,16 @@
 #include <string_view>
 #include <unordered_set>
 
-#include "absl/container/flat_hash_set.h"
 #include "common.h"
 #include "compression.h"
 #include "manifest_buffer.h"
 #include "storage/mem_index_page.h"
+#include "storage/page_mapper.h"
 #include "tasks/task.h"
 
 namespace eloqstore
 {
+
 // For Manifest snapshot, the structure is:
 // Header :  [ Checksum(8B) | Root(4B) | TTL Root(4B) | Payload Len(4B) ]
 // Body   :  [ MaxFpId(8B) | DictLen(4B) | dict_bytes(bytes) |
@@ -26,8 +27,6 @@ namespace eloqstore
 // Header  :  [ Checksum(8B) | Root(4B) | TTL Root(4B) | Payload Len(4B) ]
 // LogBody :  [ mapping_bytes_len(4B) | mapping_bytes(varint64...) |
 //              | Serialized FileIdTermMapping bytes(4B|varint64...) ]
-class PageMapper;
-struct MappingSnapshot;
 
 class ManifestBuilder
 {
@@ -82,15 +81,18 @@ struct CowRootMeta
 
 struct RootMeta
 {
-    RootMeta();
+    RootMeta() : compression_(std::make_shared<compression::DictCompression>())
+    {
+    }
     RootMeta(const RootMeta &rhs) = delete;
     RootMeta(RootMeta &&rhs) = default;
+    void Pin();
+    void Unpin();
 
     PageId root_id_{MaxPageId};
     PageId ttl_root_id_{MaxPageId};
     std::unique_ptr<PageMapper> mapper_{nullptr};
-    absl::flat_hash_set<MappingSnapshot *> mapping_snapshots_;
-    absl::flat_hash_set<MemIndexPage *> index_pages_;
+    std::unordered_set<MappingSnapshot *> mapping_snapshots_;
     uint64_t manifest_size_{0};
     uint64_t next_expire_ts_{0};
     std::shared_ptr<compression::DictCompression> compression_{nullptr};

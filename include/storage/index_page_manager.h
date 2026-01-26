@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <span>
+#include <unordered_map>
 #include <vector>
 
 #include "async_io_manager.h"
@@ -9,22 +10,17 @@
 #include "error.h"
 #include "kv_options.h"
 #include "storage/mem_index_page.h"
-#include "storage/page_mapper.h"
 #include "storage/root_meta.h"
-#include "storage/root_meta_manager.h"
 #include "types.h"
 
 namespace eloqstore
 {
 class KvTask;
 class PageMapper;
-class IndexPageManager;
 
 using MappingArena = Pool<MappingSnapshot::MappingTbl>;
 class IndexPageManager
 {
-    friend class RootMetaMgr;
-
 public:
     IndexPageManager(AsyncIoManager *io_manager);
     ~IndexPageManager();
@@ -48,8 +44,7 @@ public:
      */
     void EnqueueIndexPage(MemIndexPage *page);
 
-    std::pair<RootMetaMgr::Handle, KvError> FindRoot(
-        const TableIdent &tbl_ident);
+    std::pair<RootMeta *, KvError> FindRoot(const TableIdent &tbl_ident);
 
     KvError MakeCowRoot(const TableIdent &tbl_ident, CowRootMeta &cow_meta);
 
@@ -72,7 +67,6 @@ public:
     const KvOptions *Options() const;
     AsyncIoManager *IoMgr() const;
     MappingArena *MapperArena();
-    RootMetaMgr *RootMetaManager();
 
     /**
      * @brief Get current buffer pool used size in bytes.
@@ -86,6 +80,8 @@ public:
      */
     size_t GetBufferPoolLimit() const;
 
+    void EvictRootIfEmpty(const TableIdent &tbl_id);
+
 private:
     /**
      * @brief Returns if memory is full. TODO: Replaces with a reasonable
@@ -97,6 +93,16 @@ private:
     bool IsFull() const;
 
     bool Evict();
+
+    /**
+     * @brief Evicts the root entry from the root table, if (1) the current root
+     * page has been evicted, (2) no mapping snapshot of the table is active,
+     * and (3) all pages belonging to the tree have been evicted.
+     *
+     * @param root_it
+     */
+    void EvictRootIfEmpty(
+        std::unordered_map<TableIdent, RootMeta>::iterator root_it);
 
     bool RecyclePage(MemIndexPage *page);
 
@@ -116,8 +122,14 @@ private:
      */
     std::vector<std::unique_ptr<MemIndexPage>> index_pages_;
 
+    /**
+     * @brief Cached roots, which maps a table identity to an in-memory
+     * page.
+     *
+     */
+    std::unordered_map<TableIdent, RootMeta> tbl_roots_;
+
     AsyncIoManager *io_manager_;
     MappingArena mapping_arena_;
-    RootMetaMgr root_meta_mgr_;
 };
 }  // namespace eloqstore

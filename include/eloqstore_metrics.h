@@ -47,6 +47,8 @@ inline const Name NAME_ELOQSTORE_OPEN_FILE_LIMIT{"eloqstore_open_file_limit"};
 inline const Name NAME_ELOQSTORE_LOCAL_SPACE_USED{"eloqstore_local_space_used"};
 inline const Name NAME_ELOQSTORE_LOCAL_SPACE_LIMIT{
     "eloqstore_local_space_limit"};
+inline const Name NAME_ELOQSTORE_IO_SUBMIT_DURATION{
+    "eloqstore_io_submit_duration"};
 
 // Collection interval for Phase 9-11 gauge metrics (index buffer pool, page
 // pool, open file, local space) These metrics are collected every N
