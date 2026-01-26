@@ -301,6 +301,7 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
     EnsureChunkCount(required_chunks);
     ThdTask()->step_ = 210;
     ThdTask()->YieldToLowPQ();
+    ThdTask()->step_ = 211;
 
     size_t old_size = logical_size_;
     while (old_size < new_size)
