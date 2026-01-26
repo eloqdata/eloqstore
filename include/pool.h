@@ -31,7 +31,7 @@ public:
 
     void Release(T &&value)
     {
-        if (max_cached_ == 0 || pool_.size() >= max_cached_)
+        if (max_cached_ != 0 && pool_.size() >= max_cached_)
         {
             LOG(INFO) << "Pool Release";
             return;

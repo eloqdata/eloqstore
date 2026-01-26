@@ -229,10 +229,6 @@ struct KvOptions
      * enabled.
      */
     uint16_t prewarm_task_count = 3;
-    /**
-     * @brief Size of mapping arena.
-     */
-    size_t mapping_arena_size = 10000;
 
     /**
      * @brief Filter function to determine which partitions belong to this
