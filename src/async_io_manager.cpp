@@ -195,22 +195,6 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
     }
     io_uring_buf_ring_advance(buf_ring_, num_bufs);
 
-    io_uring_buf_reg reg = {};
-    reg.ring_addr = reinterpret_cast<uint64_t>(buf_ring_);
-    reg.ring_entries = num_bufs;
-    reg.bgid = buf_group_;
-    ret = io_uring_register_buf_ring(&ring_, &reg, 0);
-    if (ret < 0)
-    {
-        LOG(ERROR) << "failed to register buf ring: " << ret;
-        io_uring_free_buf_ring(
-            &ring_, buf_ring_, options_->buf_ring_size, buf_group_);
-        io_uring_unregister_files(&ring_);
-        io_uring_queue_exit(&ring_);
-        ring_inited_ = false;
-        return KvError::OutOfMem;
-    }
-
     return KvError::NoError;
 }
 
