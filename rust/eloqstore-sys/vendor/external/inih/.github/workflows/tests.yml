@@ -1,0 +1,43 @@
+name: Tests
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Run Diff Tests
+      run: |
+        cd tests
+        ./unittest.sh
+        cd ../examples
+        ./cpptest.sh
+        git diff --exit-code
+
+  build-meson:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+    - uses: BSFishy/meson-build@v1.0.3
+      with:
+        action: test
+        meson-version: 1.4.1
+  build-meson-msvc:
+    runs-on: windows-latest
+
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-python@v5
+    - uses: BSFishy/meson-build@v1.0.3
+      with:
+        action: test
+        meson-version: 1.4.1

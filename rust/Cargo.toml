@@ -1,0 +1,3 @@
+[workspace]
+members = ["eloqstore", "eloqstore-sys"]
+resolver = "2"
