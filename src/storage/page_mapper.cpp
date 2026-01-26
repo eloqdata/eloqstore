@@ -182,7 +182,6 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
     {
         return;
     }
-    clear();
     if (src.logical_size_ == 0)
     {
         return;
