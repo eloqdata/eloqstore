@@ -295,9 +295,11 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
         logical_size_ = new_size;
         return;
     }
+    ThdTask()->step_ = 209;
     ThdTask()->YieldToLowPQ();
 
     EnsureChunkCount(required_chunks);
+    ThdTask()->step_ = 210;
     ThdTask()->YieldToLowPQ();
 
     size_t old_size = logical_size_;
