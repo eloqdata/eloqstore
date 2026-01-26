@@ -505,7 +505,7 @@ bool Shard::ExecuteReadyTasks()
         uint64_t delta_us = DurationMicroseconds(ts_);
         if (delta_us >= FLAGS_max_processing_time_microseconds)
         {
-            if (delta_us > 2000)
+            if (delta_us > 1000)
                 LOG(INFO) << "ExecuteReadyTasks cost "
                           << DurationMicroseconds(start) << "us, cnt=" << cnt;
             goto finish;
@@ -533,7 +533,7 @@ bool Shard::ExecuteReadyTasks()
         uint64_t delta_us = DurationMicroseconds(ts_);
         if (delta_us >= FLAGS_max_processing_time_microseconds)
         {
-            if (delta_us > 2000)
+            if (delta_us > 1000)
                 LOG(INFO) << "ExecuteReadyTasks LPQ cost "
                           << DurationMicroseconds(start) << "us, cnt=" << cnt;
             goto finish;
@@ -674,7 +674,7 @@ void Shard::WorkOneRound()
     }
 
     delta_us = DurationMicroseconds(ts_);
-    if (delta_us >= 1000000)
+    if (delta_us >= 1000)
     {
         LOG(ERROR) << "after ExecuteReadyTasks, took:" << delta_us;
     }
