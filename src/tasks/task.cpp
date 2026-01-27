@@ -106,10 +106,8 @@ std::pair<Page, KvError> LoadPage(const TableIdent &tbl_id,
                                   FilePageId file_page_id)
 {
     assert(file_page_id != MaxFilePageId);
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 90;
     auto [page, err] = IoMgr()->ReadPage(tbl_id, file_page_id, Page(true));
-    if (err != KvError::NoError)
+    if (__builtin_expect(err != KvError::NoError, 0))
     {
         return {Page(false), err};
     }
@@ -120,12 +118,8 @@ std::pair<DataPage, KvError> LoadDataPage(const TableIdent &tbl_id,
                                           PageId page_id,
                                           FilePageId file_page_id)
 {
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 80;
     auto [page, err] = LoadPage(tbl_id, file_page_id);
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 81;
-    if (err != KvError::NoError)
+    if (__builtin_expect(err != KvError::NoError, 0))
     {
         return {DataPage(), err};
     }
@@ -137,7 +131,7 @@ std::pair<OverflowPage, KvError> LoadOverflowPage(const TableIdent &tbl_id,
                                                   FilePageId file_page_id)
 {
     auto [page, err] = LoadPage(tbl_id, file_page_id);
-    if (err != KvError::NoError)
+    if (__builtin_expect(err != KvError::NoError, 0))
     {
         return {OverflowPage(), err};
     }
