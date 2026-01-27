@@ -115,12 +115,7 @@ PagesPool::PagesPool(const KvOptions *options)
     {
         initial_pages = 1;
     }
-    const size_t max_reg_pages =
-#ifdef IORING_MAX_REG_BUFFERS
-        IORING_MAX_REG_BUFFERS;
-#else
-        32768;
-#endif
+    const size_t max_reg_pages = 0x4000;
     if (initial_pages > max_reg_pages)
     {
         LOG(WARNING) << "buffer_pool_size requests " << initial_pages
