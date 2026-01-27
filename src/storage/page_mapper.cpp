@@ -179,9 +179,6 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
     {
         return;
     }
-    // ThdTask()->step_ = 205;
-    // ThdTask()->ts_ = butil::cpuwide_time_ns();
-    // ThdTask()->YieldToLowPQ();
     ResizeInternal(src.logical_size_);
     ThdTask()->YieldToLowPQ();
     ThdTask()->step_ = 207;

@@ -418,7 +418,6 @@ KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
 
 KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
 {
-    step_ = 31;
     assert(!stack_.empty());
     KvError err;
     DataPage *base_page = nullptr;
@@ -441,8 +440,6 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     DataPageIter base_page_iter{base_page, Options()};
     bool is_base_iter_valid = false;
     AdvanceDataPageIter(base_page_iter, is_base_iter_valid);
-    // YieldToLowPQ();
-    // step_ = 32;
 
     data_page_builder_.Reset();
 
@@ -539,8 +536,6 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             prev_key = key;
             return KvError::NoError;
         });
-    // YieldToLowPQ();
-    // step_ = 34;
     while (is_base_iter_valid && change_it != change_end_it)
     {
         std::string_view base_key = base_page_iter.Key();
@@ -688,8 +683,6 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             break;
         }
     }
-    // YieldToLowPQ();
-    // step_ = 35;
 
     while (is_base_iter_valid)
     {
@@ -704,8 +697,6 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         CHECK_KV_ERR(err);
         AdvanceDataPageIter(base_page_iter, is_base_iter_valid);
     }
-    // YieldToLowPQ();
-    // step_ = 36;
 
     while (change_it != change_end_it)
     {
@@ -741,8 +732,6 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         }
         ++change_it;
     }
-    // YieldToLowPQ();
-    // step_ = 37;
 
     if (data_page_builder_.IsEmpty())
     {
@@ -766,11 +755,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     assert(!TripleElement(1));
     leaf_triple_[1] = std::move(leaf_triple_[2]);
     YieldToLowPQ();
-    step_ = 38;
 
     cidx = cidx + std::distance(data_batch_.begin() + cidx, change_end_it);
-    // YieldToLowPQ();
-    // step_ = 40;
     return KvError::NoError;
 }
 
@@ -991,8 +977,6 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         }
         prev_page.page_ = nullptr;
     }
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 117;
 
     if (stack_page != nullptr)
     {
@@ -1005,8 +989,6 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
 KvError BatchWriteTask::FinishIndexPage(DirtyIndexPage &prev,
                                         std::string cur_page_key)
 {
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 130;
     assert(!idx_page_builder_.IsEmpty());
     const uint16_t cur_page_len = idx_page_builder_.CurrentSizeEstimate();
     std::string_view page_view = idx_page_builder_.Finish();
