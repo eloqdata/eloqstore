@@ -181,7 +181,6 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
     }
     ResizeInternal(src.logical_size_);
     ThdTask()->YieldToLowPQ();
-    ThdTask()->step_ = 207;
     for (size_t chunk_idx = 0; chunk_idx < base_.size(); ++chunk_idx)
     {
         size_t offset = chunk_idx << kChunkShift;
@@ -283,13 +282,8 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
         logical_size_ = new_size;
         return;
     }
-    ThdTask()->step_ = 209;
-    ThdTask()->YieldToLowPQ();
 
     EnsureChunkCount(required_chunks);
-    ThdTask()->step_ = 210;
-    ThdTask()->YieldToLowPQ();
-    ThdTask()->step_ = 211;
 
     size_t old_size = logical_size_;
     while (old_size < new_size)
@@ -301,7 +295,6 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
         std::fill_n(
             base_[chunk_idx]->data() + chunk_offset, fill, InvalidValue);
         old_size += fill;
-        ThdTask()->YieldToLowPQ();
     }
     logical_size_ = new_size;
 }
