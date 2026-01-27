@@ -255,7 +255,7 @@ void BatchWriteTask::Abort()
 
 KvError BatchWriteTask::Apply()
 {
-    Record(300000);
+    // Record(300000);
     YieldToLowPQ();
     step_ = 0;
     KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);

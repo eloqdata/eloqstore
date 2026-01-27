@@ -17,7 +17,7 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
                        uint64_t &timestamp,
                        uint64_t &expire_ts)
 {
-    Record(300000);
+    // Record(300000);
     step_ = 300;
     auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_id);
     CHECK_KV_ERR(err);
