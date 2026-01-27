@@ -3,12 +3,13 @@
 #include <glog/logging.h>
 
 #include "random.h"
+
+#ifdef WITH_ROCKSDB
 #include "rocksdb/advanced_cache.h"
 #include "rocksdb/convenience.h"
 #include "rocksdb/db.h"
 #include "rocksdb/table.h"
 
-#ifdef WITH_ROCKSDB
 namespace RocksDBBM
 {
 static std::optional<int64_t> seed_base;

@@ -1,8 +1,7 @@
-#include "rocksdb_bm.h"
-
 #include <iomanip>
 
 #ifdef WITH_ROCKSDB
+#include "rocksdb_bm.h"
 namespace RocksDBBM
 {
 static DistributionType StringToDistributionType(const char *ctype)
@@ -315,8 +314,8 @@ void Stats::FinishedOps(DBWithColumnFamilies *db_with_cfh,
                 std::chrono::high_resolution_clock::now().time_since_epoch())
                 .count();
         uint64_t d = now - ops_start_;
-        DLOG(INFO) << "latency: " << d << "(us)"
-                   << " now: " << now << " start: " << ops_start_;
+        DLOG(INFO) << "latency: " << d << "(us)" << " now: " << now
+                   << " start: " << ops_start_;
         latency_->push_back(d);
         ops_start_ = 0;
     }
