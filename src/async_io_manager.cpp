@@ -963,13 +963,12 @@ void IouringMgr::Submit()
     {
         return;
     }
-    auto t = butil::cpuwide_time_ns();
+    auto t = butil::cpuwide_time_us();
     int ret = io_uring_submit(&ring_);
-    t = butil::cpuwide_time_ns() - t;
+    t = butil::cpuwide_time_us() - t;
     if (t > FLAGS_io_uring_threshold)
     {
-        LOG(WARNING) << "IoUring cost " << t / 1000
-                     << "us, write=" << pages_to_write_
+        LOG(WARNING) << "IoUring cost " << t << "us, write=" << pages_to_write_
                      << ", writev=" << writev_ << ", read=" << read_
                      << ", tasks=" << prepared_sqe_;
     }
