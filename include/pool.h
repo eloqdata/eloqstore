@@ -1,8 +1,9 @@
 #pragma once
 
+#include <glog/logging.h>
+
 #include <utility>
 #include <vector>
-#include <glog/logging.h>
 
 namespace eloqstore
 {
@@ -11,10 +12,7 @@ template <typename T>
 class Pool
 {
 public:
-    explicit Pool(size_t max_cached = 0) : max_cached_(max_cached)
-    {
-        pool_.reserve(max_cached_);
-    }
+    explicit Pool(size_t max_cached = 0) : max_cached_(max_cached) {};
 
     T Acquire()
     {
