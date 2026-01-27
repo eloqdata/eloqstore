@@ -473,6 +473,13 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
                                   uint32_t offset,
                                   std::span<iovec> iov)
     {
+        size_t num_pages = pages.size();
+        while (pages_to_write_ + num_pages >=
+               options_->max_write_pages_one_submission)
+        {
+            ThdTask()->YieldToLowPQ();
+        }
+        pages_to_write_ += num_pages;
         auto [fd, registered] = fd_ref.FdPair();
         io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
         if (registered)
@@ -480,18 +487,11 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
             sqe->flags |= IOSQE_FIXED_FILE;
         }
 
-        size_t num_pages = pages.size();
         for (size_t i = 0; i < num_pages; i++)
         {
             iov[i].iov_base = VarPagePtr(pages[i]);
             iov[i].iov_len = options_->data_page_size;
         }
-        while (pages_to_write_ + num_pages >=
-               options_->max_write_pages_one_submission)
-        {
-            ThdTask()->YieldToLowPQ();
-        }
-        pages_to_write_ += num_pages;
         io_uring_prep_writev(sqe, fd, iov.data(), num_pages, offset);
 
         int ret = ThdTask()->WaitIoResult();
