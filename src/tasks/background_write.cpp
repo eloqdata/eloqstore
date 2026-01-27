@@ -140,20 +140,17 @@ KvError BackgroundWrite::CompactDataFile()
     }
 
     // Begin compaction.
-    step_ = 3;
 
     err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
     CHECK_KV_ERR(err);
     PageMapper *mapper = cow_meta_.mapper_.get();
 
-    step_ = 4;
     allocator = static_cast<AppendAllocator *>(mapper->FilePgAllocator());
     assert(mapping_cnt == mapper->MappingCount());
 
     // Get all file page ids that are used by this version.
     std::vector<std::pair<FilePageId, PageId>> fp_ids;
     fp_ids.reserve(mapping_cnt);
-    step_ = 5;
     size_t tbl_size = mapper->GetMapping()->mapping_tbl_.size();
     for (PageId page_id = 0; page_id < tbl_size; page_id++)
     {
@@ -172,17 +169,14 @@ KvError BackgroundWrite::CompactDataFile()
     assert(fp_ids.size() == mapping_cnt);
     HeapSortFpIdsWithYield(fp_ids);
     YieldToLowPQ();
-    step_ = 7;
 
     constexpr uint8_t max_move_batch = max_read_pages_batch;
     std::vector<Page> move_batch_buf;
     move_batch_buf.reserve(max_move_batch);
     YieldToLowPQ();
-    step_ = 8;
     std::vector<FilePageId> move_batch_fp_ids;
     move_batch_fp_ids.reserve(max_move_batch);
     MovingCachedPages moving_cached(mapping_cnt);
-    step_ = 9;
 
     auto it_low = fp_ids.begin();
     auto it_high = fp_ids.begin();
@@ -233,6 +227,7 @@ KvError BackgroundWrite::CompactDataFile()
         // Compact this data file, copy all pages in this file to the back.
         for (auto it = it_low; it < it_high; it += max_move_batch)
         {
+            YieldToLowPQ();
             uint32_t batch_size = std::min(long(max_move_batch), it_high - it);
             const std::span<std::pair<FilePageId, PageId>> batch_ids(
                 it, batch_size);
