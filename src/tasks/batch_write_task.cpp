@@ -262,8 +262,6 @@ KvError BatchWriteTask::Apply()
     step_ = 1;
     cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     CHECK_KV_ERR(err);
-    // YieldToLowPQ();
-    // step_ = 2;
     err = ApplyBatch(cow_meta_.root_id_, true);
     step_ = 3;
     CHECK_KV_ERR(err);
@@ -372,8 +370,6 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
 
 KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
 {
-    // YieldToLowPQ();
-    // step_ = 60;
     assert(page_id != MaxPageId);
     // Now we are going to fetch a data page before execute ApplyOnePage.
     // But this page may already exists at leaf_triple_[1], because it may be
@@ -387,14 +383,10 @@ KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
     }
     else
     {
-        // YieldToLowPQ();
-        // step_ = 64;
         auto [page, err] = LoadDataPage(page_id);
         CHECK_KV_ERR(err);
         applying_page_ = std::move(page);
     }
-    // YieldToLowPQ();
-    // step_ = 61;
     assert(TypeOfPage(applying_page_.PagePtr()) == PageType::Data);
 
     if (TripleElement(1))
@@ -403,8 +395,6 @@ KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
         KvError err = ShiftLeafLink();
         CHECK_KV_ERR(err);
     }
-    // YieldToLowPQ();
-    // step_ = 62;
     if (TripleElement(0) &&
         TripleElement(0)->GetPageId() != applying_page_.PrevPageId())
     {
@@ -746,13 +736,11 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     }
     else
     {
-        // YieldToLowPQ();
         err = FinishDataPage(std::move(curr_page_key), page_id);
         CHECK_KV_ERR(err);
     }
     assert(!TripleElement(1));
     leaf_triple_[1] = std::move(leaf_triple_[2]);
-    // YieldToLowPQ();
 
     cidx = cidx + std::distance(data_batch_.begin() + cidx, change_end_it);
     return KvError::NoError;
@@ -899,8 +887,6 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
             break;
         }
     }
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 114;
 
     while (is_base_iter_valid)
     {
@@ -913,8 +899,6 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         }
         AdvanceIndexPageIter(base_page_iter, is_base_iter_valid);
     }
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 115;
 
     while (cit != changes.end())
     {
@@ -930,8 +914,6 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         }
         ++cit;
     }
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 116;
 
     MemIndexPage *new_root = nullptr;
     if (idx_page_builder_.IsEmpty())
