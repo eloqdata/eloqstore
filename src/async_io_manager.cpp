@@ -960,7 +960,13 @@ void IouringMgr::Submit()
     {
         return;
     }
+    auto t = butil::cpuwide_time_ns();
     int ret = io_uring_submit(&ring_);
+    t = butil::cpuwide_time_ns() - t;
+    if (t > 500000)
+    {
+        LOG(INFO) << "io_uring submit cost " << t / 1000 << " us";
+    }
     if (__builtin_expect(ret < 0, 0))
     {
         LOG(ERROR) << "iouring submit failed " << ret;
