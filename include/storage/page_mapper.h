@@ -29,7 +29,6 @@ struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
     public:
         MappingTbl();
         MappingTbl(MappingArena *vector_arena, MappingChunkArena *chunk_arena);
-        explicit MappingTbl(MappingChunkArena *arena);
         ~MappingTbl();
         MappingTbl(MappingTbl &&) = default;
         MappingTbl &operator=(MappingTbl &&) = default;
@@ -59,7 +58,7 @@ struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
         }
 
     private:
-        static constexpr size_t kChunkShift = 9;
+        static constexpr size_t kChunkShift = 11;
         static constexpr size_t kChunkSize = 1ULL << kChunkShift;
         static constexpr size_t kChunkMask = kChunkSize - 1;
 
@@ -67,7 +66,6 @@ struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
         using Chunk = std::array<uint64_t, kChunkSize>;
 
     private:
-
         void EnsureSize(PageId page_id);
         size_t RequiredChunks(size_t n) const;
         void EnsureChunkCount(size_t count);
@@ -147,21 +145,14 @@ struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
 class MappingChunkArena
 {
 public:
-    explicit MappingChunkArena(size_t max_cached = 0);
-
     std::unique_ptr<MappingSnapshot::MappingTbl::Chunk> Acquire();
     void Release(std::unique_ptr<MappingSnapshot::MappingTbl::Chunk> chunk);
 
 private:
-    size_t max_cached_;
-    std::vector<std::unique_ptr<MappingSnapshot::MappingTbl::Chunk>> pool_;
+    int create_{0};
+    int reused_{0};
+    std::deque<std::unique_ptr<MappingSnapshot::MappingTbl::Chunk>> pool_;
 };
-
-inline MappingChunkArena::MappingChunkArena(size_t max_cached)
-    : max_cached_(max_cached)
-{
-    pool_.reserve(max_cached_);
-}
 
 inline std::unique_ptr<MappingSnapshot::MappingTbl::Chunk>
 MappingChunkArena::Acquire()
@@ -171,12 +162,12 @@ MappingChunkArena::Acquire()
     {
         chunk = std::move(pool_.back());
         pool_.pop_back();
+        reused_++;
     }
     else
     {
         chunk = std::make_unique<MappingSnapshot::MappingTbl::Chunk>();
     }
-    chunk->fill(MappingSnapshot::InvalidValue);
     return chunk;
 }
 
@@ -184,11 +175,6 @@ inline void MappingChunkArena::Release(
     std::unique_ptr<MappingSnapshot::MappingTbl::Chunk> chunk)
 {
     if (!chunk)
-    {
-        return;
-    }
-    chunk->fill(MappingSnapshot::InvalidValue);
-    if (max_cached_ != 0 && pool_.size() >= max_cached_)
     {
         return;
     }
@@ -201,16 +187,12 @@ public:
     using ChunkVector =
         std::vector<std::unique_ptr<MappingSnapshot::MappingTbl::Chunk>>;
 
-    explicit MappingArena(size_t max_cached = 0);
-
     ChunkVector Acquire();
     void Release(ChunkVector &&vec);
 
 private:
     Pool<ChunkVector> pool_;
 };
-
-inline MappingArena::MappingArena(size_t max_cached) : pool_(max_cached) {}
 
 inline MappingArena::ChunkVector MappingArena::Acquire()
 {

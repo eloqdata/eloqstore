@@ -578,18 +578,6 @@ void Shard::OnTaskFinished(KvTask *task)
 #ifdef ELOQ_MODULE_ENABLED
 void Shard::WorkOneRound()
 {
-    struct Timer
-    {
-        ~Timer()
-        {
-            auto diff = butil::cpuwide_time_ns() - start;
-            if (diff > 1000000)
-            {
-                LOG(INFO) << "work one round cost " << diff;
-            }
-        }
-        int64_t start{butil::cpuwide_time_ns()};
-    } timer;
     ts_ = ReadTimeMicroseconds();
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: start timing the round
@@ -633,11 +621,8 @@ void Shard::WorkOneRound()
     {
         OnReceivedReq(reqs[i]);
         processed_reqs++;
-        uint64_t delta_us = DurationMicroseconds(ts_);
-        if (delta_us >= FLAGS_max_processing_time_microseconds)
+        if (DurationMicroseconds(ts_) >= FLAGS_max_processing_time_microseconds)
         {
-            LOG(ERROR) << "OnReceivedReq cost " << delta_us
-                       << "us, cnt = " << i;
             size_t remaining = nreqs - (i + 1);
             if (remaining > 0)
             {
@@ -658,26 +643,14 @@ void Shard::WorkOneRound()
         }
     }
 
-    uint64_t delta_us = DurationMicroseconds(ts_);
-    if (delta_us >= FLAGS_max_processing_time_microseconds)
-    {
-        LOG(WARNING) << "after received req, cost " << delta_us;
-    }
     req_queue_size_.fetch_sub(processed_reqs, std::memory_order_relaxed);
 
     io_mgr_->Submit();
 
     io_mgr_->PollComplete();
-    delta_us = DurationMicroseconds(ts_);
-    if (delta_us < FLAGS_max_processing_time_microseconds)
+    if (DurationMicroseconds(ts_) < FLAGS_max_processing_time_microseconds)
     {
         ExecuteReadyTasks();
-    }
-
-    delta_us = DurationMicroseconds(ts_);
-    if (delta_us >= 1000)
-    {
-        LOG(ERROR) << "after ExecuteReadyTasks, took:" << delta_us;
     }
 
 #ifdef ELOQSTORE_WITH_TXSERVICE

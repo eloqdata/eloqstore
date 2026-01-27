@@ -255,7 +255,8 @@ void BatchWriteTask::Abort()
 
 KvError BatchWriteTask::Apply()
 {
-    Record(500000);
+    Record(300000);
+    YieldToLowPQ();
     step_ = 0;
     KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
     step_ = 1;
@@ -324,23 +325,17 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
     size_t cidx = 0;
     const uint64_t now_ms =
         now_ts != 0 ? now_ts : utils::UnixTs<chrono::milliseconds>();
-    YieldToLowPQ();
-    step_ = 11;
     while (cidx < data_batch_.size())
     {
         YieldToLowPQ();
-        step_ = 21;
         std::string_view batch_start_key = {data_batch_[cidx].key_.data(),
                                             data_batch_[cidx].key_.size()};
         if (stack_.size() > 1)
         {
-            YieldToLowPQ();
-            step_ = 25;
             err = SeekStack(batch_start_key);
+            YieldToLowPQ();
             CHECK_KV_ERR(err);
         }
-        YieldToLowPQ();
-        step_ = 22;
         auto [page_id, err] = Seek(batch_start_key);
         CHECK_KV_ERR(err);
         if (page_id != MaxPageId)
@@ -351,12 +346,10 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
             CHECK_KV_ERR(err);
         }
         YieldToLowPQ();
-        step_ = 23;
         err = ApplyOnePage(cidx, now_ms);
         CHECK_KV_ERR(err);
     }
     YieldToLowPQ();
-    step_ = 12;
     // Flush all dirty leaf data pages in leaf_triple_.
     assert(TripleElement(2) == nullptr);
     err = ShiftLeafLink();

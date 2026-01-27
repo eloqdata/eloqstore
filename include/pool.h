@@ -41,7 +41,7 @@ public:
 
 private:
     size_t max_cached_;
-    std::vector<T> pool_;
+    std::deque<T> pool_;
 };
 
 }  // namespace eloqstore
