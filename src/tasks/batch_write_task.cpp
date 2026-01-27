@@ -759,14 +759,13 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     }
     else
     {
-        // YieldToLowPQ();
-        // step_ = 39;
+        YieldToLowPQ();
         err = FinishDataPage(std::move(curr_page_key), page_id);
         CHECK_KV_ERR(err);
     }
     assert(!TripleElement(1));
     leaf_triple_[1] = std::move(leaf_triple_[2]);
-    // YieldToLowPQ();
+    YieldToLowPQ();
     step_ = 38;
 
     cidx = cidx + std::distance(data_batch_.begin() + cidx, change_end_it);
