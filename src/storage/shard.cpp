@@ -491,8 +491,6 @@ void Shard::ProcessReq(KvRequest *req)
 
 bool Shard::ExecuteReadyTasks()
 {
-    auto start = ReadTimeMicroseconds();
-    int cnt = 0;
     if (oss_enabled_)
     {
         auto *cloud_mgr = reinterpret_cast<CloudStoreMgr *>(io_mgr_.get());
@@ -501,7 +499,6 @@ bool Shard::ExecuteReadyTasks()
     bool busy = ready_tasks_.Size() > 0;
     while (ready_tasks_.Size() > 0)
     {
-        ++cnt;
         KvTask *task = ready_tasks_.Peek();
         ready_tasks_.Dequeue();
         assert(task->status_ == TaskStatus::Ongoing);
@@ -511,25 +508,14 @@ bool Shard::ExecuteReadyTasks()
         {
             OnTaskFinished(task);
         }
-        uint64_t delta_us = DurationMicroseconds(ts_);
-        if (delta_us >= FLAGS_max_processing_time_microseconds)
+        if (DurationMicroseconds(ts_) >= FLAGS_max_processing_time_microseconds)
         {
-            if (delta_us > 1000)
-                LOG(INFO) << "ExecuteReadyTasks cost "
-                          << DurationMicroseconds(start) << "us, cnt=" << cnt;
             goto finish;
         }
     }
-    if (DurationMicroseconds(ts_) >= FLAGS_max_processing_time_microseconds)
-    {
-        goto finish;
-    }
 
-    cnt = 0;
-    start = ReadTimeMicroseconds();
     while (low_priority_ready_tasks_.Size() > 0)
     {
-        ++cnt;
         KvTask *task = low_priority_ready_tasks_.Peek();
         low_priority_ready_tasks_.Dequeue();
         task->status_ = TaskStatus::Ongoing;
@@ -539,12 +525,8 @@ bool Shard::ExecuteReadyTasks()
         {
             OnTaskFinished(task);
         }
-        uint64_t delta_us = DurationMicroseconds(ts_);
-        if (delta_us >= FLAGS_max_processing_time_microseconds)
+        if (DurationMicroseconds(ts_) >= FLAGS_max_processing_time_microseconds)
         {
-            if (delta_us > 1000)
-                LOG(INFO) << "ExecuteReadyTasks LPQ cost "
-                          << DurationMicroseconds(start) << "us, cnt=" << cnt;
             goto finish;
         }
     }

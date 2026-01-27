@@ -955,6 +955,8 @@ std::pair<FileId, uint32_t> IouringMgr::ConvFilePageId(
     return {file_id, offset};
 }
 
+DEFINE_uint32(io_uring_threshold, 1000, "");
+
 void IouringMgr::Submit()
 {
     if (prepared_sqe_ == 0)
@@ -964,11 +966,12 @@ void IouringMgr::Submit()
     auto t = butil::cpuwide_time_ns();
     int ret = io_uring_submit(&ring_);
     t = butil::cpuwide_time_ns() - t;
-    if (t > 500000)
+    if (t > FLAGS_io_uring_threshold)
     {
         LOG(WARNING) << "IoUring cost " << t / 1000
                      << "us, write=" << pages_to_write_
-                     << ", writev=" << writev_ << ", read=" << read_;
+                     << ", writev=" << writev_ << ", read=" << read_
+                     << ", tasks=" << prepared_sqe_;
     }
     if (__builtin_expect(ret < 0, 0))
     {
@@ -3571,9 +3574,7 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
     size_t file_size = is_data_file ? options_->DataFileSize() : 0;
     if (!is_data_file)
     {
-        struct statx stx
-        {
-        };
+        struct statx stx{};
         int stat_res = Statx(fd, "", &stx);
         if (stat_res < 0)
         {
