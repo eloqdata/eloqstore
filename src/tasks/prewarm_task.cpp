@@ -165,7 +165,8 @@ void Prewarmer::Run()
         DLOG(INFO) << "Prewarm downloading: " << file.tbl_id.ToString() << "/"
                    << (file.is_manifest
                            ? "manifest"
-                           : "data_" + std::to_string(file.file_id));
+                           : "data_" + std::to_string(file.file_id))
+                   << "_" + std::to_string(file.term);
         auto [fd_ref, err] =
             io_mgr_->OpenFD(file.tbl_id, file.file_id, true, file.term);
         if (err == KvError::NoError)
@@ -440,26 +441,24 @@ void PrewarmService::PrewarmCloudCache()
             PrewarmFile file;
             file.tbl_id = tbl_id;
             file.mod_time = info.mod_time;
-            if (filename == FileNameManifest)
+            auto [file_type, suffix] = ParseFileName(filename);
+            if (file_type == FileNameManifest)
             {
-                file.file_id = CloudStoreMgr::ManifestFileId();
-                file.is_manifest = true;
-            }
-            else if (filename.rfind(FileNameData, 0) == 0)
-            {
-                size_t underscore = filename.find_first_of(FileNameSeparator);
-                if (underscore == std::string::npos ||
-                    underscore + 1 >= filename.size())
+                uint64_t term = 0;
+                std::optional<uint64_t> ts;
+                if (!ParseManifestFileSuffix(suffix, term, ts) ||
+                    ts.has_value())
                 {
                     total_files_skipped++;
                     continue;
                 }
-                std::string id_str = filename.substr(underscore + 1);
-                try
-                {
-                    file.file_id = std::stoull(id_str);
-                }
-                catch (const std::exception &)
+                file.file_id = CloudStoreMgr::ManifestFileId();
+                file.term = term;
+                file.is_manifest = true;
+            }
+            else if (file_type == FileNameData)
+            {
+                if (!ParseDataFileSuffix(suffix, file.file_id, file.term))
                 {
                     total_files_skipped++;
                     continue;
