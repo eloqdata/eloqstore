@@ -237,12 +237,8 @@ void MappingSnapshot::MappingTbl::EnsureSize(PageId page_id)
     ResizeInternal(new_size);
 }
 
-size_t MappingSnapshot::MappingTbl::RequiredChunks(size_t n) const
+inline size_t MappingSnapshot::MappingTbl::RequiredChunks(size_t n) const
 {
-    if (n == 0)
-    {
-        return 0;
-    }
     return (n + kChunkSize - 1) >> kChunkShift;
 }
 
@@ -263,6 +259,7 @@ void MappingSnapshot::MappingTbl::EnsureChunkCount(size_t count)
 
 void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
 {
+    // must not yield within this method to avoid new_size is changed.
     if (new_size == logical_size_)
     {
         return;
