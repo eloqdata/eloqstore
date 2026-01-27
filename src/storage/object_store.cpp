@@ -1470,8 +1470,7 @@ void AsyncHttpManager::ProcessCompletedRequests()
                         << "HTTP error " << response_code
                         << ", scheduling retry " << unsigned(task->retry_count_)
                         << "/" << unsigned(task->max_retries_) << " in "
-                        << retry_delay_ms << " ms"
-                        << ", task=" << task->Info();
+                        << retry_delay_ms << " ms" << ", task=" << task->Info();
                 }
                 else
                 {
@@ -1492,8 +1491,7 @@ void AsyncHttpManager::ProcessCompletedRequests()
                         << curl_easy_strerror(msg->data.result)
                         << ", scheduling retry " << unsigned(task->retry_count_)
                         << "/" << unsigned(task->max_retries_) << " in "
-                        << retry_delay_ms << " ms"
-                        << ", task=" << task->Info();
+                        << retry_delay_ms << " ms" << ", task=" << task->Info();
                 }
                 else
                 {

@@ -84,8 +84,7 @@ inline void test_random_key_value(uint32_t key_size,
                     << static_cast<unsigned>(static_cast<uint8_t>(key[j]));
         }
 
-        LOG(INFO) << i << "->"
-                  << " key index: " << key_index << ". key hex: 0x"
+        LOG(INFO) << i << "->" << " key index: " << key_index << ". key hex: 0x"
                   << key_oss.str() << ", key length: " << obj_gen.get_key_len()
                   << ". value: 0x" << oss.str()
                   << ", value length: " << value_len;

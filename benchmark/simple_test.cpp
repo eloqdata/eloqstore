@@ -399,8 +399,7 @@ void do_random_lookups(eloqstore::EloqStore &store,
     auto end_time = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
         end_time - start_time);
-    std::cout << "Time taken: " << duration.count() << "ms"
-              << " Throughput: "
+    std::cout << "Time taken: " << duration.count() << "ms" << " Throughput: "
               << NUM_LOOKUPS * num_read_threads * 1000.0 / duration.count()
               << " lookups/s" << std::endl;
 }
@@ -435,8 +434,8 @@ void do_range_scans(eloqstore::EloqStore &store,
         NUM_SCANS * SCAN_RANGE * num_read_threads * 1000.0 / duration.count();
     size_t kib_per_sec = (kvs_per_sec * 32) >> 10;
     std::cout << "Time taken: " << duration.count() << "ms"
-              << " Throughput: " << kvs_per_sec << " entries/s"
-              << ", " << kib_per_sec << " KB/s" << std::endl;
+              << " Throughput: " << kvs_per_sec << " entries/s" << ", "
+              << kib_per_sec << " KB/s" << std::endl;
 }
 
 int main(int argc, char *argv[])

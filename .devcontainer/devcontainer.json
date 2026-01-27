@@ -1,0 +1,9 @@
+{
+    "name": "eloqstore-ubuntu24.04-root",
+    "build": {
+      "dockerfile": "Dockerfile"
+    },
+  
+    "remoteUser": "root",
+    "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}"
+}
