@@ -34,7 +34,6 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     tbl_ident_ = tbl_id;
     write_err_ = KvError::NoError;
     wal_builder_.Reset();
-    batch_pages_.clear();
     file_id_term_mapping_dirty_ = false;
     cow_meta_ = CowRootMeta();
 }
@@ -42,10 +41,7 @@ void WriteTask::Reset(const TableIdent &tbl_id)
 void WriteTask::Abort()
 {
     LOG(INFO) << "WriteTask to " << tbl_ident_ << " is aborted";
-    if (!Options()->data_append_mode)
-    {
-        IoMgr()->AbortWrite(tbl_ident_);
-    }
+    IoMgr()->AbortWrite(tbl_ident_);
 
     if (cow_meta_.old_mapping_ != nullptr)
     {
@@ -82,42 +78,17 @@ KvError WriteTask::WritePage(VarPage page, FilePageId file_page_id)
 {
     const KvOptions *opts = Options();
     assert(ValidateChecksum({VarPagePtr(page), opts->data_page_size}));
-    KvError err;
-    if (opts->data_append_mode)
+    KvError err = IoMgr()->WritePage(tbl_ident_, std::move(page), file_page_id);
+    CHECK_KV_ERR(err);
+    if (inflight_io_ >= opts->max_write_batch_pages)
     {
-        batch_pages_.emplace_back(std::move(page));
-        if (batch_pages_.size() == 1)
-        {
-            batch_fp_id_ = file_page_id;
-        }
-        // Flush the current batch when it is full, or when a data file switch
-        // is required.
-        size_t mask = opts->FilePageOffsetMask();
-        if (batch_pages_.size() >= opts->max_write_batch_pages ||
-            (file_page_id & mask) == mask)
-        {
-            err = FlushBatchPages();
-            CHECK_KV_ERR(err);
-        }
-        else
-        {
-            YieldToLowPQ();
-        }
+        // Avoid long running WriteTask block ReadTask/ScanTask
+        err = WaitWrite();
+        CHECK_KV_ERR(err);
     }
     else
     {
-        err = IoMgr()->WritePage(tbl_ident_, std::move(page), file_page_id);
-        CHECK_KV_ERR(err);
-        if (inflight_io_ >= opts->max_write_batch_pages)
-        {
-            // Avoid long running WriteTask block ReadTask/ScanTask
-            err = WaitWrite();
-            CHECK_KV_ERR(err);
-        }
-        else
-        {
-            YieldToLowPQ();
-        }
+        YieldToLowPQ();
     }
     return KvError::NoError;
 }
@@ -150,21 +121,6 @@ void WriteTask::WritePageCallback(VarPage page, KvError err)
     case VarPageType::Page:
         break;
     }
-}
-
-KvError WriteTask::FlushBatchPages()
-{
-    assert(!batch_pages_.empty());
-    assert(batch_fp_id_ != MaxFilePageId);
-    assert(Options()->data_append_mode);
-    KvError err = IoMgr()->WritePages(tbl_ident_, batch_pages_, batch_fp_id_);
-    for (VarPage &page : batch_pages_)
-    {
-        WritePageCallback(std::move(page), err);
-    }
-    batch_pages_.clear();
-    batch_fp_id_ = MaxFilePageId;
-    return err;
 }
 
 KvError WriteTask::WaitWrite()
@@ -330,20 +286,8 @@ KvError WriteTask::UpdateMeta()
 {
     KvError err;
     const KvOptions *opts = Options();
-    // Flush data pages.
-    if (opts->data_append_mode)
-    {
-        if (!batch_pages_.empty())
-        {
-            err = FlushBatchPages();
-            CHECK_KV_ERR(err);
-        }
-    }
-    else
-    {
-        err = WaitWrite();
-        CHECK_KV_ERR(err);
-    }
+    err = WaitWrite();
+    CHECK_KV_ERR(err);
 
     err = IoMgr()->SyncData(tbl_ident_);
     CHECK_KV_ERR(err);

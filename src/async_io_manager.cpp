@@ -106,11 +106,12 @@ IouringMgr::IouringMgr(const KvOptions *opts, uint32_t fd_limit)
     lru_fd_head_.next_ = &lru_fd_tail_;
     lru_fd_tail_.prev_ = &lru_fd_head_;
 
-    if (!options_->data_append_mode)
+    uint32_t pool_size = options_->max_inflight_write;
+    if (pool_size == 0)
     {
-        uint32_t pool_size = options_->max_inflight_write;
-        write_req_pool_ = std::make_unique<WriteReqPool>(pool_size);
+        pool_size = 1;
     }
+    write_req_pool_ = std::make_unique<WriteReqPool>(pool_size);
 }
 
 IouringMgr::~IouringMgr()
@@ -479,6 +480,7 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
     fd_ref.Get()->dirty_ = true;
     TEST_KILL_POINT_WEIGHT("WritePage", 1000)
 
+    VarPageType page_type = VarPageType(page.index());
     auto [fd, registered] = fd_ref.FdPair();
     WriteReq *req = write_req_pool_->Alloc(std::move(fd_ref), std::move(page));
     io_uring_sqe *sqe = GetSQE(UserDataType::WriteReq, req);
@@ -488,7 +490,24 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
     }
 
     char *ptr = req->PagePtr();
-    io_uring_prep_write(sqe, fd, ptr, options_->data_page_size, offset);
+    std::optional<uint32_t> buf_idx;
+    if (page_type != VarPageType::MemIndexPage && shard != nullptr)
+    {
+        buf_idx = shard->PagePool()->RegisteredIndex(ptr);
+    }
+    if (buf_idx.has_value())
+    {
+        io_uring_prep_write_fixed(sqe,
+                                  fd,
+                                  ptr,
+                                  options_->data_page_size,
+                                  offset,
+                                  buf_idx.value());
+    }
+    else
+    {
+        io_uring_prep_write(sqe, fd, ptr, options_->data_page_size, offset);
+    }
     return KvError::NoError;
 }
 
