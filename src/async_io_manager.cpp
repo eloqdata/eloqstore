@@ -244,6 +244,7 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
             sqe->buf_group = buf_group_;
             sqe->flags |= IOSQE_BUFFER_SELECT;
             io_uring_prep_read(sqe, fd.first, NULL, 0, offset);
+            read_++;
             res = ThdTask()->WaitIoResult();
             if (ThdTask()->io_flags_ & IORING_CQE_F_BUFFER)
             {
@@ -331,6 +332,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
         sqe->buf_group = buf_group_;
         sqe->flags |= IOSQE_BUFFER_SELECT;
         io_uring_prep_read(sqe, fd, NULL, 0, req->offset_);
+        read_++;
     };
 
     // Send requests.
@@ -480,6 +482,7 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
             ThdTask()->YieldToLowPQ();
         }
         pages_to_write_ += num_pages;
+        writev_++;
         auto [fd, registered] = fd_ref.FdPair();
         io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
         if (registered)
@@ -963,7 +966,9 @@ void IouringMgr::Submit()
     t = butil::cpuwide_time_ns() - t;
     if (t > 500000)
     {
-        LOG(WARNING) << "IoUring cost " << t / 10 << "us";
+        LOG(WARNING) << "IoUring cost " << t / 10
+                     << "us, write=" << pages_to_write_
+                     << ", writev=" << writev_ << ", read=" << read_;
     }
     if (__builtin_expect(ret < 0, 0))
     {
@@ -973,6 +978,8 @@ void IouringMgr::Submit()
     {
         prepared_sqe_ -= ret;
         pages_to_write_ = 0;
+        writev_ = 0;
+        read_ = 0;
     }
 }
 
@@ -1141,6 +1148,7 @@ int IouringMgr::Read(FdIdx fd, char *dst, size_t n, uint64_t offset)
         sqe->flags |= IOSQE_FIXED_FILE;
     }
     io_uring_prep_read(sqe, fd.first, dst, n, offset);
+    read_++;
     return ThdTask()->WaitIoResult();
 }
 
