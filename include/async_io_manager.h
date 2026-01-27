@@ -517,9 +517,6 @@ public:
         WaitingZone waiting_;
     };
 
-    /**
-     * @brief This is only used in non-append mode.
-     */
     std::unique_ptr<WriteReqPool> write_req_pool_{nullptr};
 
     std::unordered_map<TableIdent, PartitionFiles> tables_;
@@ -541,8 +538,10 @@ public:
     io_uring ring_;
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};
-    uint32_t read_{0};
-    uint32_t write_{0};
+    uint32_t read_fixed_{0};
+    uint32_t read_non_fixed_{0};
+    uint32_t write_fixed_{0};
+    uint32_t write_non_fixed_{0};
     uint32_t writev_{0};
 
     KvError BootstrapRing(Shard *shard);

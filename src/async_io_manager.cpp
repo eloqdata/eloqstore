@@ -253,10 +253,10 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
             {
                 sqe->flags |= IOSQE_FIXED_FILE;
             }
-            read_++;
             auto buf_idx = GetBufferIndex(result);
             if (buf_idx.has_value())
             {
+                read_fixed_++;
                 io_uring_prep_read_fixed(sqe,
                                          fd.first,
                                          result.Ptr(),
@@ -266,6 +266,7 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
             }
             else
             {
+                read_non_fixed_++;
                 io_uring_prep_read(
                     sqe, fd.first, result.Ptr(), options_->data_page_size, offset);
             }
@@ -351,10 +352,10 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
         {
             sqe->flags |= IOSQE_FIXED_FILE;
         }
-        read_++;
         auto buf_idx = GetBufferIndex(req->page_);
         if (buf_idx.has_value())
         {
+            read_fixed_++;
             io_uring_prep_read_fixed(sqe,
                                      fd,
                                      req->page_.Ptr(),
@@ -364,6 +365,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
         }
         else
         {
+            read_non_fixed_++;
             io_uring_prep_read(sqe,
                                fd,
                                req->page_.Ptr(),
@@ -497,6 +499,7 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
     }
     if (buf_idx.has_value())
     {
+        write_fixed_++;
         io_uring_prep_write_fixed(sqe,
                                   fd,
                                   ptr,
@@ -506,6 +509,7 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
     }
     else
     {
+        write_non_fixed_++;
         io_uring_prep_write(sqe, fd, ptr, options_->data_page_size, offset);
     }
     return KvError::NoError;
@@ -539,7 +543,6 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
             iov[i].iov_len = options_->data_page_size;
         }
         io_uring_prep_writev(sqe, fd, iov.data(), num_pages, offset);
-        write_++;
         writev_ += num_pages;
 
         int ret = ThdTask()->WaitIoResult();
@@ -1012,8 +1015,10 @@ void IouringMgr::Submit()
     if (diff > 500000)
     {
         LOG(INFO) << "IoUring submit cost " << diff
-                  << "ns, tasks=" << prepared_sqe_ << ", write=" << write_
-                  << ", writev=" << writev_ << ", read=" << read_;
+                  << "ns, tasks=" << prepared_sqe_ << ", write_fixed="
+                  << write_fixed_ << ", write_non_fixed=" << write_non_fixed_
+                  << ", writev=" << writev_ << ", read_fixed=" << read_fixed_
+                  << ", read_non_fixed=" << read_non_fixed_;
     }
     if (ret < 0)
     {
@@ -1022,9 +1027,11 @@ void IouringMgr::Submit()
     else
     {
         prepared_sqe_ -= ret;
-        write_ = 0;
+        write_fixed_ = 0;
+        write_non_fixed_ = 0;
+        read_fixed_ = 0;
+        read_non_fixed_ = 0;
         writev_ = 0;
-        read_ = 0;
     }
 }
 
@@ -1192,7 +1199,7 @@ int IouringMgr::Read(FdIdx fd, char *dst, size_t n, uint64_t offset)
     {
         sqe->flags |= IOSQE_FIXED_FILE;
     }
-    read_++;
+    read_non_fixed_++;
     io_uring_prep_read(sqe, fd.first, dst, n, offset);
     return ThdTask()->WaitIoResult();
 }
@@ -1204,6 +1211,7 @@ int IouringMgr::Write(FdIdx fd, const char *src, size_t n, uint64_t offset)
     {
         sqe->flags |= IOSQE_FIXED_FILE;
     }
+    write_non_fixed_++;
     io_uring_prep_write(sqe, fd.first, src, n, offset);
     return ThdTask()->WaitIoResult();
 }
