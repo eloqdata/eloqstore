@@ -491,6 +491,7 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
         {
             ThdTask()->YieldToLowPQ();
         }
+        pages_to_write_ += num_pages;
         io_uring_prep_writev(sqe, fd, iov.data(), num_pages, offset);
 
         int ret = ThdTask()->WaitIoResult();
@@ -965,6 +966,7 @@ void IouringMgr::Submit()
     else
     {
         prepared_sqe_ -= ret;
+        pages_to_write_ = 0;
     }
 }
 
