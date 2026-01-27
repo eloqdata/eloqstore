@@ -83,6 +83,7 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
                   data_files,
                   manifest_terms);
     ThdTask()->step_ = 21;
+    ThdTask()->ts_ = butil::cpuwide_time_ns();
 
     // No need to check term expired for local mode.
 
@@ -188,6 +189,7 @@ void ClassifyFiles(const std::vector<std::string> &files,
     archive_timestamps.clear();
     data_files.clear();
     manifest_terms.clear();
+    data_files.reserve(files.size());
 
     for (const std::string &file_name : files)
     {
@@ -531,6 +533,7 @@ KvError DeleteUnreferencedLocalFiles(
 
     std::vector<std::string> files_to_delete;
     std::vector<FileId> file_ids_to_close;
+    files_to_delete.reserve(data_files.size());
     file_ids_to_close.reserve(data_files.size());
 
     for (const std::string &file_name : data_files)
