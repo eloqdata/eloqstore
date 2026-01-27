@@ -256,6 +256,7 @@ void BatchWriteTask::Abort()
 KvError BatchWriteTask::Apply()
 {
     Record(300000);
+    // directly go to low priority queue and wait for scheduling
     YieldToLowPQ();
     step_ = 0;
     KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
@@ -299,8 +300,8 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
                                    bool update_ttl,
                                    uint64_t now_ts)
 {
-    YieldToLowPQ();
-    step_ = 10;
+    // YieldToLowPQ();
+    // step_ = 10;
     do_update_ttl_ = update_ttl;
     assert(!update_ttl || ttl_batch_.empty());
 
@@ -325,29 +326,29 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         now_ts != 0 ? now_ts : utils::UnixTs<chrono::milliseconds>();
     while (cidx < data_batch_.size())
     {
-        YieldToLowPQ();
+        // YieldToLowPQ();
         std::string_view batch_start_key = {data_batch_[cidx].key_.data(),
                                             data_batch_[cidx].key_.size()};
         if (stack_.size() > 1)
         {
             err = SeekStack(batch_start_key);
-            YieldToLowPQ();
+            // YieldToLowPQ();
             CHECK_KV_ERR(err);
         }
         auto [page_id, err] = Seek(batch_start_key);
         CHECK_KV_ERR(err);
         if (page_id != MaxPageId)
         {
-            YieldToLowPQ();
-            step_ = 24;
+            // YieldToLowPQ();
+            // step_ = 24;
             err = LoadApplyingPage(page_id);
             CHECK_KV_ERR(err);
         }
-        YieldToLowPQ();
+        // YieldToLowPQ();
         err = ApplyOnePage(cidx, now_ms);
         CHECK_KV_ERR(err);
     }
-    YieldToLowPQ();
+    // YieldToLowPQ();
     // Flush all dirty leaf data pages in leaf_triple_.
     assert(TripleElement(2) == nullptr);
     err = ShiftLeafLink();
@@ -935,8 +936,8 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         {
             return {nullptr, err};
         }
-        ThdTask()->YieldToLowPQ();
-        ThdTask()->step_ = 118;
+        // ThdTask()->YieldToLowPQ();
+        // ThdTask()->step_ = 118;
         err = FlushIndexPage(prev_page.page_,
                              std::move(prev_page.key_),
                              prev_page.page_id_,

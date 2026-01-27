@@ -67,15 +67,15 @@ void BackgroundWrite::HeapSortFpIdsWithYield(
         return;
     }
 
-    constexpr size_t push_batch = 256;
-    constexpr size_t pop_batch = 256;
+    constexpr size_t push_batch = 1 << 8;
+    constexpr size_t pop_batch = 1 << 8;
 
     size_t push_ops = 0;
     for (size_t next = 1; next < fp_ids.size(); ++next)
     {
         std::push_heap(fp_ids.begin(), fp_ids.begin() + next + 1, FilePageLess);
         push_ops++;
-        if (push_ops % push_batch == 0)
+        if ((push_ops & (push_batch - 1)) == 0)
         {
             YieldToLowPQ();
         }
@@ -86,7 +86,7 @@ void BackgroundWrite::HeapSortFpIdsWithYield(
     {
         std::pop_heap(fp_ids.begin(), fp_ids.begin() + count, FilePageLess);
         pop_ops++;
-        if (pop_ops % pop_batch == 0)
+        if ((pop_ops & (pop_batch - 1)) == 0)
         {
             YieldToLowPQ();
         }
