@@ -61,6 +61,7 @@ public:
 
 private:
     void WorkLoop();
+    void InitBackgroundJob();
     bool ExecuteReadyTasks();
     void OnTaskFinished(KvTask *task);
     void OnReceivedReq(KvRequest *req);

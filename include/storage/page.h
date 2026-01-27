@@ -56,6 +56,7 @@ class PagesPool
 public:
     using UPtr = std::unique_ptr<char, decltype(&std::free)>;
     PagesPool(const KvOptions *options);
+    void Init();
     char *Allocate();
     void Free(char *ptr);
 
@@ -74,9 +75,11 @@ private:
     };
 
     const KvOptions *options_;
+    const size_t initial_pages_;
     std::deque<MemChunk> chunks_;
     FreePage *free_head_;
     size_t free_cnt_;
+    bool initialized_;
 };
 
 }  // namespace eloqstore

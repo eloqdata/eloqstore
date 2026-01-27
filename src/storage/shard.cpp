@@ -70,11 +70,20 @@ KvError Shard::Init()
     return res;
 }
 
+void Shard::InitBackgroundJob()
+{
+    page_pool_.Init();
+    if (!io_mgr_->BackgroundJobInited())
+    {
+        io_mgr_->InitBackgroundJob();
+    }
+}
+
 void Shard::WorkLoop()
 {
     shard = this;
     io_mgr_->Start();
-    io_mgr_->InitBackgroundJob();
+    InitBackgroundJob();
 
     // Get new requests from the queue, only blocked when there are no requests
     // and no active tasks.
@@ -586,7 +595,7 @@ void Shard::WorkOneRound()
 
     if (__builtin_expect(!io_mgr_->BackgroundJobInited(), false))
     {
-        io_mgr_->InitBackgroundJob();
+        InitBackgroundJob();
     }
     KvRequest *reqs[128];
     size_t nreqs = requests_.try_dequeue_bulk(reqs, std::size(reqs));
