@@ -220,15 +220,11 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
                                               FilePageId fp_id,
                                               Page page)
 {
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 100;
     auto [file_id, offset] = ConvFilePageId(fp_id);
     auto term = GetFileIdTerm(tbl_id, file_id);
     CHECK(term.has_value()) << "ReadPage, not found term for file id "
                             << file_id << " in table " << tbl_id;
     auto [fd_ref, err] = OpenFD(tbl_id, file_id, true, term.value());
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 101;
     if (err != KvError::NoError)
     {
         return {std::move(page), err};
@@ -272,8 +268,6 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
     {
         return {std::move(page), err};
     }
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 102;
 
     if (!options_->skip_verify_checksum &&
         !ValidateChecksum({page.Ptr(), options_->data_page_size}))
@@ -281,8 +275,6 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
         LOG(ERROR) << "corrupted " << tbl_id << " page " << fp_id;
         return {std::move(page), KvError::Corrupted};
     }
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 103;
     return {std::move(page), KvError::NoError};
 }
 
