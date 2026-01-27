@@ -966,7 +966,7 @@ void IouringMgr::Submit()
     t = butil::cpuwide_time_ns() - t;
     if (t > 500000)
     {
-        LOG(WARNING) << "IoUring cost " << t / 10
+        LOG(WARNING) << "IoUring cost " << t / 1000
                      << "us, write=" << pages_to_write_
                      << ", writev=" << writev_ << ", read=" << read_;
     }
