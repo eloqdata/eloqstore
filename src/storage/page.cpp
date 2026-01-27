@@ -38,11 +38,9 @@ Page::Page(bool alloc)
     {
         char *ptr = shard->PagePool()->Allocate();
         bool registered = shard->PagePool()->IsRegistered(ptr);
-        ptr_ = reinterpret_cast<uintptr_t>(ptr);
-        if (!registered)
-        {
-            ptr_ |= unregistered_ptr_mask;
-        }
+        uintptr_t raw = reinterpret_cast<uintptr_t>(ptr);
+        uintptr_t flag = static_cast<uintptr_t>(!registered);
+        ptr_ = raw | (unregistered_ptr_mask & -flag);
     }
     else
     {
