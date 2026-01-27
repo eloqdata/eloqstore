@@ -471,8 +471,6 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     std::string prev_key;
     std::string_view page_key = stack_.back()->idx_page_iter_.Key();
     std::string curr_page_key{page_key.data(), page_key.size()};
-    // YieldToLowPQ();
-    // step_ = 33;
 
     PageId page_id = MaxPageId;
     if (base_page != nullptr)
@@ -762,8 +760,6 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
 
 std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
 {
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 110;
     if (stack_.empty())
     {
         return {nullptr, KvError::NoError};
@@ -784,8 +780,6 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
 
     idx_page_builder_.Reset();
 
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 112;
     const Comparator *cmp = shard->IndexManager()->GetComparator();
     std::vector<IndexOp> &changes = stack_entry->changes_;
     MemIndexPage *stack_page = stack_entry->idx_page_;
@@ -832,8 +826,6 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         }
         return KvError::NoError;
     };
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 113;
 
     while (is_base_iter_valid && cit != changes.end())
     {
