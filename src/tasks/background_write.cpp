@@ -95,6 +95,25 @@ void BackgroundWrite::HeapSortFpIdsWithYield(
 
 KvError BackgroundWrite::CompactDataFile()
 {
+    struct Guard
+    {
+        Guard()
+        {
+            auto *io_mgr = reinterpret_cast<IouringMgr *>(IoMgr());
+            while (io_mgr->compaction_in_progress_ >=
+                   Options()->max_compaction_in_progress)
+            {
+                ThdTask()->YieldToLowPQ();
+            }
+            ++io_mgr->compaction_in_progress_;
+        }
+
+        ~Guard()
+        {
+            auto *io_mgr = reinterpret_cast<IouringMgr *>(IoMgr());
+            --io_mgr->compaction_in_progress_;
+        }
+    } guard;
     Record(300000);
     LOG(INFO) << "begin compaction on " << this->tbl_ident_;
     const KvOptions *opts = Options();

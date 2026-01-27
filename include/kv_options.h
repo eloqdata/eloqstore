@@ -69,6 +69,10 @@ struct KvOptions
      */
     uint32_t max_write_batch_pages = 32;
     /**
+     * @brief The maximum number of compaction in progress.
+     */
+    uint32_t max_compaction_in_progress = 1;
+    /**
      * @brief The maximum numer of pages to write per io_uring submit.
      */
     uint32_t max_write_pages_one_submission = 64;
