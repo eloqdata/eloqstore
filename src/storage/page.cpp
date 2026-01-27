@@ -1,6 +1,9 @@
 #include "storage/page.h"
 
+#include <cstring>
+
 #include <glog/logging.h>
+#include <liburing.h>
 
 #include "storage/shard.h"
 
@@ -32,11 +35,11 @@ bool ValidateChecksum(std::string_view blob)
     return checksum == checksum_stored;
 }
 
-Page::Page(bool alloc)
+Page::Page(bool alloc, PageAllocHint hint)
 {
     if (alloc)
     {
-        char *ptr = shard->PagePool()->Allocate();
+        char *ptr = shard->PagePool()->Allocate(hint);
         bool registered = shard->PagePool()->IsRegistered(ptr);
         uintptr_t raw = reinterpret_cast<uintptr_t>(ptr);
         uintptr_t flag = static_cast<uintptr_t>(!registered);
@@ -96,6 +99,8 @@ PagesPool::PagesPool(const KvOptions *options)
     : options_(options),
       free_head_(nullptr),
       free_cnt_(0),
+      registered_free_head_(nullptr),
+      registered_free_cnt_(0),
       registered_base_(nullptr),
       registered_bytes_(0),
       registered_pages_(0),
@@ -109,6 +114,19 @@ PagesPool::PagesPool(const KvOptions *options)
     if (initial_pages == 0)
     {
         initial_pages = 1;
+    }
+    const size_t max_reg_pages =
+#ifdef IORING_MAX_REG_BUFFERS
+        IORING_MAX_REG_BUFFERS;
+#else
+        32768;
+#endif
+    if (initial_pages > max_reg_pages)
+    {
+        LOG(WARNING) << "buffer_pool_size requests " << initial_pages
+                     << " pages, clamping to io_uring limit "
+                     << max_reg_pages;
+        initial_pages = max_reg_pages;
     }
     registered_pages_ = initial_pages;
     registered_bytes_ = initial_pages * page_size;
@@ -139,7 +157,23 @@ void PagesPool::Extend(size_t pages, bool registered)
 
     for (size_t i = 0; i < chunk_size; i += page_size)
     {
-        Free(ptr + i);
+        char *page_ptr = ptr + i;
+#ifdef NDEBUG
+        (void) registered;
+#else
+        memset(page_ptr, 123, options_->data_page_size);
+#endif
+        if (registered)
+        {
+            PushRegistered(page_ptr);
+        }
+        else
+        {
+            FreePage *free_page = new (page_ptr) FreePage;
+            free_page->next_ = free_head_;
+            free_head_ = free_page;
+            free_cnt_++;
+        }
     }
     auto t3 = butil::cpuwide_time_ns() - a;
     if (t1 + t2 + t3 > 500000)
@@ -149,8 +183,14 @@ void PagesPool::Extend(size_t pages, bool registered)
     }
 }
 
-char *PagesPool::Allocate()
+char *PagesPool::Allocate(PageAllocHint hint)
 {
+    if (hint == PageAllocHint::PreferRegistered &&
+        registered_free_head_ != nullptr)
+    {
+        return PopRegistered();
+    }
+
     if (free_head_ == nullptr)
     {
         auto t = butil::cpuwide_time_ns();
@@ -164,14 +204,20 @@ char *PagesPool::Allocate()
     }
     FreePage *head = free_head_;
     free_head_ = head->next_;
+    free_cnt_--;
     return reinterpret_cast<char *>(head);
 }
 
 void PagesPool::Free(char *ptr)
 {
     assert(ptr != nullptr);
+    bool registered = IsRegistered(ptr);
+    if (registered)
+    {
+        PushRegistered(ptr);
+        return;
+    }
 #ifndef NDEBUG
-    // Fill with junk data for debugging purposes.
     memset(ptr, 123, options_->data_page_size);
 #endif
     FreePage *free_page = new (ptr) FreePage;
@@ -216,5 +262,24 @@ std::optional<uint32_t> PagesPool::RegisteredIndex(const char *ptr) const
     uintptr_t addr = reinterpret_cast<uintptr_t>(ptr);
     uint32_t idx = static_cast<uint32_t>((addr - base) >> page_shift_);
     return idx;
+}
+
+char *PagesPool::PopRegistered()
+{
+    FreePage *head = registered_free_head_;
+    registered_free_head_ = head->next_;
+    registered_free_cnt_--;
+    return reinterpret_cast<char *>(head);
+}
+
+void PagesPool::PushRegistered(char *ptr)
+{
+#ifndef NDEBUG
+    memset(ptr, 123, options_->data_page_size);
+#endif
+    FreePage *free_page = new (ptr) FreePage;
+    free_page->next_ = registered_free_head_;
+    registered_free_head_ = free_page;
+    registered_free_cnt_++;
 }
 }  // namespace eloqstore

@@ -30,10 +30,16 @@ inline static size_t page_align = sysconf(_SC_PAGESIZE);
 inline constexpr uintptr_t unregistered_ptr_mask =
     uintptr_t(1) << (sizeof(uintptr_t) * 8 - 1);
 
+enum class PageAllocHint : uint8_t
+{
+    PreferRegistered = 0,
+    GenericOnly
+};
+
 class Page
 {
 public:
-    explicit Page(bool alloc);
+    explicit Page(bool alloc, PageAllocHint hint = PageAllocHint::PreferRegistered);
     Page(Page &&other) noexcept;
     Page &operator=(Page &&other) noexcept;
     Page(const Page &) = delete;
@@ -58,7 +64,7 @@ class PagesPool
 public:
     using UPtr = std::unique_ptr<char, decltype(&std::free)>;
     PagesPool(const KvOptions *options);
-    char *Allocate();
+    char *Allocate(PageAllocHint hint = PageAllocHint::PreferRegistered);
     void Free(char *ptr);
     bool IsRegistered(const char *ptr) const;
     size_t RegisteredPages() const;
@@ -84,10 +90,15 @@ private:
     std::vector<MemChunk> chunks_;
     FreePage *free_head_;
     size_t free_cnt_;
+    FreePage *registered_free_head_;
+    size_t registered_free_cnt_;
     char *registered_base_;
     size_t registered_bytes_;
     size_t registered_pages_;
     uint8_t page_shift_;
+
+    char *PopRegistered();
+    void PushRegistered(char *ptr);
 };
 
 }  // namespace eloqstore
