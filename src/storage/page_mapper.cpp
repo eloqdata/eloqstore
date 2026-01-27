@@ -39,16 +39,11 @@ MappingSnapshot::MappingTbl::MappingTbl(MappingArena *vector_arena,
     }
 }
 
-MappingSnapshot::MappingTbl::MappingTbl(MappingChunkArena *arena)
-    : MappingTbl(nullptr, arena)
-{
-}
-
 MappingSnapshot::MappingTbl::~MappingTbl()
 {
-    clear();
     if (vector_arena_ != nullptr)
     {
+        clear();
         vector_arena_->Release(std::move(base_));
     }
 }
@@ -326,7 +321,6 @@ MappingSnapshot::MappingTbl::AcquireChunk()
         return chunk_arena_->Acquire();
     }
     auto chunk = std::make_unique<Chunk>();
-    chunk->fill(MappingSnapshot::InvalidValue);
     return chunk;
 }
 
@@ -336,7 +330,6 @@ void MappingSnapshot::MappingTbl::ReleaseChunk(std::unique_ptr<Chunk> chunk)
     {
         return;
     }
-    chunk->fill(MappingSnapshot::InvalidValue);
     if (chunk_arena_ != nullptr)
     {
         chunk_arena_->Release(std::move(chunk));
