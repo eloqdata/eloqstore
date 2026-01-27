@@ -65,7 +65,7 @@ KvError BatchWriteTask::SeekStack(std::string_view search_key)
             auto [_, err] = Pop();
             CHECK_KV_ERR(err);
         }
-        YieldToLowPQ();
+        // YieldToLowPQ();
     }
     return KvError::NoError;
 }
@@ -1021,14 +1021,8 @@ KvError BatchWriteTask::FlushIndexPage(MemIndexPage *idx_page,
         }
 
         IndexStackEntry *parent_entry = stack_[stack_.size() - 2].get();
-        int64_t start = butil::cpuwide_time_ns();
         parent_entry->changes_.emplace_back(
             std::move(idx_page_key), idx_page->GetPageId(), WriteOp::Upsert);
-        int64_t diff = butil::cpuwide_time_ns() - start;
-        if (diff > 200000)
-        {
-            LOG(ERROR) << "FlushIndexPage " << diff << "ns";
-        }
     }
     return KvError::NoError;
 }
@@ -1065,8 +1059,6 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
             new_data_page.SetPage(Page(true));
             memcpy(new_data_page.PagePtr(), page_view.data(), page_view.size());
         }
-        // YieldToLowPQ();
-        // step_ = 72;
 
         // This is a new data page that does not exist in the tree and has a new
         // page Id.
