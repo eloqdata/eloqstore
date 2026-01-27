@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <vector>
 
@@ -73,7 +74,7 @@ private:
     };
 
     const KvOptions *options_;
-    std::vector<MemChunk> chunks_;
+    std::deque<MemChunk> chunks_;
     FreePage *free_head_;
     size_t free_cnt_;
 };
