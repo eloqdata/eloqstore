@@ -977,8 +977,6 @@ KvError BatchWriteTask::FinishIndexPage(DirtyIndexPage &prev,
             prev.page_->RestartNum() > 1 &&
             prev.page_->ContentLength() > three_quarter)
         {
-            // ThdTask()->YieldToLowPQ();
-            // ThdTask()->step_ = 131;
             page_view = Redistribute(prev.page_, page_view, cur_page_key);
         }
 
@@ -988,15 +986,11 @@ KvError BatchWriteTask::FinishIndexPage(DirtyIndexPage &prev,
         prev.page_ = nullptr;
         prev.page_id_ = MaxPageId;
     }
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 132;
     MemIndexPage *cur_page = shard->IndexManager()->AllocIndexPage();
     if (cur_page == nullptr)
     {
         return KvError::OutOfMem;
     }
-    // ThdTask()->YieldToLowPQ();
-    // ThdTask()->step_ = 133;
     memcpy(cur_page->PagePtr(), page_view.data(), page_view.size());
     prev.page_ = cur_page;
     prev.key_ = std::move(cur_page_key);
@@ -1050,8 +1044,6 @@ KvError BatchWriteTask::FlushIndexPage(MemIndexPage *idx_page,
 
 KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
 {
-    // YieldToLowPQ();
-    // step_ = 70;
     const uint16_t cur_page_len = data_page_builder_.CurrentSizeEstimate();
     std::string_view page_view = data_page_builder_.Finish();
     if (page_id == MaxPageId)
@@ -1065,8 +1057,6 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
         const uint16_t one_quarter = Options()->data_page_size >> 2;
         const uint16_t three_quarter = Options()->data_page_size - one_quarter;
         DataPage *prev_page = TripleElement(0);
-        // YieldToLowPQ();
-        // step_ = 71;
         if (cur_page_len < one_quarter && prev_page != nullptr &&
             prev_page->RestartNum() > 1 &&
             prev_page->ContentLength() > three_quarter)
@@ -1097,13 +1087,9 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
                stack_.back()->changes_.back().key_ < page_key);
         stack_.back()->changes_.emplace_back(
             std::move(page_key), page_id, WriteOp::Upsert);
-        // YieldToLowPQ();
-        // step_ = 73;
     }
     else
     {
-        // YieldToLowPQ();
-        // step_ = 74;
         DataPage new_page(page_id);
         memcpy(new_page.PagePtr(), page_view.data(), page_view.size());
         // This is an existing data page with updated content.
