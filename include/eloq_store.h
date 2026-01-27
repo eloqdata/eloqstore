@@ -473,6 +473,16 @@ public:
     {
         return cloud_service_.get();
     }
+
+    /**
+     * @brief Get the PrewarmService instance
+     * @return Pointer to PrewarmService, or nullptr if not available
+     */
+    PrewarmService *GetPrewarmService() const
+    {
+        return prewarm_service_.get();
+    }
+
     uint64_t Term() const
     {
         return term_;

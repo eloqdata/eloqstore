@@ -106,6 +106,18 @@ public:
     void Start();
     void Stop();
 
+    /**
+     * @brief Wait for prewarm operation to complete
+     * Blocks until the prewarm thread finishes execution
+     */
+    void Wait()
+    {
+        if (thread_.joinable())
+        {
+            thread_.join();
+        }
+    }
+
 private:
     friend class EloqStore;
     friend class CloudStoreMgr;
