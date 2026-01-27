@@ -69,6 +69,22 @@ TEST_CASE("EloqStore ValidateOptions validates all parameters", "[eloq_store]")
     REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
     options = CreateValidOptions(test_dir);  // restore valid value
 
+    // Test invalid max_write_pages_one_submission (zero)
+    options.max_write_pages_one_submission = 0;
+    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
+    options = CreateValidOptions(test_dir);  // restore valid value
+
+    // Test invalid max_write_pages_one_submission (> io_queue_size)
+    options.max_write_pages_one_submission = options.io_queue_size + 1;
+    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
+    options = CreateValidOptions(test_dir);  // restore valid value
+
+    // Test invalid max_write_pages_one_submission (< max_write_batch_pages)
+    options.max_write_pages_one_submission =
+        options.max_write_batch_pages - 1;
+    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
+    options = CreateValidOptions(test_dir);  // restore valid value
+
     // Test invalid max_cloud_concurrency (cloud mode)
     options.cloud_store_path = "test";
     options.max_cloud_concurrency = 0;

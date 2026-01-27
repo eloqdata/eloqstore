@@ -486,6 +486,11 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
             iov[i].iov_base = VarPagePtr(pages[i]);
             iov[i].iov_len = options_->data_page_size;
         }
+        while (pages_to_write_ + num_pages >=
+               options_->max_write_pages_one_submission)
+        {
+            ThdTask()->YieldToLowPQ();
+        }
         io_uring_prep_writev(sqe, fd, iov.data(), num_pages, offset);
 
         int ret = ThdTask()->WaitIoResult();

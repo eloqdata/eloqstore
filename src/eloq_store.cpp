@@ -61,6 +61,25 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
         LOG(ERROR) << "Invalid option max_write_batch_pages";
         return false;
     }
+    if (opts.max_write_pages_one_submission == 0)
+    {
+        LOG(ERROR) << "Invalid option max_write_pages_one_submission";
+        return false;
+    }
+    if (opts.max_write_pages_one_submission > opts.io_queue_size)
+    {
+        LOG(ERROR)
+            << "max_write_pages_one_submission cannot be greater than "
+            << "io_queue_size";
+        return false;
+    }
+    if (opts.max_write_pages_one_submission < opts.max_write_batch_pages)
+    {
+        LOG(ERROR)
+            << "max_write_pages_one_submission cannot be smaller than "
+            << "max_write_batch_pages";
+        return false;
+    }
 
     if (!opts.cloud_store_path.empty())
     {

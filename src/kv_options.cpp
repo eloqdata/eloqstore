@@ -153,6 +153,11 @@ int KvOptions::LoadFromIni(const char *path)
         max_write_batch_pages =
             reader.GetUnsigned(sec_run, "max_write_batch_pages", 64);
     }
+    if (reader.HasValue(sec_run, "max_write_pages_one_submission"))
+    {
+        max_write_pages_one_submission = reader.GetUnsigned(
+            sec_run, "max_write_pages_one_submission", 64);
+    }
     if (reader.HasValue(sec_run, "buf_ring_size"))
     {
         buf_ring_size = reader.GetUnsigned(sec_run, "buf_ring_size", 1 << 10);

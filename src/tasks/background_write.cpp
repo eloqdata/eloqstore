@@ -96,7 +96,6 @@ void BackgroundWrite::HeapSortFpIdsWithYield(
 KvError BackgroundWrite::CompactDataFile()
 {
     Record(300000);
-    step_ = 0;
     LOG(INFO) << "begin compaction on " << this->tbl_ident_;
     const KvOptions *opts = Options();
     assert(opts->data_append_mode);
@@ -105,7 +104,6 @@ KvError BackgroundWrite::CompactDataFile()
     auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_ident_);
     CHECK_KV_ERR(err);
     RootMeta *meta = root_handle.Get();
-    step_ = 1;
 
     auto allocator =
         static_cast<AppendAllocator *>(meta->mapper_->FilePgAllocator());
@@ -122,7 +120,6 @@ KvError BackgroundWrite::CompactDataFile()
         TriggerFileGC();
         return KvError::NoError;
     }
-    step_ = 2;
     CHECK((meta->root_id_ != MaxPageId) || (meta->ttl_root_id_ != MaxPageId))
         << "mapping_cnt=" << mapping_cnt << " tbl:" << tbl_ident_;
 
@@ -279,18 +276,15 @@ KvError BackgroundWrite::CompactDataFile()
         }
         it_low = it_high;
     }
-    step_ = 15;
     allocator->UpdateStat(min_file_id, empty_file_cnt);
     assert(mapping_cnt == mapper->MappingCount());
     assert(allocator->SpaceSize() >= mapping_cnt);
     assert(meta->mapper_->DebugStat());
 
-    step_ = 16;
     err = UpdateMeta();
     CHECK_KV_ERR(err);
     moving_cached.Finish();
     TriggerFileGC();
-    step_ = 17;
     LOG(INFO) << "finish compaction on " << tbl_ident_;
     return KvError::NoError;
 }

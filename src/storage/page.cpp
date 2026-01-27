@@ -110,6 +110,7 @@ void PagesPool::Extend(size_t pages)
     const size_t chunk_size = pages * page_size;
     auto a = butil::cpuwide_time_ns();
     char *ptr = (char *) std::aligned_alloc(page_align, chunk_size);
+    memset(ptr, 0, chunk_size);
     auto t1 = butil::cpuwide_time_ns() - a;
     a = butil::cpuwide_time_ns();
     assert(ptr);

@@ -67,7 +67,11 @@ struct KvOptions
     /**
      * @brief The maximum number of pages per batch for the write task.
      */
-    uint32_t max_write_batch_pages = 256;
+    uint32_t max_write_batch_pages = 32;
+    /**
+     * @brief The maximum numer of pages to write per io_uring submit.
+     */
+    uint32_t max_write_pages_one_submission = 64;
     /**
      * @brief Size of io-uring selected buffer ring.
      * It must be a power-of 2, and can be up to 32768.
