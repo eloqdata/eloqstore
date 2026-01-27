@@ -220,15 +220,15 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
                                               FilePageId fp_id,
                                               Page page)
 {
-    ThdTask()->YieldToLowPQ();
-    ThdTask()->step_ = 100;
+    // ThdTask()->YieldToLowPQ();
+    // ThdTask()->step_ = 100;
     auto [file_id, offset] = ConvFilePageId(fp_id);
     auto term = GetFileIdTerm(tbl_id, file_id);
     CHECK(term.has_value()) << "ReadPage, not found term for file id "
                             << file_id << " in table " << tbl_id;
     auto [fd_ref, err] = OpenFD(tbl_id, file_id, true, term.value());
-    ThdTask()->YieldToLowPQ();
-    ThdTask()->step_ = 101;
+    // ThdTask()->YieldToLowPQ();
+    // ThdTask()->step_ = 101;
     if (err != KvError::NoError)
     {
         return {std::move(page), err};
@@ -248,7 +248,6 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
             sqe->buf_group = buf_group_;
             sqe->flags |= IOSQE_BUFFER_SELECT;
             io_uring_prep_read(sqe, fd.first, NULL, 0, offset);
-            read_++;
             res = ThdTask()->WaitIoResult();
             if (ThdTask()->io_flags_ & IORING_CQE_F_BUFFER)
             {
@@ -273,8 +272,8 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
     {
         return {std::move(page), err};
     }
-    ThdTask()->YieldToLowPQ();
-    ThdTask()->step_ = 102;
+    // ThdTask()->YieldToLowPQ();
+    // ThdTask()->step_ = 102;
 
     if (!options_->skip_verify_checksum &&
         !ValidateChecksum({page.Ptr(), options_->data_page_size}))
@@ -282,8 +281,8 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
         LOG(ERROR) << "corrupted " << tbl_id << " page " << fp_id;
         return {std::move(page), KvError::Corrupted};
     }
-    ThdTask()->YieldToLowPQ();
-    ThdTask()->step_ = 103;
+    // ThdTask()->YieldToLowPQ();
+    // ThdTask()->step_ = 103;
     return {std::move(page), KvError::NoError};
 }
 
@@ -340,7 +339,6 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
         sqe->buf_group = buf_group_;
         sqe->flags |= IOSQE_BUFFER_SELECT;
         io_uring_prep_read(sqe, fd, NULL, 0, req->offset_);
-        read_++;
     };
 
     // Send requests.
@@ -497,8 +495,6 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
             iov[i].iov_len = options_->data_page_size;
         }
         io_uring_prep_writev(sqe, fd, iov.data(), num_pages, offset);
-        write_ += num_pages;
-        writev_++;
 
         int ret = ThdTask()->WaitIoResult();
         if (ret < 0)
@@ -964,15 +960,7 @@ void IouringMgr::Submit()
     {
         return;
     }
-    auto t = butil::cpuwide_time_ns();
     int ret = io_uring_submit(&ring_);
-    t = butil::cpuwide_time_ns() - t;
-    if (t > 500000)
-    {
-        LOG(INFO) << "io_uring submit cost " << t / 1000
-                  << " us, read=" << read_ << ", writev=" << writev_
-                  << ", write=" << write_ << ", total=" << prepared_sqe_;
-    }
     if (__builtin_expect(ret < 0, 0))
     {
         LOG(ERROR) << "iouring submit failed " << ret;
@@ -980,9 +968,6 @@ void IouringMgr::Submit()
     else
     {
         prepared_sqe_ -= ret;
-        read_ = 0;
-        writev_ = 0;
-        write_ = 0;
     }
 }
 
@@ -1151,7 +1136,6 @@ int IouringMgr::Read(FdIdx fd, char *dst, size_t n, uint64_t offset)
         sqe->flags |= IOSQE_FIXED_FILE;
     }
     io_uring_prep_read(sqe, fd.first, dst, n, offset);
-    read_++;
     return ThdTask()->WaitIoResult();
 }
 
