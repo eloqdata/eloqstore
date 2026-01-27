@@ -441,8 +441,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     DataPageIter base_page_iter{base_page, Options()};
     bool is_base_iter_valid = false;
     AdvanceDataPageIter(base_page_iter, is_base_iter_valid);
-    YieldToLowPQ();
-    step_ = 32;
+    // YieldToLowPQ();
+    // step_ = 32;
 
     data_page_builder_.Reset();
 
@@ -474,8 +474,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     std::string prev_key;
     std::string_view page_key = stack_.back()->idx_page_iter_.Key();
     std::string curr_page_key{page_key.data(), page_key.size()};
-    YieldToLowPQ();
-    step_ = 33;
+    // YieldToLowPQ();
+    // step_ = 33;
 
     PageId page_id = MaxPageId;
     if (base_page != nullptr)
@@ -539,8 +539,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             prev_key = key;
             return KvError::NoError;
         });
-    YieldToLowPQ();
-    step_ = 34;
+    // YieldToLowPQ();
+    // step_ = 34;
     while (is_base_iter_valid && change_it != change_end_it)
     {
         std::string_view base_key = base_page_iter.Key();
@@ -688,8 +688,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             break;
         }
     }
-    YieldToLowPQ();
-    step_ = 35;
+    // YieldToLowPQ();
+    // step_ = 35;
 
     while (is_base_iter_valid)
     {
@@ -704,8 +704,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         CHECK_KV_ERR(err);
         AdvanceDataPageIter(base_page_iter, is_base_iter_valid);
     }
-    YieldToLowPQ();
-    step_ = 36;
+    // YieldToLowPQ();
+    // step_ = 36;
 
     while (change_it != change_end_it)
     {
@@ -741,8 +741,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         }
         ++change_it;
     }
-    YieldToLowPQ();
-    step_ = 37;
+    // YieldToLowPQ();
+    // step_ = 37;
 
     if (data_page_builder_.IsEmpty())
     {
@@ -759,8 +759,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     }
     else
     {
-        YieldToLowPQ();
-        step_ = 39;
+        // YieldToLowPQ();
+        // step_ = 39;
         err = FinishDataPage(std::move(curr_page_key), page_id);
         CHECK_KV_ERR(err);
     }
@@ -777,8 +777,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
 
 std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
 {
-    ThdTask()->YieldToLowPQ();
-    ThdTask()->step_ = 110;
+    // ThdTask()->YieldToLowPQ();
+    // ThdTask()->step_ = 110;
     if (stack_.empty())
     {
         return {nullptr, KvError::NoError};
@@ -799,8 +799,8 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
 
     idx_page_builder_.Reset();
 
-    ThdTask()->YieldToLowPQ();
-    ThdTask()->step_ = 112;
+    // ThdTask()->YieldToLowPQ();
+    // ThdTask()->step_ = 112;
     const Comparator *cmp = shard->IndexManager()->GetComparator();
     std::vector<IndexOp> &changes = stack_entry->changes_;
     MemIndexPage *stack_page = stack_entry->idx_page_;
@@ -847,8 +847,8 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         }
         return KvError::NoError;
     };
-    ThdTask()->YieldToLowPQ();
-    ThdTask()->step_ = 113;
+    // ThdTask()->YieldToLowPQ();
+    // ThdTask()->step_ = 113;
 
     while (is_base_iter_valid && cit != changes.end())
     {
@@ -992,8 +992,8 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         }
         prev_page.page_ = nullptr;
     }
-    ThdTask()->YieldToLowPQ();
-    ThdTask()->step_ = 117;
+    // ThdTask()->YieldToLowPQ();
+    // ThdTask()->step_ = 117;
 
     if (stack_page != nullptr)
     {
@@ -1006,8 +1006,8 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
 KvError BatchWriteTask::FinishIndexPage(DirtyIndexPage &prev,
                                         std::string cur_page_key)
 {
-    ThdTask()->YieldToLowPQ();
-    ThdTask()->step_ = 130;
+    // ThdTask()->YieldToLowPQ();
+    // ThdTask()->step_ = 130;
     assert(!idx_page_builder_.IsEmpty());
     const uint16_t cur_page_len = idx_page_builder_.CurrentSizeEstimate();
     std::string_view page_view = idx_page_builder_.Finish();

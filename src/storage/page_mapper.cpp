@@ -275,7 +275,6 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
     const size_t current_chunks = base_.size();
     if (new_size < logical_size_)
     {
-        LOG(INFO) << "shrink from " << logical_size_ << " to " << new_size;
         if (required_chunks < current_chunks)
         {
             for (size_t idx = required_chunks; idx < current_chunks; ++idx)
