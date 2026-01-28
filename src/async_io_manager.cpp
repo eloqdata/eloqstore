@@ -244,7 +244,6 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
             sqe->buf_group = buf_group_;
             sqe->flags |= IOSQE_BUFFER_SELECT;
             io_uring_prep_read(sqe, fd.first, NULL, 0, offset);
-            read_++;
             res = ThdTask()->WaitIoResult();
             if (ThdTask()->io_flags_ & IORING_CQE_F_BUFFER)
             {
