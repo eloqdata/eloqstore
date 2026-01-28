@@ -178,13 +178,10 @@ inline void MappingChunkArena::Release(
 
 inline void MappingChunkArena::Extend()
 {
-    auto start = butil::cpuwide_time_ns();
     for (size_t i = 0; i < 1024; ++i)
     {
         pool_.push_back(std::make_unique<MappingSnapshot::MappingTbl::Chunk>());
     }
-    start = butil::cpuwide_time_ns() - start;
-    LOG(INFO) << "Extend cost " << start << "ns";;
 }
 
 class MappingArena

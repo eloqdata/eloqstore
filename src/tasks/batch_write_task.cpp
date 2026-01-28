@@ -255,7 +255,7 @@ void BatchWriteTask::Abort()
 
 KvError BatchWriteTask::Apply()
 {
-    Record(300000);
+    Record(800000);
     // directly go to low priority queue and wait for scheduling
     YieldToLowPQ();
     step_ = 0;

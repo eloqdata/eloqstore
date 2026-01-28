@@ -263,12 +263,16 @@ KvError WriteTask::FlushManifest()
     const bool dict_dirty = cow_meta_.compression_->Dirty();
 
     // Serialize FileIdTermMapping for this table.
+    YieldToLowPQ();
+    step_ = 10;
     std::string term_buf;
     std::shared_ptr<FileIdTermMapping> file_term_mapping =
         IoMgr()->GetOrCreateFileIdTermMapping(tbl_ident_);
     file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
                                         IoMgr()->ProcessTerm());
     SerializeFileIdTermMapping(*file_term_mapping, term_buf);
+    YieldToLowPQ();
+    step_ = 11;
 
     if (need_empty_snapshot)
     {
@@ -330,6 +334,7 @@ KvError WriteTask::UpdateMeta()
 {
     KvError err;
     const KvOptions *opts = Options();
+    step_ = 7;
     // Flush data pages.
     if (opts->data_append_mode)
     {
@@ -344,11 +349,13 @@ KvError WriteTask::UpdateMeta()
         err = WaitWrite();
         CHECK_KV_ERR(err);
     }
+    step_ = 8;
 
     err = IoMgr()->SyncData(tbl_ident_);
     CHECK_KV_ERR(err);
 
     // Update meta data in storage and then in memory.
+    step_ = 9;
     err = FlushManifest();
     CHECK_KV_ERR(err);
 

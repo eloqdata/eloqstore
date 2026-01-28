@@ -114,7 +114,6 @@ KvError BackgroundWrite::CompactDataFile()
             --io_mgr->compaction_in_progress_;
         }
     } guard;
-    Record(300000);
     LOG(INFO) << "begin compaction on " << this->tbl_ident_;
     const KvOptions *opts = Options();
     assert(opts->data_append_mode);
