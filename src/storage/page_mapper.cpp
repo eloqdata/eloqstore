@@ -180,7 +180,7 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
     {
         return;
     }
-    ResizeInternal(src.logical_size_);
+    ResizeInternal(src.logical_size_, /*init_new_chunks=*/false);
     ThdTask()->YieldToLowPQ();
     for (size_t chunk_idx = 0; chunk_idx < base_.size(); ++chunk_idx)
     {
@@ -258,7 +258,8 @@ void MappingSnapshot::MappingTbl::EnsureChunkCount(size_t count)
     }
 }
 
-void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
+void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size,
+                                                 bool init_new_chunks)
 {
     // must not yield within this method to avoid new_size is changed.
     if (new_size == logical_size_)
@@ -282,16 +283,19 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
     }
 
     EnsureChunkCount(required_chunks);
-    auto start = butil::cpuwide_time_ns();
-    for (size_t i = current_chunks; i < required_chunks; ++i)
+    if (init_new_chunks)
     {
-        base_[i]->fill(InvalidValue);
-    }
-    start = butil::cpuwide_time_ns() - start;
-    if (start > 200000)
-    {
-        LOG(INFO) << "resize fill " << required_chunks - current_chunks
-                  << " chunks, cost " << start << "ns";
+        auto start = butil::cpuwide_time_ns();
+        for (size_t i = current_chunks; i < required_chunks; ++i)
+        {
+            base_[i]->fill(InvalidValue);
+        }
+        start = butil::cpuwide_time_ns() - start;
+        if (start > 200000)
+        {
+            LOG(INFO) << "resize fill " << required_chunks - current_chunks
+                      << " chunks, cost " << start << "ns";
+        }
     }
 
     logical_size_ = new_size;
