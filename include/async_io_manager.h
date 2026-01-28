@@ -65,7 +65,7 @@ class EloqStore;
 class AsyncIoManager
 {
 public:
-    explicit AsyncIoManager(const KvOptions *opts) : options_(opts){};
+    explicit AsyncIoManager(const KvOptions *opts) : options_(opts) {};
     virtual ~AsyncIoManager() = default;
     static std::unique_ptr<AsyncIoManager> Instance(const EloqStore *store,
                                                     uint32_t fd_limit);
@@ -376,7 +376,7 @@ public:
 
     struct BaseReq
     {
-        explicit BaseReq(KvTask *task = nullptr) : task_(task){};
+        explicit BaseReq(KvTask *task = nullptr) : task_(task) {};
         KvTask *task_;
         int res_{0};
         uint32_t flags_{0};
@@ -840,7 +840,7 @@ public:
     class Manifest : public ManifestFile
     {
     public:
-        explicit Manifest(std::string_view content) : content_(content){};
+        explicit Manifest(std::string_view content) : content_(content) {};
         KvError Read(char *dst, size_t n) override;
         KvError SkipPadding(size_t n) override;
 

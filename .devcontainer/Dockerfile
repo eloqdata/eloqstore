@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
     sudo \
     clangd \
-    clang-format \
+    net-tools \
  && rm -rf /var/lib/apt/lists/*
 
 USER root

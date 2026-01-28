@@ -2,6 +2,27 @@
 
 set -ex
 
+kernel_ge() {
+  local need_major="$1" need_minor="$2"
+  local rel ver major minor
+
+  rel="$(uname -r)"          # e.g. 6.5.0-41-generic
+  ver="${rel%%-*}"           # -> 6.5.0
+  IFS=. read -r major minor _ <<<"$ver"
+
+  major="${major:-0}"
+  minor="${minor:-0}"
+
+  (( major > need_major || (major == need_major && minor >= need_minor) ))
+}
+
+if ! kernel_ge 6 6; then
+  echo "Kernel $(uname -r) < 6.6, exit." >&2
+  exit 1
+fi
+
+echo "Kernel $(uname -r) >= 6.6, continue."
+
 # Ensure noninteractive apt; keep TZ default
 export DEBIAN_FRONTEND=noninteractive
 export TZ=${TZ:-UTC}
@@ -71,7 +92,7 @@ cd ../ && rm -rf protobuf
 git clone https://github.com/eloqdata/glog.git glog
 cd glog
 cmake -S . -B build -G "Unix Makefiles"
-cmake --build build -j6
+cmake --build build -j$(nproc)
 sudo cmake --build build --target install
 cd ../ && rm -rf glog
 
@@ -80,7 +101,7 @@ git clone https://github.com/axboe/liburing.git liburing
 cd liburing
 git checkout tags/liburing-2.6
 ./configure --cc=gcc --cxx=g++
-make -j4 && sudo make install
+make -j$(nproc) && sudo make install
 cd .. && rm -rf liburing
 
 # Install brpc
@@ -91,7 +112,7 @@ cmake .. \
     -DWITH_GLOG=ON \
     -DIO_URING_ENABLED=ON \
     -DBUILD_SHARED_LIBS=ON
-cmake --build . -j6
+cmake --build . -j$(nproc)
 sudo cp -r ./output/include/* /usr/include/
 sudo cp ./output/lib/* /usr/lib/
 cd ../../ && rm -rf brpc
@@ -102,7 +123,7 @@ cd braft
 sed -i 's/libbrpc.a//g' CMakeLists.txt
 mkdir bld && cd bld
 cmake .. -DBRPC_WITH_GLOG=ON
-cmake --build . -j6
+cmake --build . -j$(nproc)
 sudo cp -r ./output/include/* /usr/include/
 sudo cp ./output/lib/* /usr/lib/
 cd ../../ && rm -rf braft
@@ -133,7 +154,7 @@ cmake .. \
     -DBUILD_SHARED_LIBS=ON \
     -DFORCE_SHARED_CRT=OFF \
     -DBUILD_ONLY="s3"
-cmake --build . --config RelWithDebInfo -j6
+cmake --build . --config RelWithDebInfo -j$(nproc)
 cmake --install . --config RelWithDebInfo
 sudo cp -r ./output/include/* /usr/include/
 sudo cp -r ./output/lib/* /usr/lib/
