@@ -1,10 +1,10 @@
 #pragma once
 
 #include <array>
+#include <deque>
 #include <memory>
 #include <utility>
 #include <vector>
-#include <deque>
 
 #include "absl/container/flat_hash_map.h"
 #include "pool.h"
