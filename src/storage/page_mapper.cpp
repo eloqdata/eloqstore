@@ -285,16 +285,9 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size,
     EnsureChunkCount(required_chunks);
     if (init_new_chunks)
     {
-        auto start = butil::cpuwide_time_ns();
         for (size_t i = current_chunks; i < required_chunks; ++i)
         {
             base_[i]->fill(InvalidValue);
-        }
-        start = butil::cpuwide_time_ns() - start;
-        if (start > 200000)
-        {
-            LOG(INFO) << "resize fill " << required_chunks - current_chunks
-                      << " chunks, cost " << start << "ns";
         }
     }
 
