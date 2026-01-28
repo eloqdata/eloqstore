@@ -32,7 +32,7 @@ std::atomic<uint64_t> Shard::tsc_cycles_per_microsecond_{0};
 
 #ifdef NDEBUG
 DEFINE_uint64(max_processing_time_microseconds,
-              50,
+              500,
               "Max processing time in microseconds for low priority tasks.");
 #else
 DEFINE_uint64(max_processing_time_microseconds,
