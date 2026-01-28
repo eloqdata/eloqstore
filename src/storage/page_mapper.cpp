@@ -179,6 +179,7 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
     {
         return;
     }
+    ThdTask()->step_ = 204;
     ResizeInternal(src.logical_size_);
     ThdTask()->YieldToLowPQ();
     ThdTask()->step_ = 205;
@@ -238,7 +239,7 @@ void MappingSnapshot::MappingTbl::EnsureSize(PageId page_id)
     ResizeInternal(new_size);
 }
 
-inline size_t MappingSnapshot::MappingTbl::RequiredChunks(size_t n) const
+inline size_t MappingSnapshot::MappingTbl::RequiredChunks(size_t n)
 {
     return (n + kChunkSize - 1) >> kChunkShift;
 }
@@ -261,11 +262,14 @@ void MappingSnapshot::MappingTbl::EnsureChunkCount(size_t count)
 void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
 {
     // must not yield within this method to avoid new_size is changed.
+    auto t = butil::cpuwide_time_ns();
     if (new_size == logical_size_)
     {
         return;
     }
     const size_t required_chunks = RequiredChunks(new_size);
+    auto t1 = butil::cpuwide_time_ns() - t;
+    t = butil::cpuwide_time_ns();
     const size_t current_chunks = base_.size();
     if (new_size < logical_size_)
     {
@@ -280,8 +284,12 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
         logical_size_ = new_size;
         return;
     }
+    auto t2 = butil::cpuwide_time_ns() - t;
+    t = butil::cpuwide_time_ns();
 
     EnsureChunkCount(required_chunks);
+    auto t3 = butil::cpuwide_time_ns() - t;
+    t = butil::cpuwide_time_ns();
 
     size_t old_size = logical_size_;
     while (old_size < new_size)
@@ -294,6 +302,9 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
             base_[chunk_idx]->data() + chunk_offset, fill, InvalidValue);
         old_size += fill;
     }
+    auto t4 = butil::cpuwide_time_ns() - t;
+    LOG(INFO) << "ResizeInternal t1 = " << t1 << " t2 = " << t2
+              << " t3 = " << t3 << " t4 = " << t4;
     logical_size_ = new_size;
 }
 

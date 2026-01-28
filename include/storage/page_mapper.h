@@ -67,7 +67,7 @@ struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
 
     private:
         void EnsureSize(PageId page_id);
-        size_t RequiredChunks(size_t n) const;
+        static size_t RequiredChunks(size_t n) ;
         void EnsureChunkCount(size_t count);
         void ResizeInternal(size_t new_size);
         std::unique_ptr<Chunk> AcquireChunk();
