@@ -197,6 +197,7 @@ private:
     uint16_t curr_restart_idx_{0};
 
     std::string key_;
+    std::string prev_key_;
     PageId page_id_{MaxPageId};
 };
 }  // namespace eloqstore

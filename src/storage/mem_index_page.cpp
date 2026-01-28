@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <string_view>
 
@@ -117,6 +118,8 @@ IndexPageIter::IndexPageIter(const MemIndexPage *index_page,
                                 (1 + restart_num_) * sizeof(uint16_t)),
       curr_offset_(MemIndexPage::leftmost_ptr_offset)
 {
+    key_.reserve(128);
+    prev_key_.reserve(128);
 }
 
 IndexPageIter::IndexPageIter(std::string_view page_view, const KvOptions *opts)
@@ -129,6 +132,8 @@ IndexPageIter::IndexPageIter(std::string_view page_view, const KvOptions *opts)
 {
     assert(DecodeFixed16(page_view.data() + MemIndexPage::page_size_offset) ==
            page_view.size());
+    key_.reserve(128);
+    prev_key_.reserve(128);
 }
 
 bool IndexPageIter::ParseNextKey()
@@ -163,8 +168,13 @@ bool IndexPageIter::ParseNextKey()
     }
     else
     {
-        key_.resize(shared);
-        key_.append(pt, non_shared);
+        const size_t new_size = static_cast<size_t>(shared + non_shared);
+        if (key_.capacity() < new_size)
+        {
+            key_.reserve(new_size);
+        }
+        key_.resize(new_size);
+        std::memcpy(&key_[shared], pt, non_shared);
         pt += non_shared;
 
         // Parses the page Id. The stored value is the real page Id if this is
@@ -252,9 +262,14 @@ void IndexPageIter::PeekNextKey(std::string &key) const
     }
     else
     {
-        key.reserve(shared + non_shared);
-        key.append(key_.data(), shared);
-        key.append(pt, non_shared);
+        const size_t new_size = static_cast<size_t>(shared + non_shared);
+        if (key.capacity() < new_size)
+        {
+            key.reserve(new_size);
+        }
+        key.resize(new_size);
+        std::memcpy(&key[0], key_.data(), shared);
+        std::memcpy(&key[shared], pt, non_shared);
     }
 }
 
@@ -347,7 +362,7 @@ void IndexPageIter::Seek(std::string_view search_key)
                                                   : restart_offset_;
 
         uint16_t prev_offset = curr_offset_;
-        std::string prev_key = key_;
+        prev_key_.assign(key_);
         uint32_t prev_page_id = page_id_;
 
         while (curr_offset_ < limit)
@@ -373,14 +388,14 @@ void IndexPageIter::Seek(std::string_view search_key)
             else
             {
                 prev_offset = curr_offset_;
-                prev_key = key_;
+                prev_key_.assign(key_);
                 prev_page_id = page_id_;
             }
         }
 
         // Positions to the prior index entry.
         curr_offset_ = prev_offset;
-        key_ = prev_key;
+        key_.assign(prev_key_);
         page_id_ = prev_page_id;
     }
 }
