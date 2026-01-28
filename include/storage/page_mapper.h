@@ -1,7 +1,8 @@
 #pragma once
 
+#include <array>
+#include <deque>
 #include <memory>
-#include <string>
 #include <utility>
 #include <vector>
 
@@ -18,13 +19,17 @@ class ManifestBuilder;
 class ManifestBuffer;
 struct KvOptions;
 
+class MappingArena;
+class MappingChunkArena;
+
 struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
 {
     class MappingTbl
     {
     public:
-        MappingTbl() = default;
-        explicit MappingTbl(std::vector<uint64_t> tbl);
+        MappingTbl();
+        MappingTbl(MappingArena *vector_arena, MappingChunkArena *chunk_arena);
+        ~MappingTbl();
         MappingTbl(MappingTbl &&) = default;
         MappingTbl &operator=(MappingTbl &&) = default;
         MappingTbl(const MappingTbl &) = delete;
@@ -34,6 +39,8 @@ struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
         void reserve(size_t n);
         size_t size() const;
         size_t capacity() const;
+        void SetVectorArena(MappingArena *arena);
+        void SetChunkArena(MappingChunkArena *arena);
         void StartCopying();
         void FinishCopying();
         void ApplyChanges();
@@ -41,17 +48,37 @@ struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
         void Set(PageId page_id, uint64_t value);
         PageId PushBack(uint64_t value);
         uint64_t Get(PageId page_id) const;
-        std::vector<uint64_t> &Base();
-        const std::vector<uint64_t> &Base() const;
+        void AssignFrom(const std::vector<uint64_t> &src);
+        void CopyFrom(const MappingTbl &src);
         void ApplyPendingTo(MappingTbl &dst) const;
+        bool operator==(const MappingTbl &rhs) const;
+        bool operator!=(const MappingTbl &rhs) const
+        {
+            return !(*this == rhs);
+        }
+
+    private:
+        static constexpr size_t kChunkShift = 9;
+        static constexpr size_t kChunkSize = 1ULL << kChunkShift;
+        static constexpr size_t kChunkMask = kChunkSize - 1;
+
+    public:
+        using Chunk = std::array<uint64_t, kChunkSize>;
 
     private:
         void EnsureSize(PageId page_id);
+        static size_t RequiredChunks(size_t n);
+        void EnsureChunkCount(size_t count);
+        void ResizeInternal(size_t new_size, bool init_new_chunks = true);
+        std::unique_ptr<Chunk> AcquireChunk();
+        void ReleaseChunk(std::unique_ptr<Chunk> chunk);
 
         bool under_copying_{false};
         absl::flat_hash_map<PageId, uint64_t> changes_;
-        std::vector<uint64_t> base_;
+        std::vector<std::unique_ptr<Chunk>> base_;
         size_t logical_size_{0};
+        MappingArena *vector_arena_{nullptr};
+        MappingChunkArena *chunk_arena_{nullptr};
     };
 
     MappingSnapshot(IndexPageManager *idx_mgr,
@@ -114,6 +141,71 @@ struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
     std::shared_ptr<MappingSnapshot> next_snapshot_{nullptr};
     MappingTbl mapping_tbl_;
 };
+
+class MappingChunkArena
+{
+public:
+    std::unique_ptr<MappingSnapshot::MappingTbl::Chunk> Acquire();
+    void Release(std::unique_ptr<MappingSnapshot::MappingTbl::Chunk> chunk);
+    void Extend();
+
+private:
+    std::deque<std::unique_ptr<MappingSnapshot::MappingTbl::Chunk>> pool_;
+};
+
+inline std::unique_ptr<MappingSnapshot::MappingTbl::Chunk>
+MappingChunkArena::Acquire()
+{
+    if (pool_.empty())
+    {
+        Extend();
+    }
+    std::unique_ptr<MappingSnapshot::MappingTbl::Chunk> chunk =
+        std::move(pool_.back());
+    pool_.pop_back();
+    return chunk;
+}
+
+inline void MappingChunkArena::Release(
+    std::unique_ptr<MappingSnapshot::MappingTbl::Chunk> chunk)
+{
+    if (!chunk)
+    {
+        return;
+    }
+    pool_.push_back(std::move(chunk));
+}
+
+inline void MappingChunkArena::Extend()
+{
+    for (size_t i = 0; i < 1024; ++i)
+    {
+        pool_.push_back(std::make_unique<MappingSnapshot::MappingTbl::Chunk>());
+    }
+}
+
+class MappingArena
+{
+public:
+    using ChunkVector =
+        std::vector<std::unique_ptr<MappingSnapshot::MappingTbl::Chunk>>;
+
+    ChunkVector Acquire();
+    void Release(ChunkVector &&vec);
+
+private:
+    Pool<ChunkVector> pool_;
+};
+
+inline MappingArena::ChunkVector MappingArena::Acquire()
+{
+    return pool_.Acquire();
+}
+
+inline void MappingArena::Release(ChunkVector &&vec)
+{
+    pool_.Release(std::move(vec));
+}
 
 /**
  * @brief FilePageAllocator is used to allocate file page id.

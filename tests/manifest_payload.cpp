@@ -85,14 +85,14 @@ TEST_CASE(
     std::string_view mapping_view = payload.substr(0, mapping_len);
 
     // 4) mapping table
-    std::vector<uint64_t> parsed_tbl;
+    eloqstore::MappingSnapshot::MappingTbl parsed_tbl;
     while (!mapping_view.empty())
     {
         uint64_t val = 0;
         REQUIRE(eloqstore::GetVarint64(&mapping_view, &val));
-        parsed_tbl.push_back(val);
+        parsed_tbl.PushBack(val);
     }
-    REQUIRE(parsed_tbl == mapping_snapshot.mapping_tbl_.Base());
+    REQUIRE(parsed_tbl == mapping_snapshot.mapping_tbl_);
 
     // 5) file_term_mapping
     std::string_view file_term_mapping_view = payload.substr(mapping_len);

@@ -456,7 +456,7 @@ TEST_CASE("rootmeta eviction with small cache across partitions",
 {
     eloqstore::KvOptions opts = append_opts;
     opts.num_threads = 1;
-    opts.root_meta_cache_size = 256;
+    opts.root_meta_cache_size = 5000;
     opts.init_page_count = 8;
     opts.data_page_size = 4096;
     const uint32_t value_size = 256;
@@ -598,7 +598,7 @@ TEST_CASE("manifest tolerates trailing corruption", "[manifest]")
         REQUIRE(err == eloqstore::KvError::NoError);
         return std::tuple{replayer.root_,
                           replayer.ttl_root_,
-                          replayer.mapping_tbl_,
+                          std::move(replayer.mapping_tbl_),
                           replayer.max_fp_id_,
                           replayer.file_size_};
     };

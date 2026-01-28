@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <deque>
 #include <memory>
 #include <vector>
 
@@ -30,6 +31,9 @@ inline static size_t page_align = sysconf(_SC_PAGESIZE);
 class Page
 {
 public:
+    static constexpr uintptr_t kRegisteredMask =
+        uintptr_t(1) << (sizeof(uintptr_t) * 8 - 1);
+
     Page(bool alloc);
     Page(char *ptr);
     Page(Page &&other) noexcept;
@@ -43,9 +47,10 @@ public:
     }
     void Free();
     char *Ptr() const;
+    bool IsRegistered() const;
 
 private:
-    char *ptr_;
+    uintptr_t ptr_{0};
 };
 
 struct KvOptions;
@@ -55,15 +60,18 @@ class PagesPool
 public:
     using UPtr = std::unique_ptr<char, decltype(&std::free)>;
     PagesPool(const KvOptions *options);
+    void Init(void *registered_buffer = nullptr, size_t buffer_size = 0);
     char *Allocate();
     void Free(char *ptr);
 
 private:
     void Extend(size_t pages);
+    void AddChunk(UPtr chunk, size_t size, bool registered);
 
     struct FreePage
     {
         FreePage *next_;
+        bool registered_;
     };
 
     struct MemChunk
@@ -73,9 +81,11 @@ private:
     };
 
     const KvOptions *options_;
-    std::vector<MemChunk> chunks_;
+    const size_t initial_pages_;
+    std::deque<MemChunk> chunks_;
     FreePage *free_head_;
     size_t free_cnt_;
+    bool initialized_;
 };
 
 }  // namespace eloqstore

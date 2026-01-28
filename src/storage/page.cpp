@@ -1,5 +1,9 @@
 #include "storage/page.h"
 
+#include <cstdlib>
+#include <cstring>
+#include <utility>
+
 #include "storage/shard.h"
 
 namespace eloqstore
@@ -34,22 +38,22 @@ Page::Page(bool alloc)
 {
     if (alloc)
     {
-        ptr_ = shard->PagePool()->Allocate();
+        ptr_ = reinterpret_cast<uintptr_t>(shard->PagePool()->Allocate());
     }
     else
     {
-        ptr_ = nullptr;
+        ptr_ = 0;
     }
 }
 
 Page::Page(char *ptr)
 {
-    ptr_ = ptr;
+    ptr_ = reinterpret_cast<uintptr_t>(ptr);
 }
 
 Page::Page(Page &&other) noexcept : ptr_(other.ptr_)
 {
-    other.ptr_ = nullptr;
+    other.ptr_ = 0;
 }
 
 Page &Page::operator=(Page &&other) noexcept
@@ -58,7 +62,7 @@ Page &Page::operator=(Page &&other) noexcept
     {
         Free();
         ptr_ = other.ptr_;
-        other.ptr_ = nullptr;
+        other.ptr_ = 0;
     }
     return *this;
 }
@@ -70,65 +74,120 @@ Page::~Page()
 
 void Page::Free()
 {
-    if (ptr_ != nullptr && shard != nullptr)
+    if (ptr_ != 0 && shard != nullptr)
     {
-        shard->PagePool()->Free(ptr_);
-        ptr_ = nullptr;
+        shard->PagePool()->Free(reinterpret_cast<char *>(ptr_));
+        ptr_ = 0;
     }
 }
 
 char *Page::Ptr() const
 {
-    return ptr_;
+    if (ptr_ == 0)
+    {
+        return nullptr;
+    }
+    return reinterpret_cast<char *>(ptr_ & ~kRegisteredMask);
+}
+
+bool Page::IsRegistered() const
+{
+    return (ptr_ & kRegisteredMask) != 0;
 }
 
 PagesPool::PagesPool(const KvOptions *options)
-    : options_(options), free_head_(nullptr), free_cnt_(0)
+    : options_(options),
+      initial_pages_(options->buffer_pool_size / options->data_page_size),
+      free_head_(nullptr),
+      free_cnt_(0),
+      initialized_(false)
 {
-    // Initially allocate only enough pages for the io_uring buffer ring and
-    // grow lazily on demand when the pool runs out of free pages.
-    size_t initial_pages =
-        options->buf_ring_size > 0 ? options->buf_ring_size : 1;
-    Extend(initial_pages);
+}
+
+void PagesPool::Init(void *registered_buffer, size_t buffer_size)
+{
+    if (initialized_)
+    {
+        return;
+    }
+    if (registered_buffer != nullptr && buffer_size > 0)
+    {
+        [[maybe_unused]] uint16_t page_size = options_->data_page_size;
+        assert((buffer_size % page_size) == 0);
+        memset(registered_buffer, 0, buffer_size);
+        AddChunk(UPtr(static_cast<char *>(registered_buffer), &std::free),
+                 buffer_size,
+                 true);
+    }
+    else
+    {
+        Extend(initial_pages_);
+    }
+    initialized_ = true;
 }
 
 void PagesPool::Extend(size_t pages)
 {
+    LOG(INFO) << "Extend " << pages << " pages";
     assert(pages > 0);
     uint16_t page_size = options_->data_page_size;
     const size_t chunk_size = pages * page_size;
     char *ptr = (char *) std::aligned_alloc(page_align, chunk_size);
+    memset(ptr, 0, chunk_size);
     assert(ptr);
-    chunks_.emplace_back(UPtr(ptr, &std::free), chunk_size);
-
-    for (size_t i = 0; i < chunk_size; i += page_size)
-    {
-        Free(ptr + i);
-    }
+    AddChunk(UPtr(ptr, &std::free), chunk_size, false);
 }
 
 char *PagesPool::Allocate()
 {
     if (free_head_ == nullptr)
     {
-        Extend(1024);  // Extend the pool with 1024 pages if free list is empty.
+        Extend(1024);  // Extend the pool with 8 pages if free list is empty.
         assert(free_head_ != nullptr);
     }
     FreePage *head = free_head_;
     free_head_ = head->next_;
-    return reinterpret_cast<char *>(head);
+    uintptr_t raw = reinterpret_cast<uintptr_t>(head);
+    if (head->registered_)
+    {
+        raw |= Page::kRegisteredMask;
+    }
+    return reinterpret_cast<char *>(raw);
 }
 
 void PagesPool::Free(char *ptr)
 {
     assert(ptr != nullptr);
+    uintptr_t raw = reinterpret_cast<uintptr_t>(ptr);
+    bool registered = (raw & Page::kRegisteredMask) != 0;
+    ptr = reinterpret_cast<char *>(raw & ~Page::kRegisteredMask);
 #ifndef NDEBUG
     // Fill with junk data for debugging purposes.
     memset(ptr, 123, options_->data_page_size);
 #endif
     FreePage *free_page = new (ptr) FreePage;
+    free_page->registered_ = registered;
     free_page->next_ = free_head_;
     free_head_ = free_page;
     free_cnt_++;
+}
+
+void PagesPool::AddChunk(UPtr chunk, size_t size, bool registered)
+{
+    assert(chunk);
+    assert(size % options_->data_page_size == 0);
+    char *ptr = chunk.get();
+    chunks_.push_back(MemChunk{std::move(chunk), size});
+
+    uint16_t page_size = options_->data_page_size;
+    for (size_t offset = 0; offset < size; offset += page_size)
+    {
+        char *page_ptr = ptr + offset;
+        FreePage *free_page = new (page_ptr) FreePage;
+        free_page->registered_ = registered;
+        free_page->next_ = free_head_;
+        free_head_ = free_page;
+        free_cnt_++;
+    }
 }
 }  // namespace eloqstore

@@ -54,6 +54,10 @@ int KvTask::WaitIoResult()
 
 void KvTask::WaitIo()
 {
+    if (!ReadOnly())
+    {
+        shard->low_priority_tasks_io_submitted_ = true;
+    }
     while (inflight_io_ > 0)
     {
         status_ = TaskStatus::BlockedIO;
@@ -83,7 +87,7 @@ std::pair<Page, KvError> LoadPage(const TableIdent &tbl_id,
 {
     assert(file_page_id != MaxFilePageId);
     auto [page, err] = IoMgr()->ReadPage(tbl_id, file_page_id, Page(true));
-    if (err != KvError::NoError)
+    if (__builtin_expect(err != KvError::NoError, 0))
     {
         return {Page(false), err};
     }
@@ -95,7 +99,7 @@ std::pair<DataPage, KvError> LoadDataPage(const TableIdent &tbl_id,
                                           FilePageId file_page_id)
 {
     auto [page, err] = LoadPage(tbl_id, file_page_id);
-    if (err != KvError::NoError)
+    if (__builtin_expect(err != KvError::NoError, 0))
     {
         return {DataPage(), err};
     }
@@ -107,7 +111,7 @@ std::pair<OverflowPage, KvError> LoadOverflowPage(const TableIdent &tbl_id,
                                                   FilePageId file_page_id)
 {
     auto [page, err] = LoadPage(tbl_id, file_page_id);
-    if (err != KvError::NoError)
+    if (__builtin_expect(err != KvError::NoError, 0))
     {
         return {OverflowPage(), err};
     }

@@ -1,11 +1,14 @@
 #include "storage/page_mapper.h"
 
+#include <butil/time.h>
 #include <glog/logging.h>
 
 #include <algorithm>
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,13 +28,33 @@ MappingSnapshot::MappingSnapshot(IndexPageManager *idx_mgr,
 {
 }
 
-MappingSnapshot::MappingTbl::MappingTbl(std::vector<uint64_t> tbl)
-    : base_(std::move(tbl)), logical_size_(base_.size())
+MappingSnapshot::MappingTbl::MappingTbl() = default;
+
+MappingSnapshot::MappingTbl::MappingTbl(MappingArena *vector_arena,
+                                        MappingChunkArena *chunk_arena)
+    : vector_arena_(vector_arena), chunk_arena_(chunk_arena)
 {
+    if (vector_arena_ != nullptr)
+    {
+        base_ = vector_arena_->Acquire();
+    }
+}
+
+MappingSnapshot::MappingTbl::~MappingTbl()
+{
+    if (vector_arena_ != nullptr)
+    {
+        clear();
+        vector_arena_->Release(std::move(base_));
+    }
 }
 
 void MappingSnapshot::MappingTbl::clear()
 {
+    for (auto &chunk : base_)
+    {
+        ReleaseChunk(std::move(chunk));
+    }
     base_.clear();
     changes_.clear();
     logical_size_ = 0;
@@ -42,30 +65,42 @@ void MappingSnapshot::MappingTbl::reserve(size_t n)
 {
     if (!under_copying_)
     {
-        base_.reserve(n);
+        base_.reserve(RequiredChunks(n));
     }
 }
 
 size_t MappingSnapshot::MappingTbl::size() const
 {
-    if (__builtin_expect(!under_copying_, 1))
-        return base_.size();
     return logical_size_;
 }
 
 size_t MappingSnapshot::MappingTbl::capacity() const
 {
-    return base_.capacity();
+    return base_.size() * kChunkSize;
+}
+
+void MappingSnapshot::MappingTbl::SetVectorArena(MappingArena *arena)
+{
+    if (vector_arena_ == arena)
+    {
+        return;
+    }
+    CHECK(base_.empty());
+    vector_arena_ = arena;
+    if (vector_arena_ != nullptr)
+    {
+        base_ = vector_arena_->Acquire();
+    }
+}
+
+void MappingSnapshot::MappingTbl::SetChunkArena(MappingChunkArena *arena)
+{
+    chunk_arena_ = arena;
 }
 
 void MappingSnapshot::MappingTbl::StartCopying()
 {
     under_copying_ = true;
-    size_t base_size = base_.size();
-    if (base_size > logical_size_)
-    {
-        logical_size_ = base_size;
-    }
 }
 
 void MappingSnapshot::MappingTbl::FinishCopying()
@@ -79,35 +114,37 @@ void MappingSnapshot::MappingTbl::ApplyChanges()
 {
     if (changes_.empty())
     {
-        logical_size_ = base_.size();
         return;
-    }
-    if (logical_size_ > base_.size())
-    {
-        base_.resize(logical_size_, InvalidValue);
     }
     for (const auto &entry : changes_)
     {
-        base_[entry.first] = entry.second;
+        const PageId page_id = entry.first;
+        if (logical_size_ < static_cast<size_t>(page_id) + 1)
+        {
+            ResizeInternal(static_cast<size_t>(page_id) + 1);
+        }
+        const size_t chunk_idx = static_cast<size_t>(page_id) >> kChunkShift;
+        const size_t chunk_offset = static_cast<size_t>(page_id) & kChunkMask;
+        (*base_[chunk_idx])[chunk_offset] = entry.second;
     }
-    logical_size_ = base_.size();
 }
 
 void MappingSnapshot::MappingTbl::Set(PageId page_id, uint64_t value)
 {
-    size_t next_size = static_cast<size_t>(page_id) + 1;
-    if (logical_size_ < next_size)
-    {
-        logical_size_ = next_size;
-    }
-    if (__builtin_expect(under_copying_, 0))
+    const size_t next_size = static_cast<size_t>(page_id) + 1;
+    if (under_copying_)
     {
         changes_[page_id] = value;
+        if (logical_size_ < next_size)
+        {
+            logical_size_ = next_size;
+        }
         return;
     }
     EnsureSize(page_id);
-    base_[page_id] = value;
-    logical_size_ = base_.size();
+    const size_t chunk_idx = static_cast<size_t>(page_id) >> kChunkShift;
+    const size_t chunk_offset = static_cast<size_t>(page_id) & kChunkMask;
+    (*base_[chunk_idx])[chunk_offset] = value;
 }
 
 PageId MappingSnapshot::MappingTbl::PushBack(uint64_t value)
@@ -127,53 +164,161 @@ uint64_t MappingSnapshot::MappingTbl::Get(PageId page_id) const
             return it->second;
         }
     }
-    CHECK(page_id < base_.size());
-    return base_[page_id];
+    CHECK(static_cast<size_t>(page_id) < logical_size_)
+        << "page_id=" << page_id << ", logical_size=" << logical_size_;
+    const size_t chunk_idx = static_cast<size_t>(page_id) >> kChunkShift;
+    const size_t chunk_offset = static_cast<size_t>(page_id) & kChunkMask;
+    return (*base_[chunk_idx])[chunk_offset];
 }
 
-std::vector<uint64_t> &MappingSnapshot::MappingTbl::Base()
+void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
 {
-    return base_;
-}
-
-const std::vector<uint64_t> &MappingSnapshot::MappingTbl::Base() const
-{
-    return base_;
+    if (this == &src)
+    {
+        return;
+    }
+    if (src.logical_size_ == 0)
+    {
+        return;
+    }
+    ResizeInternal(src.logical_size_, /*init_new_chunks=*/false);
+    ThdTask()->YieldToLowPQ();
+    for (size_t chunk_idx = 0; chunk_idx < base_.size(); ++chunk_idx)
+    {
+        size_t offset = chunk_idx << kChunkShift;
+        if (offset >= src.logical_size_)
+        {
+            break;
+        }
+        const size_t copy_elems =
+            std::min(kChunkSize, src.logical_size_ - offset);
+        std::memcpy(base_[chunk_idx]->data(),
+                    src.base_[chunk_idx]->data(),
+                    copy_elems * sizeof(uint64_t));
+        ThdTask()->YieldToLowPQ();
+    }
 }
 
 void MappingSnapshot::MappingTbl::ApplyPendingTo(MappingTbl &dst) const
 {
-    CHECK(logical_size_ >= dst.base_.size() &&
-          logical_size_ >= dst.logical_size_);
-    if (logical_size_ > dst.base_.size())
-    {
-        dst.base_.resize(logical_size_, MappingSnapshot::InvalidValue);
-    }
+    CHECK(logical_size_ >= dst.logical_size_);
     if (logical_size_ > dst.logical_size_)
     {
-        dst.logical_size_ = logical_size_;
+        dst.ResizeInternal(logical_size_);
     }
     for (const auto &entry : changes_)
     {
-        PageId page_id = entry.first;
-        dst.base_[page_id] = entry.second;
+        dst.Set(entry.first, entry.second);
     }
+}
+
+bool MappingSnapshot::MappingTbl::operator==(const MappingTbl &rhs) const
+{
+    if (logical_size_ != rhs.logical_size_)
+    {
+        return false;
+    }
+    for (PageId page_id = 0; page_id < logical_size_; ++page_id)
+    {
+        if (Get(page_id) != rhs.Get(page_id))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 void MappingSnapshot::MappingTbl::EnsureSize(PageId page_id)
 {
-    if (page_id >= base_.size())
+    if (static_cast<size_t>(page_id) < logical_size_)
     {
-        // TODO(chenzhao): change mapping to std::vector<std::array>
-        base_.resize(page_id + 1, InvalidValue);
+        return;
+    }
+
+    const size_t new_size = static_cast<size_t>(page_id) + 1;
+    ResizeInternal(new_size);
+}
+
+inline size_t MappingSnapshot::MappingTbl::RequiredChunks(size_t n)
+{
+    return (n + kChunkSize - 1) >> kChunkShift;
+}
+
+void MappingSnapshot::MappingTbl::EnsureChunkCount(size_t count)
+{
+    if (base_.size() >= count)
+    {
+        return;
+    }
+    const size_t old_size = base_.size();
+    base_.reserve(count);
+    for (size_t i = old_size; i < count; ++i)
+    {
+        auto chunk = AcquireChunk();
+        base_.push_back(std::move(chunk));
+    }
+}
+
+void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size,
+                                                 bool init_new_chunks)
+{
+    // must not yield within this method to avoid new_size is changed.
+    if (new_size == logical_size_)
+    {
+        return;
+    }
+    const size_t required_chunks = RequiredChunks(new_size);
+    const size_t current_chunks = base_.size();
+    if (new_size < logical_size_)
+    {
+        if (required_chunks < current_chunks)
+        {
+            for (size_t idx = required_chunks; idx < current_chunks; ++idx)
+            {
+                ReleaseChunk(std::move(base_[idx]));
+            }
+            base_.resize(required_chunks);
+        }
+        logical_size_ = new_size;
+        return;
+    }
+
+    EnsureChunkCount(required_chunks);
+    if (init_new_chunks)
+    {
+        for (size_t i = current_chunks; i < required_chunks; ++i)
+        {
+            base_[i]->fill(InvalidValue);
+        }
+    }
+
+    logical_size_ = new_size;
+}
+
+std::unique_ptr<MappingSnapshot::MappingTbl::Chunk>
+MappingSnapshot::MappingTbl::AcquireChunk()
+{
+    if (chunk_arena_ != nullptr)
+    {
+        return chunk_arena_->Acquire();
+    }
+    auto chunk = std::make_unique<Chunk>();
+    return chunk;
+}
+
+void MappingSnapshot::MappingTbl::ReleaseChunk(std::unique_ptr<Chunk> chunk)
+{
+    if (chunk_arena_ != nullptr)
+    {
+        chunk_arena_->Release(std::move(chunk));
     }
 }
 
 PageMapper::PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident)
 {
-    auto *arena = idx_mgr->MapperArena();
-    MappingSnapshot::MappingTbl tbl =
-        arena == nullptr ? MappingSnapshot::MappingTbl() : arena->Acquire();
+    MappingArena *vector_arena = idx_mgr->MapperArena();
+    MappingChunkArena *chunk_arena = idx_mgr->MapperChunkArena();
+    MappingSnapshot::MappingTbl tbl(vector_arena, chunk_arena);
     mapping_ =
         std::make_shared<MappingSnapshot>(idx_mgr, tbl_ident, std::move(tbl));
 
@@ -187,28 +332,21 @@ PageMapper::PageMapper(const PageMapper &rhs)
       free_page_cnt_(rhs.free_page_cnt_),
       file_page_allocator_(rhs.file_page_allocator_->Clone())
 {
-    auto *arena = shard->IndexManager()->MapperArena();
-    MappingSnapshot::MappingTbl tbl =
-        arena == nullptr ? MappingSnapshot::MappingTbl() : arena->Acquire();
+    MappingArena *vector_arena =
+        shard != nullptr ? shard->IndexManager()->MapperArena() : nullptr;
+    MappingChunkArena *chunk_arena =
+        shard != nullptr ? shard->IndexManager()->MapperChunkArena() : nullptr;
+    MappingSnapshot::MappingTbl tbl(vector_arena, chunk_arena);
     mapping_ = std::make_shared<MappingSnapshot>(
         rhs.mapping_->idx_mgr_, rhs.mapping_->tbl_ident_, std::move(tbl));
 
     auto &src_tbl = rhs.mapping_->mapping_tbl_;
     src_tbl.StartCopying();
-    const auto &src = src_tbl.Base();
-    auto &dst = mapping_->mapping_tbl_.Base();
-    dst.clear();
-    dst.reserve(src.size());
-
-    static constexpr size_t kCopyBatchSize = 512;
-    for (size_t i = 0; i < src.size(); i += kCopyBatchSize)
-    {
-        size_t batch_size = std::min(kCopyBatchSize, src.size() - i);
-        dst.insert(dst.end(), src.begin() + i, src.begin() + i + batch_size);
-        ThdTask()->YieldToLowPQ();
-    }
+    mapping_->mapping_tbl_.CopyFrom(src_tbl);
+    ThdTask()->YieldToLowPQ();
 
     src_tbl.ApplyPendingTo(mapping_->mapping_tbl_);
+    ThdTask()->YieldToLowPQ();
     src_tbl.FinishCopying();
 
     assert(file_page_allocator_->MaxFilePageId() ==
@@ -335,10 +473,6 @@ uint64_t MappingSnapshot::DecodeId(uint64_t val)
 MappingSnapshot::~MappingSnapshot()
 {
     idx_mgr_->FreeMappingSnapshot(this);
-    if (shard != nullptr)
-    {
-        shard->IndexManager()->MapperArena()->Release(std::move(mapping_tbl_));
-    }
 }
 
 FilePageId MappingSnapshot::ToFilePage(PageId page_id) const

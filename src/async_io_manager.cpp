@@ -6,6 +6,7 @@
 #include <liburing.h>
 #include <liburing/io_uring.h>
 #include <linux/openat2.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -36,6 +37,8 @@
 #ifdef ELOQ_MODULE_ENABLED
 #include <bthread/eloq_module.h>
 #endif
+
+#include <butil/time.h>
 
 #include "cloud_storage_service.h"
 #include "coding.h"
@@ -74,6 +77,25 @@ char *VarPagePtr(const VarPage &page)
     return ptr;
 }
 
+bool VarPageRegistered(const VarPage &page)
+{
+    switch (VarPageType(page.index()))
+    {
+    case VarPageType::MemIndexPage:
+    {
+        MemIndexPage *idx = std::get<MemIndexPage *>(page);
+        return idx != nullptr && idx->IsRegistered();
+    }
+    case VarPageType::DataPage:
+        return std::get<DataPage>(page).IsRegistered();
+    case VarPageType::OverflowPage:
+        return std::get<OverflowPage>(page).IsRegistered();
+    case VarPageType::Page:
+        return std::get<Page>(page).IsRegistered();
+    }
+    return false;
+}
+
 std::unique_ptr<AsyncIoManager> AsyncIoManager::Instance(const EloqStore *store,
                                                          uint32_t fd_limit)
 {
@@ -105,17 +127,19 @@ IouringMgr::IouringMgr(const KvOptions *opts, uint32_t fd_limit)
     lru_fd_head_.next_ = &lru_fd_tail_;
     lru_fd_tail_.prev_ = &lru_fd_head_;
 
-    if (!options_->data_append_mode)
-    {
-        uint32_t pool_size = options_->max_inflight_write;
-        write_req_pool_ = std::make_unique<WriteReqPool>(pool_size);
-    }
+    uint32_t pool_size = options_->max_inflight_write;
+    write_req_pool_ = std::make_unique<WriteReqPool>(pool_size);
 }
 
 IouringMgr::~IouringMgr()
 {
     if (ring_inited_)
     {
+        if (buffers_registered_)
+        {
+            io_uring_unregister_buffers(&ring_);
+            buffers_registered_ = false;
+        }
         io_uring_unregister_files(&ring_);
         for (auto &[_, tbl] : tables_)
         {
@@ -125,19 +149,25 @@ IouringMgr::~IouringMgr()
             }
         }
 
-        if (buf_ring_ != nullptr)
-        {
-            io_uring_free_buf_ring(
-                &ring_, buf_ring_, options_->buf_ring_size, buf_group_);
-        }
-
         io_uring_queue_exit(&ring_);
     }
 }
 
 KvError IouringMgr::Init(Shard *shard)
 {
+    (void) shard;
+    return KvError::NoError;
+}
+
+KvError IouringMgr::BootstrapRing(Shard *shard)
+{
+    if (ring_inited_)
+    {
+        return KvError::NoError;
+    }
+
     io_uring_params params = {};
+    params.flags |= (IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN);
     const uint32_t sq_size = options_->io_queue_size;
     int ret = io_uring_queue_init_params(sq_size, &ring_, &params);
     if (ret < 0)
@@ -154,33 +184,110 @@ KvError IouringMgr::Init(Shard *shard)
         {
             LOG(ERROR) << "failed to reserve register file slots: " << ret;
             io_uring_queue_exit(&ring_);
+            ring_inited_ = false;
             return KvError::OpenFileLimit;
         }
         free_reg_slots_.reserve(fd_limit_);
     }
 
-    uint16_t num_bufs = options_->buf_ring_size;
-    assert(num_bufs);
-    uint16_t buf_size = options_->data_page_size;
-    buf_ring_ = io_uring_setup_buf_ring(&ring_, num_bufs, buf_group_, 0, &ret);
-    if (buf_ring_ == nullptr)
+    bool registered_buffers = false;
+    size_t page_size = options_->data_page_size;
+    size_t pool_bytes = (options_->buffer_pool_size / page_size) * page_size;
+    constexpr size_t kMaxRegisteredBytes = 1ull << 30;  // 1 GiB per iovec.
+    registered_buf_base_ = nullptr;
+    registered_buf_stride_ = 0;
+    registered_buf_shift_ = 0;
+    registered_buf_count_ = 0;
+    registered_last_slice_size_ = 0;
+    if (pool_bytes > 0)
     {
-        LOG(ERROR) << "failed to initialize buffer ring: " << ret;
-        io_uring_unregister_files(&ring_);
-        io_uring_queue_exit(&ring_);
-        return KvError::OutOfMem;
+        void *raw_ptr = nullptr;
+        int aligned = posix_memalign(&raw_ptr, page_align, pool_bytes);
+        if (aligned == 0 && raw_ptr != nullptr)
+        {
+            std::unique_ptr<char, decltype(&std::free)> buffer{
+                static_cast<char *>(raw_ptr), &std::free};
+            memset(buffer.get(), 0, pool_bytes);
+            std::vector<iovec> iovecs;
+            size_t remaining = pool_bytes;
+            size_t offset = 0;
+            uint64_t idx = 0;
+            while (remaining > 0)
+            {
+                size_t chunk_size = std::min(remaining, kMaxRegisteredBytes);
+                iovec iov = {.iov_base = buffer.get() + offset,
+                             .iov_len = chunk_size};
+                iovecs.push_back(iov);
+                remaining -= chunk_size;
+                offset += chunk_size;
+                idx++;
+            }
+
+            if (iovecs.size() > std::numeric_limits<uint16_t>::max())
+            {
+                LOG(WARNING)
+                    << "too many registered buffer slices: " << iovecs.size();
+                ret = -1;
+            }
+            else
+            {
+                ret = io_uring_register_buffers(
+                    &ring_, iovecs.data(), iovecs.size());
+            }
+            if (ret < 0)
+            {
+                LOG(WARNING) << "failed to register buffers: " << ret
+                             << ", falling back to unregistered pages";
+            }
+            else
+            {
+                buffers_registered_ = true;
+                registered_buffers = true;
+                registered_buf_base_ = buffer.get();
+                registered_buf_stride_ = kMaxRegisteredBytes;
+                registered_buf_shift_ = 30;
+                registered_buf_count_ = static_cast<uint16_t>(iovecs.size());
+                registered_last_slice_size_ =
+                    iovecs.empty() ? 0 : iovecs.back().iov_len;
+                shard->PagePool()->Init(buffer.release(), pool_bytes);
+            }
+        }
+        else
+        {
+            LOG(WARNING) << "posix_memalign failed for registered pool, error: "
+                         << aligned;
+        }
     }
-    int mask = io_uring_buf_ring_mask(num_bufs);
-    bufs_pool_.reserve(num_bufs);
-    for (uint16_t i = 0; i < num_bufs; i++)
+
+    if (!registered_buffers)
     {
-        Page page(shard->PagePool()->Allocate());
-        io_uring_buf_ring_add(buf_ring_, page.Ptr(), buf_size, i, mask, i);
-        bufs_pool_.emplace_back(std::move(page));
+        registered_buf_base_ = nullptr;
+        registered_buf_stride_ = 0;
+        registered_buf_shift_ = 0;
+        registered_buf_count_ = 0;
+        registered_last_slice_size_ = 0;
+        shard->PagePool()->Init();
     }
-    io_uring_buf_ring_advance(buf_ring_, num_bufs);
 
     return KvError::NoError;
+}
+
+void IouringMgr::InitBackgroundJob()
+{
+    if (ring_inited_)
+    {
+        return;
+    }
+
+    Shard *target_shard = shard;
+    CHECK(target_shard != nullptr)
+        << "Shard must be set before initializing io_uring";
+    KvError err = BootstrapRing(target_shard);
+    if (err != KvError::NoError)
+    {
+        LOG(FATAL) << "failed to initialize io queue in background thread: "
+                   << ErrorString(err);
+    }
 }
 
 std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
@@ -208,16 +315,24 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
             {
                 sqe->flags |= IOSQE_FIXED_FILE;
             }
-            sqe->buf_group = buf_group_;
-            sqe->flags |= IOSQE_BUFFER_SELECT;
-            io_uring_prep_read(sqe, fd.first, NULL, 0, offset);
-            res = ThdTask()->WaitIoResult();
-            if (ThdTask()->io_flags_ & IORING_CQE_F_BUFFER)
+            char *dst = result.Ptr();
+            bool use_fixed = result.IsRegistered();
+            if (use_fixed)
             {
-                uint16_t buf_id =
-                    ThdTask()->io_flags_ >> IORING_CQE_BUFFER_SHIFT;
-                result = SwapPage(std::move(result), buf_id);
+                uint16_t buf_index = LookupRegisteredBufferIndex(dst);
+                io_uring_prep_read_fixed(sqe,
+                                         fd.first,
+                                         dst,
+                                         options_->data_page_size,
+                                         offset,
+                                         buf_index);
             }
+            else
+            {
+                io_uring_prep_read(
+                    sqe, fd.first, dst, options_->data_page_size, offset);
+            }
+            res = ThdTask()->WaitIoResult();
             if (res == 0)
             {
                 LOG(ERROR) << "read page failed, reach end of file, file id:"
@@ -261,7 +376,6 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
               page_(true) {};
 
         bool done_{false};
-        // no need to construct
         uint32_t offset_;
         LruFD::Ref fd_ref_;
         Page page_{false};
@@ -295,9 +409,23 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
         {
             sqe->flags |= IOSQE_FIXED_FILE;
         }
-        sqe->buf_group = buf_group_;
-        sqe->flags |= IOSQE_BUFFER_SELECT;
-        io_uring_prep_read(sqe, fd, NULL, 0, req->offset_);
+        char *dst = req->page_.Ptr();
+        bool use_fixed = req->page_.IsRegistered();
+        if (use_fixed)
+        {
+            uint16_t buf_index = LookupRegisteredBufferIndex(dst);
+            io_uring_prep_read_fixed(sqe,
+                                     fd,
+                                     dst,
+                                     options_->data_page_size,
+                                     req->offset_,
+                                     buf_index);
+        }
+        else
+        {
+            io_uring_prep_read(
+                sqe, fd, dst, options_->data_page_size, req->offset_);
+        }
     };
 
     // Send requests.
@@ -312,12 +440,6 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             }
 
             int res = req.res_;
-            if (req.flags_ & IORING_CQE_F_BUFFER)
-            {
-                uint16_t buf_id = req.flags_ >> IORING_CQE_BUFFER_SHIFT;
-                req.page_ = SwapPage(std::move(req.page_), buf_id);
-            }
-
             KvError err = ToKvError(res);
             if ((res >= 0 && res < options_->data_page_size) ||
                 err == KvError::TryAgain)
@@ -422,67 +544,17 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
     }
 
     char *ptr = req->PagePtr();
-    io_uring_prep_write(sqe, fd, ptr, options_->data_page_size, offset);
-    return KvError::NoError;
-}
-
-KvError IouringMgr::WritePages(const TableIdent &tbl_id,
-                               std::span<VarPage> pages,
-                               FilePageId first_fp_id)
-{
-    auto [file_id, offset] = ConvFilePageId(first_fp_id);
-    uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
-    auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id, true, true, term);
-    CHECK_KV_ERR(err);
-    fd_ref.Get()->dirty_ = true;
-
-    auto writev = [this, &fd_ref](std::span<VarPage> pages,
-                                  uint32_t offset,
-                                  std::span<iovec> iov)
+    if (VarPageRegistered(req->page_))
     {
-        auto [fd, registered] = fd_ref.FdPair();
-        io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
-        if (registered)
-        {
-            sqe->flags |= IOSQE_FIXED_FILE;
-        }
-
-        size_t num_pages = pages.size();
-        for (size_t i = 0; i < num_pages; i++)
-        {
-            iov[i].iov_base = VarPagePtr(pages[i]);
-            iov[i].iov_len = options_->data_page_size;
-        }
-        io_uring_prep_writev(sqe, fd, iov.data(), num_pages, offset);
-
-        int ret = ThdTask()->WaitIoResult();
-        if (ret < 0)
-        {
-            return ToKvError(ret);
-        }
-        const size_t expected_bytes = num_pages * options_->data_page_size;
-        if (static_cast<size_t>(ret) < expected_bytes)
-        {
-            return KvError::TryAgain;
-        }
-        return KvError::NoError;
-    };
-
-    TEST_KILL_POINT_WEIGHT("WritePages", 100)
-    size_t num_pages = pages.size();
-    if (num_pages <= 256)
-    {
-        // Allocate iovec on stack (4KB).
-        std::array<iovec, 256> iov;
-        return writev(pages, offset, iov);
+        uint16_t buf_index = LookupRegisteredBufferIndex(ptr);
+        io_uring_prep_write_fixed(
+            sqe, fd, ptr, options_->data_page_size, offset, buf_index);
     }
     else
     {
-        // Allocate iovec on heap when required space exceed 4KB.
-        std::vector<iovec> iov;
-        iov.resize(num_pages);
-        return writev(pages, offset, iov);
+        io_uring_prep_write(sqe, fd, ptr, options_->data_page_size, offset);
     }
+    return KvError::NoError;
 }
 
 KvError IouringMgr::SyncData(const TableIdent &tbl_id)
@@ -902,6 +974,27 @@ void IouringMgr::SetFileIdTerm(const TableIdent &tbl_id,
     mapping_ptr->insert_or_assign(file_id, term);
 }
 
+uint16_t IouringMgr::LookupRegisteredBufferIndex(const char *ptr) const
+{
+    DCHECK(buffers_registered_);
+    DCHECK(ptr != nullptr);
+    DCHECK(registered_buf_base_ != nullptr);
+    DCHECK_GT(registered_buf_stride_, 0);
+    DCHECK_GT(registered_buf_shift_, 0);
+    DCHECK_GT(registered_buf_count_, 0);
+    size_t diff = static_cast<size_t>(ptr - registered_buf_base_);
+    [[maybe_unused]] size_t max_bytes =
+        registered_buf_stride_ * (registered_buf_count_ - 1) +
+        registered_last_slice_size_;
+    DCHECK_LT(diff, max_bytes);
+    size_t idx = diff >> registered_buf_shift_;
+    if (idx >= registered_buf_count_)
+    {
+        idx = registered_buf_count_ - 1;
+    }
+    return static_cast<uint16_t>(idx);
+}
+
 std::pair<FileId, uint32_t> IouringMgr::ConvFilePageId(
     FilePageId file_page_id) const
 {
@@ -920,7 +1013,7 @@ void IouringMgr::Submit()
         return;
     }
     int ret = io_uring_submit(&ring_);
-    if (ret < 0)
+    if (__builtin_expect(ret < 0, 0))
     {
         LOG(ERROR) << "iouring submit failed " << ret;
     }
@@ -1096,19 +1189,6 @@ int IouringMgr::Read(FdIdx fd, char *dst, size_t n, uint64_t offset)
     }
     io_uring_prep_read(sqe, fd.first, dst, n, offset);
     return ThdTask()->WaitIoResult();
-}
-
-Page IouringMgr::SwapPage(Page page, uint16_t buf_id)
-{
-    assert(buf_id < bufs_pool_.size());
-    std::swap(page, bufs_pool_[buf_id]);
-
-    uint16_t buf_size = options_->data_page_size;
-    int mask = io_uring_buf_ring_mask(options_->buf_ring_size);
-    io_uring_buf_ring_add(
-        buf_ring_, bufs_pool_[buf_id].Ptr(), buf_size, buf_id, mask, 0);
-    io_uring_buf_ring_advance(buf_ring_, 1);
-    return page;
 }
 
 int IouringMgr::Write(FdIdx fd, const char *src, size_t n, uint64_t offset)
@@ -1648,16 +1728,33 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
     assert((offset & (alignment - 1)) == 0);
     assert((log.size() & (alignment - 1)) == 0);
 
-    int wres = Write(fd_ref.FdPair(), log.data(), log.size(), offset);
-    if (wres < 0)
+    const size_t write_batch_size = page_align;
+    size_t remaining = log.size();
+    size_t written = 0;
+    FdIdx fd_idx = fd_ref.FdPair();
+    while (remaining > 0)
     {
-        LOG(ERROR) << "append manifest failed " << tbl_id;
-        return ToKvError(wres);
-    }
-    if (wres < static_cast<int>(log.size()))
-    {
-        LOG(ERROR) << "append manifest less than expected " << tbl_id;
-        return KvError::TryAgain;
+        size_t batch = std::min(write_batch_size, remaining);
+        int wres = Write(fd_idx, log.data() + written, batch, offset + written);
+        if (wres < 0)
+        {
+            LOG(ERROR) << "append manifest failed " << tbl_id;
+            return ToKvError(wres);
+        }
+        if (wres == 0)
+        {
+            LOG(ERROR) << "append manifest wrote zero bytes " << tbl_id;
+            return KvError::TryAgain;
+        }
+        written += static_cast<size_t>(wres);
+        if (remaining >= static_cast<size_t>(wres))
+        {
+            remaining -= static_cast<size_t>(wres);
+        }
+        else
+        {
+            remaining = 0;
+        }
     }
 
     TEST_KILL_POINT_WEIGHT("AppendManifest:Sync", 10)
@@ -1683,22 +1780,39 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
     [[maybe_unused]] const size_t alignment = page_align;
     assert((io_size & (alignment - 1)) == 0);
     assert((reinterpret_cast<uintptr_t>(write_ptr) & (alignment - 1)) == 0);
-    int res = Write({tmp_fd, false}, write_ptr, io_size, 0);
-    if (res < 0)
+    FdIdx tmp_fd_idx{tmp_fd, false};
+    const size_t write_batch_size = page_align;
+    size_t remaining = io_size;
+    size_t written = 0;
+    while (remaining > 0)
     {
-        Close(tmp_fd);
-        LOG(ERROR) << "write temporary file failed " << strerror(-res);
-        return res;
-    }
-    if (res < static_cast<int>(io_size))
-    {
-        Close(tmp_fd);
-        LOG(ERROR) << "write temporary file less than expected.";
-        return -EIO;
+        size_t batch = std::min(write_batch_size, remaining);
+        int res = Write(tmp_fd_idx, write_ptr + written, batch, written);
+        if (res < 0)
+        {
+            Close(tmp_fd);
+            LOG(ERROR) << "write snapshot failed: " << strerror(-res);
+            return res;
+        }
+        if (res == 0)
+        {
+            Close(tmp_fd);
+            LOG(ERROR) << "write temporary file wrote zero bytes.";
+            return -EIO;
+        }
+        written += static_cast<size_t>(res);
+        if (remaining >= static_cast<size_t>(res))
+        {
+            remaining -= static_cast<size_t>(res);
+        }
+        else
+        {
+            remaining = 0;
+        }
     }
 
     TEST_KILL_POINT("AtomicWriteFile:Sync")
-    res = Fdatasync({tmp_fd, false});
+    int res = Fdatasync({tmp_fd, false});
     if (res < 0)
     {
         Close(tmp_fd);
@@ -3305,14 +3419,9 @@ size_t CloudStoreMgr::EstimateFileSize(std::string_view filename) const
     __builtin_unreachable();
 }
 
-inline bool CloudStoreMgr::BackgroundJobInited()
-{
-    return background_job_inited_;
-}
-
 void CloudStoreMgr::InitBackgroundJob()
 {
-    background_job_inited_ = true;
+    IouringMgr::InitBackgroundJob();
     shard->running_ = &file_cleaner_;
     file_cleaner_.coro_ = boost::context::callcc(
         [this](continuation &&sink)
@@ -3482,9 +3591,7 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
     size_t file_size = is_data_file ? options_->DataFileSize() : 0;
     if (!is_data_file)
     {
-        struct statx stx
-        {
-        };
+        struct statx stx{};
         int stat_res = Statx(fd, "", &stx);
         if (stat_res < 0)
         {
@@ -3502,7 +3609,7 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
     }
 
     buffer.resize(file_size);
-    constexpr size_t read_batch_size = 1ULL << 20;
+    const size_t read_batch_size = page_align;
     size_t remaining = buffer.padded_size();
     size_t read_offset = 0;
     FdIdx fd_idx{fd, false};
@@ -3881,13 +3988,6 @@ KvError MemStoreMgr::WritePage(const TableIdent &tbl_id,
     static_cast<WriteTask *>(ThdTask())->WritePageCallback(std::move(page),
                                                            KvError::NoError);
     return KvError::NoError;
-}
-
-KvError MemStoreMgr::WritePages(const TableIdent &tbl_id,
-                                std::span<VarPage> pages,
-                                FilePageId first_fp_id)
-{
-    LOG(FATAL) << "not implemented";
 }
 
 KvError MemStoreMgr::SyncData(const TableIdent &tbl_id)

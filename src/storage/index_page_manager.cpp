@@ -2,6 +2,7 @@
 
 #include <glog/logging.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <memory>
@@ -23,28 +24,39 @@ namespace eloqstore
 {
 namespace
 {
+constexpr size_t kIndexPoolLimitPercent = 95;
+
+size_t EffectiveBufferPoolLimitBytes(const KvOptions *opts)
+{
+    size_t limit = (opts->buffer_pool_size * kIndexPoolLimitPercent) / 100;
+    if (limit == 0)
+    {
+        return opts->data_page_size;
+    }
+    return std::max(limit, static_cast<size_t>(opts->data_page_size));
+}
+
 size_t RootMetaBytes(const RootMeta &meta)
 {
     if (meta.mapper_ == nullptr)
     {
         return 0;
     }
-    const auto &base = meta.mapper_->GetMapping()->mapping_tbl_.Base();
-    size_t bytes = base.capacity() * sizeof(uint64_t);
-    if (meta.compression_ != nullptr)
-    {
-        bytes += meta.compression_->DictionaryMemoryBytes();
-    }
+    const auto &tbl = meta.mapper_->GetMapping()->mapping_tbl_;
+    size_t bytes = tbl.capacity() * sizeof(uint64_t);
+    CHECK(meta.compression_ != nullptr);
+    bytes += meta.compression_->DictionaryMemoryBytes();
     return bytes;
 }
 }  // namespace
 
 IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
-    : io_manager_(io_manager),
-      mapping_arena_(Options()->mapping_arena_size),
-      root_meta_mgr_(this, Options())
+    : io_manager_(io_manager), root_meta_mgr_(this, Options())
 {
     active_head_.EnqueNext(&active_tail_);
+    const size_t page_limit =
+        EffectiveBufferPoolLimitBytes(Options()) / Options()->data_page_size;
+    index_pages_.reserve(page_limit);
 }
 
 IndexPageManager::~IndexPageManager()
@@ -109,7 +121,7 @@ bool IndexPageManager::IsFull() const
 {
     // Calculate current total memory usage
     size_t current_size = index_pages_.size() * Options()->data_page_size;
-    return current_size >= Options()->buffer_pool_size;
+    return current_size >= EffectiveBufferPoolLimitBytes(Options());
 }
 
 size_t IndexPageManager::GetBufferPoolUsed() const
@@ -119,7 +131,7 @@ size_t IndexPageManager::GetBufferPoolUsed() const
 
 size_t IndexPageManager::GetBufferPoolLimit() const
 {
-    return Options()->buffer_pool_size;
+    return EffectiveBufferPoolLimitBytes(Options());
 }
 
 std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
@@ -184,6 +196,11 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
             meta->waiting_.WakeAll();
             if (err != KvError::NoError)
             {
+                if (err != KvError::NotFound)
+                {
+                    LOG(ERROR)
+                        << "load meta failed, err: " << static_cast<int>(err);
+                }
                 root_meta_mgr_.Erase(tbl_id);
                 return {RootMetaMgr::Handle(), err};
             }
@@ -475,6 +492,11 @@ AsyncIoManager *IndexPageManager::IoMgr() const
 MappingArena *IndexPageManager::MapperArena()
 {
     return &mapping_arena_;
+}
+
+MappingChunkArena *IndexPageManager::MapperChunkArena()
+{
+    return &mapping_chunk_arena_;
 }
 
 RootMetaMgr *IndexPageManager::RootMetaManager()

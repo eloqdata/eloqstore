@@ -30,9 +30,15 @@ namespace eloqstore
 std::once_flag Shard::tsc_frequency_initialized_;
 std::atomic<uint64_t> Shard::tsc_cycles_per_microsecond_{0};
 
+#ifdef NDEBUG
 DEFINE_uint64(max_processing_time_microseconds,
-              50,
+              500,
               "Max processing time in microseconds for low priority tasks.");
+#else
+DEFINE_uint64(max_processing_time_microseconds,
+              UINT64_MAX,
+              "Max processing time in microseconds for low priority tasks.");
+#endif
 
 Shard::Shard(const EloqStore *store, size_t shard_id, uint32_t fd_limit)
     : store_(store),
@@ -64,11 +70,21 @@ KvError Shard::Init()
     return res;
 }
 
+void Shard::InitIoMgrAndPagePool()
+{
+    if (dynamic_cast<IouringMgr *>(io_mgr_.get()) == nullptr)
+    {
+        page_pool_.Init();
+    }
+    io_mgr_->InitBackgroundJob();
+    io_mgr_and_page_pool_inited_ = true;
+}
+
 void Shard::WorkLoop()
 {
     shard = this;
     io_mgr_->Start();
-    io_mgr_->InitBackgroundJob();
+    InitIoMgrAndPagePool();
 
     // Get new requests from the queue, only blocked when there are no requests
     // and no active tasks.
@@ -476,8 +492,6 @@ void Shard::ProcessReq(KvRequest *req)
 
 bool Shard::ExecuteReadyTasks()
 {
-    uint64_t start_us_fast = ReadTimeMicroseconds();
-
     if (oss_enabled_)
     {
         auto *cloud_mgr = reinterpret_cast<CloudStoreMgr *>(io_mgr_.get());
@@ -495,8 +509,13 @@ bool Shard::ExecuteReadyTasks()
         {
             OnTaskFinished(task);
         }
+        if (DurationMicroseconds(ts_) >= FLAGS_max_processing_time_microseconds)
+        {
+            goto finish;
+        }
     }
 
+    low_priority_tasks_io_submitted_ = false;
     while (low_priority_ready_tasks_.Size() > 0)
     {
         KvTask *task = low_priority_ready_tasks_.Peek();
@@ -508,16 +527,19 @@ bool Shard::ExecuteReadyTasks()
         {
             OnTaskFinished(task);
         }
-        uint64_t delta_us = DurationMicroseconds(start_us_fast);
-        if (delta_us >= FLAGS_max_processing_time_microseconds)
+        if (low_priority_tasks_io_submitted_ ||
+            DurationMicroseconds(ts_) >= FLAGS_max_processing_time_microseconds)
         {
-            break;
+            goto finish;
         }
     }
 
+finish:
     running_ = nullptr;
     return busy;
 }
+
+DEFINE_int32(run_size, 128, "run_size");
 
 void Shard::OnTaskFinished(KvTask *task)
 {
@@ -550,14 +572,15 @@ void Shard::OnTaskFinished(KvTask *task)
 #ifdef ELOQ_MODULE_ENABLED
 void Shard::WorkOneRound()
 {
+    ts_ = ReadTimeMicroseconds();
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: start timing the round
     metrics::TimePoint round_start{};
 #endif
 
-    if (__builtin_expect(!io_mgr_->BackgroundJobInited(), false))
+    if (__builtin_expect(!io_mgr_and_page_pool_inited_, false))
     {
-        io_mgr_->InitBackgroundJob();
+        InitIoMgrAndPagePool();
     }
     KvRequest *reqs[128];
     size_t nreqs = requests_.try_dequeue_bulk(reqs, std::size(reqs));
@@ -587,7 +610,7 @@ void Shard::WorkOneRound()
 #endif
     }
 
-    for (size_t i = 0; i < nreqs; i++)
+    for (size_t i = 0; i < nreqs; ++i)
     {
         OnReceivedReq(reqs[i]);
     }
@@ -597,8 +620,10 @@ void Shard::WorkOneRound()
     io_mgr_->Submit();
 
     io_mgr_->PollComplete();
-
-    ExecuteReadyTasks();
+    if (DurationMicroseconds(ts_) < FLAGS_max_processing_time_microseconds)
+    {
+        ExecuteReadyTasks();
+    }
 
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: end of round
@@ -804,7 +829,7 @@ uint64_t Shard::DurationMicroseconds(uint64_t start_us)
     // Check elapsed time (returns microseconds directly)
     uint64_t end_us = ReadTimeMicroseconds();
     // Handle potential wraparound (unlikely but safe)
-    if (end_us > start_us)
+    if (end_us >= start_us)
     {
         return end_us - start_us;
     }
