@@ -231,9 +231,6 @@ public:
     KvError WritePage(const TableIdent &tbl_id,
                       VarPage page,
                       FilePageId file_page_id) override;
-    KvError WritePages(const TableIdent &tbl_id,
-                       std::span<VarPage> pages,
-                       FilePageId first_fp_id) override;
     KvError SyncData(const TableIdent &tbl_id) override;
     KvError AbortWrite(const TableIdent &tbl_id) override;
 
@@ -794,9 +791,6 @@ public:
     KvError WritePage(const TableIdent &tbl_id,
                       VarPage page,
                       FilePageId file_page_id) override;
-    KvError WritePages(const TableIdent &tbl_id,
-                       std::span<VarPage> pages,
-                       FilePageId first_fp_id) override;
     KvError SyncData(const TableIdent &tbl_id) override;
     KvError AbortWrite(const TableIdent &tbl_id) override;
 
