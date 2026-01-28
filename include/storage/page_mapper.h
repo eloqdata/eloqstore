@@ -2,9 +2,9 @@
 
 #include <array>
 #include <memory>
-#include <string>
 #include <utility>
 #include <vector>
+#include <deque>
 
 #include "absl/container/flat_hash_map.h"
 #include "pool.h"

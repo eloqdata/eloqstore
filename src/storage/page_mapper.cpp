@@ -281,6 +281,10 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
     }
 
     EnsureChunkCount(required_chunks);
+    for (size_t i = current_chunks; i < required_chunks; ++i)
+    {
+        base_[i]->fill(InvalidValue);
+    }
 
     logical_size_ = new_size;
 }
