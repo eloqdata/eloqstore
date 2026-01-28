@@ -301,6 +301,7 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
 std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
     MappingSnapshot *mapping, PageId page_id)
 {
+    CHECK(page_id != MaxPageId);
     while (true)
     {
         // First checks swizzling pointers.
@@ -449,6 +450,7 @@ KvError IndexPageManager::SeekIndex(MappingSnapshot *mapping,
         IndexPageIter idx_it{node, Options()};
         idx_it.Seek(key);
         PageId child_id = idx_it.GetPageId();
+        CHECK(child_id != MaxPageId);
 
         if (node->IsPointingToLeaf())
         {

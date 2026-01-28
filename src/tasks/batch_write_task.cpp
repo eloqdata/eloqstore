@@ -1035,7 +1035,7 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
         DataPage *prev_page = TripleElement(0);
         if (cur_page_len < one_quarter && prev_page != nullptr &&
             prev_page->RestartNum() > 1 &&
-            prev_page->ContentLength() > three_quarter)
+            prev_page->ContentLength() > three_quarter && false)
         {
             // This page is too small, redistribute it with the previous page.
             Page page = Redistribute(*prev_page, page_view);
