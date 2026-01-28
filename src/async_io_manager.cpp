@@ -473,7 +473,6 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
                                   uint32_t offset,
                                   std::span<iovec> iov)
     {
-        size_t num_pages = pages.size();
         auto [fd, registered] = fd_ref.FdPair();
         io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
         if (registered)
@@ -481,6 +480,7 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
             sqe->flags |= IOSQE_FIXED_FILE;
         }
 
+        size_t num_pages = pages.size();
         for (size_t i = 0; i < num_pages; i++)
         {
             iov[i].iov_base = VarPagePtr(pages[i]);
@@ -3372,15 +3372,9 @@ size_t CloudStoreMgr::EstimateFileSize(std::string_view filename) const
     __builtin_unreachable();
 }
 
-inline bool CloudStoreMgr::BackgroundJobInited()
-{
-    return background_job_inited_;
-}
-
 void CloudStoreMgr::InitBackgroundJob()
 {
     IouringMgr::InitBackgroundJob();
-    background_job_inited_ = true;
     shard->running_ = &file_cleaner_;
     file_cleaner_.coro_ = boost::context::callcc(
         [this](continuation &&sink)
@@ -3550,9 +3544,7 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
     size_t file_size = is_data_file ? options_->DataFileSize() : 0;
     if (!is_data_file)
     {
-        struct statx stx
-        {
-        };
+        struct statx stx{};
         int stat_res = Statx(fd, "", &stx);
         if (stat_res < 0)
         {
@@ -3569,15 +3561,7 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
         file_size = static_cast<size_t>(stx.stx_size);
     }
 
-    int64_t resize_time = butil::cpuwide_time_ns();
     buffer.resize(file_size);
-    resize_time = butil::cpuwide_time_ns() - resize_time;
-    if (resize_time > 1000000)
-    {
-        resize_time_++;
-        LOG(ERROR) << "resize cost " << resize_time
-                   << ", resize_time=" << resize_time_;
-    }
     const size_t read_batch_size = page_align;
     size_t remaining = buffer.padded_size();
     size_t read_offset = 0;

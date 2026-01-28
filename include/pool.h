@@ -1,9 +1,7 @@
 #pragma once
 
-#include <glog/logging.h>
-
+#include <deque>
 #include <utility>
-#include <vector>
 
 namespace eloqstore
 {

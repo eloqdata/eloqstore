@@ -70,20 +70,18 @@ KvError Shard::Init()
     return res;
 }
 
-void Shard::InitBackgroundJob()
+void Shard::InitIoMgrAndPagePool()
 {
     page_pool_.Init();
-    if (!io_mgr_->BackgroundJobInited())
-    {
-        io_mgr_->InitBackgroundJob();
-    }
+    io_mgr_->InitBackgroundJob();
+    io_mgr_and_page_pool_inited_ = true;
 }
 
 void Shard::WorkLoop()
 {
     shard = this;
     io_mgr_->Start();
-    InitBackgroundJob();
+    InitIoMgrAndPagePool();
 
     // Get new requests from the queue, only blocked when there are no requests
     // and no active tasks.
@@ -577,9 +575,9 @@ void Shard::WorkOneRound()
     metrics::TimePoint round_start{};
 #endif
 
-    if (__builtin_expect(!io_mgr_->BackgroundJobInited(), false))
+    if (__builtin_expect(!io_mgr_and_page_pool_inited, false))
     {
-        InitBackgroundJob();
+        InitIoMgrAndPagePool();
     }
     KvRequest *reqs[128];
     size_t nreqs = requests_.try_dequeue_bulk(reqs, std::size(reqs));
@@ -609,34 +607,12 @@ void Shard::WorkOneRound()
 #endif
     }
 
-    size_t processed_reqs = 0;
     for (size_t i = 0; i < nreqs; ++i)
     {
         OnReceivedReq(reqs[i]);
-        processed_reqs++;
-        if (DurationMicroseconds(ts_) >= FLAGS_max_processing_time_microseconds)
-        {
-            size_t remaining = nreqs - (i + 1);
-            if (remaining > 0)
-            {
-                bool requeued = requests_.enqueue_bulk(reqs + i + 1, remaining);
-                if (!requeued)
-                {
-                    LOG(ERROR)
-                        << "failed to enqueue bulk for remaining requests";
-                    for (size_t j = i + 1; j < nreqs; ++j)
-                    {
-                        bool single_enqueue = requests_.enqueue(reqs[j]);
-                        CHECK(single_enqueue)
-                            << "failed to re-enqueue request after time limit";
-                    }
-                }
-            }
-            break;
-        }
     }
 
-    req_queue_size_.fetch_sub(processed_reqs, std::memory_order_relaxed);
+    req_queue_size_.fetch_sub(nreqs, std::memory_order_relaxed);
 
     io_mgr_->Submit();
 

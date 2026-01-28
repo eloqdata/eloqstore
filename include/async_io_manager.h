@@ -88,10 +88,6 @@ public:
     virtual void InitBackgroundJob()
     {
     }
-    virtual bool BackgroundJobInited()
-    {
-        return true;
-    }
     virtual void RunPrewarm() {};
 
     /** These methods are provided for kv task. */
@@ -221,14 +217,9 @@ KvError ToKvError(int err_no);
 class IouringMgr : public AsyncIoManager
 {
 public:
-    int resize_time_ = 0;
     IouringMgr(const KvOptions *opts, uint32_t fd_limit);
     ~IouringMgr() override;
     KvError Init(Shard *shard) override;
-    bool BackgroundJobInited() override
-    {
-        return ring_inited_;
-    }
     void Submit() override;
     void PollComplete() override;
     void InitBackgroundJob() override;
@@ -689,7 +680,6 @@ private:
     static std::string ToFilename(FileId file_id, uint64_t term = 0);
     size_t EstimateFileSize(FileId file_id) const;
     size_t EstimateFileSize(std::string_view filename) const;
-    bool BackgroundJobInited() override;
     void InitBackgroundJob() override;
     KvError RestoreLocalCacheState();
     KvError RestoreFilesForTable(const TableIdent &tbl_id,
@@ -752,7 +742,6 @@ private:
         bool killed_{false};
     };
 
-    bool background_job_inited_{false};
     FileCleaner file_cleaner_;
     std::vector<std::unique_ptr<Prewarmer>> prewarmers_;
     size_t active_prewarm_tasks_{0};

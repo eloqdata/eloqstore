@@ -59,10 +59,11 @@ public:
     size_t running_writing_tasks_{};
     bool oss_enabled_{false};
     bool low_priority_tasks_io_submitted_{false};
+    bool io_mgr_and_page_pool_inited_{false};
 
 private:
     void WorkLoop();
-    void InitBackgroundJob();
+    void InitIoMgrAndPagePool();
     bool ExecuteReadyTasks();
     void OnTaskFinished(KvTask *task);
     void OnReceivedReq(KvRequest *req);

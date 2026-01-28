@@ -65,7 +65,6 @@ KvError BatchWriteTask::SeekStack(std::string_view search_key)
             auto [_, err] = Pop();
             CHECK_KV_ERR(err);
         }
-        // YieldToLowPQ();
     }
     return KvError::NoError;
 }
