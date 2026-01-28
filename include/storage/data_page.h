@@ -38,7 +38,7 @@ public:
     DataPage() = default;
     DataPage(PageId page_id);
     DataPage(PageId page_id, Page page)
-        : page_id_(page_id), page_(std::move(page)){};
+        : page_id_(page_id), page_(std::move(page)) {};
     DataPage(const DataPage &) = delete;
     DataPage(DataPage &&rhs);
     DataPage &operator=(DataPage &&) noexcept;

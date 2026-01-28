@@ -17,5 +17,5 @@ jobs:
           source: '.'
           exclude: './external'
           extensions: 'h,cpp,cc'
-          clangFormatVersion: 18
+          clangFormatVersion: 18 # default is 18.1.8
           style: file
