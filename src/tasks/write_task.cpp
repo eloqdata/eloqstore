@@ -263,8 +263,6 @@ KvError WriteTask::FlushManifest()
     const bool dict_dirty = cow_meta_.compression_->Dirty();
 
     // Serialize FileIdTermMapping for this table.
-    YieldToLowPQ();
-    step_ = 10;
     std::string term_buf;
     std::shared_ptr<FileIdTermMapping> file_term_mapping =
         IoMgr()->GetOrCreateFileIdTermMapping(tbl_ident_);
@@ -272,7 +270,6 @@ KvError WriteTask::FlushManifest()
                                         IoMgr()->ProcessTerm());
     SerializeFileIdTermMapping(*file_term_mapping, term_buf);
     YieldToLowPQ();
-    step_ = 11;
 
     if (need_empty_snapshot)
     {
