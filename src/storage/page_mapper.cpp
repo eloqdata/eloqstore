@@ -291,17 +291,6 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
     auto t3 = butil::cpuwide_time_ns() - t;
     t = butil::cpuwide_time_ns();
 
-    size_t old_size = logical_size_;
-    while (old_size < new_size)
-    {
-        const size_t chunk_idx = old_size >> kChunkShift;
-        const size_t chunk_offset = old_size & kChunkMask;
-        const size_t fill =
-            std::min(kChunkSize - chunk_offset, new_size - old_size);
-        std::fill_n(
-            base_[chunk_idx]->data() + chunk_offset, fill, InvalidValue);
-        old_size += fill;
-    }
     auto t4 = butil::cpuwide_time_ns() - t;
     if (t1 + t2 + t3 + t4 > 200000)
     {
