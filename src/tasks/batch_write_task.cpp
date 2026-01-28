@@ -260,7 +260,6 @@ KvError BatchWriteTask::Apply()
     YieldToLowPQ();
     step_ = 0;
     KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
-    step_ = 1;
     cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     CHECK_KV_ERR(err);
     err = ApplyBatch(cow_meta_.root_id_, true);
@@ -340,6 +339,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         }
         err = ApplyOnePage(cidx, now_ms);
         CHECK_KV_ERR(err);
+        YieldToLowPQ();
     }
     // Flush all dirty leaf data pages in leaf_triple_.
     assert(TripleElement(2) == nullptr);
@@ -355,6 +355,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         auto [new_page, err] = Pop();
         CHECK_KV_ERR(err);
         new_root = new_page;
+        YieldToLowPQ();
     }
     root_id = new_root == nullptr ? MaxPageId : new_root->GetPageId();
 
