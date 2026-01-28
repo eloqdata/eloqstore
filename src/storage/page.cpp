@@ -112,7 +112,7 @@ void PagesPool::Init(void *registered_buffer, size_t buffer_size)
     }
     if (registered_buffer != nullptr && buffer_size > 0)
     {
-        uint16_t page_size = options_->data_page_size;
+        [[maybe_unused]] uint16_t page_size = options_->data_page_size;
         assert((buffer_size % page_size) == 0);
         memset(registered_buffer, 0, buffer_size);
         AddChunk(UPtr(static_cast<char *>(registered_buffer), &std::free),

@@ -288,10 +288,8 @@ KvError WriteTask::FlushManifest()
 
 KvError WriteTask::UpdateMeta()
 {
-    KvError err;
-    const KvOptions *opts = Options();
     // Flush data pages.
-    err = WaitWrite();
+    KvError err = WaitWrite();
     CHECK_KV_ERR(err);
 
     err = IoMgr()->SyncData(tbl_ident_);
