@@ -62,7 +62,6 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
                << ", retained_files count=" << retained_files.size();
 
     // 1. list all files in local directory.
-    ThdTask()->step_ = 20;
     std::vector<std::string> local_files;
     KvError err = ListLocalFiles(tbl_id, local_files, io_mgr);
     if (err != KvError::NoError)
@@ -82,8 +81,6 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
                   archive_timestamps,
                   data_files,
                   manifest_terms);
-    ThdTask()->step_ = 21;
-    ThdTask()->ts_ = butil::cpuwide_time_ns();
 
     // No need to check term expired for local mode.
 
@@ -95,7 +92,6 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
                                        least_not_archived_file_id,
                                        io_mgr);
 
-    ThdTask()->step_ = 22;
     if (err != KvError::NoError)
     {
         LOG(ERROR)
@@ -107,7 +103,6 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
     // 4. delete unreferenced data files.
     err = DeleteUnreferencedLocalFiles(
         tbl_id, data_files, retained_files, least_not_archived_file_id, io_mgr);
-    ThdTask()->step_ = 23;
     if (err != KvError::NoError)
     {
         LOG(ERROR)

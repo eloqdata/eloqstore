@@ -179,10 +179,8 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
     {
         return;
     }
-    ThdTask()->step_ = 204;
     ResizeInternal(src.logical_size_);
     ThdTask()->YieldToLowPQ();
-    ThdTask()->step_ = 205;
     for (size_t chunk_idx = 0; chunk_idx < base_.size(); ++chunk_idx)
     {
         size_t offset = chunk_idx << kChunkShift;
@@ -338,9 +336,7 @@ PageMapper::PageMapper(const PageMapper &rhs)
     ThdTask()->YieldToLowPQ();
 
     src_tbl.ApplyPendingTo(mapping_->mapping_tbl_);
-    ThdTask()->step_ = 207;
     ThdTask()->YieldToLowPQ();
-    ThdTask()->step_ = 208;
     src_tbl.FinishCopying();
 
     assert(file_page_allocator_->MaxFilePageId() ==

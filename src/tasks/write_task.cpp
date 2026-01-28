@@ -331,7 +331,6 @@ KvError WriteTask::UpdateMeta()
 {
     KvError err;
     const KvOptions *opts = Options();
-    step_ = 7;
     // Flush data pages.
     if (opts->data_append_mode)
     {
@@ -346,13 +345,11 @@ KvError WriteTask::UpdateMeta()
         err = WaitWrite();
         CHECK_KV_ERR(err);
     }
-    step_ = 8;
 
     err = IoMgr()->SyncData(tbl_ident_);
     CHECK_KV_ERR(err);
 
     // Update meta data in storage and then in memory.
-    step_ = 9;
     err = FlushManifest();
     CHECK_KV_ERR(err);
 
@@ -420,7 +417,6 @@ void WriteTask::TriggerFileGC() const
 {
     assert(Options()->data_append_mode);
 
-    ThdTask()->step_ = 18;
     auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_ident_);
     if (err != KvError::NoError)
     {
@@ -444,7 +440,6 @@ void WriteTask::TriggerFileGC() const
         snapshot_array.emplace_back(mapping->shared_from_this());
     }
     retained_files.reserve(approx_file_cnt);
-    ThdTask()->step_ = 19;
     for (const std::shared_ptr<MappingSnapshot> &mapping : snapshot_array)
     {
         GetRetainedFiles(retained_files, mapping->mapping_tbl_, shift);

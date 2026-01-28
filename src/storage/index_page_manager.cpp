@@ -221,8 +221,6 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
     cow_meta.root_handle_ = RootMetaMgr::Handle();
     auto [found_handle, err] = FindRoot(tbl_ident);
     RootMeta *meta = found_handle.Get();
-    ThdTask()->step_ = 203;
-    ThdTask()->ts_ = butil::cpuwide_time_ns();
     if (err == KvError::NoError)
     {
         cow_meta.root_handle_ = std::move(found_handle);

@@ -179,7 +179,6 @@ KvError BackgroundWrite::CompactDataFile()
             YieldToLowPQ();
         }
     }
-    step_ = 6;
     YieldToLowPQ();
     assert(fp_ids.size() == mapping_cnt);
     HeapSortFpIdsWithYield(fp_ids);
@@ -202,7 +201,6 @@ KvError BackgroundWrite::CompactDataFile()
     FileId min_file_id = end_file_id;
     uint32_t empty_file_cnt = 0;
     size_t round_cnt = 0;
-    step_ = 10;
     for (FileId file_id = begin_file_id; file_id < end_file_id; file_id++)
     {
         if ((round_cnt & 0xFF) == 0)
