@@ -164,7 +164,8 @@ uint64_t MappingSnapshot::MappingTbl::Get(PageId page_id) const
             return it->second;
         }
     }
-    CHECK(static_cast<size_t>(page_id) < logical_size_);
+    CHECK(static_cast<size_t>(page_id) < logical_size_)
+        << "page_id=" << page_id << ", logical_size=" << logical_size_;
     const size_t chunk_idx = static_cast<size_t>(page_id) >> kChunkShift;
     const size_t chunk_offset = static_cast<size_t>(page_id) & kChunkMask;
     return (*base_[chunk_idx])[chunk_offset];
