@@ -127,7 +127,7 @@ uint64_t MappingSnapshot::MappingTbl::Get(PageId page_id) const
             return it->second;
         }
     }
-    CHECK(page_id < base_.size());
+    CHECK(page_id < base_.size()) << "page_id=" << page_id << ", base_.size()=" << base_.size();
     return base_[page_id];
 }
 
