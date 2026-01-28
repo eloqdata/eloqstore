@@ -128,6 +128,7 @@ void PagesPool::Init(void *registered_buffer, size_t buffer_size)
 
 void PagesPool::Extend(size_t pages)
 {
+    LOG(INFO) << "Extend " << pages << " pages";
     assert(pages > 0);
     uint16_t page_size = options_->data_page_size;
     const size_t chunk_size = pages * page_size;

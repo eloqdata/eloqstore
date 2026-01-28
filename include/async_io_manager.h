@@ -101,9 +101,6 @@ public:
     virtual KvError WritePage(const TableIdent &tbl_id,
                               VarPage page,
                               FilePageId file_page_id) = 0;
-    virtual KvError WritePages(const TableIdent &tbl_id,
-                               std::span<VarPage> pages,
-                               FilePageId first_fp_id) = 0;
     virtual KvError SyncData(const TableIdent &tbl_id) = 0;
     virtual KvError AbortWrite(const TableIdent &tbl_id) = 0;
 

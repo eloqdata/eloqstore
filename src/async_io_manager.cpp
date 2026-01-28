@@ -552,68 +552,10 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
     }
     else
     {
+        LOG(INFO) << "write";
         io_uring_prep_write(sqe, fd, ptr, options_->data_page_size, offset);
     }
     return KvError::NoError;
-}
-
-KvError IouringMgr::WritePages(const TableIdent &tbl_id,
-                               std::span<VarPage> pages,
-                               FilePageId first_fp_id)
-{
-    auto [file_id, offset] = ConvFilePageId(first_fp_id);
-    uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
-    auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id, true, true, term);
-    CHECK_KV_ERR(err);
-    fd_ref.Get()->dirty_ = true;
-
-    auto writev = [this, &fd_ref](std::span<VarPage> pages,
-                                  uint32_t offset,
-                                  std::span<iovec> iov)
-    {
-        auto [fd, registered] = fd_ref.FdPair();
-        io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
-        if (registered)
-        {
-            sqe->flags |= IOSQE_FIXED_FILE;
-        }
-
-        size_t num_pages = pages.size();
-        for (size_t i = 0; i < num_pages; i++)
-        {
-            iov[i].iov_base = VarPagePtr(pages[i]);
-            iov[i].iov_len = options_->data_page_size;
-        }
-        io_uring_prep_writev(sqe, fd, iov.data(), num_pages, offset);
-
-        int ret = ThdTask()->WaitIoResult();
-        if (ret < 0)
-        {
-            return ToKvError(ret);
-        }
-        const size_t expected_bytes = num_pages * options_->data_page_size;
-        if (static_cast<size_t>(ret) < expected_bytes)
-        {
-            return KvError::TryAgain;
-        }
-        return KvError::NoError;
-    };
-
-    TEST_KILL_POINT_WEIGHT("WritePages", 100)
-    size_t num_pages = pages.size();
-    if (num_pages <= 256)
-    {
-        // Allocate iovec on stack (4KB).
-        std::array<iovec, 256> iov;
-        return writev(pages, offset, iov);
-    }
-    else
-    {
-        // Allocate iovec on heap when required space exceed 4KB.
-        std::vector<iovec> iov;
-        iov.resize(num_pages);
-        return writev(pages, offset, iov);
-    }
 }
 
 KvError IouringMgr::SyncData(const TableIdent &tbl_id)
@@ -4047,13 +3989,6 @@ KvError MemStoreMgr::WritePage(const TableIdent &tbl_id,
     static_cast<WriteTask *>(ThdTask())->WritePageCallback(std::move(page),
                                                            KvError::NoError);
     return KvError::NoError;
-}
-
-KvError MemStoreMgr::WritePages(const TableIdent &tbl_id,
-                                std::span<VarPage> pages,
-                                FilePageId first_fp_id)
-{
-    LOG(FATAL) << "not implemented";
 }
 
 KvError MemStoreMgr::SyncData(const TableIdent &tbl_id)
