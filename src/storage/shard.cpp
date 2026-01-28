@@ -72,7 +72,10 @@ KvError Shard::Init()
 
 void Shard::InitIoMgrAndPagePool()
 {
-    page_pool_.Init();
+    if (dynamic_cast<IouringMgr *>(io_mgr_.get()) == nullptr)
+    {
+        page_pool_.Init();
+    }
     io_mgr_->InitBackgroundJob();
     io_mgr_and_page_pool_inited_ = true;
 }

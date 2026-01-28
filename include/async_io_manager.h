@@ -428,6 +428,8 @@ public:
     uint32_t AllocRegisterIndex();
     void FreeRegisterIndex(uint32_t idx);
 
+    inline uint16_t LookupRegisteredBufferIndex(const char *ptr) const;
+
     // Low-level io operation. Very simple wrap on syscall.
     io_uring_sqe *GetSQE(UserDataType type, const void *user_ptr);
     int MakeDir(FdIdx dir_fd, const char *path);
@@ -445,8 +447,6 @@ public:
     int UnregisterFile(int idx);
     int Fallocate(FdIdx fd, uint64_t size);
     int UnlinkAt(FdIdx dir_fd, const char *path, bool rmdir);
-    Page SwapPage(Page page, uint16_t buf_id);
-
     /**
      * @brief Write content to a file with given name in the directory.
      * This is often used to write snapshot of manifest atomically.
@@ -526,11 +526,13 @@ public:
     uint32_t alloc_reg_slot_{0};
     std::vector<uint32_t> free_reg_slots_;
 
-    io_uring_buf_ring *buf_ring_{nullptr};
-    std::vector<Page> bufs_pool_;
-    const int buf_group_{0};
-
     bool ring_inited_{false};
+    bool buffers_registered_{false};
+    char *registered_buf_base_{nullptr};
+    size_t registered_buf_stride_{0};
+    uint8_t registered_buf_shift_{0};
+    uint16_t registered_buf_count_{0};
+    size_t registered_last_slice_size_{0};
     io_uring ring_;
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};

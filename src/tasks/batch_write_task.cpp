@@ -19,10 +19,6 @@ BatchWriteTask::BatchWriteTask()
 {
     overflow_ptrs_.reserve(Options()->overflow_pointers * 4);
 
-    if (Options()->data_append_mode)
-    {
-        batch_pages_.reserve(Options()->max_write_batch_pages);
-    }
 }
 
 KvError BatchWriteTask::SeekStack(std::string_view search_key)
@@ -260,6 +256,7 @@ KvError BatchWriteTask::Apply()
     cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     CHECK_KV_ERR(err);
     err = ApplyBatch(cow_meta_.root_id_, true);
+    WaitWrite();
     CHECK_KV_ERR(err);
     err = ApplyTTLBatch();
     CHECK_KV_ERR(err);
