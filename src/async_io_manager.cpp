@@ -1791,7 +1791,7 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
         if (res < 0)
         {
             Close(tmp_fd);
-            LOG(ERROR) << "write temporary file failed " << strerror(-res);
+            LOG(ERROR) << "write snapshot failed: " << strerror(-res);
             return res;
         }
         if (res == 0)
