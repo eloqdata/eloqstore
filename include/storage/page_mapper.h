@@ -147,27 +147,22 @@ class MappingChunkArena
 public:
     std::unique_ptr<MappingSnapshot::MappingTbl::Chunk> Acquire();
     void Release(std::unique_ptr<MappingSnapshot::MappingTbl::Chunk> chunk);
+    void Extend();
 
 private:
-    int create_{0};
-    int reused_{0};
     std::deque<std::unique_ptr<MappingSnapshot::MappingTbl::Chunk>> pool_;
 };
 
 inline std::unique_ptr<MappingSnapshot::MappingTbl::Chunk>
 MappingChunkArena::Acquire()
 {
-    std::unique_ptr<MappingSnapshot::MappingTbl::Chunk> chunk;
-    if (!pool_.empty())
+    if (pool_.empty())
     {
-        chunk = std::move(pool_.back());
-        pool_.pop_back();
-        reused_++;
+        Extend();
     }
-    else
-    {
-        chunk = std::make_unique<MappingSnapshot::MappingTbl::Chunk>();
-    }
+    std::unique_ptr<MappingSnapshot::MappingTbl::Chunk> chunk =
+        std::move(pool_.back());
+    pool_.pop_back();
     return chunk;
 }
 
@@ -179,6 +174,17 @@ inline void MappingChunkArena::Release(
         return;
     }
     pool_.push_back(std::move(chunk));
+}
+
+inline void MappingChunkArena::Extend()
+{
+    auto start = butil::cpuwide_time_ns();
+    for (size_t i = 0; i < 1024; ++i)
+    {
+        pool_.push_back(std::make_unique<MappingSnapshot::MappingTbl::Chunk>());
+    }
+    start = butil::cpuwide_time_ns() - start;
+    LOG(INFO) << "Extend cost " << start << "ns";;
 }
 
 class MappingArena
