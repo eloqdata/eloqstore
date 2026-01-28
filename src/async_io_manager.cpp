@@ -970,7 +970,7 @@ void IouringMgr::Submit()
     {
         LOG(WARNING) << "IoUring cost " << t << "us, write=" << pages_to_write_
                      << ", writev=" << writev_ << ", read=" << read_
-                     << ", tasks=" << prepared_sqe_;
+                     << ", fsync=" << fsync_ << ", tasks=" << prepared_sqe_;
     }
     if (__builtin_expect(ret < 0, 0))
     {
@@ -982,6 +982,7 @@ void IouringMgr::Submit()
         pages_to_write_ = 0;
         writev_ = 0;
         read_ = 0;
+        fsync_ = 0;
     }
 }
 
@@ -1213,6 +1214,7 @@ KvError IouringMgr::FdatasyncFiles(const TableIdent &tbl_id,
             sqe->flags |= IOSQE_FIXED_FILE;
         }
         io_uring_prep_fsync(sqe, fd, IORING_FSYNC_DATASYNC);
+        fsync_++;
     }
     ThdTask()->WaitIo();
 
@@ -1429,6 +1431,7 @@ int IouringMgr::Fdatasync(FdIdx fd)
         sqe->flags |= IOSQE_FIXED_FILE;
     }
     io_uring_prep_fsync(sqe, fd.first, IORING_FSYNC_DATASYNC);
+    fsync_++;
     return ThdTask()->WaitIoResult();
 }
 
