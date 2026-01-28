@@ -69,10 +69,6 @@ struct KvOptions
      */
     uint32_t max_write_batch_pages = 32;
     /**
-     * @brief The maximum number of compaction in progress.
-     */
-    uint32_t max_compaction_in_progress = 1;
-    /**
      * @brief Size of io-uring selected buffer ring.
      * It must be a power-of 2, and can be up to 32768.
      */
