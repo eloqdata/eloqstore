@@ -575,7 +575,7 @@ void Shard::WorkOneRound()
     metrics::TimePoint round_start{};
 #endif
 
-    if (__builtin_expect(!io_mgr_and_page_pool_inited, false))
+    if (__builtin_expect(!io_mgr_and_page_pool_inited_, false))
     {
         InitIoMgrAndPagePool();
     }
