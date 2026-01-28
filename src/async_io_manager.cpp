@@ -552,7 +552,6 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
     }
     else
     {
-        LOG(INFO) << "write";
         io_uring_prep_write(sqe, fd, ptr, options_->data_page_size, offset);
     }
     return KvError::NoError;
