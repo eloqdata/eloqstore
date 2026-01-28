@@ -959,12 +959,12 @@ DEFINE_uint32(io_uring_threshold, 1000, "");
 
 void IouringMgr::Submit()
 {
-    // if (prepared_sqe_ == 0)
-    // {
-        // return;
-    // }
+    if (prepared_sqe_ == 0)
+    {
+        return;
+    }
     auto t = butil::cpuwide_time_us();
-    int ret = io_uring_submit_and_get_events(&ring_);
+    int ret = io_uring_submit(&ring_);
     t = butil::cpuwide_time_us() - t;
     if (t > FLAGS_io_uring_threshold)
     {
