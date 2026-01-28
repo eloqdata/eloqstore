@@ -303,8 +303,11 @@ void MappingSnapshot::MappingTbl::ResizeInternal(size_t new_size)
         old_size += fill;
     }
     auto t4 = butil::cpuwide_time_ns() - t;
-    LOG(INFO) << "ResizeInternal t1 = " << t1 << " t2 = " << t2
-              << " t3 = " << t3 << " t4 = " << t4;
+    if (t1 + t2 + t3 + t4 > 200000)
+    {
+        LOG(INFO) << "ResizeInternal t1 = " << t1 << " t2 = " << t2
+                  << " t3 = " << t3 << " t4 = " << t4;
+    }
     logical_size_ = new_size;
 }
 
