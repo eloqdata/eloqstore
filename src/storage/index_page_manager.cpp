@@ -38,8 +38,7 @@ size_t RootMetaBytes(const RootMeta &meta)
 }  // namespace
 
 IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
-    : io_manager_(io_manager),
-      root_meta_mgr_(this, Options())
+    : io_manager_(io_manager), root_meta_mgr_(this, Options())
 {
     active_head_.EnqueNext(&active_tail_);
     index_pages_.reserve(Options()->buffer_pool_size /

@@ -3550,7 +3550,9 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
     size_t file_size = is_data_file ? options_->DataFileSize() : 0;
     if (!is_data_file)
     {
-        struct statx stx{};
+        struct statx stx
+        {
+        };
         int stat_res = Statx(fd, "", &stx);
         if (stat_res < 0)
         {
