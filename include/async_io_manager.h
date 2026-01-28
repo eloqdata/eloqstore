@@ -543,7 +543,6 @@ public:
     io_uring ring_;
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};
-    uint32_t pages_to_write_{0};
     uint32_t compaction_in_progress_{0};
 
     KvError BootstrapRing(Shard *shard);

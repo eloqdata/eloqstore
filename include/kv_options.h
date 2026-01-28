@@ -73,10 +73,6 @@ struct KvOptions
      */
     uint32_t max_compaction_in_progress = 1;
     /**
-     * @brief The maximum numer of pages to write per io_uring submit.
-     */
-    uint32_t max_write_pages_one_submission = 64;
-    /**
      * @brief Size of io-uring selected buffer ring.
      * It must be a power-of 2, and can be up to 32768.
      */

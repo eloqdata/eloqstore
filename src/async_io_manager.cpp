@@ -474,12 +474,6 @@ KvError IouringMgr::WritePages(const TableIdent &tbl_id,
                                   std::span<iovec> iov)
     {
         size_t num_pages = pages.size();
-        while (pages_to_write_ + num_pages >=
-               options_->max_write_pages_one_submission)
-        {
-            ThdTask()->YieldToLowPQ();
-        }
-        pages_to_write_ += num_pages;
         auto [fd, registered] = fd_ref.FdPair();
         io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
         if (registered)
@@ -966,7 +960,6 @@ void IouringMgr::Submit()
     else
     {
         prepared_sqe_ -= ret;
-        pages_to_write_ = 0;
     }
 }
 
