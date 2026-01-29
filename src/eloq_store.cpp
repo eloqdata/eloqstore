@@ -402,6 +402,7 @@ KvError EloqStore::CollectTablePartitions(
         shards_[utils::RandomInt(static_cast<int>(shards_.size()))]
             ->AddKvRequest(&list_object_request);
         list_object_request.Wait();
+        partitions.reserve(objects.size());
         for (auto &object_name : objects)
         {
             TableIdent ident = TableIdent::FromString(object_name);
