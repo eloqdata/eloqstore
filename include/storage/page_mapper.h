@@ -85,7 +85,7 @@ struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
      */
     void Unswizzling(MemIndexPage *page);
     MemIndexPage *GetSwizzlingPointer(PageId page_id) const;
-    void AddSwizzling(PageId page_id, MemIndexPage *idx_page);
+    void AddSwizzling(PageId page_id, MemIndexPage *idx_page, const char *tag);
 
     static bool IsSwizzlingPointer(uint64_t val);
     static bool IsFilePageId(uint64_t val);

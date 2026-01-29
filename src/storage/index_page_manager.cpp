@@ -359,7 +359,7 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
             }
             new_page->SetPageId(page_id);
             new_page->SetFilePageId(file_page_id);
-            mapping->AddSwizzling(page_id, new_page);
+            mapping->AddSwizzling(page_id, new_page, "FindPage:before_read");
 
             // Read the page async.
             auto [page, err] = IoMgr()->ReadPage(
@@ -482,7 +482,7 @@ void IndexPageManager::FinishIo(MappingSnapshot *mapping,
                                 MemIndexPage *idx_page)
 {
     idx_page->tbl_ident_ = mapping->tbl_ident_;
-    mapping->AddSwizzling(idx_page->GetPageId(), idx_page);
+    mapping->AddSwizzling(idx_page->GetPageId(), idx_page, "FinishIo");
 
     auto *entry = root_meta_mgr_.Find(*mapping->tbl_ident_);
     if (entry != nullptr)

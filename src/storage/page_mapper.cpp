@@ -443,7 +443,28 @@ MemIndexPage *MappingSnapshot::GetSwizzlingPointer(PageId page_id) const
     return nullptr;
 }
 
-void MappingSnapshot::AddSwizzling(PageId page_id, MemIndexPage *idx_page)
+namespace
+{
+const char *ValTypeToString(MappingSnapshot::ValType type)
+{
+    switch (type)
+    {
+    case MappingSnapshot::ValType::SwizzlingPointer:
+        return "swizzle";
+    case MappingSnapshot::ValType::FilePageId:
+        return "file";
+    case MappingSnapshot::ValType::PageId:
+        return "page";
+    case MappingSnapshot::ValType::Invalid:
+        return "invalid";
+    }
+    return "unknown";
+}
+}  // namespace
+
+void MappingSnapshot::AddSwizzling(PageId page_id,
+                                   MemIndexPage *idx_page,
+                                   const char *tag)
 {
     auto &mapping_tbl = mapping_tbl_;
     assert(page_id < mapping_tbl.size());
@@ -455,9 +476,18 @@ void MappingSnapshot::AddSwizzling(PageId page_id, MemIndexPage *idx_page)
         if (existing != idx_page)
         {
             LOG(ERROR) << "AddSwizzling pointer mismatch tbl=" << *tbl_ident_
+                       << " tag=" << (tag == nullptr ? "null" : tag)
                        << " page_id=" << page_id
+                       << " existing_ptr=" << existing
                        << " existing_page_id=" << existing->GetPageId()
-                       << " new_page_id=" << idx_page->GetPageId();
+                       << " existing_file_page_id="
+                       << existing->GetFilePageId()
+                       << " new_ptr=" << idx_page
+                       << " new_page_id=" << idx_page->GetPageId()
+                       << " new_file_page_id=" << idx_page->GetFilePageId()
+                       << " raw_val=" << val
+                       << " val_type=" << ValTypeToString(GetValType(val))
+                       << " mapping_size=" << mapping_tbl.size();
             // Override stale pointer to avoid use-after-free.
             mapping_tbl.Set(page_id, reinterpret_cast<uint64_t>(idx_page));
         }
@@ -467,10 +497,15 @@ void MappingSnapshot::AddSwizzling(PageId page_id, MemIndexPage *idx_page)
         if (DecodeId(val) != idx_page->GetFilePageId())
         {
             LOG(ERROR) << "AddSwizzling file_page_id mismatch tbl="
-                       << *tbl_ident_ << " page_id=" << page_id
+                       << *tbl_ident_ << " tag="
+                       << (tag == nullptr ? "null" : tag)
+                       << " page_id=" << page_id
                        << " mapping_file_page_id=" << DecodeId(val)
                        << " idx_page_file_page_id="
-                       << idx_page->GetFilePageId();
+                       << idx_page->GetFilePageId()
+                       << " raw_val=" << val
+                       << " val_type=" << ValTypeToString(GetValType(val))
+                       << " mapping_size=" << mapping_tbl.size();
         }
         mapping_tbl.Set(page_id, reinterpret_cast<uint64_t>(idx_page));
     }
