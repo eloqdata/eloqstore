@@ -372,6 +372,11 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
                 FreeIndexPage(new_page);
                 return {nullptr, err};
             }
+            CHECK_EQ(new_page->GetFilePageId(), file_page_id)
+                << "FindPage read file_page_id mismatch tbl="
+                << *mapping->tbl_ident_ << " page_id=" << page_id
+                << " expected_file_page_id=" << file_page_id
+                << " actual_file_page_id=" << new_page->GetFilePageId();
             const uint64_t raw_val = mapping->mapping_tbl_.Get(page_id);
             const auto val_type = MappingSnapshot::GetValType(raw_val);
             if (val_type == MappingSnapshot::ValType::FilePageId &&
@@ -531,6 +536,13 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
 void IndexPageManager::FinishIo(MappingSnapshot *mapping,
                                 MemIndexPage *idx_page)
 {
+    CHECK_EQ(idx_page->GetFilePageId(),
+             mapping->ToFilePage(idx_page->GetPageId()))
+        << "FinishIo file_page_id mismatch tbl=" << *mapping->tbl_ident_
+        << " page_id=" << idx_page->GetPageId()
+        << " mapping_file_page_id="
+        << mapping->ToFilePage(idx_page->GetPageId())
+        << " idx_page_file_page_id=" << idx_page->GetFilePageId();
     idx_page->tbl_ident_ = mapping->tbl_ident_;
     mapping->AddSwizzling(idx_page->GetPageId(), idx_page, "FinishIo");
 
