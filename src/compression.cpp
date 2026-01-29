@@ -25,10 +25,11 @@ thread_local std::unique_ptr<ZSTD_DCtx, ZstdDCtxDeleter> kDecompressCtx{
     ZSTD_createDCtx()};
 constexpr size_t kSkipCompressionThreshold = 100;
 constexpr size_t kStandaloneCompressionThreshold = 10ULL * 1024 * 1024;
-constexpr int kCompressionLevel = ZSTD_CLEVEL_DEFAULT;
 }  // namespace
 
-bool CompressRaw(std::string_view input, std::string &output)
+bool CompressRaw(std::string_view input,
+                 std::string &output,
+                 int compression_level)
 {
     if (!kCompressCtx)
     {
@@ -49,7 +50,7 @@ bool CompressRaw(std::string_view input, std::string &output)
                                        max_compressed_len,
                                        &input[0],
                                        input.size(),
-                                       kCompressionLevel);
+                                       compression_level);
     if (ZSTD_isError(written) || written == 0 || written >= input.size())
     {
         output.clear();
@@ -103,7 +104,7 @@ PreparedValue Prepare(std::string_view value,
 
     if (value.size() > kStandaloneCompressionThreshold)
     {
-        if (CompressRaw(value, scratch))
+        if (CompressRaw(value, scratch, Options()->zstd_compression_level))
         {
             return {scratch, CompressionType::Standalone};
         }
@@ -164,7 +165,7 @@ void DictCompression::LoadDictionary(std::string &&dict_bytes)
 {
     dictionary_ = std::move(dict_bytes);
     has_dictionary_ = true;
-    if (!EnsureZstdObjects())
+    if (!EnsureZstdObjects(Options()->zstd_compression_level))
     {
         LOG(FATAL) << "Manifest is corrupted";
     }
@@ -279,11 +280,11 @@ void DictCompression::BuildDictionary()
         dict_buffer = "";
     }
     dictionary_ = std::move(dict_buffer);
-    if (!EnsureZstdObjects())
+    if (!EnsureZstdObjects(Options()->zstd_compression_level))
     {
         // In case that zstd objects cannot be created, use empty dictionary.
         dictionary_ = "";
-        if (!EnsureZstdObjects())
+        if (!EnsureZstdObjects(Options()->zstd_compression_level))
         {
             LOG(FATAL) << "Fail to init zstd objects with empty dictionary";
         }
@@ -346,11 +347,11 @@ bool DictCompression::Decompress(std::string_view input,
     return true;
 }
 
-bool DictCompression::EnsureZstdObjects()
+bool DictCompression::EnsureZstdObjects(int compression_level)
 {
     cctx_.reset(ZSTD_createCCtx());
     cdict_.reset(ZSTD_createCDict(
-        dictionary_.data(), dictionary_.size(), kCompressionLevel));
+        dictionary_.data(), dictionary_.size(), compression_level));
     dctx_.reset(ZSTD_createDCtx());
     ddict_.reset(ZSTD_createDDict(dictionary_.data(), dictionary_.size()));
     if (!cctx_ || !cdict_ || !dctx_ || !ddict_)

@@ -73,7 +73,7 @@ public:
     bool Decompress(std::string_view input, std::string &output) const;
 
 private:
-    bool EnsureZstdObjects();
+    bool EnsureZstdObjects(int compression_level);
 
     bool dirty_{false};
     bool has_dictionary_{false};
@@ -92,7 +92,9 @@ struct PreparedValue
     CompressionType compression_kind{CompressionType::None};
 };
 
-bool CompressRaw(std::string_view input, std::string &output);
+bool CompressRaw(std::string_view input,
+                 std::string &output,
+                 int compression_level);
 bool DecompressRaw(std::string_view input, std::string &output);
 
 PreparedValue Prepare(std::string_view value,

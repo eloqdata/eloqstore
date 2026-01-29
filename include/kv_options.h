@@ -1,5 +1,7 @@
 #pragma once
 
+#include <zstd.h>
+
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -218,6 +220,11 @@ struct KvOptions
      * @brief Compression is enabled.
      */
     bool enable_compression = false;
+    /**
+     * @brief The compression level to use when compression is enabled.
+     * Use ZSTD_CLEVEL_DEFAULT by default.
+     */
+    int zstd_compression_level = ZSTD_CLEVEL_DEFAULT;
     /**
      * @brief Download recent files from cloud into local cache during startup.
      * The partition filter returning true means that this table partition
