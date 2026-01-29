@@ -372,6 +372,29 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
                 FreeIndexPage(new_page);
                 return {nullptr, err};
             }
+            if (!ValidateChecksum(
+                    {new_page->PagePtr(), Options()->data_page_size}))
+            {
+                LOG(FATAL) << "FindPage checksum mismatch tbl="
+                           << *mapping->tbl_ident_ << " page_id=" << page_id
+                           << " file_page_id=" << file_page_id;
+                new_page->waiting_.WakeAll();
+                mapping->Unswizzling(new_page);
+                FreeIndexPage(new_page);
+                return {nullptr, KvError::Corrupted};
+            }
+            const PageType type = TypeOfPage(new_page->PagePtr());
+            if (type != PageType::LeafIndex && type != PageType::NonLeafIndex)
+            {
+                LOG(FATAL) << "FindPage unexpected page type tbl="
+                           << *mapping->tbl_ident_ << " page_id=" << page_id
+                           << " file_page_id=" << file_page_id
+                           << " type=" << static_cast<int>(type);
+                new_page->waiting_.WakeAll();
+                mapping->Unswizzling(new_page);
+                FreeIndexPage(new_page);
+                return {nullptr, KvError::Corrupted};
+            }
             FinishIo(mapping, new_page);
             new_page->waiting_.WakeAll();
             return {new_page, KvError::NoError};
