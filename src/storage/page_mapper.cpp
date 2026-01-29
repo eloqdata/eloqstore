@@ -427,13 +427,13 @@ MemIndexPage *MappingSnapshot::GetSwizzlingPointer(PageId page_id) const
         MemIndexPage *idx_page = reinterpret_cast<MemIndexPage *>(val);
         if (idx_page == nullptr)
         {
-            LOG(ERROR) << "GetSwizzlingPointer got null ptr tbl="
-                       << *tbl_ident_ << " page_id=" << page_id;
+            LOG(FATAL) << "GetSwizzlingPointer got null ptr tbl=" << *tbl_ident_
+                       << " page_id=" << page_id;
             return nullptr;
         }
         if (idx_page->GetPageId() != page_id)
         {
-            LOG(ERROR) << "GetSwizzlingPointer page_id mismatch tbl="
+            LOG(FATAL) << "GetSwizzlingPointer page_id mismatch tbl="
                        << *tbl_ident_ << " requested_page_id=" << page_id
                        << " actual_page_id=" << idx_page->GetPageId();
             return nullptr;
@@ -475,13 +475,11 @@ void MappingSnapshot::AddSwizzling(PageId page_id,
         MemIndexPage *existing = reinterpret_cast<MemIndexPage *>(val);
         if (existing != idx_page)
         {
-            LOG(ERROR) << "AddSwizzling pointer mismatch tbl=" << *tbl_ident_
+            LOG(FATAL) << "AddSwizzling pointer mismatch tbl=" << *tbl_ident_
                        << " tag=" << (tag == nullptr ? "null" : tag)
-                       << " page_id=" << page_id
-                       << " existing_ptr=" << existing
+                       << " page_id=" << page_id << " existing_ptr=" << existing
                        << " existing_page_id=" << existing->GetPageId()
-                       << " existing_file_page_id="
-                       << existing->GetFilePageId()
+                       << " existing_file_page_id=" << existing->GetFilePageId()
                        << " new_ptr=" << idx_page
                        << " new_page_id=" << idx_page->GetPageId()
                        << " new_file_page_id=" << idx_page->GetFilePageId()
@@ -496,13 +494,12 @@ void MappingSnapshot::AddSwizzling(PageId page_id,
     {
         if (DecodeId(val) != idx_page->GetFilePageId())
         {
-            LOG(ERROR) << "AddSwizzling file_page_id mismatch tbl="
-                       << *tbl_ident_ << " tag="
-                       << (tag == nullptr ? "null" : tag)
+            LOG(FATAL) << "AddSwizzling file_page_id mismatch tbl="
+                       << *tbl_ident_
+                       << " tag=" << (tag == nullptr ? "null" : tag)
                        << " page_id=" << page_id
                        << " mapping_file_page_id=" << DecodeId(val)
-                       << " idx_page_file_page_id="
-                       << idx_page->GetFilePageId()
+                       << " idx_page_file_page_id=" << idx_page->GetFilePageId()
                        << " raw_val=" << val
                        << " val_type=" << ValTypeToString(GetValType(val))
                        << " mapping_size=" << mapping_tbl.size();
