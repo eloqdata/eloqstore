@@ -117,9 +117,9 @@ void IndexPageManager::ReleaseIndexPage(MemIndexPage *page)
         else
         {
             LOG(WARNING) << "ReleaseIndexPage: missing root meta tbl="
-                         << *page->tbl_ident_ << " page_id="
-                         << page->GetPageId() << " file_page_id="
-                         << page->GetFilePageId();
+                         << *page->tbl_ident_
+                         << " page_id=" << page->GetPageId()
+                         << " file_page_id=" << page->GetFilePageId();
         }
     }
     FreeIndexPage(page);
@@ -347,8 +347,8 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
             if (page_id == MaxPageId)
             {
                 LOG(ERROR) << "FindPage with MaxPageId tbl="
-                           << *mapping->tbl_ident_ << " mapping_size="
-                           << mapping->mapping_tbl_.size();
+                           << *mapping->tbl_ident_
+                           << " mapping_size=" << mapping->mapping_tbl_.size();
             }
             FilePageId file_page_id = mapping->ToFilePage(page_id);
             if (file_page_id == MaxFilePageId)
@@ -381,11 +381,10 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
             if (idx_page->GetPageId() == MaxPageId ||
                 idx_page->GetFilePageId() == MaxFilePageId)
             {
-                LOG(FATAL)
-                    << "Stale swizzling pointer to freed index page tbl="
-                    << *mapping->tbl_ident_ << " page_id=" << page_id
-                    << " idx_page_id=" << idx_page->GetPageId()
-                    << " file_page_id=" << idx_page->GetFilePageId();
+                LOG(FATAL) << "Stale swizzling pointer to freed index page tbl="
+                           << *mapping->tbl_ident_ << " page_id=" << page_id
+                           << " idx_page_id=" << idx_page->GetPageId()
+                           << " file_page_id=" << idx_page->GetFilePageId();
             }
             // This page is not loaded yet.
             idx_page->waiting_.Wait(ThdTask());
@@ -394,10 +393,10 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
         {
             if (idx_page->GetPageId() != page_id)
             {
-                LOG(FATAL) << "Swizzling pointer page_id mismatch tbl="
-                           << *mapping->tbl_ident_ << " requested_page_id="
-                           << page_id << " actual_page_id="
-                           << idx_page->GetPageId();
+                LOG(ERROR) << "Swizzling pointer page_id mismatch tbl="
+                           << *mapping->tbl_ident_
+                           << " requested_page_id=" << page_id
+                           << " actual_page_id=" << idx_page->GetPageId();
             }
             EnqueueIndexPage(idx_page);
             return {idx_page, KvError::NoError};
