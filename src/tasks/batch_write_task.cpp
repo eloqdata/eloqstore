@@ -965,6 +965,7 @@ KvError BatchWriteTask::FinishIndexPage(DirtyIndexPage &prev,
         KvError err = FlushIndexPage(
             prev.page_, std::move(prev.key_), prev.page_id_, true);
         CHECK_KV_ERR(err);
+        prev.page_->Unpin();
         prev.page_ = nullptr;
         prev.page_id_ = MaxPageId;
     }
@@ -973,6 +974,7 @@ KvError BatchWriteTask::FinishIndexPage(DirtyIndexPage &prev,
     {
         return KvError::OutOfMem;
     }
+    cur_page->Pin();
     memcpy(cur_page->PagePtr(), page_view.data(), page_view.size());
     prev.page_ = cur_page;
     prev.key_ = std::move(cur_page_key);
@@ -983,6 +985,7 @@ BatchWriteTask::DirtyIndexPage::~DirtyIndexPage()
 {
     if (page_ != nullptr)
     {
+        page_->Unpin();
         assert(page_->IsDetached());
         shard->IndexManager()->ReleaseIndexPage(page_);
         page_ = nullptr;
