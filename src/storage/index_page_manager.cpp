@@ -372,6 +372,33 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
                 FreeIndexPage(new_page);
                 return {nullptr, err};
             }
+            const uint64_t raw_val = mapping->mapping_tbl_.Get(page_id);
+            const auto val_type = MappingSnapshot::GetValType(raw_val);
+            if (val_type == MappingSnapshot::ValType::FilePageId &&
+                MappingSnapshot::DecodeId(raw_val) != file_page_id)
+            {
+                LOG(FATAL) << "FindPage mapping file_page_id changed after read tbl="
+                           << *mapping->tbl_ident_ << " page_id=" << page_id
+                           << " expected_file_page_id=" << file_page_id
+                           << " mapping_file_page_id="
+                           << MappingSnapshot::DecodeId(raw_val);
+            }
+            if (val_type == MappingSnapshot::ValType::SwizzlingPointer)
+            {
+                MemIndexPage *existing =
+                    reinterpret_cast<MemIndexPage *>(raw_val);
+                if (existing != new_page)
+                {
+                    LOG(FATAL) << "FindPage swizzle pointer replaced after read tbl="
+                               << *mapping->tbl_ident_
+                               << " page_id=" << page_id
+                               << " expected_ptr=" << new_page
+                               << " actual_ptr=" << existing
+                               << " actual_page_id=" << existing->GetPageId()
+                               << " actual_file_page_id="
+                               << existing->GetFilePageId();
+                }
+            }
             if (!ValidateChecksum(
                     {new_page->PagePtr(), Options()->data_page_size}))
             {
