@@ -84,6 +84,18 @@ public:
 
     void SetFilePageId(FilePageId file_page_id)
     {
+        if (file_page_id_ != MaxFilePageId && file_page_id_ != file_page_id)
+        {
+            LOG(FATAL) << "MemIndexPage file_page_id overwrite page=" << this
+                       << " tbl="
+                       << (tbl_ident_ == nullptr ? "null"
+                                                 : tbl_ident_->ToString())
+                       << " page_id=" << page_id_
+                       << " old_file_page_id=" << file_page_id_
+                       << " new_file_page_id=" << file_page_id
+                       << " ref_cnt=" << ref_cnt_
+                       << " task=" << ThdTask();
+        }
         file_page_id_ = file_page_id;
     }
 
