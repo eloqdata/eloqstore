@@ -91,6 +91,10 @@ void IndexPageManager::FreeIndexPage(MemIndexPage *page)
 {
     assert(page->IsDetached());
     assert(!page->IsPinned());
+    // Poison identifiers so stale swizzling pointers are detectable.
+    page->page_id_ = MaxPageId;
+    page->file_page_id_ = MaxFilePageId;
+    page->tbl_ident_ = nullptr;
     free_head_.EnqueNext(page);
 }
 
@@ -347,11 +351,27 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
         }
         if (idx_page->IsDetached())
         {
+            if (idx_page->GetPageId() == MaxPageId ||
+                idx_page->GetFilePageId() == MaxFilePageId)
+            {
+                LOG(FATAL)
+                    << "Stale swizzling pointer to freed index page tbl="
+                    << *mapping->tbl_ident_ << " page_id=" << page_id
+                    << " idx_page_id=" << idx_page->GetPageId()
+                    << " file_page_id=" << idx_page->GetFilePageId();
+            }
             // This page is not loaded yet.
             idx_page->waiting_.Wait(ThdTask());
         }
         else
         {
+            if (idx_page->GetPageId() != page_id)
+            {
+                LOG(FATAL) << "Swizzling pointer page_id mismatch tbl="
+                           << *mapping->tbl_ident_ << " requested_page_id="
+                           << page_id << " actual_page_id="
+                           << idx_page->GetPageId();
+            }
             EnqueueIndexPage(idx_page);
             return {idx_page, KvError::NoError};
         }
