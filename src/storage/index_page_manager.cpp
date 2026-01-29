@@ -82,8 +82,15 @@ MemIndexPage *IndexPageManager::AllocIndexPage()
             next_free = free_head_.DequeNext();
         }
     }
-    assert(next_free->IsDetached());
-    assert(!next_free->IsPinned());
+    CHECK(next_free->IsDetached());
+    CHECK(!next_free->IsPinned());
+    CHECK(next_free->GetPageId() == MaxPageId)
+        << "AllocIndexPage got dirty page_id=" << next_free->GetPageId();
+    CHECK(next_free->GetFilePageId() == MaxFilePageId)
+        << "AllocIndexPage got dirty file_page_id="
+        << next_free->GetFilePageId();
+    CHECK(next_free->tbl_ident_ == nullptr)
+        << "AllocIndexPage got dirty tbl=" << next_free->tbl_ident_->ToString();
     return next_free;
 }
 
@@ -382,11 +389,12 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
             if (val_type == MappingSnapshot::ValType::FilePageId &&
                 MappingSnapshot::DecodeId(raw_val) != file_page_id)
             {
-                LOG(FATAL) << "FindPage mapping file_page_id changed after read tbl="
-                           << *mapping->tbl_ident_ << " page_id=" << page_id
-                           << " expected_file_page_id=" << file_page_id
-                           << " mapping_file_page_id="
-                           << MappingSnapshot::DecodeId(raw_val);
+                LOG(FATAL)
+                    << "FindPage mapping file_page_id changed after read tbl="
+                    << *mapping->tbl_ident_ << " page_id=" << page_id
+                    << " expected_file_page_id=" << file_page_id
+                    << " mapping_file_page_id="
+                    << MappingSnapshot::DecodeId(raw_val);
             }
             if (val_type == MappingSnapshot::ValType::SwizzlingPointer)
             {
@@ -394,14 +402,13 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
                     reinterpret_cast<MemIndexPage *>(raw_val);
                 if (existing != new_page)
                 {
-                    LOG(FATAL) << "FindPage swizzle pointer replaced after read tbl="
-                               << *mapping->tbl_ident_
-                               << " page_id=" << page_id
-                               << " expected_ptr=" << new_page
-                               << " actual_ptr=" << existing
-                               << " actual_page_id=" << existing->GetPageId()
-                               << " actual_file_page_id="
-                               << existing->GetFilePageId();
+                    LOG(FATAL)
+                        << "FindPage swizzle pointer replaced after read tbl="
+                        << *mapping->tbl_ident_ << " page_id=" << page_id
+                        << " expected_ptr=" << new_page
+                        << " actual_ptr=" << existing
+                        << " actual_page_id=" << existing->GetPageId()
+                        << " actual_file_page_id=" << existing->GetFilePageId();
                 }
             }
             if (!ValidateChecksum(
@@ -539,8 +546,7 @@ void IndexPageManager::FinishIo(MappingSnapshot *mapping,
     CHECK_EQ(idx_page->GetFilePageId(),
              mapping->ToFilePage(idx_page->GetPageId()))
         << "FinishIo file_page_id mismatch tbl=" << *mapping->tbl_ident_
-        << " page_id=" << idx_page->GetPageId()
-        << " mapping_file_page_id="
+        << " page_id=" << idx_page->GetPageId() << " mapping_file_page_id="
         << mapping->ToFilePage(idx_page->GetPageId())
         << " idx_page_file_page_id=" << idx_page->GetFilePageId();
     idx_page->tbl_ident_ = mapping->tbl_ident_;
