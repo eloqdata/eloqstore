@@ -96,6 +96,9 @@ struct MappingSnapshot : public std::enable_shared_from_this<MappingSnapshot>
 
     void Serialize(ManifestBuffer &dst) const;
 
+    // Destructors often run on non-shard threads (e.g. Stop() callers) where
+    // TLS `shard` is invalid, so we rely on idx_mgr_ to reclaim resources. It
+    // remains valid until RootMetaMgr::ReleaseMappers() clears snapshots.
     IndexPageManager *idx_mgr_;
     const TableIdent *tbl_ident_;
 

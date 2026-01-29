@@ -334,11 +334,15 @@ uint64_t MappingSnapshot::DecodeId(uint64_t val)
 
 MappingSnapshot::~MappingSnapshot()
 {
-    idx_mgr_->FreeMappingSnapshot(this);
-    if (shard != nullptr)
+    IndexPageManager *mgr = idx_mgr_;
+    if (mgr == nullptr)
     {
-        shard->IndexManager()->MapperArena()->Release(std::move(mapping_tbl_));
+        return;
     }
+
+    mgr->FreeMappingSnapshot(this);
+
+    mgr->MapperArena()->Release(std::move(mapping_tbl_));
 }
 
 FilePageId MappingSnapshot::ToFilePage(PageId page_id) const

@@ -307,7 +307,13 @@ void RootMetaMgr::ReleaseMappers()
 {
     for (auto &it : entries_)
     {
-        it.second.meta_.mapper_ = nullptr;
+        RootMeta &meta = it.second.meta_;
+        for (MappingSnapshot *snapshot : meta.mapping_snapshots_)
+        {
+            snapshot->idx_mgr_ = nullptr;
+        }
+        meta.mapping_snapshots_.clear();
+        meta.mapper_ = nullptr;
     }
 }
 
