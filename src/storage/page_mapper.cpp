@@ -425,6 +425,19 @@ MemIndexPage *MappingSnapshot::GetSwizzlingPointer(PageId page_id) const
     if (IsSwizzlingPointer(val))
     {
         MemIndexPage *idx_page = reinterpret_cast<MemIndexPage *>(val);
+        if (idx_page == nullptr)
+        {
+            LOG(ERROR) << "GetSwizzlingPointer got null ptr tbl="
+                       << *tbl_ident_ << " page_id=" << page_id;
+            return nullptr;
+        }
+        if (idx_page->GetPageId() != page_id)
+        {
+            LOG(ERROR) << "GetSwizzlingPointer page_id mismatch tbl="
+                       << *tbl_ident_ << " requested_page_id=" << page_id
+                       << " actual_page_id=" << idx_page->GetPageId();
+            return nullptr;
+        }
         return idx_page;
     }
     return nullptr;
@@ -438,11 +451,27 @@ void MappingSnapshot::AddSwizzling(PageId page_id, MemIndexPage *idx_page)
     uint64_t val = mapping_tbl.Get(page_id);
     if (IsSwizzlingPointer(val))
     {
-        assert(reinterpret_cast<MemIndexPage *>(val) == idx_page);
+        MemIndexPage *existing = reinterpret_cast<MemIndexPage *>(val);
+        if (existing != idx_page)
+        {
+            LOG(ERROR) << "AddSwizzling pointer mismatch tbl=" << *tbl_ident_
+                       << " page_id=" << page_id
+                       << " existing_page_id=" << existing->GetPageId()
+                       << " new_page_id=" << idx_page->GetPageId();
+            // Override stale pointer to avoid use-after-free.
+            mapping_tbl.Set(page_id, reinterpret_cast<uint64_t>(idx_page));
+        }
     }
     else
     {
-        assert(DecodeId(val) == idx_page->GetFilePageId());
+        if (DecodeId(val) != idx_page->GetFilePageId())
+        {
+            LOG(ERROR) << "AddSwizzling file_page_id mismatch tbl="
+                       << *tbl_ident_ << " page_id=" << page_id
+                       << " mapping_file_page_id=" << DecodeId(val)
+                       << " idx_page_file_page_id="
+                       << idx_page->GetFilePageId();
+        }
         mapping_tbl.Set(page_id, reinterpret_cast<uint64_t>(idx_page));
     }
 }
