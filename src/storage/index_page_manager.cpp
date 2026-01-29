@@ -313,7 +313,19 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
             {
                 return {nullptr, KvError::OutOfMem};
             }
+            if (page_id == MaxPageId)
+            {
+                LOG(ERROR) << "FindPage with MaxPageId tbl="
+                           << *mapping->tbl_ident_ << " mapping_size="
+                           << mapping->mapping_tbl_.size();
+            }
             FilePageId file_page_id = mapping->ToFilePage(page_id);
+            if (file_page_id == MaxFilePageId)
+            {
+                LOG(ERROR) << "FindPage got MaxFilePageId tbl="
+                           << *mapping->tbl_ident_ << " page_id=" << page_id
+                           << " mapping_size=" << mapping->mapping_tbl_.size();
+            }
             new_page->SetPageId(page_id);
             new_page->SetFilePageId(file_page_id);
             mapping->AddSwizzling(page_id, new_page);
@@ -449,6 +461,11 @@ KvError IndexPageManager::SeekIndex(MappingSnapshot *mapping,
         IndexPageIter idx_it{node, Options()};
         idx_it.Seek(key);
         PageId child_id = idx_it.GetPageId();
+        if (child_id == MaxPageId)
+        {
+            node->Unpin();
+            return KvError::NotFound;
+        }
 
         if (node->IsPointingToLeaf())
         {

@@ -30,7 +30,18 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
     err = shard->IndexManager()->SeekIndex(
         mapping.get(), meta->root_id_, search_key, page_id);
     CHECK_KV_ERR(err);
+    if (page_id == MaxPageId)
+    {
+        LOG(ERROR) << "ReadTask SeekIndex got MaxPageId tbl=" << tbl_id
+                   << " key=" << search_key;
+    }
     FilePageId file_page = mapping->ToFilePage(page_id);
+    if (file_page == MaxFilePageId)
+    {
+        LOG(ERROR) << "ReadTask mapping ToFilePage returned MaxFilePageId tbl="
+                   << tbl_id << " page_id=" << page_id
+                   << " mapping_size=" << mapping->mapping_tbl_.size();
+    }
     auto [page, err_load] = LoadDataPage(tbl_id, page_id, file_page);
     CHECK_KV_ERR(err_load);
 

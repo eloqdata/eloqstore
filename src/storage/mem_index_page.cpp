@@ -1,5 +1,6 @@
 #include "storage/mem_index_page.h"
 
+#include <glog/logging.h>
 #include <sys/types.h>
 
 #include <cstddef>
@@ -138,6 +139,10 @@ bool IndexPageIter::ParseNextKey()
 
     if (pt >= limit)
     {
+        // LOG(ERROR) << "IndexPageIter::ParseNextKey end-of-region curr_offset="
+        //            << curr_offset_ << " restart_offset=" << restart_offset_
+        //            << " restart_idx=" << curr_restart_idx_ << " page_id="
+        //            << page_id_;
         Invalidate();
         return false;
     }
@@ -145,8 +150,14 @@ bool IndexPageIter::ParseNextKey()
              MemIndexPage::leftmost_ptr_offset + sizeof(uint32_t))
     {
         key_.clear();
+        CHECK(page_id_ != MaxPageId);
         page_id_ =
             DecodeFixed32(page_.data() + MemIndexPage::leftmost_ptr_offset);
+        if (page_id_ == MaxPageId)
+        {
+            LOG(ERROR) << "IndexPageIter::ParseNextKey leftmost page_id="
+                       << page_id_ << " curr_offset=" << curr_offset_;
+        }
         curr_offset_ = MemIndexPage::leftmost_ptr_offset + sizeof(uint32_t);
         curr_restart_idx_ = 0;
         return true;
@@ -158,6 +169,10 @@ bool IndexPageIter::ParseNextKey()
 
     if (pt == nullptr || key_.size() < shared)
     {
+        LOG(ERROR) << "IndexPageIter::ParseNextKey decode entry failed pt_null="
+                   << (pt == nullptr) << " key_size=" << key_.size()
+                   << " shared=" << shared << " curr_offset="
+                   << curr_offset_ << " restart_idx=" << curr_restart_idx_;
         Invalidate();
         return false;
     }
@@ -172,6 +187,8 @@ bool IndexPageIter::ParseNextKey()
         uint32_t ptr_val;
         if ((pt = GetVarint32Ptr(pt, limit, &ptr_val)) == nullptr)
         {
+            LOG(ERROR) << "IndexPageIter::ParseNextKey decode ptr failed curr_offset="
+                       << curr_offset_ << " key=" << key_;
             Invalidate();
             return false;
         }
@@ -333,6 +350,8 @@ void IndexPageIter::Seek(std::string_view search_key)
         SeekToRestart(right);
         if (!ParseNextKey())
         {
+            LOG(ERROR) << "IndexPageIter::Seek ParseNextKey failed at restart="
+                       << right << " key=" << search_key;
             Invalidate();
             return;
         }
@@ -354,6 +373,9 @@ void IndexPageIter::Seek(std::string_view search_key)
         {
             if (!ParseNextKey())
             {
+                LOG(ERROR) << "IndexPageIter::Seek ParseNextKey failed in region key="
+                           << search_key << " prev_key=" << prev_key
+                           << " prev_page_id=" << prev_page_id;
                 Invalidate();
                 return;
             }

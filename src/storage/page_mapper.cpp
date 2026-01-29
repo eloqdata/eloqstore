@@ -127,6 +127,13 @@ uint64_t MappingSnapshot::MappingTbl::Get(PageId page_id) const
             return it->second;
         }
     }
+    if (__builtin_expect(page_id >= base_.size(), 0))
+    {
+        LOG(ERROR) << "MappingTbl::Get out of range page_id=" << page_id
+                   << " base_size=" << base_.size()
+                   << " logical_size=" << logical_size_
+                   << " under_copying=" << under_copying_;
+    }
     CHECK(page_id < base_.size());
     return base_[page_id];
 }

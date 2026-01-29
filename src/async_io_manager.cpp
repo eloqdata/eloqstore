@@ -1651,12 +1651,17 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
     int wres = Write(fd_ref.FdPair(), log.data(), log.size(), offset);
     if (wres < 0)
     {
-        LOG(ERROR) << "append manifest failed " << tbl_id;
+        LOG(ERROR) << "append manifest failed " << tbl_id << " offset="
+                   << offset << " bytes=" << log.size() << " err="
+                   << strerror(-wres) << " open_fds="
+                   << GetOpenFileCount() << "/" << GetOpenFileLimit();
         return ToKvError(wres);
     }
     if (wres < static_cast<int>(log.size()))
     {
-        LOG(ERROR) << "append manifest less than expected " << tbl_id;
+        LOG(ERROR) << "append manifest less than expected " << tbl_id
+                   << " offset=" << offset << " wrote=" << wres
+                   << " expected=" << log.size();
         return KvError::TryAgain;
     }
 
