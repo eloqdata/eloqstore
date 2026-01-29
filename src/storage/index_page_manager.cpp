@@ -98,6 +98,33 @@ void IndexPageManager::FreeIndexPage(MemIndexPage *page)
     free_head_.EnqueNext(page);
 }
 
+void IndexPageManager::ReleaseIndexPage(MemIndexPage *page)
+{
+    assert(page->IsDetached());
+    assert(!page->IsPinned());
+    if (page->tbl_ident_ != nullptr)
+    {
+        RootMetaMgr::Entry *entry = root_meta_mgr_.Find(*page->tbl_ident_);
+        if (entry != nullptr)
+        {
+            RootMeta &meta = entry->meta_;
+            for (auto &mapping : meta.mapping_snapshots_)
+            {
+                mapping->Unswizzling(page);
+            }
+            meta.index_pages_.erase(page);
+        }
+        else
+        {
+            LOG(WARNING) << "ReleaseIndexPage: missing root meta tbl="
+                         << *page->tbl_ident_ << " page_id="
+                         << page->GetPageId() << " file_page_id="
+                         << page->GetFilePageId();
+        }
+    }
+    FreeIndexPage(page);
+}
+
 void IndexPageManager::EnqueueIndexPage(MemIndexPage *page)
 {
     if (page->prev_ != nullptr)

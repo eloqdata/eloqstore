@@ -39,6 +39,7 @@ public:
      */
     MemIndexPage *AllocIndexPage();
     void FreeIndexPage(MemIndexPage *page);
+    void ReleaseIndexPage(MemIndexPage *page);
 
     /**
      * @brief Enqueues the index page into the cache replacement list.

@@ -141,7 +141,7 @@ void WriteTask::WritePageCallback(VarPage page, KvError err)
         }
         else
         {
-            shard->IndexManager()->FreeIndexPage(idx_page);
+            shard->IndexManager()->ReleaseIndexPage(idx_page);
         }
         break;
     }
