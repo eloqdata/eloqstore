@@ -531,12 +531,6 @@ std::pair<ManifestFilePtr, KvError> IouringMgr::GetManifest(
         return {nullptr, dir_err};
     }
     int res = StatxAt(dir_fd.FdPair(), manifest_name.c_str(), &result);
-    KvError close_dir_err = CloseFile(std::move(dir_fd));
-    if (close_dir_err != KvError::NoError)
-    {
-        LOG(WARNING) << "failed to close directory handle for table " << tbl_id
-                     << ": " << ErrorString(close_dir_err);
-    }
     if (res < 0)
     {
         LOG(ERROR) << "failed to statx manifest file: " << strerror(-res);
@@ -1192,16 +1186,12 @@ int IouringMgr::OpenAt(FdIdx dir_fd,
                        uint64_t mode,
                        bool fixed_target)
 {
+    EvictFD();
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
     open_how how = {.flags = flags, .mode = mode, .resolve = 0};
     if (fixed_target)
     {
         uint32_t idx = AllocRegisterIndex();
-        if (idx == UINT32_MAX)
-        {
-            EvictFD();
-            idx = AllocRegisterIndex();
-        }
         if (idx == UINT32_MAX)
         {
             LOG(ERROR) << "register file slot used up";
@@ -1471,10 +1461,7 @@ int IouringMgr::Fdatasync(FdIdx fd)
 int IouringMgr::Statx(FdIdx fd, const char *path, struct statx *result)
 {
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
-    if (fd.second)
-    {
-        sqe->flags |= IOSQE_FIXED_FILE;
-    }
+    CHECK(!fd.second) << "statx does not support fixed file";
     io_uring_prep_statx(
         sqe, fd.first, path, AT_EMPTY_PATH, STATX_BASIC_STATS, result);
     return ThdTask()->WaitIoResult();
@@ -1483,10 +1470,6 @@ int IouringMgr::Statx(FdIdx fd, const char *path, struct statx *result)
 int IouringMgr::StatxAt(FdIdx dir_fd, const char *path, struct statx *result)
 {
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
-    if (dir_fd.second)
-    {
-        sqe->flags |= IOSQE_FIXED_FILE;
-    }
     io_uring_prep_statx(
         sqe, dir_fd.first, path, 0, STATX_BASIC_STATS, result);
     return ThdTask()->WaitIoResult();
@@ -1527,9 +1510,9 @@ int IouringMgr::CloseDirect(int idx)
         LOG(ERROR) << "close direct file " << idx << " failed: "
                    << strerror(-res);
     }
-    FreeRegisterIndex(idx);
     if (res == 0)
     {
+        FreeRegisterIndex(idx);
         lru_fd_count_--;
     }
     return res;
