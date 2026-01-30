@@ -436,6 +436,7 @@ public:
     int Write(FdIdx fd, const char *src, size_t n, uint64_t offset);
     int Fdatasync(FdIdx fd);
     int Statx(FdIdx fd, const char *path, struct statx *result);
+    int StatxAt(FdIdx dir_fd, const char *path, struct statx *result);
     int Rename(FdIdx dir_fd, const char *old_path, const char *new_path);
     int Close(int fd);
     int CloseDirect(int idx);
