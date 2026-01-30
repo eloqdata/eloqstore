@@ -60,6 +60,7 @@ const Comparator *IndexPageManager::GetComparator() const
 MemIndexPage *IndexPageManager::AllocIndexPage()
 {
     MemIndexPage *next_free = free_head_.DequeNext();
+    bool from_free_list = next_free != nullptr;
 
     while (next_free == nullptr)
     {
@@ -68,6 +69,7 @@ MemIndexPage *IndexPageManager::AllocIndexPage()
             auto &new_page =
                 index_pages_.emplace_back(std::make_unique<MemIndexPage>());
             next_free = new_page.get();
+            from_free_list = false;
         }
         else
         {
@@ -80,11 +82,16 @@ MemIndexPage *IndexPageManager::AllocIndexPage()
                 return nullptr;
             }
             next_free = free_head_.DequeNext();
+            from_free_list = true;
         }
     }
     CHECK(next_free->IsDetached());
     CHECK(!next_free->IsPinned());
-    CHECK(next_free->InFreeList()) << "AllocIndexPage got page not in free list";
+    if (from_free_list)
+    {
+        CHECK(next_free->InFreeList())
+            << "AllocIndexPage got page not in free list";
+    }
     next_free->in_free_list_ = false;
     CHECK(next_free->GetPageId() == MaxPageId)
         << "AllocIndexPage got dirty page_id=" << next_free->GetPageId();
