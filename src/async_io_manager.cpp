@@ -145,7 +145,10 @@ IouringMgr::~IouringMgr()
         {
             for (auto &[_, fd] : tbl.fds_)
             {
-                close(fd.fd_);
+                if (fd.fd_ >= 0)
+                {
+                    close(fd.fd_);
+                }
             }
         }
 
@@ -188,6 +191,38 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
             return KvError::OpenFileLimit;
         }
         free_reg_slots_.reserve(fd_limit_);
+    }
+    else
+    {
+        LOG(ERROR) << "fd_limit is zero, cannot register fixed files";
+        io_uring_queue_exit(&ring_);
+        ring_inited_ = false;
+        return KvError::OpenFileLimit;
+    }
+
+    root_reg_idxs_.clear();
+    root_reg_idxs_.reserve(eloq_store->root_fds_.size());
+    for (int root_fd : eloq_store->root_fds_)
+    {
+        uint32_t idx = AllocRegisterIndex();
+        if (idx == UINT32_MAX)
+        {
+            LOG(ERROR) << "register file slot used up for root dirs";
+            io_uring_queue_exit(&ring_);
+            ring_inited_ = false;
+            return KvError::OpenFileLimit;
+        }
+        ret = io_uring_register_files_update(&ring_, idx, &root_fd, 1);
+        if (ret < 0)
+        {
+            LOG(ERROR) << "failed to register root dir fd " << root_fd
+                       << " at " << idx << ": " << strerror(-ret);
+            FreeRegisterIndex(idx);
+            io_uring_queue_exit(&ring_);
+            ring_inited_ = false;
+            return ToKvError(ret);
+        }
+        root_reg_idxs_.push_back(static_cast<int>(idx));
     }
 
     bool registered_buffers = false;
@@ -512,7 +547,7 @@ std::pair<ManifestFilePtr, KvError> IouringMgr::GetManifest(
         return {nullptr, err};
     }
     struct statx result = {};
-    int res = Statx(fd.Get()->fd_, "", &result);
+    int res = Statx(fd.FdPair(), "", &result);
     if (res < 0)
     {
         LOG(ERROR) << "failed to statx manifest file: " << strerror(-res);
@@ -763,9 +798,10 @@ void IouringMgr::EncodeUserData(io_uring_sqe *sqe,
 IouringMgr::FdIdx IouringMgr::GetRootFD(const TableIdent &tbl_id)
 {
     assert(!eloq_store->root_fds_.empty());
+    assert(root_reg_idxs_.size() == eloq_store->root_fds_.size());
     const uint16_t n_disks = eloq_store->root_fds_.size();
-    int root_fd = eloq_store->root_fds_[tbl_id.DiskIndex(n_disks)];
-    return {root_fd, false};
+    int root_fd = root_reg_idxs_[tbl_id.DiskIndex(n_disks)];
+    return {root_fd, true};
 }
 
 IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(const TableIdent &tbl_id,
@@ -784,7 +820,7 @@ IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(const TableIdent &tbl_id,
     // This file may be in the process of being closed.
     LruFD::Ref fd_ref(&it_fd->second, this);
     fd_ref.Get()->mu_.Lock();
-    bool empty = fd_ref.Get()->fd_ == LruFD::FdEmpty;
+    bool empty = fd_ref.Get()->reg_idx_ < 0;
     fd_ref.Get()->mu_.Unlock();
     return empty ? nullptr : fd_ref;
 }
@@ -821,7 +857,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     // Avoid multiple coroutines from concurrently opening or closing the same
     // file duplicately.
     lru_fd.Get()->mu_.Lock();
-    if (lru_fd.Get()->fd_ != LruFD::FdEmpty)
+    if (lru_fd.Get()->reg_idx_ >= 0)
     {
         // Check for term mismatch in cloud mode.
         const bool cloud_mode = !options_->cloud_store_path.empty();
@@ -831,19 +867,18 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
             if (cached_term != 0 && cached_term != term)
             {
                 // Term mismatch detected, close and reopen with correct term.
-                int old_fd = lru_fd.Get()->fd_;
-                if (lru_fd.Get()->reg_idx_ >= 0)
-                {
-                    UnregisterFile(lru_fd.Get()->reg_idx_);
-                }
-                int res = Close(old_fd);
+                int old_idx = lru_fd.Get()->reg_idx_;
+                io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
+                io_uring_prep_close_direct(sqe, old_idx);
+                int res = ThdTask()->WaitIoResult();
                 if (res < 0)
                 {
                     lru_fd.Get()->mu_.Unlock();
                     return {nullptr, ToKvError(res)};
                 }
-                lru_fd.Get()->fd_ = LruFD::FdEmpty;
+                FreeRegisterIndex(old_idx);
                 lru_fd.Get()->reg_idx_ = -1;
+                lru_fd_count_--;
                 // Fall through to open/create with correct term
             }
             else
@@ -912,17 +947,14 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
         return {nullptr, error};
     }
 
-    if (file_id != LruFD::kDirectory)
-    {
-        lru_fd.Get()->reg_idx_ = RegisterFile(fd);
-    }
+    lru_fd.Get()->reg_idx_ = fd;
 
     // Set term on newly opened data file FD.
     if (file_id <= LruFD::kMaxDataFile)
     {
         lru_fd.Get()->term_ = term;
     }
-    lru_fd.Get()->fd_ = fd;
+    lru_fd.Get()->fd_ = LruFD::FdEmpty;
     lru_fd.Get()->mu_.Unlock();
     return {std::move(lru_fd), KvError::NoError};
 }
@@ -1161,23 +1193,34 @@ int IouringMgr::OpenAt(FdIdx dir_fd,
                        uint64_t flags,
                        uint64_t mode)
 {
-    lru_fd_count_++;
-    EvictFD();
-
+    uint32_t idx = AllocRegisterIndex();
+    if (idx == UINT32_MAX)
+    {
+        EvictFD();
+        idx = AllocRegisterIndex();
+    }
+    if (idx == UINT32_MAX)
+    {
+        LOG(ERROR) << "register file slot used up";
+        return -EMFILE;
+    }
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
     if (dir_fd.second)
     {
         sqe->flags |= IOSQE_FIXED_FILE;
     }
     open_how how = {.flags = flags, .mode = mode, .resolve = 0};
+    sqe->file_index = idx;
     io_uring_prep_openat2(sqe, dir_fd.first, path, &how);
     int fd = ThdTask()->WaitIoResult();
 
     if (fd < 0)
     {
-        lru_fd_count_--;
+        FreeRegisterIndex(idx);
+        return fd;
     }
-    return fd;
+    lru_fd_count_++;
+    return static_cast<int>(idx);
 }
 
 int IouringMgr::Read(FdIdx fd, char *dst, size_t n, uint64_t offset)
@@ -1277,7 +1320,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
         CloseReq(KvTask *task, LruFD::Ref fd)
             : BaseReq(task), fd_ref_(std::move(fd)) {};
         LruFD::Ref fd_ref_;
-        int fd_{LruFD::FdEmpty};
+        int reg_idx_{-1};
     };
 
     struct PendingClose
@@ -1287,7 +1330,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
         bool locked;
         int reg_idx;
     };
-    // We need to do three things: flush dirty pages, unregister, and close.
+    // We need to flush dirty pages and close.
     std::vector<PendingClose> pendings;
     pendings.reserve(fds.size());
     std::unordered_map<const TableIdent *, std::vector<LruFD::Ref>>
@@ -1303,7 +1346,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
         }
 
         lru_fd->mu_.Lock();
-        if (lru_fd->fd_ == LruFD::FdEmpty)
+        if (lru_fd->reg_idx_ < 0)
         {
             lru_fd->mu_.Unlock();
             continue;
@@ -1344,56 +1387,6 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
         }
     }
 
-    struct UnregisterReq : BaseReq
-    {
-        UnregisterReq(KvTask *task, PendingClose *pending)
-            : BaseReq(task), pending_(pending) {};
-        PendingClose *pending_;
-        int placeholder_{-1};
-    };
-
-    std::vector<UnregisterReq> unregister_reqs;
-    unregister_reqs.reserve(pendings.size());
-
-    for (PendingClose &pending : pendings)
-    {
-        if (!pending.locked || pending.reg_idx < 0)
-        {
-            continue;
-        }
-        UnregisterReq &req = unregister_reqs.emplace_back(ThdTask(), &pending);
-        io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, &req);
-        io_uring_prep_files_update(sqe, &req.placeholder_, 1, pending.reg_idx);
-    }
-
-    KvError unregister_err = KvError::NoError;
-    if (!unregister_reqs.empty())
-    {
-        ThdTask()->WaitIo();
-        for (UnregisterReq &req : unregister_reqs)
-        {
-            if (req.res_ < 0)
-            {
-                LOG(ERROR) << "unregister file slot failed file_id="
-                           << req.pending_->lru_fd->file_id_ << " : "
-                           << strerror(-req.res_);
-                if (unregister_err == KvError::NoError)
-                {
-                    unregister_err = ToKvError(req.res_);
-                }
-            }
-            PendingClose *pending = req.pending_;
-            FreeRegisterIndex(pending->reg_idx);
-            pending->lru_fd->reg_idx_ = -1;
-            pending->reg_idx = -1;
-        }
-    }
-    if (unregister_err != KvError::NoError)
-    {
-        unlock_pendings();
-        return unregister_err;
-    }
-
     std::vector<CloseReq> reqs;
     reqs.reserve(pendings.size());
 
@@ -1408,11 +1401,12 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
         LruFD::Ref &fd_ref = *pending.fd_ref;
 
         CloseReq &req = reqs.emplace_back(ThdTask(), std::move(fd_ref));
-        req.fd_ = lru_fd->fd_;
+        req.reg_idx_ = pending.reg_idx;
+        lru_fd->reg_idx_ = -1;
         lru_fd->fd_ = LruFD::FdEmpty;
 
         io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, &req);
-        io_uring_prep_close(sqe, req.fd_);
+        io_uring_prep_close_direct(sqe, req.reg_idx_);
 
         lru_fd->mu_.Unlock();
         pending.locked = false;
@@ -1435,7 +1429,8 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
                     close_err = ToKvError(req.res_);
                 }
             }
-            else
+            FreeRegisterIndex(req.reg_idx_);
+            if (req.res_ == 0)
             {
                 lru_fd_count_--;
             }
@@ -1456,11 +1451,15 @@ int IouringMgr::Fdatasync(FdIdx fd)
     return ThdTask()->WaitIoResult();
 }
 
-int IouringMgr::Statx(int fd, const char *path, struct statx *result)
+int IouringMgr::Statx(FdIdx fd, const char *path, struct statx *result)
 {
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
+    if (fd.second)
+    {
+        sqe->flags |= IOSQE_FIXED_FILE;
+    }
     io_uring_prep_statx(
-        sqe, fd, path, AT_EMPTY_PATH, STATX_BASIC_STATS, result);
+        sqe, fd.first, path, AT_EMPTY_PATH, STATX_BASIC_STATS, result);
     return ThdTask()->WaitIoResult();
 }
 
@@ -1496,13 +1495,11 @@ int IouringMgr::Close(int fd)
 KvError IouringMgr::CloseFile(LruFD::Ref fd_ref)
 {
     LruFD *lru_fd = fd_ref.Get();
-    const int fd = lru_fd->fd_;
-    if (fd < 0)
+    const int fd_idx = lru_fd->reg_idx_;
+    if (fd_idx < 0)
     {
         return KvError::NoError;
     }
-    FdIdx fd_idx = lru_fd->FdPair();
-
     // Make sure no tasks can use this fd during closing.
     lru_fd->mu_.Lock();
 
@@ -1515,25 +1512,29 @@ KvError IouringMgr::CloseFile(LruFD::Ref fd_ref)
         }
     }
 
-    if (fd_idx.second)
-    {
-        UnregisterFile(fd_idx.first);
-        lru_fd->reg_idx_ = -1;
-    }
-
-    if (int res = Close(fd); res < 0)
-    {
-        lru_fd->mu_.Unlock();
-        return ToKvError(res);
-    }
+    lru_fd->reg_idx_ = -1;
     lru_fd->fd_ = LruFD::FdEmpty;
+    io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
+    io_uring_prep_close_direct(sqe, fd_idx);
+    int res = ThdTask()->WaitIoResult();
+    if (res < 0)
+    {
+        LOG(ERROR) << "close file failed file_id=" << lru_fd->file_id_ << " : "
+                   << strerror(-res);
+    }
+    FreeRegisterIndex(fd_idx);
+    if (res == 0)
+    {
+        lru_fd_count_--;
+    }
     lru_fd->mu_.Unlock();
-    return KvError::NoError;
+    return ToKvError(res);
 }
 
 bool IouringMgr::EvictFD()
 {
-    while (lru_fd_count_ > fd_limit_)
+    while (lru_fd_count_ > fd_limit_ ||
+           (free_reg_slots_.empty() && alloc_reg_slot_ >= fd_limit_))
     {
         LruFD *lru_fd = lru_fd_tail_.prev_;
         if (lru_fd == &lru_fd_head_)
@@ -1541,7 +1542,7 @@ bool IouringMgr::EvictFD()
             return false;
         }
         assert(lru_fd->ref_count_ == 0);
-        assert(lru_fd->fd_ >= 0);
+        assert(lru_fd->reg_idx_ >= 0);
         // This LruFD will be removed by ~LruFD::Ref if succeed to close,
         // otherwise be enqueued back to LRU.
         CloseFile(LruFD::Ref(lru_fd, this));
@@ -2146,7 +2147,7 @@ void IouringMgr::LruFD::Ref::Clear()
     if (--fd_->ref_count_ == 0)
     {
         PartitionFiles *partition_files = fd_->tbl_;
-        if (fd_->fd_ >= 0)
+        if (fd_->reg_idx_ >= 0)
         {
             io_mgr_->lru_fd_head_.EnqueNext(fd_);
         }
@@ -3609,7 +3610,8 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
         struct statx stx
         {
         };
-        int stat_res = Statx(fd, "", &stx);
+        FdIdx stat_fd{fd, false};
+        int stat_res = Statx(stat_fd, "", &stx);
         if (stat_res < 0)
         {
             KvError err = ToKvError(stat_res);
