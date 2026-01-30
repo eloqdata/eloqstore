@@ -389,29 +389,60 @@ KvError EloqStore::CollectTablePartitions(
     }
     else
     {
+
         std::vector<std::string> objects;
         ListObjectRequest list_object_request(&objects);
+        list_object_request.SetRemotePath(std::string{});
+        list_object_request.SetRecursive(false);
+
+        bool has_more = false;
+        do
+        {
 #ifdef ELOQSTORE_WITH_TXSERVICE
-        {
-            std::lock_guard<bthread::Mutex> lk(list_object_request.mutex_);
-            list_object_request.done_ = false;
-        }
-#else
-        list_object_request.done_.store(false, std::memory_order_relaxed);
-#endif
-        shards_[utils::RandomInt(static_cast<int>(shards_.size()))]
-            ->AddKvRequest(&list_object_request);
-        list_object_request.Wait();
-        partitions.reserve(objects.size());
-        for (auto &object_name : objects)
-        {
-            TableIdent ident = TableIdent::FromString(object_name);
-            if (!ident.IsValid() || ident.tbl_name_ != table_name)
             {
-                continue;
+                std::lock_guard<bthread::Mutex> lk(list_object_request.mutex_);
+                list_object_request.done_ = false;
             }
-            partitions.push_back(std::move(ident));
-        }
+#else
+            list_object_request.done_.store(false, std::memory_order_relaxed);
+#endif
+            list_object_request.GetNextContinuationToken()->clear();
+            objects.clear();
+
+            shards_[utils::RandomInt(static_cast<int>(shards_.size()))]
+                ->AddKvRequest(&list_object_request);
+            list_object_request.Wait();
+
+            KvError list_err = list_object_request.Error();
+            if (list_err != KvError::NoError)
+            {
+                return list_err;
+            }
+
+            if (partitions.empty())
+            {
+                partitions.reserve(objects.size());
+            }
+
+            for (auto &object_name : objects)
+            {
+                TableIdent ident = TableIdent::FromString(object_name);
+                if (!ident.IsValid() || ident.tbl_name_ != table_name)
+                {
+                    continue;
+                }
+                partitions.push_back(std::move(ident));
+            }
+
+            has_more = list_object_request.HasMoreResults();
+            if (has_more)
+            {
+                std::string next_token =
+                    std::move(*list_object_request.GetNextContinuationToken());
+                list_object_request.SetContinuationToken(std::move(next_token));
+                list_object_request.GetNextContinuationToken()->clear();
+            }
+        } while (has_more);
     }
     return KvError::NoError;
 }
