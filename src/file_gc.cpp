@@ -163,8 +163,7 @@ KvError ListCloudFiles(const TableIdent &tbl_id,
 
         if (list_task.error_ != KvError::NoError)
         {
-            LOG(ERROR) << "Failed to list cloud files for table "
-                       << table_path
+            LOG(ERROR) << "Failed to list cloud files for table " << table_path
                        << ", error: " << static_cast<int>(list_task.error_);
             return list_task.error_;
         }
