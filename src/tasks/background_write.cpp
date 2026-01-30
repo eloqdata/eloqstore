@@ -21,7 +21,7 @@ public:
         // Moving operations are aborted
         for (auto [page, src_fp_id] : pages_)
         {
-            page->SetFilePageId(src_fp_id);
+            page->SetFilePageIdAllowOverwrite(src_fp_id);
             page->Unpin();
         }
     }
@@ -29,7 +29,7 @@ public:
     {
         page->Pin();
         FilePageId src_fp_id = page->GetFilePageId();
-        page->SetFilePageId(dest_fp_id);
+        page->SetFilePageIdAllowOverwrite(dest_fp_id);
         pages_.emplace_back(page, src_fp_id);
     }
     void Finish()

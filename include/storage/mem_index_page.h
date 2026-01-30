@@ -99,6 +99,12 @@ public:
         file_page_id_ = file_page_id;
     }
 
+    // Allow controlled overwrites (e.g., temporary remap during compaction).
+    void SetFilePageIdAllowOverwrite(FilePageId file_page_id)
+    {
+        file_page_id_ = file_page_id;
+    }
+
     bool IsPageIdValid() const
     {
         return page_id_ < MaxPageId;
