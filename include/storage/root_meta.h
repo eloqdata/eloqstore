@@ -207,7 +207,7 @@ struct CowRootMeta
     PageId ttl_root_id_{MaxPageId};
     std::unique_ptr<PageMapper> mapper_{nullptr};
     uint64_t manifest_size_{};
-    std::shared_ptr<MappingSnapshot> old_mapping_{nullptr};
+    MappingSnapshot::Ref old_mapping_{nullptr};
     uint64_t next_expire_ts_{};
     std::shared_ptr<compression::DictCompression> compression_{nullptr};
     RootMetaMgr::Handle root_handle_{};
