@@ -141,11 +141,6 @@ void WriteTask::WritePageCallback(VarPage page, KvError err)
         }
         else
         {
-            LOG(ERROR) << "WritePageCallback releasing index page due to err="
-                       << static_cast<int>(err) << " tbl=" << tbl_ident_
-                       << " page_id=" << idx_page->GetPageId()
-                       << " file_page_id=" << idx_page->GetFilePageId()
-                       << " idx_page=" << idx_page;
             shard->IndexManager()->ReleaseIndexPage(idx_page,
                                                     "WritePageCallback:err");
         }
