@@ -2293,8 +2293,8 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
             fs::remove(unexpected_path, remove_ec);
             if (remove_ec)
             {
-                LOG(ERROR) << "Failed to remove cached file "
-                           << unexpected_path << ": " << remove_ec.message();
+                LOG(ERROR) << "Failed to remove cached file " << unexpected_path
+                           << ": " << remove_ec.message();
             }
             else
             {
