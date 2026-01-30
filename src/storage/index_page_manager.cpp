@@ -84,6 +84,8 @@ MemIndexPage *IndexPageManager::AllocIndexPage()
     }
     CHECK(next_free->IsDetached());
     CHECK(!next_free->IsPinned());
+    CHECK(next_free->InFreeList()) << "AllocIndexPage got page not in free list";
+    next_free->in_free_list_ = false;
     CHECK(next_free->GetPageId() == MaxPageId)
         << "AllocIndexPage got dirty page_id=" << next_free->GetPageId();
     CHECK(next_free->GetFilePageId() == MaxFilePageId)
@@ -98,6 +100,9 @@ void IndexPageManager::FreeIndexPage(MemIndexPage *page)
 {
     assert(page->IsDetached());
     assert(!page->IsPinned());
+    CHECK(!page->InFreeList()) << "Double free detected for MemIndexPage "
+                               << page;
+    page->in_free_list_ = true;
     // Poison identifiers so stale swizzling pointers are detectable.
     page->page_id_ = MaxPageId;
     page->file_page_id_ = MaxFilePageId;
