@@ -145,7 +145,7 @@ IouringMgr::~IouringMgr()
         {
             for (auto &[_, fd] : tbl.fds_)
             {
-                if (fd.fd_ >= 0)
+                if (fd.fd_ >= 0 && fd.reg_idx_ < 0)
                 {
                     close(fd.fd_);
                 }
@@ -1408,7 +1408,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
 
         CloseReq &req = reqs.emplace_back(ThdTask(), std::move(fd_ref));
         io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, &req);
-        if (lru_fd->file_id_ == LruFD::kDirectory)
+        if (lru_fd->reg_idx_ < 0)
         {
             req.fd_ = lru_fd->fd_;
             lru_fd->fd_ = LruFD::FdEmpty;
@@ -1539,7 +1539,7 @@ KvError IouringMgr::CloseFile(LruFD::Ref fd_ref)
 {
     LruFD *lru_fd = fd_ref.Get();
     const int fd_idx = lru_fd->reg_idx_;
-    if (lru_fd->file_id_ == LruFD::kDirectory)
+    if (fd_idx < 0)
     {
         const int fd = lru_fd->fd_;
         if (fd < 0)
@@ -1561,10 +1561,7 @@ KvError IouringMgr::CloseFile(LruFD::Ref fd_ref)
         lru_fd->mu_.Unlock();
         return ToKvError(res);
     }
-    if (fd_idx < 0)
-    {
-        return KvError::NoError;
-    }
+
     // Make sure no tasks can use this fd during closing.
     lru_fd->mu_.Lock();
 
