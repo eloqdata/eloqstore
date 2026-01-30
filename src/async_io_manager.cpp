@@ -2288,9 +2288,20 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
         if (filename.empty() ||
             boost::algorithm::ends_with(filename, TmpSuffix))
         {
-            LOG(ERROR) << "Unexpected cached file " << file_it->path()
-                       << ": temporary files must be cleaned before reuse";
-            return KvError::InvalidArgs;
+            fs::path unexpected_path = file_it->path();
+            std::error_code remove_ec;
+            fs::remove(unexpected_path, remove_ec);
+            if (remove_ec)
+            {
+                LOG(ERROR) << "Failed to remove cached file "
+                           << unexpected_path << ": " << remove_ec.message();
+            }
+            else
+            {
+                LOG(INFO) << "Removed unexpected cached file "
+                          << unexpected_path;
+            }
+            continue;
         }
 
         auto [prefix, suffix] = ParseFileName(filename);
