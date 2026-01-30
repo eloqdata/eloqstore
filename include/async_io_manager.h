@@ -430,13 +430,15 @@ public:
     int OpenAt(FdIdx dir_fd,
                const char *path,
                uint64_t flags,
-               uint64_t mode = 0);
+               uint64_t mode = 0,
+               bool fixed_target = true);
     int Read(FdIdx fd, char *dst, size_t n, uint64_t offset);
     int Write(FdIdx fd, const char *src, size_t n, uint64_t offset);
     int Fdatasync(FdIdx fd);
     int Statx(FdIdx fd, const char *path, struct statx *result);
     int Rename(FdIdx dir_fd, const char *old_path, const char *new_path);
     int Close(int fd);
+    int CloseDirect(int idx);
     int RegisterFile(int fd);
     int UnregisterFile(int idx);
     int Fallocate(FdIdx fd, uint64_t size);
@@ -519,7 +521,6 @@ public:
 
     uint32_t alloc_reg_slot_{0};
     std::vector<uint32_t> free_reg_slots_;
-    std::vector<int> root_reg_idxs_;
 
     bool ring_inited_{false};
     bool buffers_registered_{false};
