@@ -146,7 +146,8 @@ void WriteTask::WritePageCallback(VarPage page, KvError err)
                        << " page_id=" << idx_page->GetPageId()
                        << " file_page_id=" << idx_page->GetFilePageId()
                        << " idx_page=" << idx_page;
-            shard->IndexManager()->ReleaseIndexPage(idx_page);
+            shard->IndexManager()->ReleaseIndexPage(idx_page,
+                                                    "WritePageCallback:err");
         }
         break;
     }

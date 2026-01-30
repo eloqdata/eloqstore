@@ -38,8 +38,8 @@ public:
      * @return MemIndexPage*
      */
     MemIndexPage *AllocIndexPage();
-    void FreeIndexPage(MemIndexPage *page);
-    void ReleaseIndexPage(MemIndexPage *page);
+    void FreeIndexPage(MemIndexPage *page, const char *tag = nullptr);
+    void ReleaseIndexPage(MemIndexPage *page, const char *tag = nullptr);
 
     /**
      * @brief Enqueues the index page into the cache replacement list.

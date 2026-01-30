@@ -984,7 +984,7 @@ BatchWriteTask::DirtyIndexPage::~DirtyIndexPage()
     if (page_ != nullptr)
     {
         assert(page_->IsDetached());
-        shard->IndexManager()->ReleaseIndexPage(page_);
+        shard->IndexManager()->ReleaseIndexPage(page_, "DirtyIndexPage:dtor");
         page_ = nullptr;
     }
 }
@@ -1574,7 +1574,8 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::TruncateIndexPage(
     err = WritePage(new_page);
     if (err != KvError::NoError)
     {
-        shard->IndexManager()->ReleaseIndexPage(new_page);
+        shard->IndexManager()->ReleaseIndexPage(new_page,
+                                               "TruncateIndexPage:write_err");
         return {nullptr, err};
     }
     return {new_page, KvError::NoError};

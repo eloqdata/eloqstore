@@ -103,13 +103,18 @@ MemIndexPage *IndexPageManager::AllocIndexPage()
     return next_free;
 }
 
-void IndexPageManager::FreeIndexPage(MemIndexPage *page)
+void IndexPageManager::FreeIndexPage(MemIndexPage *page, const char *tag)
 {
     assert(page->IsDetached());
     assert(!page->IsPinned());
-    CHECK(!page->InFreeList()) << "Double free detected for MemIndexPage "
-                               << page;
+    CHECK(!page->InFreeList())
+        << "Double free detected for MemIndexPage " << page
+        << " last_free_tag=" << (page->LastFreeTag() == nullptr
+                                     ? "null"
+                                     : page->LastFreeTag())
+        << " new_free_tag=" << (tag == nullptr ? "null" : tag);
     page->in_free_list_ = true;
+    page->last_free_tag_ = tag;
     // Poison identifiers so stale swizzling pointers are detectable.
     page->page_id_ = MaxPageId;
     page->file_page_id_ = MaxFilePageId;
@@ -117,7 +122,7 @@ void IndexPageManager::FreeIndexPage(MemIndexPage *page)
     free_head_.EnqueNext(page);
 }
 
-void IndexPageManager::ReleaseIndexPage(MemIndexPage *page)
+void IndexPageManager::ReleaseIndexPage(MemIndexPage *page, const char *tag)
 {
     assert(page->IsDetached());
     assert(!page->IsPinned());
@@ -141,7 +146,7 @@ void IndexPageManager::ReleaseIndexPage(MemIndexPage *page)
                          << " file_page_id=" << page->GetFilePageId();
         }
     }
-    FreeIndexPage(page);
+    FreeIndexPage(page, tag);
 }
 
 void IndexPageManager::EnqueueIndexPage(MemIndexPage *page)
@@ -388,7 +393,7 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
             {
                 new_page->waiting_.WakeAll();
                 mapping->Unswizzling(new_page);
-                FreeIndexPage(new_page);
+                FreeIndexPage(new_page, "FindPage:read_error");
                 return {nullptr, err};
             }
             CHECK_EQ(new_page->GetFilePageId(), file_page_id)
@@ -431,7 +436,7 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
                            << " file_page_id=" << file_page_id;
                 new_page->waiting_.WakeAll();
                 mapping->Unswizzling(new_page);
-                FreeIndexPage(new_page);
+                FreeIndexPage(new_page, "FindPage:checksum_error");
                 return {nullptr, KvError::Corrupted};
             }
             const PageType type = TypeOfPage(new_page->PagePtr());
@@ -443,7 +448,7 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
                            << " type=" << static_cast<int>(type);
                 new_page->waiting_.WakeAll();
                 mapping->Unswizzling(new_page);
-                FreeIndexPage(new_page);
+                FreeIndexPage(new_page, "FindPage:type_error");
                 return {nullptr, KvError::Corrupted};
             }
             FinishIo(mapping, new_page);
@@ -548,7 +553,7 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
     page->file_page_id_ = MaxFilePageId;
     page->tbl_ident_ = nullptr;
 
-    FreeIndexPage(page);
+    FreeIndexPage(page, "RecyclePage");
     return true;
 }
 

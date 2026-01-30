@@ -72,6 +72,11 @@ public:
         return in_free_list_;
     }
 
+    const char *LastFreeTag() const
+    {
+        return last_free_tag_;
+    }
+
     PageId GetPageId() const
     {
         return page_id_;
@@ -148,6 +153,7 @@ private:
     MemIndexPage *prev_{nullptr};
     const TableIdent *tbl_ident_{nullptr};
     bool in_free_list_{false};
+    const char *last_free_tag_{nullptr};
     friend class IndexPageManager;
 };
 
