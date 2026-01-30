@@ -481,8 +481,6 @@ MappingSnapshot::~MappingSnapshot()
     }
 
     mgr->FreeMappingSnapshot(this);
-
-    mgr->MapperArena()->Release(std::move(mapping_tbl_));
 }
 
 FilePageId MappingSnapshot::ToFilePage(PageId page_id) const
