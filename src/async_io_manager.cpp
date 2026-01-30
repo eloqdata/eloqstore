@@ -524,7 +524,19 @@ std::pair<ManifestFilePtr, KvError> IouringMgr::GetManifest(
         return {nullptr, err};
     }
     struct statx result = {};
-    int res = Statx(fd.FdPair(), "", &result);
+    const std::string manifest_name = ManifestFileName(manifest_term);
+    auto [dir_fd, dir_err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
+    if (dir_err != KvError::NoError)
+    {
+        return {nullptr, dir_err};
+    }
+    int res = StatxAt(dir_fd.FdPair(), manifest_name.c_str(), &result);
+    KvError close_dir_err = CloseFile(std::move(dir_fd));
+    if (close_dir_err != KvError::NoError)
+    {
+        LOG(WARNING) << "failed to close directory handle for table " << tbl_id
+                     << ": " << ErrorString(close_dir_err);
+    }
     if (res < 0)
     {
         LOG(ERROR) << "failed to statx manifest file: " << strerror(-res);
@@ -1465,6 +1477,18 @@ int IouringMgr::Statx(FdIdx fd, const char *path, struct statx *result)
     }
     io_uring_prep_statx(
         sqe, fd.first, path, AT_EMPTY_PATH, STATX_BASIC_STATS, result);
+    return ThdTask()->WaitIoResult();
+}
+
+int IouringMgr::StatxAt(FdIdx dir_fd, const char *path, struct statx *result)
+{
+    io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
+    if (dir_fd.second)
+    {
+        sqe->flags |= IOSQE_FIXED_FILE;
+    }
+    io_uring_prep_statx(
+        sqe, dir_fd.first, path, 0, STATX_BASIC_STATS, result);
     return ThdTask()->WaitIoResult();
 }
 
