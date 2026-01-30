@@ -4,6 +4,7 @@
 
 #include <boost/algorithm/string/predicate.hpp>
 #include <filesystem>
+#include <iterator>
 #include <memory>
 #include <unordered_set>
 #include <utility>
@@ -145,32 +146,48 @@ KvError ListCloudFiles(const TableIdent &tbl_id,
     std::string table_path = tbl_id.ToString();
     KvTask *current_task = ThdTask();
 
-    // List all files in cloud.
-    ObjectStore::ListTask list_task(table_path);
-
-    // Set KvTask pointer and initialize inflight_io_
-    list_task.SetKvTask(current_task);
-
-    cloud_mgr->AcquireCloudSlot(current_task);
-    cloud_mgr->GetObjectStore().SubmitTask(&list_task, shard);
-    current_task->WaitIo();
-
-    if (list_task.error_ != KvError::NoError)
-    {
-        LOG(ERROR) << "Failed to list cloud files for table " << table_path
-                   << ", error: " << static_cast<int>(list_task.error_);
-        return list_task.error_;
-    }
-
     ObjectStore &object_store = cloud_mgr->GetObjectStore();
-    if (!object_store.ParseListObjectsResponse(list_task.response_data_.view(),
-                                               list_task.json_data_,
-                                               &cloud_files,
-                                               nullptr))
+    cloud_files.clear();
+
+    std::string continuation_token;
+    do
     {
-        LOG(ERROR) << "Failed to parse cloud list response";
-        return KvError::Corrupted;
-    }
+        // List files in batches (S3 ListObjectsV2 caps responses at 1000)
+        ObjectStore::ListTask list_task(table_path);
+        list_task.SetContinuationToken(continuation_token);
+        list_task.SetKvTask(current_task);
+
+        cloud_mgr->AcquireCloudSlot(current_task);
+        cloud_mgr->GetObjectStore().SubmitTask(&list_task, shard);
+        current_task->WaitIo();
+
+        if (list_task.error_ != KvError::NoError)
+        {
+            LOG(ERROR) << "Failed to list cloud files for table "
+                       << table_path
+                       << ", error: " << static_cast<int>(list_task.error_);
+            return list_task.error_;
+        }
+
+        std::vector<std::string> batch_files;
+        std::string next_token;
+        if (!object_store.ParseListObjectsResponse(
+                list_task.response_data_.view(),
+                list_task.json_data_,
+                &batch_files,
+                nullptr,
+                &next_token))
+        {
+            LOG(ERROR) << "Failed to parse cloud list response";
+            return KvError::Corrupted;
+        }
+
+        cloud_files.insert(cloud_files.end(),
+                           std::make_move_iterator(batch_files.begin()),
+                           std::make_move_iterator(batch_files.end()));
+
+        continuation_token = std::move(next_token);
+    } while (!continuation_token.empty());
 
     return KvError::NoError;
 }
