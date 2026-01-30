@@ -270,7 +270,8 @@ MappingSnapshot *PageMapper::GetMapping() const
 
 uint32_t PageMapper::UseCount() const
 {
-    return mapping_ ? mapping_->RefCount() : 0;
+    CHECK(mapping_ != nullptr);
+    return mapping_->RefCount();
 }
 
 const KvOptions *PageMapper::Options() const
@@ -637,7 +638,7 @@ void MappingSnapshot::AddRef()
 
 void MappingSnapshot::Release()
 {
-    assert(ref_cnt_ > 0);
+    CHECK(ref_cnt_ > 0);
     if (--ref_cnt_ == 0)
     {
         delete this;
