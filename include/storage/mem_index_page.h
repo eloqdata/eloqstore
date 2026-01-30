@@ -67,6 +67,11 @@ public:
         return prev_ == nullptr && next_ == nullptr;
     }
 
+    bool InFreeList() const
+    {
+        return in_free_list_;
+    }
+
     PageId GetPageId() const
     {
         return page_id_;
@@ -124,6 +129,7 @@ private:
     MemIndexPage *next_{nullptr};
     MemIndexPage *prev_{nullptr};
     const TableIdent *tbl_ident_{nullptr};
+    bool in_free_list_{false};
     friend class IndexPageManager;
 };
 

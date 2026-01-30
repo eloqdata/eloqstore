@@ -84,6 +84,7 @@ MemIndexPage *IndexPageManager::AllocIndexPage()
     }
     assert(next_free->IsDetached());
     assert(!next_free->IsPinned());
+    next_free->in_free_list_ = false;
     return next_free;
 }
 
@@ -91,6 +92,7 @@ void IndexPageManager::FreeIndexPage(MemIndexPage *page)
 {
     assert(page->IsDetached());
     assert(!page->IsPinned());
+    page->in_free_list_ = true;
     free_head_.EnqueNext(page);
 }
 

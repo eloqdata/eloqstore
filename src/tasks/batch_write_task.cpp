@@ -983,6 +983,11 @@ BatchWriteTask::DirtyIndexPage::~DirtyIndexPage()
 {
     if (page_ != nullptr)
     {
+        if (page_->InFreeList())
+        {
+            page_ = nullptr;
+            return;
+        }
         assert(page_->IsDetached());
         shard->IndexManager()->FreeIndexPage(page_);
         page_ = nullptr;
