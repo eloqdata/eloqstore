@@ -330,7 +330,6 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         }
         err = ApplyOnePage(cidx, now_ms);
         CHECK_KV_ERR(err);
-        YieldToLowPQ();
     }
     // Flush all dirty leaf data pages in leaf_triple_.
     assert(TripleElement(2) == nullptr);
@@ -345,10 +344,24 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
     {
         auto [new_page, err] = Pop();
         CHECK_KV_ERR(err);
-        new_root = new_page;
-        YieldToLowPQ();
+        if (new_page != nullptr)
+        {
+            if (new_root != nullptr)
+            {
+                new_root->Unpin();
+            }
+            new_root = new_page;
+        }
     }
-    root_id = new_root == nullptr ? MaxPageId : new_root->GetPageId();
+    if (new_root == nullptr)
+    {
+        root_id = MaxPageId;
+    }
+    else
+    {
+        root_id = new_root->GetPageId();
+        new_root->Unpin();
+    }
 
     return KvError::NoError;
 }
@@ -932,6 +945,10 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         {
             new_root = prev_page.page_;
         }
+        else
+        {
+            prev_page.page_->Unpin();
+        }
         prev_page.page_ = nullptr;
     }
 
@@ -966,6 +983,7 @@ KvError BatchWriteTask::FinishIndexPage(DirtyIndexPage &prev,
         KvError err = FlushIndexPage(
             prev.page_, std::move(prev.key_), prev.page_id_, true);
         CHECK_KV_ERR(err);
+        prev.page_->Unpin();
         prev.page_ = nullptr;
         prev.page_id_ = MaxPageId;
     }
@@ -975,6 +993,7 @@ KvError BatchWriteTask::FinishIndexPage(DirtyIndexPage &prev,
         return KvError::OutOfMem;
     }
     memcpy(cur_page->PagePtr(), page_view.data(), page_view.size());
+    cur_page->Pin();
     prev.page_ = cur_page;
     prev.key_ = std::move(cur_page_key);
     return KvError::NoError;
@@ -984,6 +1003,10 @@ BatchWriteTask::DirtyIndexPage::~DirtyIndexPage()
 {
     if (page_ != nullptr)
     {
+        if (page_->IsPinned())
+        {
+            page_->Unpin();
+        }
         if (page_->InFreeList())
         {
             page_ = nullptr;
@@ -1458,17 +1481,26 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::TruncateIndexPage(
                                  PageId sub_node_id) -> KvError
     {
         // truncate sub-node
-        std::pair<bool, KvError> ret;
+        bool partially_truncated = false;
+        KvError ret_err = KvError::NoError;
         if (is_leaf_idx)
         {
-            ret = TruncateDataPage(sub_node_id, trunc_pos);
+            auto [has_tail, err] = TruncateDataPage(sub_node_id, trunc_pos);
+            ret_err = err;
+            partially_truncated = has_tail;
         }
         else
         {
-            ret = TruncateIndexPage(sub_node_id, trunc_pos);
+            auto [new_page, err] = TruncateIndexPage(sub_node_id, trunc_pos);
+            ret_err = err;
+            partially_truncated = new_page != nullptr;
+            if (new_page != nullptr)
+            {
+                new_page->Unpin();
+            }
         }
-        CHECK_KV_ERR(ret.second);
-        if (ret.first)
+        CHECK_KV_ERR(ret_err);
+        if (partially_truncated)
         {
             // This sub-node is partially truncated
             builder.Add(sub_node_key, sub_node_id, is_leaf_idx);
@@ -1577,9 +1609,11 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::TruncateIndexPage(
     std::string_view page_view = builder.Finish();
     memcpy(new_page->PagePtr(), page_view.data(), page_view.size());
     new_page->SetPageId(page_id);
+    new_page->Pin();
     err = WritePage(new_page);
     if (err != KvError::NoError)
     {
+        new_page->Unpin();
         shard->IndexManager()->FreeIndexPage(new_page);
         return {nullptr, err};
     }
@@ -1628,8 +1662,15 @@ KvError BatchWriteTask::Truncate(std::string_view trunc_pos)
     do_update_ttl_ = true;
     auto [new_root, error] = TruncateIndexPage(cow_meta_.root_id_, trunc_pos);
     CHECK_KV_ERR(error);
-    cow_meta_.root_id_ =
-        new_root == nullptr ? MaxPageId : new_root->GetPageId();
+    if (new_root == nullptr)
+    {
+        cow_meta_.root_id_ = MaxPageId;
+    }
+    else
+    {
+        cow_meta_.root_id_ = new_root->GetPageId();
+        new_root->Unpin();
+    }
     err = ApplyTTLBatch();
     CHECK_KV_ERR(err);
     return UpdateMeta();
