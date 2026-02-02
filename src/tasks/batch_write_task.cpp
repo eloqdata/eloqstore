@@ -1007,6 +1007,9 @@ KvError BatchWriteTask::FlushIndexPage(MemIndexPage *idx_page,
                                        PageId page_id,
                                        bool split)
 {
+    CHECK(!idx_page->InFreeList());
+    CHECK(idx_page->IsDetached());
+    CHECK(idx_page->IsPinned());
     // Flushes the built index page.
     idx_page->SetPageId(page_id);
     LOG(INFO) << "FlushIndexPage " << page_id << " for " << tbl_ident_;

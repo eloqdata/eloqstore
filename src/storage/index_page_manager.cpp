@@ -18,6 +18,7 @@
 #include "storage/page_mapper.h"
 #include "storage/root_meta.h"
 #include "tasks/task.h"
+#include "tasks/write_task.h"
 #include "types.h"
 
 namespace eloqstore
@@ -104,6 +105,7 @@ void IndexPageManager::FreeIndexPage(MemIndexPage *page)
 {
     assert(page->IsDetached());
     assert(!page->IsPinned());
+    LOG(INFO) << "FreeIndexPage " << page->page_id_;
     page->in_free_list_ = true;
     free_head_.EnqueNext(page);
 }
@@ -432,11 +434,12 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
     page->Deque();
     assert(page->page_id_ != MaxPageId);
     assert(page->file_page_id_ != MaxFilePageId);
+    LOG(INFO) << "FreeIndexPage " << page->page_id_ << " for "
+              << ((WriteTask *) ThdTask())->TableId();
     page->page_id_ = MaxPageId;
     page->file_page_id_ = MaxFilePageId;
     page->tbl_ident_ = nullptr;
 
-    LOG(INFO) << "FreeIndexPage " << page->page_id_;
     FreeIndexPage(page);
     return true;
 }
