@@ -1011,7 +1011,8 @@ KvError BatchWriteTask::FlushIndexPage(MemIndexPage *idx_page,
     CHECK(idx_page->IsDetached());
     // Flushes the built index page.
     idx_page->SetPageId(page_id);
-    LOG(INFO) << "FlushIndexPage " << page_id << " for " << tbl_ident_;
+    LOG(INFO) << "FlushIndexPage " << page_id << " for " << tbl_ident_
+              << ", ptr:" << idx_page;
     KvError err = WritePage(idx_page);
     CHECK_KV_ERR(err);
 

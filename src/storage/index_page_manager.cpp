@@ -98,6 +98,8 @@ MemIndexPage *IndexPageManager::AllocIndexPage()
     assert(next_free->IsDetached());
     assert(!next_free->IsPinned());
     next_free->in_free_list_ = false;
+    LOG(INFO) << "AllocIndexPage " << next_free << " for "
+              << ((WriteTask *) ThdTask())->TableId();
     return next_free;
 }
 
@@ -105,7 +107,7 @@ void IndexPageManager::FreeIndexPage(MemIndexPage *page)
 {
     assert(page->IsDetached());
     assert(!page->IsPinned());
-    LOG(INFO) << "FreeIndexPage " << page->page_id_;
+    LOG(INFO) << "FreeIndexPage " << page;
     page->in_free_list_ = true;
     free_head_.EnqueNext(page);
 }
@@ -118,6 +120,7 @@ void IndexPageManager::EnqueueIndexPage(MemIndexPage *page)
         page->Deque();
     }
     assert(page->prev_ == nullptr && page->next_ == nullptr);
+    LOG(INFO) << "EnqueueIndexPage " << page;
     active_head_.EnqueNext(page);
 }
 
@@ -408,6 +411,7 @@ bool IndexPageManager::Evict()
         }
 
         node = node->prev_;
+        LOG(INFO) << "Evict from active list " << node;
         RecyclePage(node);
     } while (free_head_.next_ == nullptr);
 
@@ -434,12 +438,11 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
     page->Deque();
     assert(page->page_id_ != MaxPageId);
     assert(page->file_page_id_ != MaxFilePageId);
-    LOG(INFO) << "FreeIndexPage " << page->page_id_ << " for "
-              << ((WriteTask *) ThdTask())->TableId() << ", ptr:" << page;
     page->page_id_ = MaxPageId;
     page->file_page_id_ = MaxFilePageId;
     page->tbl_ident_ = nullptr;
 
+    LOG(INFO) << "FreeIndexPage " << page;
     FreeIndexPage(page);
     return true;
 }

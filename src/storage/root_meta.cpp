@@ -297,6 +297,7 @@ bool RootMetaMgr::EvictRootForCache(Entry *entry)
                                       meta.index_pages_.end());
     for (MemIndexPage *page : pages)
     {
+        LOG(INFO) << "EvictRootForCache " << page;
         owner_->RecyclePage(page);
     }
     meta.index_pages_.clear();

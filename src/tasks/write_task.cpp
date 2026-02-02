@@ -119,7 +119,7 @@ void WriteTask::WritePageCallback(VarPage page, KvError err)
         }
         else
         {
-            LOG(INFO) << "FreeIndexPage " << idx_page << " for " << tbl_ident_;
+            LOG(INFO) << "FreeIndexPage " << idx_page;
             shard->IndexManager()->FreeIndexPage(idx_page);
         }
         break;
@@ -181,7 +181,6 @@ std::pair<PageId, FilePageId> WriteTask::AllocatePage(PageId page_id)
 
     cow_meta_.mapper_->UpdateMapping(page_id, file_page_id);
     wal_builder_.UpdateMapping(page_id, file_page_id);
-    LOG(INFO) << "Allocate page=" << page_id << " for " << tbl_ident_;
     return {page_id, file_page_id};
 }
 
@@ -193,6 +192,7 @@ void WriteTask::FreePage(PageId page_id)
         FilePageId file_page = ToFilePage(page_id);
         cow_meta_.old_mapping_->AddFreeFilePage(file_page);
     }
+    LOG(INFO) << "FreePage=" << page_id << " for " << tbl_ident_;
     cow_meta_.mapper_->FreePage(page_id);
     wal_builder_.DeleteMapping(page_id);
 }

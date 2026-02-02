@@ -358,8 +358,6 @@ PageId PageMapper::GetPage()
     if (free_page_head_ == MaxPageId)
     {
         auto ret = map.PushBack(MappingSnapshot::InvalidValue);
-        LOG(INFO) << "GetPage from new:" << ret << " for "
-                  << ((WriteTask *) ThdTask())->TableId();
         return ret;
     }
     else

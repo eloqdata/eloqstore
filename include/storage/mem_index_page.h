@@ -48,12 +48,14 @@ public:
 
     void Pin()
     {
+        LOG(INFO) << "Pin " << this;
         ++ref_cnt_;
     }
 
     void Unpin()
     {
         CHECK_GT(ref_cnt_, 0);
+        LOG(INFO) << "Unpin " << this;
         --ref_cnt_;
     }
 
