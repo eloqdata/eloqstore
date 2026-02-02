@@ -21,6 +21,13 @@
 
 namespace eloqstore
 {
+namespace
+{
+inline bool ShouldTracePage(PageId page_id)
+{
+    return page_id == 1002 || page_id == 1503 || page_id == 1504;
+}
+}  // namespace
 MappingSnapshot::MappingSnapshot(IndexPageManager *idx_mgr,
                                  const TableIdent *tbl_id,
                                  MappingTbl tbl)
@@ -360,7 +367,15 @@ PageId PageMapper::GetPage()
     if (free_page_head_ == MaxPageId)
     {
         auto ret = map.PushBack(MappingSnapshot::InvalidValue);
-        // LOG(INFO) << "GetPage from new:" << ret;
+        if (ShouldTracePage(ret))
+        {
+            LOG(INFO) << "TracePage GetPage(new): page_id=" << ret << " table "
+                      << (mapping_->tbl_ident_ != nullptr
+                              ? mapping_->tbl_ident_->ToString()
+                              : "null")
+                      << " map_size=" << map.size()
+                      << " free_head=" << free_page_head_;
+        }
         return ret;
     }
     else
@@ -381,7 +396,16 @@ PageId PageMapper::GetPage()
         // Sets the free page's mapped file page to null.
         map.Set(free_page, MappingSnapshot::InvalidValue);
         free_page_cnt_--;
-        LOG(INFO) << "GetPage from reused:" << free_page;
+        if (ShouldTracePage(free_page))
+        {
+            LOG(INFO) << "TracePage GetPage(reuse): page_id=" << free_page
+                      << " table "
+                      << (mapping_->tbl_ident_ != nullptr
+                              ? mapping_->tbl_ident_->ToString()
+                              : "null")
+                      << " map_size=" << map.size()
+                      << " next_free=" << free_page_head_;
+        }
         return free_page;
     }
 }
@@ -407,6 +431,16 @@ void PageMapper::FreePage(PageId page_id, const char *file, int line)
                    << " current_at=" << file << ":" << line;
     }
     freed_pages_[page_id] = std::string(file) + ":" + std::to_string(line);
+    if (ShouldTracePage(page_id))
+    {
+        LOG(INFO) << "TracePage FreePage: page_id=" << page_id << " table "
+                  << (mapping_->tbl_ident_ != nullptr
+                          ? mapping_->tbl_ident_->ToString()
+                          : "null")
+                  << " current_at=" << file << ":" << line
+                  << " free_head_before=" << free_page_head_
+                  << " map_size=" << map.size();
+    }
     uint64_t val = free_page_head_ == MaxPageId
                        ? MappingSnapshot::InvalidValue
                        : MappingSnapshot::EncodePageId(free_page_head_);
@@ -483,6 +517,15 @@ void PageMapper::UpdateMapping(PageId page_id, FilePageId file_page_id)
 {
     auto &map = Mapping();
     assert(page_id < map.size());
+    if (ShouldTracePage(page_id))
+    {
+        LOG(INFO) << "TracePage UpdateMapping: page_id=" << page_id
+                  << " file_page_id=" << file_page_id << " table "
+                  << (mapping_->tbl_ident_ != nullptr
+                          ? mapping_->tbl_ident_->ToString()
+                          : "null")
+                  << " map_size=" << map.size();
+    }
     uint64_t val = MappingSnapshot::EncodeFilePageId(file_page_id);
     map.Set(page_id, val);
 }
