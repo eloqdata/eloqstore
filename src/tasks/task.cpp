@@ -54,10 +54,6 @@ int KvTask::WaitIoResult()
 
 void KvTask::WaitIo()
 {
-    if (!ReadOnly())
-    {
-        shard->low_priority_tasks_io_submitted_ = true;
-    }
     while (inflight_io_ > 0)
     {
         status_ = TaskStatus::BlockedIO;

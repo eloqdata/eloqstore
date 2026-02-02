@@ -58,7 +58,6 @@ public:
     CircularQueue<KvTask *> low_priority_ready_tasks_;
     size_t running_writing_tasks_{};
     bool oss_enabled_{false};
-    bool low_priority_tasks_io_submitted_{false};
     bool io_mgr_and_page_pool_inited_{false};
 
 private:
