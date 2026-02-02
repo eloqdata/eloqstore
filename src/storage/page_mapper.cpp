@@ -344,7 +344,6 @@ PageMapper::PageMapper(const PageMapper &rhs)
     auto &src_tbl = rhs.mapping_->mapping_tbl_;
     src_tbl.StartCopying();
     mapping_->mapping_tbl_.CopyFrom(src_tbl);
-    ThdTask()->YieldToLowPQ();
 
     src_tbl.ApplyPendingTo(mapping_->mapping_tbl_);
     src_tbl.FinishCopying();
