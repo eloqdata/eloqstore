@@ -18,7 +18,9 @@ using eloqstore::KvError;
 using eloqstore::KvOptions;
 using eloqstore::ReadRequest;
 using eloqstore::ScanRequest;
-using eloqstore::TableIdentifier;
+using eloqstore::TableIdent;
+using eloqstore::WriteDataEntry;
+using eloqstore::WriteOp;
 
 // ============================================================
 // Thread-local storage for error messages

@@ -187,6 +187,7 @@ fn main() {
             // Static mode: link all system dependencies that libeloqstore.a needs
             println!("cargo:rustc-link-lib=zstd");
             println!("cargo:rustc-link-lib=glog");
+            println!("cargo:rustc-link-lib=gflags");
             println!("cargo:rustc-link-lib=curl");
             println!("cargo:rustc-link-lib=crypto");
             println!("cargo:rustc-link-lib=ssl");
@@ -258,6 +259,7 @@ fn main() {
         // System libraries that need to be linked (fallback mode)
         println!("cargo:rustc-link-lib=zstd");
         println!("cargo:rustc-link-lib=glog");
+        println!("cargo:rustc-link-lib=gflags");
         println!("cargo:rustc-link-lib=curl");
         println!("cargo:rustc-link-lib=crypto");
         println!("cargo:rustc-link-lib=ssl");

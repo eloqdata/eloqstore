@@ -156,6 +156,59 @@ if (STATIC_ALL_DEPS)
         find_package(CURL REQUIRED)
     endif()
     
+    # Find gflags library (required by shard.cpp for DEFINE_uint64)
+    # For shared library builds, prefer dynamic library (static may lack PIC)
+    if (BUILD_FOR_RUST AND STATIC_ALL_DEPS)
+        # Try dynamic library first for shared library builds
+        set(CMAKE_FIND_LIBRARY_SUFFIXES_BACKUP ${CMAKE_FIND_LIBRARY_SUFFIXES})
+        set(CMAKE_FIND_LIBRARY_SUFFIXES ".so" ".so.2" ".so.2.2" ".so.2.2.2")
+        find_library(GFLAGS_DYNAMIC_LIB 
+            NAMES gflags libgflags
+            PATHS /usr/lib/x86_64-linux-gnu /usr/lib /usr/local/lib
+            NO_DEFAULT_PATH
+        )
+        if (NOT GFLAGS_DYNAMIC_LIB)
+            find_library(GFLAGS_DYNAMIC_LIB gflags)
+        endif()
+        set(CMAKE_FIND_LIBRARY_SUFFIXES ${CMAKE_FIND_LIBRARY_SUFFIXES_BACKUP})
+        
+        if (GFLAGS_DYNAMIC_LIB AND EXISTS ${GFLAGS_DYNAMIC_LIB})
+            get_filename_component(GFLAGS_EXT ${GFLAGS_DYNAMIC_LIB} EXT)
+            if (GFLAGS_EXT MATCHES "\\.so")
+                set(GFLAGS_LIBRARY ${GFLAGS_DYNAMIC_LIB})
+                set(GFLAGS_USE_DYNAMIC TRUE)
+                message(STATUS "Using dynamic gflags library for shared library build: ${GFLAGS_LIBRARY}")
+            endif()
+        endif()
+    endif()
+    
+    # Fallback to static library if dynamic not found or not building shared library
+    if (NOT GFLAGS_USE_DYNAMIC)
+        find_library(GFLAGS_LIBRARY 
+            NAMES libgflags.a gflags
+            PATHS /usr/lib /usr/local/lib
+            NO_DEFAULT_PATH
+        )
+        if (NOT GFLAGS_LIBRARY)
+            find_library(GFLAGS_LIBRARY NAMES gflags libgflags)
+        endif()
+    endif()
+    
+    if (GFLAGS_LIBRARY)
+        set(gflags_FOUND TRUE)
+        get_filename_component(GFLAGS_LIB_DIR ${GFLAGS_LIBRARY} DIRECTORY)
+        find_path(GFLAGS_INCLUDE_DIR 
+            NAMES gflags/gflags.h
+            PATHS /usr/include /usr/local/include
+            NO_DEFAULT_PATH
+        )
+        if (NOT GFLAGS_INCLUDE_DIR)
+            find_path(GFLAGS_INCLUDE_DIR NAMES gflags/gflags.h)
+        endif()
+    else()
+        message(WARNING "gflags not found - shard.cpp uses DEFINE_uint64 which requires gflags")
+    endif()
+    
     # For shared library, static libs must be compiled with -fPIC
     # Some system static libraries (like zstd) may not have PIC, so we use dynamic libs for those
     if (BUILD_FOR_RUST AND STATIC_ALL_DEPS)
@@ -431,15 +484,23 @@ if (BUILD_FOR_RUST AND STATIC_ALL_DEPS)
         target_link_libraries(eloqstore_combine PRIVATE ${CURL_LIBRARIES})
     endif()
     
-    # Link zstd FIRST with dynamic linking (if needed)
+    # Link zstd and gflags with dynamic linking if needed (if static libs lack PIC)
     # This must be done before other static libraries to avoid PIC issues
-    if (ZSTD_USE_DYNAMIC)
-        message(STATUS "Linking zstd dynamically: ${ZSTD_LIBRARY}")
-        # Ensure we're in dynamic linking mode for zstd
+    if (ZSTD_USE_DYNAMIC OR GFLAGS_USE_DYNAMIC)
+        message(STATUS "Linking some libraries dynamically due to PIC requirements")
+        # Ensure we're in dynamic linking mode
         target_link_options(eloqstore_combine PRIVATE
             -Wl,-Bdynamic
         )
-        target_link_libraries(eloqstore_combine PRIVATE ${ZSTD_LIBRARY})
+        if (ZSTD_USE_DYNAMIC)
+            target_link_libraries(eloqstore_combine PRIVATE ${ZSTD_LIBRARY})
+        endif()
+        if (GFLAGS_USE_DYNAMIC)
+            target_link_libraries(eloqstore_combine PRIVATE ${GFLAGS_LIBRARY})
+            if (GFLAGS_INCLUDE_DIR)
+                target_include_directories(eloqstore_combine PRIVATE ${GFLAGS_INCLUDE_DIR})
+            endif()
+        endif()
         # Switch back to static linking for other libraries
         target_link_options(eloqstore_combine PRIVATE
             -Wl,-Bstatic
@@ -459,6 +520,14 @@ if (BUILD_FOR_RUST AND STATIC_ALL_DEPS)
     # Link zstd statically if not using dynamic
     if (NOT ZSTD_USE_DYNAMIC)
         target_link_libraries(eloqstore_combine PRIVATE ${ZSTD_LIBRARY})
+    endif()
+    
+    # Link gflags statically if not using dynamic (required by shard.cpp for DEFINE_uint64)
+    if (GFLAGS_LIBRARY AND NOT GFLAGS_USE_DYNAMIC)
+        target_link_libraries(eloqstore_combine PRIVATE ${GFLAGS_LIBRARY})
+        if (GFLAGS_INCLUDE_DIR)
+            target_include_directories(eloqstore_combine PRIVATE ${GFLAGS_INCLUDE_DIR})
+        endif()
     endif()
     
     # Switch back to dynamic linking for system libraries (pthread, dl, etc.)
