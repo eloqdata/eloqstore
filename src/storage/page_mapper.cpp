@@ -357,7 +357,9 @@ PageId PageMapper::GetPage()
     auto &map = Mapping();
     if (free_page_head_ == MaxPageId)
     {
-        return map.PushBack(MappingSnapshot::InvalidValue);
+        auto ret = map.PushBack(MappingSnapshot::InvalidValue);
+        LOG(INFO) << "GetPage:" << ret;
+        return ret;
     }
     else
     {
