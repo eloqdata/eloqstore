@@ -512,7 +512,6 @@ bool Shard::ExecuteReadyTasks()
         }
     }
 
-    low_priority_tasks_io_submitted_ = false;
     while (low_priority_ready_tasks_.Size() > 0)
     {
         KvTask *task = low_priority_ready_tasks_.Peek();
@@ -524,8 +523,7 @@ bool Shard::ExecuteReadyTasks()
         {
             OnTaskFinished(task);
         }
-        if (low_priority_tasks_io_submitted_ ||
-            DurationMicroseconds(ts_) >= FLAGS_max_processing_time_microseconds)
+        if (DurationMicroseconds(ts_) >= FLAGS_max_processing_time_microseconds)
         {
             goto finish;
         }
