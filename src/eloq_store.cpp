@@ -391,8 +391,6 @@ KvError EloqStore::CollectTablePartitions(
     {
         std::vector<std::string> objects;
         ListObjectRequest list_object_request(&objects);
-        list_object_request.SetRemotePath(std::string{});
-        list_object_request.SetRecursive(false);
 
         bool has_more = false;
         do
