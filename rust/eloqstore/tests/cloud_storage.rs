@@ -31,7 +31,7 @@ fn main() -> Result<(), eloqstore::KvError> {
     opts.set_enable_compression(true);
 
     // Cloud storage configuration
-    opts.set_cloud_store_path("eloqstore/test-bucket");
+    opts.set_cloud_store_path("eloqstore/example_bucket");
     opts.set_cloud_provider("aws");
     opts.set_cloud_region("us-east-1");
     opts.set_cloud_credentials("minioadmin", "minioadmin");
@@ -51,7 +51,7 @@ fn main() -> Result<(), eloqstore::KvError> {
     }
 
     println!("Options configured successfully");
-    println!("  - Cloud path: eloqstore/test-bucket");
+    println!("  - Cloud path: eloqstore/example_bucket");
     println!("  - Provider: aws (S3-compatible)");
     println!("  - Region: us-east-1");
     println!("  - Local cache: /tmp/eloqstore_cloud_cache");

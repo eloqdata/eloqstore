@@ -1,6 +1,6 @@
 # EloqStore Rust FFI
 
-Rust bindings for [EloqStore](https://github.com/alibaba/EloqStore), a high-performance embedded key-value database written in C++.
+Rust bindings for [EloqStore](https://github.com/eloqdata/eloqstore), a high-performance embedded key-value database written in C++.
 
 ## Overview
 
@@ -237,4 +237,4 @@ High-level Rust API. This crate:
 
 ## License
 
-EloqStore Rust FFI is licensed under the same license as EloqStore. See the [EloqStore repository](https://github.com/alibaba/EloqStore) for details.
+EloqStore Rust FFI is licensed under the same license as EloqStore. See the [EloqStore repository](https://github.com/eloqdata/eloqstore) for details.
