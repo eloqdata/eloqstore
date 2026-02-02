@@ -328,18 +328,18 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
     do_update_ttl_ = update_ttl;
     CHECK(!update_ttl || ttl_batch_.empty());
 
+    auto *old_mapping = cow_meta_.old_mapping_.Get();
+    const size_t old_mapping_size = old_mapping->mapping_tbl_.size();
     if (root_id != MaxPageId)
     {
-        auto *mapping = cow_meta_.old_mapping_.Get();
-        const size_t mapping_size = mapping->mapping_tbl_.size();
-        if (static_cast<size_t>(root_id) >= mapping_size)
+        if (static_cast<size_t>(root_id) >= old_mapping_size)
         {
             LOG(FATAL) << "ApplyBatch root_id out of range, root_id=" << root_id
-                       << " mapping_size=" << mapping_size << " table "
+                       << " mapping_size=" << old_mapping_size << " table "
                        << tbl_ident_;
         }
         auto [root_page, err] =
-            shard->IndexManager()->FindPage(mapping, root_id);
+            shard->IndexManager()->FindPage(old_mapping, root_id);
         CHECK_KV_ERR(err);
         stack_.emplace_back(
             std::make_unique<IndexStackEntry>(root_page, Options()));
@@ -368,8 +368,31 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         CHECK_KV_ERR(err);
         if (page_id != MaxPageId)
         {
+            if (static_cast<size_t>(page_id) >= old_mapping_size)
+            {
+                LOG(FATAL) << "ApplyBatch seek page_id out of range, page_id="
+                           << page_id << " mapping_size=" << old_mapping_size
+                           << " table " << tbl_ident_;
+            }
             err = LoadApplyingPage(page_id);
             CHECK_KV_ERR(err);
+            const PageId loaded_page_id = applying_page_.GetPageId();
+            if (loaded_page_id != page_id)
+            {
+                LOG(FATAL)
+                    << "ApplyBatch applying_page page_id changed, table "
+                    << tbl_ident_ << " seek_page_id=" << page_id
+                    << " loaded_page_id=" << loaded_page_id
+                    << " mapping_size=" << old_mapping_size;
+            }
+            if (static_cast<size_t>(loaded_page_id) >= old_mapping_size)
+            {
+                LOG(FATAL)
+                    << "ApplyBatch applying_page_id out of range, page_id="
+                    << loaded_page_id
+                    << " mapping_size=" << old_mapping_size << " table "
+                    << tbl_ident_;
+            }
         }
         err = ApplyOnePage(cidx, now_ms);
         CHECK_KV_ERR(err);
