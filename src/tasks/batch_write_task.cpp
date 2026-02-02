@@ -392,16 +392,20 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         new_root = new_page;
         const PageId page_id_before_yield =
             new_root != nullptr ? new_root->GetPageId() : MaxPageId;
-        YieldToLowPQ();
-        const PageId page_id_after_yield =
-            new_root != nullptr ? new_root->GetPageId() : MaxPageId;
-        if (page_id_before_yield != page_id_after_yield)
+        if (stack_.size() > 1)
         {
-            LOG(FATAL) << "ApplyBatch root page_id changed across yield, table "
-                       << tbl_ident_
-                       << " page_id_before_yield=" << page_id_before_yield
-                       << " page_id_after_yield=" << page_id_after_yield
-                       << " stack_size_before_pop=" << stack_size_before_pop;
+            YieldToLowPQ();
+            const PageId page_id_after_yield =
+                new_root != nullptr ? new_root->GetPageId() : MaxPageId;
+            if (page_id_before_yield != page_id_after_yield)
+            {
+                LOG(FATAL)
+                    << "ApplyBatch root page_id changed across yield, table "
+                    << tbl_ident_
+                    << " page_id_before_yield=" << page_id_before_yield
+                    << " page_id_after_yield=" << page_id_after_yield
+                    << " stack_size_before_pop=" << stack_size_before_pop;
+            }
         }
     }
     root_id = new_root == nullptr ? MaxPageId : new_root->GetPageId();
