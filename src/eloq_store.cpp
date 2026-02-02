@@ -1108,6 +1108,11 @@ void BatchWriteRequest::Clear()
     batch_.shrink_to_fit();
 }
 
+std::vector<WriteDataEntry> BatchWriteRequest::TakeBatch()
+{
+    return std::move(batch_);
+}
+
 void TruncateRequest::SetArgs(TableIdent tbl_id, std::string_view position)
 {
     SetTableId(std::move(tbl_id));

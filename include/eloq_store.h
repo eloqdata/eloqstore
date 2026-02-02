@@ -344,6 +344,8 @@ public:
     void AddWrite(std::string key, std::string value, uint64_t ts, WriteOp op);
     // used by caller.
     void Clear();
+    /** Move out batch_ for caller to reclaim (e.g. move into write_op in OnBatchWrite). */
+    std::vector<WriteDataEntry> TakeBatch();
 
     // input
     std::vector<WriteDataEntry> batch_;
