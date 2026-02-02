@@ -117,6 +117,7 @@ void WriteTask::WritePageCallback(VarPage page, KvError err)
         }
         else
         {
+            LOG(INFO) << "FreeIndexPage " << idx_page << " for " << tbl_ident_;
             shard->IndexManager()->FreeIndexPage(idx_page);
         }
         break;

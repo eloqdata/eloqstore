@@ -345,6 +345,7 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
             {
                 new_page->waiting_.WakeAll();
                 mapping->Unswizzling(new_page);
+                LOG(INFO) << "FreeIndexPage " << new_page;
                 FreeIndexPage(new_page);
                 return {nullptr, err};
             }
@@ -435,6 +436,7 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
     page->file_page_id_ = MaxFilePageId;
     page->tbl_ident_ = nullptr;
 
+    LOG(INFO) << "FreeIndexPage " << page->page_id_;
     FreeIndexPage(page);
     return true;
 }

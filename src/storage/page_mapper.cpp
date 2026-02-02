@@ -358,7 +358,7 @@ PageId PageMapper::GetPage()
     if (free_page_head_ == MaxPageId)
     {
         auto ret = map.PushBack(MappingSnapshot::InvalidValue);
-        LOG(INFO) << "GetPage:" << ret;
+        LOG(INFO) << "GetPage from new:" << ret;
         return ret;
     }
     else
@@ -369,6 +369,7 @@ PageId PageMapper::GetPage()
         // Sets the free page's mapped file page to null.
         map.Set(free_page, MappingSnapshot::InvalidValue);
         free_page_cnt_--;
+        LOG(INFO) << "GetPage from reused:" << free_page;
         return free_page;
     }
 }
