@@ -107,7 +107,6 @@ void IndexPageManager::FreeIndexPage(MemIndexPage *page)
 {
     assert(page->IsDetached());
     assert(!page->IsPinned());
-    LOG(INFO) << "FreeIndexPage " << page;
     page->in_free_list_ = true;
     free_head_.EnqueNext(page);
 }
@@ -120,7 +119,7 @@ void IndexPageManager::EnqueueIndexPage(MemIndexPage *page)
         page->Deque();
     }
     assert(page->prev_ == nullptr && page->next_ == nullptr);
-    LOG(INFO) << "EnqueueIndexPage " << page;
+
     active_head_.EnqueNext(page);
 }
 
@@ -354,6 +353,7 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
                 FreeIndexPage(new_page);
                 return {nullptr, err};
             }
+            LOG(INFO) << "ReadPage call FinishIO " << new_page;
             FinishIo(mapping, new_page);
             new_page->waiting_.WakeAll();
             return {new_page, KvError::NoError};
@@ -365,6 +365,7 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
         }
         else
         {
+            LOG(INFO) << "EnqueueIndexPage " << idx_page;
             EnqueueIndexPage(idx_page);
             return {idx_page, KvError::NoError};
         }
@@ -458,6 +459,7 @@ void IndexPageManager::FinishIo(MappingSnapshot *mapping,
     {
         entry->meta_.index_pages_.insert(idx_page);
     }
+    LOG(INFO) << "FinishIO EnqueueIndexPage " << idx_page;
     EnqueueIndexPage(idx_page);
 }
 

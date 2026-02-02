@@ -58,8 +58,6 @@ KvError WriteTask::WritePage(DataPage &&page)
 {
     SetChecksum({page.PagePtr(), Options()->data_page_size});
     auto [_, fp_id] = AllocatePage(page.GetPageId());
-    LOG(INFO) << "DataPage allocate " << page.GetPageId() << " for "
-              << tbl_ident_;
     return WritePage(std::move(page), fp_id);
 }
 
@@ -74,10 +72,58 @@ KvError WriteTask::WritePage(MemIndexPage *page)
 {
     SetChecksum({page->PagePtr(), Options()->data_page_size});
     auto [page_id, file_page_id] = AllocatePage(page->GetPageId());
-    LOG(INFO) << "MemIndexPage allocate " << page_id << " for " << tbl_ident_
-              << ", ptr:" << page;
+    LOG(INFO) << "FlushIndexPage " << page_id << " for " << tbl_ident_
+              << ", ptr:" << page << ", page_id:" << page_id;
     page->SetPageId(page_id);
     page->SetFilePageId(file_page_id);
+    const uint16_t content_size =
+        DecodeFixed16(page->PagePtr() + MemIndexPage::page_size_offset);
+    std::string_view content_view{page->PagePtr(), content_size};
+
+    auto has_self_pointer =
+        [&](std::string_view view, PageId page_id, TableIdent tbl_id)
+        {
+            std::string page_ids;
+            if (page_id == MaxPageId)
+            {
+                return false;
+            }
+
+            const char *data = view.data();
+            PageId left_ptr =
+                DecodeFixed32(data + MemIndexPage::leftmost_ptr_offset);
+            if (left_ptr == page_id)
+            {
+                return true;
+            }
+
+            IndexPageIter iter(view, Options());
+            while (iter.HasNext())
+            {
+                if (!iter.Next())
+                {
+                    break;
+                }
+                page_ids += " " + std::to_string(iter.GetPageId());
+                if (iter.GetPageId() == page_id)
+                {
+                    return true;
+                }
+            }
+            if (page_id == 1002)
+            {
+                LOG(INFO) << "page_ids:" << page_ids << " of " << page_id << " for "
+                          << tbl_id;
+            }
+            return false;
+        };
+
+    LOG(INFO) << "FlushIndexPage " << page_id << " for " << tbl_ident_;
+    if (has_self_pointer(content_view, page_id, tbl_ident_))
+    {
+        LOG(ERROR) << "Index page " << page_id;
+        return KvError::Corrupted;
+    }
     return WritePage(page, file_page_id);
 }
 
@@ -114,6 +160,7 @@ void WriteTask::WritePageCallback(VarPage page, KvError err)
         MemIndexPage *idx_page = std::get<MemIndexPage *>(page);
         if (err == KvError::NoError)
         {
+            LOG(INFO) << "Write call FinishIO " << idx_page;
             shard->IndexManager()->FinishIo(cow_meta_.mapper_->GetMapping(),
                                             idx_page);
         }
@@ -234,7 +281,7 @@ KvError WriteTask::FlushManifest()
     file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
                                         IoMgr()->ProcessTerm());
     SerializeFileIdTermMapping(*file_term_mapping, term_buf);
-    YieldToLowPQ();
+    // YieldToLowPQ();
 
     if (need_empty_snapshot)
     {

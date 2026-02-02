@@ -98,7 +98,6 @@ std::pair<PageId, KvError> BatchWriteTask::Seek(std::string_view key)
         }
         node->Pin();
         stack_.emplace_back(std::make_unique<IndexStackEntry>(node, Options()));
-        LOG(INFO) << "For " << tbl_ident_ << " stack size: " << stack_.size();
     }
     stack_.back()->is_leaf_index_ = true;
     return {stack_.back()->idx_page_iter_.GetPageId(), KvError::NoError};
@@ -336,7 +335,6 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         }
         err = ApplyOnePage(cidx, now_ms);
         CHECK_KV_ERR(err);
-        YieldToLowPQ();
     }
     // Flush all dirty leaf data pages in leaf_triple_.
     assert(TripleElement(2) == nullptr);
@@ -352,7 +350,17 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         auto [new_page, err] = Pop();
         CHECK_KV_ERR(err);
         new_root = new_page;
-        YieldToLowPQ();
+        const PageId page_id_before_yield =
+            new_root != nullptr ? new_root->GetPageId() : MaxPageId;
+        const PageId page_id_after_yield =
+            new_root != nullptr ? new_root->GetPageId() : MaxPageId;
+        if (page_id_before_yield != page_id_after_yield)
+        {
+            LOG(FATAL) << "ApplyBatch root page_id changed across yield, table "
+                       << tbl_ident_
+                       << " page_id_before_yield=" << page_id_before_yield
+                       << " page_id_after_yield=" << page_id_after_yield;
+        }
     }
     root_id = new_root == nullptr ? MaxPageId : new_root->GetPageId();
 
@@ -1011,8 +1019,6 @@ KvError BatchWriteTask::FlushIndexPage(MemIndexPage *idx_page,
     CHECK(idx_page->IsDetached());
     // Flushes the built index page.
     idx_page->SetPageId(page_id);
-    LOG(INFO) << "FlushIndexPage " << page_id << " for " << tbl_ident_
-              << ", ptr:" << idx_page;
     KvError err = WritePage(idx_page);
     CHECK_KV_ERR(err);
 
