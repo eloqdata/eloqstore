@@ -82,6 +82,22 @@ std::pair<PageId, KvError> BatchWriteTask::Seek(std::string_view key)
         //           << ", current page id " << idx_entry->idx_page_->GetPageId()
         //           << ", got " << page_id;
         assert(page_id != MaxPageId);
+        PageId current_id = idx_entry->idx_page_->GetPageId();
+        if (page_id == current_id)
+        {
+            LOG(FATAL) << "Seek detected self-loop for " << tbl_ident_
+                       << ", page_id=" << page_id << ", key=" << key;
+        }
+        for (const auto &entry : stack_)
+        {
+            if (entry->idx_page_ != nullptr &&
+                entry->idx_page_->GetPageId() == page_id)
+            {
+                LOG(FATAL) << "Seek detected cycle for " << tbl_ident_
+                           << ", page_id=" << page_id << ", key=" << key
+                           << ", stack_size=" << stack_.size();
+            }
+        }
         if (idx_entry->idx_page_->IsPointingToLeaf())
         {
             // LOG(INFO) << "For " << tbl_ident_ << " break";
@@ -718,7 +734,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         {
             err = LeafLinkDelete();
             CHECK_KV_ERR(err);
-            FreePage(applying_page_.GetPageId());
+            WRITE_TASK_FREE_PAGE(applying_page_.GetPageId());
             assert(stack_.back()->changes_.empty() ||
                    stack_.back()->changes_.back().key_ < curr_page_key);
             stack_.back()->changes_.emplace_back(
@@ -909,7 +925,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
     MemIndexPage *new_root = nullptr;
     if (idx_page_builder_.IsEmpty())
     {
-        FreePage(stack_.back()->idx_page_->GetPageId());
+        WRITE_TASK_FREE_PAGE(stack_.back()->idx_page_->GetPageId());
         if (stack_.size() > 1)
         {
             IndexStackEntry *parent = stack_[stack_.size() - 2].get();
@@ -1294,7 +1310,7 @@ KvError BatchWriteTask::DeleteTree(PageId page_id, bool update_prev)
             }
         }
         idx_page->Unpin();
-        FreePage(page_id);
+        WRITE_TASK_FREE_PAGE(page_id);
         return KvError::NoError;
     }
 
@@ -1309,7 +1325,7 @@ KvError BatchWriteTask::DeleteTree(PageId page_id, bool update_prev)
         }
     }
     idx_page->Unpin();
-    FreePage(page_id);
+    WRITE_TASK_FREE_PAGE(page_id);
     return KvError::NoError;
 }
 
@@ -1328,7 +1344,7 @@ KvError BatchWriteTask::DeleteDataPage(PageId page_id, bool update_prev)
         uint64_t expire_ts = iter.ExpireTs();
         UpdateTTL(expire_ts, iter.Key(), WriteOp::Delete);
     }
-    FreePage(page_id);
+    WRITE_TASK_FREE_PAGE(page_id);
 
     if (!update_prev || page.PrevPageId() == MaxPageId)
     {
@@ -1434,7 +1450,7 @@ KvError BatchWriteTask::DelOverflowValue(std::string_view encoded_ptrs)
         {
             i++;
         }
-        FreePage(page_id);
+        WRITE_TASK_FREE_PAGE(page_id);
     }
     return KvError::NoError;
 }
@@ -1573,7 +1589,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::TruncateIndexPage(
     if (builder.IsEmpty())
     {
         // This index page is wholly deleted
-        FreePage(page_id);
+        WRITE_TASK_FREE_PAGE(page_id);
         return {nullptr, KvError::NoError};
     }
     // This index page is partially truncated
@@ -1623,7 +1639,7 @@ KvError BatchWriteTask::Truncate(std::string_view trunc_pos)
                 continue;
             }
 
-            FreePage(page_id);
+            WRITE_TASK_FREE_PAGE(page_id);
         }
 
         cow_meta_.root_id_ = MaxPageId;
@@ -1690,7 +1706,7 @@ std::pair<bool, KvError> BatchWriteTask::TruncateDataPage(
 
     if (data_page_builder_.IsEmpty())
     {
-        FreePage(page.GetPageId());
+        WRITE_TASK_FREE_PAGE(page.GetPageId());
 
         uint32_t prev_page_id = page.PrevPageId();
         if (prev_page_id == MaxPageId)

@@ -255,9 +255,10 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
     {
         // Get all free page ids.
         uint64_t val = m_table.Get(page_id);
-        if (!MappingSnapshot::IsFilePageId(val))
+        auto val_type = MappingSnapshot::GetValType(val);
+        if (val_type == MappingSnapshot::ValType::Invalid)
         {
-            mapper->FreePage(page_id);
+            mapper->FreePage(page_id, __FILE__, __LINE__);
             continue;
         }
 

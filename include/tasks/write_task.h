@@ -69,4 +69,8 @@ protected:
     bool file_id_term_mapping_dirty_{false};
 };
 
+#ifndef WRITE_TASK_FREE_PAGE
+#define WRITE_TASK_FREE_PAGE(page_id) FreePage((page_id), __FILE__, __LINE__)
+#endif
+
 }  // namespace eloqstore

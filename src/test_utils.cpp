@@ -974,7 +974,7 @@ void ManifestVerifier::FreeMapping()
         root_id_ = Size() == 0 ? eloqstore::MaxPageId : RandChoose().first;
     }
 
-    answer_.FreePage(page_id);
+    answer_.FreePage(page_id, __FILE__, __LINE__);
     builder_.DeleteMapping(page_id);
     if (answer_file_pages_)
     {
