@@ -422,7 +422,7 @@ public:
     uint32_t AllocRegisterIndex();
     void FreeRegisterIndex(uint32_t idx);
 
-    inline uint16_t LookupRegisteredBufferIndex(const char *ptr) const;
+    uint16_t LookupRegisteredBufferIndex(const char *ptr) const;
 
     // Low-level io operation. Very simple wrap on syscall.
     io_uring_sqe *GetSQE(UserDataType type, const void *user_ptr);
