@@ -1,8 +1,26 @@
 use cmake::Config;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 fn main() {
+    // 在构建前初始化并更新 git submodule
+    // vendor/{src,include,external} 已通过软链接指向仓库根目录
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    if let Ok(repo_root) = manifest_dir.join("../..").canonicalize() {
+        if repo_root.join(".git").exists() {
+            let status = Command::new("git")
+                .args(&["submodule", "update", "--init", "--recursive"])
+                .current_dir(&repo_root)
+                .status();
+            if let Ok(s) = status {
+                if !s.success() {
+                    panic!("git submodule update --init --recursive 执行失败，请手动在仓库根目录执行");
+                }
+            }
+        }
+    }
+
     // Enable static linking of all dependencies
     let dst = Config::new("vendor")
         .define("CMAKE_CXX_STANDARD", "20")
@@ -260,4 +278,7 @@ fn main() {
     println!("cargo:rerun-if-changed=vendor/CMakeLists.txt");
     println!("cargo:rerun-if-changed=vendor/src/");
     println!("cargo:rerun-if-changed=vendor/include/");
+    // 仓库根目录的 submodule 与 external 变更时重新构建
+    println!("cargo:rerun-if-changed=../../.gitmodules");
+    println!("cargo:rerun-if-changed=../../external/");
 }

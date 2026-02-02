@@ -297,13 +297,14 @@ else()
     endif()
 endif()
 
-# Skip git submodule update for Rust FFI build - assume source is complete
+# vendor/{src,include,external} 已通过软链接指向仓库根目录，无需额外配置
+# Skip git submodule update for Rust FFI build - build.rs runs it from repo root
 if (NOT BUILD_FOR_RUST)
     find_package(Git QUIET)
     if (GIT_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
         message(STATUS "Submodule update")
         execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init --recursive
-                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                WORKING_DIRECTORY ${PROJECT_SOURCE_DIR}
                 RESULT_VARIABLE GIT_SUBMOD_RESULT)
         if (NOT GIT_SUBMOD_RESULT EQUAL "0")
             message(FATAL_ERROR "git submodule update --init --recursive failed with ${GIT_SUBMOD_RESULT}, please checkout submodules")
@@ -312,7 +313,7 @@ if (NOT BUILD_FOR_RUST)
 endif ()
 
 if (NOT EXISTS "${PROJECT_SOURCE_DIR}/external/concurrentqueue/CMakeLists.txt")
-    message(FATAL_ERROR "The submodules were not downloaded! GIT_SUBMODULE was turned off or failed. Please update submodules and try again.")
+    message(FATAL_ERROR "The submodules were not downloaded! Run: git submodule update --init --recursive")
 endif ()
 add_subdirectory(external/concurrentqueue)
 
@@ -326,6 +327,7 @@ SET(ELOQ_STORE_INCLUDE
         ${PROJECT_SOURCE_DIR}/external
         ${PROJECT_SOURCE_DIR}/external/abseil
         ${PROJECT_SOURCE_DIR}/include
+        ${PROJECT_SOURCE_DIR}/ffi/include
         ${PROJECT_SOURCE_DIR})
 
 set(ELOQ_STORE_SOURCES
@@ -337,7 +339,7 @@ set(ELOQ_STORE_SOURCES
         src/comparator.cpp
         src/compression.cpp
         src/eloq_store.cpp
-        src/eloqstore_capi.cpp
+        ffi/src/eloqstore_capi.cpp
         src/eloqstore_module.cpp
         src/file_gc.cpp
         src/kill_point.cpp
