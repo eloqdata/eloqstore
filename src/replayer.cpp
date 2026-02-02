@@ -76,6 +76,7 @@ KvError Replayer::ParseNextRecord(ManifestFile *file)
 {
     constexpr uint16_t header_len = ManifestBuilder::header_bytes;
     log_buf_.resize(header_len);
+    const size_t record_start = file_size_;
     KvError err = file->Read(log_buf_.data(), header_len);
     if (err != KvError::NoError)
     {

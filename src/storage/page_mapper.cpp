@@ -25,7 +25,8 @@ namespace
 {
 inline bool ShouldTracePage(PageId page_id)
 {
-    return page_id == 1002 || page_id == 1503 || page_id == 1504;
+    // return page_id == 1002 || page_id == 1503 || page_id == 1504;
+    return false;
 }
 }  // namespace
 MappingSnapshot::MappingSnapshot(IndexPageManager *idx_mgr,
@@ -176,7 +177,6 @@ uint64_t MappingSnapshot::MappingTbl::Get(PageId page_id) const
         {
             return it->second;
         }
-
     }
     CHECK(static_cast<size_t>(page_id) < logical_size_)
         << "page_id=" << page_id << ", logical_size=" << logical_size_
@@ -365,7 +365,7 @@ PageMapper::PageMapper(const PageMapper &rhs)
     src_tbl.FinishCopying();
 
     CHECK(file_page_allocator_->MaxFilePageId() ==
-           rhs.file_page_allocator_->MaxFilePageId());
+          rhs.file_page_allocator_->MaxFilePageId());
     freed_pages_ = rhs.freed_pages_;
 }
 
@@ -441,8 +441,8 @@ void PageMapper::FreePage(PageId page_id, const char *file, int line)
                    << (mapping_->tbl_ident_ != nullptr
                            ? mapping_->tbl_ident_->ToString()
                            : "null")
-                   << " previous_at=" << it->second
-                   << " current_at=" << file << ":" << line;
+                   << " previous_at=" << it->second << " current_at=" << file
+                   << ":" << line;
     }
     freed_pages_[page_id] = std::string(file) + ":" + std::to_string(line);
     if (ShouldTracePage(page_id))
