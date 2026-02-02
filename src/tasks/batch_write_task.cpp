@@ -19,7 +19,6 @@ BatchWriteTask::BatchWriteTask()
     : idx_page_builder_(Options()), data_page_builder_(Options())
 {
     overflow_ptrs_.reserve(Options()->overflow_pointers * 4);
-
 }
 
 KvError BatchWriteTask::SeekStack(std::string_view search_key)
@@ -74,18 +73,6 @@ std::pair<PageId, KvError> BatchWriteTask::Seek(std::string_view key)
         return {MaxPageId, KvError::NoError};
     }
 
-    struct SeekDebugState
-    {
-        PageId last_page_id{MaxPageId};
-        uint64_t last_key_hash{0};
-        size_t last_stack_size{0};
-        bool last_is_leaf{false};
-        uint64_t repeats{0};
-        size_t max_stack{0};
-    };
-    static thread_local SeekDebugState dbg;
-    constexpr uint64_t kRepeatLogEvery = 1024;
-
     while (true)
     {
         IndexStackEntry *idx_entry = stack_.back().get();
@@ -94,78 +81,41 @@ std::pair<PageId, KvError> BatchWriteTask::Seek(std::string_view key)
         PageId page_id = idx_iter.GetPageId();
         assert(page_id != MaxPageId);
 
-        const std::string_view current_key = idx_iter.Key();
-        const uint64_t key_hash =
-            std::hash<std::string_view>{}(current_key);
-        const bool is_leaf = idx_entry->idx_page_->IsPointingToLeaf();
-        const size_t stack_size = stack_.size();
-        const bool same_position = (page_id == dbg.last_page_id) &&
-                                   (key_hash == dbg.last_key_hash) &&
-                                   (stack_size == dbg.last_stack_size) &&
-                                   (is_leaf == dbg.last_is_leaf);
-        if (same_position)
+        const PageId current_page_id = idx_entry->idx_page_->GetPageId();
+        if (page_id == current_page_id)
         {
-            dbg.repeats++;
-            if ((dbg.repeats % kRepeatLogEvery) == 0)
+            LOG(FATAL) << "Seek detected self-loop for " << tbl_ident_
+                       << ", page_id=" << page_id << ", key=" << key;
+        }
+        for (const auto &entry : stack_)
+        {
+            if (entry->idx_page_ != nullptr &&
+                entry->idx_page_->GetPageId() == page_id)
             {
-                size_t pinned_in_stack = 0;
-                for (const auto &entry : stack_)
-                {
-                    if (entry->idx_page_ != nullptr &&
-                        entry->idx_page_->IsPinned())
-                    {
-                        pinned_in_stack++;
-                    }
-                }
-                std::string_view prefix = current_key.substr(
-                    0, std::min<size_t>(current_key.size(), 16));
-                LOG(WARNING)
-                    << "Seek loop repeats: count=" << dbg.repeats
-                    << " stack_size=" << stack_size << " page_id=" << page_id
-                    << " is_leaf=" << is_leaf
-                    << " key_size=" << current_key.size()
-                    << " key_prefix=" << prefix
-                    << " pinned_in_stack=" << pinned_in_stack;
+                LOG(FATAL) << "Seek detected cycle for " << tbl_ident_
+                           << ", page_id=" << page_id << ", key=" << key
+                           << ", stack_size=" << stack_.size();
             }
         }
-        else
+
+        if (idx_entry->idx_page_->IsPointingToLeaf())
         {
-            dbg.repeats = 0;
-            dbg.last_page_id = page_id;
-            dbg.last_key_hash = key_hash;
-            dbg.last_stack_size = stack_size;
-            dbg.last_is_leaf = is_leaf;
-        }
-        if (stack_size > dbg.max_stack &&
-            (stack_size & (stack_size - 1)) == 0)
-        {
-            dbg.max_stack = stack_size;
-            size_t pinned_in_stack = 0;
-            for (const auto &entry : stack_)
-            {
-                if (entry->idx_page_ != nullptr && entry->idx_page_->IsPinned())
-                {
-                    pinned_in_stack++;
-                }
-            }
-            LOG(WARNING) << "Seek stack growth: stack_size=" << stack_size
-                         << " pinned_in_stack=" << pinned_in_stack
-                         << " page_id=" << page_id
-                         << " is_leaf=" << is_leaf;
-        }
-        if (is_leaf)
-        {
+            LOG(INFO) << "For " << tbl_ident_ << " break";
             break;
         }
         assert(!stack_.back()->is_leaf_index_);
         auto [node, err] = shard->IndexManager()->FindPage(
             cow_meta_.mapper_->GetMapping(), page_id);
+        // LOG(INFO) << "For " << tbl_ident_ << ", find page_id: " << page_id;
         if (err != KvError::NoError)
         {
+            // LOG(INFO) << "For " << tbl_ident_ << " return";
             return {MaxPageId, err};
         }
         node->Pin();
         stack_.emplace_back(std::make_unique<IndexStackEntry>(node, Options()));
+        // LOG(INFO) << "For " << tbl_ident_ << " stack size: " <<
+        // stack_.size();
     }
     stack_.back()->is_leaf_index_ = true;
     return {stack_.back()->idx_page_iter_.GetPageId(), KvError::NoError};
