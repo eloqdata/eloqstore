@@ -320,6 +320,16 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
 std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
     MappingSnapshot *mapping, PageId page_id)
 {
+    if (page_id >= mapping->mapping_tbl_.size())
+    {
+        LOG(FATAL) << "FindPage: page_id out of range, page_id=" << page_id
+                   << " mapping_size=" << mapping->mapping_tbl_.size()
+                   << " table "
+                   << (mapping->tbl_ident_ != nullptr
+                           ? mapping->tbl_ident_->ToString()
+                           : "null")
+                   << " mapping=" << static_cast<const void *>(mapping);
+    }
     while (true)
     {
         // First checks swizzling pointers.
@@ -331,6 +341,17 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
             if (new_page == nullptr)
             {
                 return {nullptr, KvError::OutOfMem};
+            }
+            if (new_page->GetPageId() != MaxPageId)
+            {
+                LOG(WARNING) << "FindPage: reuse page with existing page_id "
+                             << new_page->GetPageId() << " for table "
+                             << (mapping->tbl_ident_ != nullptr
+                                     ? mapping->tbl_ident_->ToString()
+                                     : "null")
+                             << " new_page=" << new_page
+                             << " mapping="
+                             << static_cast<const void *>(mapping);
             }
             FilePageId file_page_id = mapping->ToFilePage(page_id);
             new_page->SetPageId(page_id);
@@ -360,6 +381,17 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
         }
         else
         {
+            if (idx_page->GetPageId() != page_id)
+            {
+                LOG(FATAL)
+                    << "FindPage: swizzled page_id mismatch, expect "
+                    << page_id << " got " << idx_page->GetPageId() << " table "
+                    << (mapping->tbl_ident_ != nullptr
+                            ? mapping->tbl_ident_->ToString()
+                            : "null")
+                    << " idx_page=" << idx_page
+                    << " mapping=" << static_cast<const void *>(mapping);
+            }
             EnqueueIndexPage(idx_page);
             return {idx_page, KvError::NoError};
         }
