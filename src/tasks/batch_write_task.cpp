@@ -826,6 +826,23 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         return {nullptr, KvError::NoError};
     }
 
+    auto check_page_id_stable = [&](MemIndexPage *page,
+                                    PageId before,
+                                    const char *where) {
+        if (page == nullptr || before == MaxPageId)
+        {
+            return;
+        }
+        const PageId after = page->GetPageId();
+        if (after != before)
+        {
+            LOG(FATAL) << "Pop page_id changed across " << where << ", table "
+                       << tbl_ident_ << " page_id_before=" << before
+                       << " page_id_after=" << after
+                       << " stack_size=" << stack_.size();
+        }
+    };
+
     IndexStackEntry *stack_entry = stack_.back().get();
     // There is no change at this level.
     if (stack_entry->changes_.empty())
@@ -833,7 +850,17 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         MemIndexPage *page = stack_entry->idx_page_;
         if (page != nullptr)
         {
+            PageId page_id_before = page->GetPageId();
             page->Unpin();
+            PageId page_id_after = page->GetPageId();
+            if (page_id_before != page_id_after)
+            {
+                LOG(FATAL) << "Pop page_id changed across Unpin, table "
+                           << tbl_ident_
+                           << " page_id_before=" << page_id_before
+                           << " page_id_after=" << page_id_after
+                           << " stack_size=" << stack_.size();
+            }
         }
         stack_.pop_back();
         return {page, KvError::NoError};
@@ -877,8 +904,14 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
             idx_page_builder_.Add(new_key, new_page_id, is_leaf_index);
         if (!success)
         {
+            MemIndexPage *page_before = prev_page.page_;
+            const PageId page_id_before =
+                page_before != nullptr ? page_before->GetPageId() : MaxPageId;
             err = FinishIndexPage(prev_page, std::move(curr_page_key));
             CHECK_KV_ERR(err);
+            check_page_id_stable(page_before,
+                                 page_id_before,
+                                 "add_to_page/FinishIndexPage");
             curr_page_key = new_key;
             idx_page_builder_.Reset();
             // The first index entry is the leftmost pointer w/o the key.
@@ -1003,11 +1036,20 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
     else
     {
         bool splited = prev_page.page_ != nullptr;
+        MemIndexPage *page_before = prev_page.page_;
+        const PageId page_id_before =
+            page_before != nullptr ? page_before->GetPageId() : MaxPageId;
         err = FinishIndexPage(prev_page, std::move(curr_page_key));
         if (err != KvError::NoError)
         {
             return {nullptr, err};
         }
+        check_page_id_stable(page_before,
+                             page_id_before,
+                             "Pop/FinishIndexPage");
+        MemIndexPage *flush_before = prev_page.page_;
+        const PageId flush_page_id_before =
+            flush_before != nullptr ? flush_before->GetPageId() : MaxPageId;
         err = FlushIndexPage(prev_page.page_,
                              std::move(prev_page.key_),
                              prev_page.page_id_,
@@ -1016,6 +1058,9 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         {
             return {nullptr, err};
         }
+        check_page_id_stable(flush_before,
+                             flush_page_id_before,
+                             "Pop/FlushIndexPage");
         if (!splited)
         {
             new_root = prev_page.page_;
