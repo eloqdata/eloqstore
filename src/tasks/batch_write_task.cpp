@@ -81,7 +81,7 @@ std::pair<PageId, KvError> BatchWriteTask::Seek(std::string_view key)
         // LOG(INFO) << "For " << tbl_ident_ << ", seek key: " << key
         //           << ", current page id " << idx_entry->idx_page_->GetPageId()
         //           << ", got " << page_id;
-        assert(page_id != MaxPageId);
+        CHECK(page_id != MaxPageId);
         PageId current_id = idx_entry->idx_page_->GetPageId();
         if (page_id == current_id)
         {
@@ -103,7 +103,7 @@ std::pair<PageId, KvError> BatchWriteTask::Seek(std::string_view key)
             // LOG(INFO) << "For " << tbl_ident_ << " break";
             break;
         }
-        assert(!stack_.back()->is_leaf_index_);
+        CHECK(!stack_.back()->is_leaf_index_);
         auto [node, err] = shard->IndexManager()->FindPage(
             cow_meta_.mapper_->GetMapping(), page_id);
         // LOG(INFO) << "For " << tbl_ident_ << ", find page_id: " << page_id;
@@ -131,7 +131,7 @@ KvError BatchWriteTask::LoadTripleElement(uint8_t idx, PageId page_id)
     {
         return KvError::NoError;
     }
-    assert(page_id != MaxPageId);
+    CHECK(page_id != MaxPageId);
     auto [page, err] = LoadDataPage(page_id);
     CHECK_KV_ERR(err);
     leaf_triple_[idx] = std::move(page);
@@ -158,19 +158,19 @@ void BatchWriteTask::LeafLinkUpdate(DataPage &&page)
 
 KvError BatchWriteTask::LeafLinkInsert(DataPage &&page)
 {
-    assert(!TripleElement(1));
+    CHECK(!TripleElement(1));
     leaf_triple_[1] = std::move(page);
     DataPage &new_elem = leaf_triple_[1];
     DataPage *prev_page = TripleElement(0);
     if (prev_page == nullptr)
     {
         // Add first element into empty link list
-        assert(stack_.back()->idx_page_iter_.GetPageId() == MaxPageId);
+        CHECK(stack_.back()->idx_page_iter_.GetPageId() == MaxPageId);
         new_elem.SetNextPageId(MaxPageId);
         new_elem.SetPrevPageId(MaxPageId);
         return KvError::NoError;
     }
-    assert(stack_.back()->idx_page_iter_.GetPageId() == MaxPageId ||
+    CHECK(stack_.back()->idx_page_iter_.GetPageId() == MaxPageId ||
            prev_page->NextPageId() == applying_page_.NextPageId());
     if (prev_page->NextPageId() != MaxPageId)
     {
@@ -194,7 +194,7 @@ KvError BatchWriteTask::LeafLinkDelete()
     }
     if (applying_page_.NextPageId() != MaxPageId)
     {
-        assert(!TripleElement(2));
+        CHECK(!TripleElement(2));
         KvError err = LoadTripleElement(2, applying_page_.NextPageId());
         CHECK_KV_ERR(err);
         TripleElement(2)->SetPrevPageId(applying_page_.PrevPageId());
@@ -228,7 +228,7 @@ bool BatchWriteTask::SetBatch(std::span<WriteDataEntry> entries)
         {
             if (cmp->Compare(entries[i - 1].key_, entries[i].key_) >= 0)
             {
-                assert(false);
+                CHECK(false);
             }
         }
     }
@@ -239,7 +239,7 @@ bool BatchWriteTask::SetBatch(std::span<WriteDataEntry> entries)
     {
         if (ent.key_.empty() || ent.key_.size() > max_key_len)
         {
-            assert(false);
+            CHECK(false);
         }
     }
 #endif
@@ -295,7 +295,7 @@ KvError BatchWriteTask::ApplyTTLBatch()
         std::sort(ttl_batch_.begin(), ttl_batch_.end());
         for (size_t i = 1; i < ttl_batch_.size(); i++)
         {
-            assert(ttl_batch_[i - 1].key_ != ttl_batch_[i].key_);
+            CHECK(ttl_batch_[i - 1].key_ != ttl_batch_[i].key_);
         }
         SetBatch(ttl_batch_);
         KvError err = ApplyBatch(cow_meta_.ttl_root_id_, false);
@@ -313,7 +313,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
                                    uint64_t now_ts)
 {
     do_update_ttl_ = update_ttl;
-    assert(!update_ttl || ttl_batch_.empty());
+    CHECK(!update_ttl || ttl_batch_.empty());
 
     if (root_id != MaxPageId)
     {
@@ -355,13 +355,13 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         YieldToLowPQ();
     }
     // Flush all dirty leaf data pages in leaf_triple_.
-    assert(TripleElement(2) == nullptr);
+    CHECK(TripleElement(2) == nullptr);
     err = ShiftLeafLink();
     CHECK_KV_ERR(err);
     err = ShiftLeafLink();
     CHECK_KV_ERR(err);
 
-    assert(!stack_.empty());
+    CHECK(!stack_.empty());
     MemIndexPage *new_root = nullptr;
     while (!stack_.empty())
     {
@@ -377,7 +377,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
 
 KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
 {
-    assert(page_id != MaxPageId);
+    CHECK(page_id != MaxPageId);
     // Now we are going to fetch a data page before execute ApplyOnePage.
     // But this page may already exists at leaf_triple_[1], because it may be
     // loaded by previous ApplyOnePage for linking purpose.
@@ -394,11 +394,11 @@ KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
         CHECK_KV_ERR(err);
         applying_page_ = std::move(page);
     }
-    assert(TypeOfPage(applying_page_.PagePtr()) == PageType::Data);
+    CHECK(TypeOfPage(applying_page_.PagePtr()) == PageType::Data);
 
     if (TripleElement(1))
     {
-        assert(TripleElement(1)->GetPageId() != applying_page_.GetPageId());
+        CHECK(TripleElement(1)->GetPageId() != applying_page_.GetPageId());
         KvError err = ShiftLeafLink();
         CHECK_KV_ERR(err);
     }
@@ -415,7 +415,7 @@ KvError BatchWriteTask::LoadApplyingPage(PageId page_id)
 
 KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
 {
-    assert(!stack_.empty());
+    CHECK(!stack_.empty());
     KvError err;
     DataPage *base_page = nullptr;
     std::string_view page_left_bound{};
@@ -424,7 +424,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
 
     if (stack_.back()->idx_page_iter_.GetPageId() != MaxPageId)
     {
-        assert(stack_.back()->idx_page_iter_.GetPageId() ==
+        CHECK(stack_.back()->idx_page_iter_.GetPageId() ==
                applying_page_.GetPageId());
         base_page = &applying_page_;
         page_left_bound = LeftBound(true);
@@ -440,11 +440,11 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
 
     data_page_builder_.Reset();
 
-    assert(cidx < data_batch_.size());
+    CHECK(cidx < data_batch_.size());
     std::string_view change_key = {data_batch_[cidx].key_.data(),
                                    data_batch_[cidx].key_.size()};
-    assert(cmp->Compare(page_left_bound, change_key) <= 0);
-    assert(page_right_bound.empty() ||
+    CHECK(cmp->Compare(page_left_bound, change_key) <= 0);
+    CHECK(page_right_bound.empty() ||
            cmp->Compare(page_left_bound, page_right_bound) < 0);
 
     auto change_it = data_batch_.begin() + cidx;
@@ -473,7 +473,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     if (base_page != nullptr)
     {
         page_id = base_page->GetPageId();
-        assert(page_key <= base_page_iter.Key());
+        CHECK(page_key <= base_page_iter.Key());
     }
 
     std::string compression_scratch;
@@ -520,14 +520,14 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
                 // Starts a new page.
                 curr_page_key = cmp->FindShortestSeparator(
                     {prev_key.data(), prev_key.size()}, key);
-                assert(!prev_key.empty() && prev_key < curr_page_key);
+                CHECK(!prev_key.empty() && prev_key < curr_page_key);
                 data_page_builder_.Reset();
                 success = data_page_builder_.Add(
                     key, val, is_ptr, ts, expire_ts, compression_type);
-                assert(success);
+                CHECK(success);
                 page_id = MaxPageId;
             }
-            assert(curr_page_key <= key);
+            CHECK(curr_page_key <= key);
             prev_key = key;
             return KvError::NoError;
         });
@@ -585,7 +585,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
                     /* DELETE */
                     new_key = std::string_view{};
                     UpdateTTL(base_expire, base_key, WriteOp::Delete);
-                    assert(expire_ts == 0 || expire_ts == base_expire);
+                    CHECK(expire_ts == 0 || expire_ts == base_expire);
                 }
                 else if (expire_ts != 0 && expire_ts <= now_ms)
                 {
@@ -735,7 +735,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             err = LeafLinkDelete();
             CHECK_KV_ERR(err);
             WRITE_TASK_FREE_PAGE(applying_page_.GetPageId());
-            assert(stack_.back()->changes_.empty() ||
+            CHECK(stack_.back()->changes_.empty() ||
                    stack_.back()->changes_.back().key_ < curr_page_key);
             stack_.back()->changes_.emplace_back(
                 std::move(curr_page_key), page_id, WriteOp::Delete);
@@ -746,7 +746,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         err = FinishDataPage(std::move(curr_page_key), page_id);
         CHECK_KV_ERR(err);
     }
-    assert(!TripleElement(1));
+    CHECK(!TripleElement(1));
     leaf_triple_[1] = std::move(leaf_triple_[2]);
 
     cidx = cidx + std::distance(data_batch_.begin() + cidx, change_end_it);
@@ -864,7 +864,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
         else
         {
             // base_key > change_key
-            assert(cit->op_ == WriteOp::Upsert);
+            CHECK(cit->op_ == WriteOp::Upsert);
             adv_type = AdvanceType::Changes;
             new_key = change_key;
             new_page_id = change_page;
@@ -968,7 +968,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
 KvError BatchWriteTask::FinishIndexPage(DirtyIndexPage &prev,
                                         std::string cur_page_key)
 {
-    assert(!idx_page_builder_.IsEmpty());
+    CHECK(!idx_page_builder_.IsEmpty());
     const uint16_t cur_page_len = idx_page_builder_.CurrentSizeEstimate();
     std::string_view page_view = idx_page_builder_.Finish();
     if (prev.page_ != nullptr)
@@ -1011,7 +1011,7 @@ BatchWriteTask::DirtyIndexPage::~DirtyIndexPage()
             page_ = nullptr;
             return;
         }
-        assert(page_->IsDetached());
+        CHECK(page_->IsDetached());
         LOG(INFO) << "FreeIndexPage " << page_id_;
         shard->IndexManager()->FreeIndexPage(page_);
         page_ = nullptr;
@@ -1033,7 +1033,7 @@ KvError BatchWriteTask::FlushIndexPage(MemIndexPage *idx_page,
     // the current page is either a newly generated page or the root page.
     if (split && (page_id == MaxPageId || stack_.size() == 1))
     {
-        assert(stack_.size() >= 1);
+        CHECK(stack_.size() >= 1);
         if (stack_.size() == 1)
         {
             stack_.emplace(
@@ -1071,7 +1071,7 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
             Page page = Redistribute(*prev_page, page_view);
             new_data_page.SetPage(std::move(page));
             DataPageIter iter(&new_data_page, Options());
-            assert(iter.HasNext());
+            CHECK(iter.HasNext());
             iter.Next();
             page_key.assign(iter.Key());
         }
@@ -1087,7 +1087,7 @@ KvError BatchWriteTask::FinishDataPage(std::string page_key, PageId page_id)
         CHECK_KV_ERR(err);
         // This is a new page that does not exist in the parent index page.
         // Elevates to the parent index page.
-        assert(stack_.back()->changes_.empty() ||
+        CHECK(stack_.back()->changes_.empty() ||
                stack_.back()->changes_.back().key_ < page_key);
         stack_.back()->changes_.emplace_back(
             std::move(page_key), page_id, WriteOp::Upsert);
@@ -1108,9 +1108,9 @@ Page BatchWriteTask::Redistribute(DataPage &prev_page,
     const uint16_t prev_page_len = prev_page.ContentLength();
     const uint16_t cur_page_len =
         DecodeFixed16(cur_page.data() + DataPage::page_size_offset);
-    assert(prev_page_len > cur_page_len);
+    CHECK(prev_page_len > cur_page_len);
     const uint16_t average_len = (prev_page_len + cur_page_len) >> 1;
-    assert(prev_page_len >= average_len);
+    CHECK(prev_page_len >= average_len);
 
     PageRegionIter iter({prev_page.PagePtr(), prev_page_len});
     uint16_t preserve_region_cnt = 0;
@@ -1119,14 +1119,14 @@ Page BatchWriteTask::Redistribute(DataPage &prev_page,
     while (preserve_len < average_len)
     {
         // Skip preserved regions for previous page.
-        assert(iter.Valid());
+        CHECK(iter.Valid());
         std::string_view region = iter.Region();
         // Space for region data and region offset
         preserve_len += region.size() + sizeof(uint16_t);
         preserve_region_cnt++;
         iter.Next();
     }
-    assert(preserve_len <= prev_page_len);
+    CHECK(preserve_len <= prev_page_len);
     Page new_page(true);
     if (preserve_len == prev_page_len)
     {
@@ -1164,11 +1164,11 @@ Page BatchWriteTask::Redistribute(DataPage &prev_page,
     builder.Finish();
 
 #ifndef NDEBUG
-    assert(prev_page.RestartNum() == preserve_region_cnt);
-    assert(prev_page.ContentLength() == preserve_len);
+    CHECK(prev_page.RestartNum() == preserve_region_cnt);
+    CHECK(prev_page.ContentLength() == preserve_len);
     const uint16_t new_page_len =
         DecodeFixed16(new_page.Ptr() + DataPage::page_size_offset);
-    assert(prev_page_len + cur_page_len == preserve_len + new_page_len);
+    CHECK(prev_page_len + cur_page_len == preserve_len + new_page_len);
 #endif
     return new_page;
 }
@@ -1181,9 +1181,9 @@ std::string_view BatchWriteTask::Redistribute(MemIndexPage *prev_page,
     const uint16_t cur_page_len =
         DecodeFixed16(cur_page.data() + DataPage::page_size_offset);
     cur_page = cur_page.substr(0, cur_page_len);
-    assert(prev_page_len > cur_page_len);
+    CHECK(prev_page_len > cur_page_len);
     const uint16_t average_len = (prev_page_len + cur_page_len) >> 1;
-    assert(prev_page_len >= average_len);
+    CHECK(prev_page_len >= average_len);
 
     PageRegionIter region_iter({prev_page->PagePtr(), prev_page_len});
     uint16_t preserve_region_cnt = 0;
@@ -1192,14 +1192,14 @@ std::string_view BatchWriteTask::Redistribute(MemIndexPage *prev_page,
     while (preserve_len < average_len)
     {
         // Skip preserved regions for previous page.
-        assert(region_iter.Valid());
+        CHECK(region_iter.Valid());
         std::string_view region = region_iter.Region();
         // Space for region data and region offset
         preserve_len += region.size() + sizeof(uint16_t);
         preserve_region_cnt++;
         region_iter.Next();
     }
-    assert(preserve_len <= prev_page_len);
+    CHECK(preserve_len <= prev_page_len);
     if (preserve_len == prev_page_len)
     {
         // Corner case: can not move any region from the previous page.
@@ -1220,7 +1220,7 @@ std::string_view BatchWriteTask::Redistribute(MemIndexPage *prev_page,
     }
     IndexPageIter iter_cur(cur_page, Options());
     iter_cur.Next();
-    assert(iter_cur.Key().empty());
+    CHECK(iter_cur.Key().empty());
     idx_builder.Add(cur_page_key, iter_cur.GetPageId(), is_leaf_idx);
     while (iter_cur.Next())
     {
@@ -1244,8 +1244,8 @@ std::string_view BatchWriteTask::Redistribute(MemIndexPage *prev_page,
     builder.Finish();
 
 #ifndef NDEBUG
-    assert(prev_page->RestartNum() == preserve_region_cnt);
-    assert(prev_page->ContentLength() == preserve_len);
+    CHECK(prev_page->RestartNum() == preserve_region_cnt);
+    CHECK(prev_page->ContentLength() == preserve_len);
 #endif
     return new_page;
 }
@@ -1426,7 +1426,7 @@ KvError BatchWriteTask::WriteOverflowValue(std::string_view value)
             err = WritePage(OverflowPage(pg_id, opts, page_val));
             CHECK_KV_ERR(err);
         }
-        assert(i == pointers.size());
+        CHECK(i == pointers.size());
     }
     return KvError::NoError;
 }
@@ -1555,7 +1555,7 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::TruncateIndexPage(
             else
             {
                 // Delete sub-node equal to trunc_pos.
-                assert(Comp()->Compare(trunc_pos, sub_node_key) == 0);
+                CHECK(Comp()->Compare(trunc_pos, sub_node_key) == 0);
                 err = delete_sub_node(sub_node_key, sub_node_id, true);
             }
             if (err != KvError::NoError)
@@ -1786,7 +1786,7 @@ KvError BatchWriteTask::CleanExpiredKeys()
 
     err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
     CHECK_KV_ERR(err);
-    assert(cow_meta_.next_expire_ts_ != 0 &&
+    CHECK(cow_meta_.next_expire_ts_ != 0 &&
            cow_meta_.next_expire_ts_ <= now_ts_ms);
 
     std::sort(data_batch.begin(), data_batch.end());
@@ -1794,7 +1794,7 @@ KvError BatchWriteTask::CleanExpiredKeys()
     err = ApplyBatch(cow_meta_.root_id_, false, now_ts_ms);
     CHECK_KV_ERR(err);
 
-    assert(std::is_sorted(ttl_batch.begin(), ttl_batch.end()));
+    CHECK(std::is_sorted(ttl_batch.begin(), ttl_batch.end()));
     SetBatch(ttl_batch);
     err = ApplyBatch(cow_meta_.ttl_root_id_, false);
     CHECK_KV_ERR(err);

@@ -73,7 +73,7 @@ char *VarPagePtr(const VarPage &page)
         ptr = std::get<Page>(page).Ptr();
         break;
     }
-    assert(!((uint64_t) ptr & (page_align - 1)));
+    CHECK(!((uint64_t) ptr & (page_align - 1)));
     return ptr;
 }
 
@@ -376,7 +376,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
                               std::span<FilePageId> page_ids,
                               std::vector<Page> &pages)
 {
-    assert(page_ids.size() <= max_read_pages_batch);
+    CHECK(page_ids.size() <= max_read_pages_batch);
 
     struct ReadReq : BaseReq
     {
@@ -471,7 +471,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             else
             {
                 // Successfully read this page.
-                assert(res == options_->data_page_size);
+                CHECK(res == options_->data_page_size);
                 req.done_ = true;
             }
         }
@@ -513,7 +513,7 @@ std::pair<ManifestFilePtr, KvError> IouringMgr::GetManifest(
     LruFD::Ref old_fd = GetOpenedFD(tbl_id, LruFD::kManifest);
     if (old_fd != nullptr)
     {
-        assert(old_fd.Get()->ref_count_ == 1);
+        CHECK(old_fd.Get()->ref_count_ == 1);
         CloseFile(std::move(old_fd));
     }
 
@@ -537,7 +537,7 @@ std::pair<ManifestFilePtr, KvError> IouringMgr::GetManifest(
         return {nullptr, ToKvError(res)};
     }
     uint64_t file_size = result.stx_size;
-    assert(file_size > 0);
+    CHECK(file_size > 0);
     auto manifest = std::make_unique<Manifest>(this, std::move(fd), file_size);
     return {std::move(manifest), KvError::NoError};
 }
@@ -780,7 +780,7 @@ void IouringMgr::EncodeUserData(io_uring_sqe *sqe,
 
 IouringMgr::FdIdx IouringMgr::GetRootFD(const TableIdent &tbl_id)
 {
-    assert(!eloq_store->root_fds_.empty());
+    CHECK(!eloq_store->root_fds_.empty());
     const uint16_t n_disks = eloq_store->root_fds_.size();
     int root_fd = eloq_store->root_fds_[tbl_id.DiskIndex(n_disks)];
     return {root_fd, false};
@@ -903,7 +903,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
         {
             // This must be data file because manifest should always be
             // created by call WriteSnapshot.
-            assert(file_id <= LruFD::kMaxDataFile);
+            CHECK(file_id <= LruFD::kMaxDataFile);
             auto [dfd_ref, err] =
                 OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, 0);
             error = err;
@@ -1030,7 +1030,7 @@ std::pair<FileId, uint32_t> IouringMgr::ConvFilePageId(
     uint32_t offset =
         (file_page_id & ((1 << options_->pages_per_file_shift) - 1)) *
         options_->data_page_size;
-    assert(!(offset & (page_align - 1)));
+    CHECK(!(offset & (page_align - 1)));
     return {file_id, offset};
 }
 
@@ -1082,7 +1082,7 @@ void IouringMgr::PollComplete()
         {
             WriteReq *req = static_cast<WriteReq *>(ptr);
             KvError err;
-            assert(cqe->res <= options_->data_page_size);
+            CHECK(cqe->res <= options_->data_page_size);
             if (cqe->res < 0)
             {
                 err = ToKvError(cqe->res);
@@ -1101,10 +1101,10 @@ void IouringMgr::PollComplete()
             break;
         }
         default:
-            assert(false);
+            CHECK(false);
             continue;
         }
-        assert(task != nullptr);
+        CHECK(task != nullptr);
         task->FinishIo();
     }
 
@@ -1133,7 +1133,7 @@ int IouringMgr::MakeDir(FdIdx dir_fd, const char *path)
 
 int IouringMgr::CreateFile(LruFD::Ref dir_fd, FileId file_id, uint64_t term)
 {
-    assert(file_id <= LruFD::kMaxDataFile);
+    CHECK(file_id <= LruFD::kMaxDataFile);
     uint64_t flags = O_CREAT | O_RDWR | O_DIRECT;
     std::string filename = DataFileName(file_id, term);
     int fd = OpenAt(dir_fd.FdPair(), filename.c_str(), flags, 0644);
@@ -1173,7 +1173,7 @@ int IouringMgr::OpenFile(const TableIdent &tbl_id,
     {
         // Data file is always opened with O_DIRECT.
         flags |= O_DIRECT;
-        assert(file_id <= LruFD::kMaxDataFile);
+        CHECK(file_id <= LruFD::kMaxDataFile);
         path.append(DataFileName(file_id, term));
     }
     FdIdx root_fd = GetRootFD(tbl_id);
@@ -1573,8 +1573,8 @@ bool IouringMgr::EvictFD()
         {
             return false;
         }
-        assert(lru_fd->ref_count_ == 0);
-        assert(lru_fd->reg_idx_ >= 0 || lru_fd->fd_ >= 0);
+        CHECK(lru_fd->ref_count_ == 0);
+        CHECK(lru_fd->reg_idx_ >= 0 || lru_fd->fd_ >= 0);
         // This LruFD will be removed by ~LruFD::Ref if succeed to close,
         // otherwise be enqueued back to LRU.
         CloseFile(LruFD::Ref(lru_fd, this));
@@ -1749,7 +1749,7 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
                << " checksum=" << checksum << " record size="
                << ManifestBuilder::header_bytes + payload_len;
     const bool checksum_ok = ManifestBuilder::ValidateChecksum(record_view);
-    assert(checksum_ok);
+    CHECK(checksum_ok);
 #endif
     auto [fd_ref, err] = OpenFD(tbl_id, LruFD::kManifest, true, manifest_term);
     CHECK_KV_ERR(err);
@@ -1758,8 +1758,8 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
     TEST_KILL_POINT_WEIGHT("AppendManifest:Write", 10)
 
     [[maybe_unused]] const size_t alignment = page_align;
-    assert((offset & (alignment - 1)) == 0);
-    assert((log.size() & (alignment - 1)) == 0);
+    CHECK((offset & (alignment - 1)) == 0);
+    CHECK((log.size() & (alignment - 1)) == 0);
 
     const size_t write_batch_size = page_align;
     size_t remaining = log.size();
@@ -1798,7 +1798,7 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
                               std::string_view name,
                               std::string_view content)
 {
-    assert(!content.empty());
+    CHECK(!content.empty());
     std::string tmpfile = std::string(name) + TmpSuffix;
     uint64_t tmp_oflags = O_CREAT | O_TRUNC | O_RDWR | O_DIRECT;
     int tmp_fd = OpenAt(dir_fd.FdPair(), tmpfile.c_str(), tmp_oflags, 0644);
@@ -1811,8 +1811,8 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
     const char *write_ptr = content.data();
     size_t io_size = content.size();
     [[maybe_unused]] const size_t alignment = page_align;
-    assert((io_size & (alignment - 1)) == 0);
-    assert((reinterpret_cast<uintptr_t>(write_ptr) & (alignment - 1)) == 0);
+    CHECK((io_size & (alignment - 1)) == 0);
+    CHECK((reinterpret_cast<uintptr_t>(write_ptr) & (alignment - 1)) == 0);
     FdIdx tmp_fd_idx{tmp_fd, true};
     const size_t write_batch_size = page_align;
     size_t remaining = io_size;
@@ -1935,7 +1935,7 @@ io_uring_sqe *IouringMgr::GetSQE(UserDataType type, const void *user_ptr)
 
 IouringMgr::WriteReqPool::WriteReqPool(uint32_t pool_size)
 {
-    assert(pool_size > 0);
+    CHECK(pool_size > 0);
     pool_ = std::make_unique<WriteReq[]>(pool_size);
     free_list_ = nullptr;
     for (size_t i = 0; i < pool_size; i++)
@@ -1974,7 +1974,7 @@ IouringMgr::Manifest::Manifest(IouringMgr *io_mgr, LruFD::Ref fd, uint64_t size)
     : io_mgr_(io_mgr), fd_(std::move(fd)), file_size_(size)
 {
     char *p = (char *) std::aligned_alloc(page_align, buf_size);
-    assert(p);
+    CHECK(p);
 #ifndef NDEBUG
     // Fill with junk data for debugging purposes.
     std::memset(p, 123, buf_size);
@@ -2109,7 +2109,7 @@ IouringMgr::LruFD::Ref::Ref(LruFD *fd_ptr, IouringMgr *io_mgr)
 {
     if (fd_)
     {
-        assert(io_mgr_);
+        CHECK(io_mgr_);
         if (fd_->ref_count_++ == 0)
         {
             fd_->Deque();
@@ -2129,8 +2129,8 @@ IouringMgr::LruFD::Ref::Ref(const Ref &other)
 {
     if (fd_)
     {
-        assert(io_mgr_);
-        assert(fd_->ref_count_ > 0);
+        CHECK(io_mgr_);
+        CHECK(fd_->ref_count_ > 0);
         fd_->ref_count_++;
     }
 }
@@ -2590,7 +2590,7 @@ void CloudStoreMgr::RegisterPrewarmActive()
 
 void CloudStoreMgr::UnregisterPrewarmActive()
 {
-    assert(active_prewarm_tasks_ > 0);
+    CHECK(active_prewarm_tasks_ > 0);
     --active_prewarm_tasks_;
 }
 
@@ -3431,7 +3431,7 @@ std::string CloudStoreMgr::ToFilename(FileId file_id, uint64_t term)
     }
     else
     {
-        assert(file_id <= LruFD::kMaxDataFile);
+        CHECK(file_id <= LruFD::kMaxDataFile);
         return DataFileName(file_id, term);
     }
 }
@@ -3444,7 +3444,7 @@ size_t CloudStoreMgr::EstimateFileSize(FileId file_id) const
     }
     else
     {
-        assert(file_id <= LruFD::kMaxDataFile);
+        CHECK(file_id <= LruFD::kMaxDataFile);
         return options_->DataFileSize();
     }
 }
@@ -3511,9 +3511,9 @@ bool CloudStoreMgr::DequeClosedFile(const FileKey &key)
 
 void CloudStoreMgr::EnqueClosedFile(FileKey key)
 {
-    assert(key.tbl_id_.IsValid());
+    CHECK(key.tbl_id_.IsValid());
     auto [it, ok] = closed_files_.try_emplace(std::move(key));
-    assert(ok);
+    CHECK(ok);
     it->second.key_ = &it->first;
     lru_file_head_.EnqueNext(&it->second);
 }
@@ -3946,7 +3946,7 @@ void CloudStoreMgr::FileCleaner::Run()
 void CloudStoreMgr::FileCleaner::Shutdown()
 {
     // Wake up file cleaner to stop it.
-    assert(status_ == TaskStatus::Idle);
+    CHECK(status_ == TaskStatus::Idle);
     killed_ = true;
     coro_ = coro_.resume();
 }
@@ -4020,7 +4020,7 @@ KvError MemStoreMgr::WritePage(const TableIdent &tbl_id,
     char *dst;
     if (file_page_id >= part.pages.size())
     {
-        assert(file_page_id == part.pages.size());
+        CHECK(file_page_id == part.pages.size());
         part.pages.emplace_back(
             std::make_unique<char[]>(options_->data_page_size));
         dst = part.pages.back().get();
@@ -4056,7 +4056,7 @@ KvError MemStoreMgr::AppendManifest(const TableIdent &tbl_id,
                                     uint64_t manifest_size)
 {
     auto it = store_.find(tbl_id);
-    assert(it != store_.end());
+    CHECK(it != store_.end());
     Partition &part = it->second;
     if (manifest_size < part.wal.size())
     {
@@ -4137,10 +4137,10 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
     [[maybe_unused]] const size_t alignment = buffer.alignment();
     const char *write_ptr = buffer.data();
 
-    assert(write_ptr != nullptr);
-    assert(padded_size > 0);
-    assert((reinterpret_cast<uintptr_t>(write_ptr) & (alignment - 1)) == 0);
-    assert(logical_size == padded_size);
+    CHECK(write_ptr != nullptr);
+    CHECK(padded_size > 0);
+    CHECK((reinterpret_cast<uintptr_t>(write_ptr) & (alignment - 1)) == 0);
+    CHECK(logical_size == padded_size);
     size_t off = 0;
     while (off < padded_size)
     {

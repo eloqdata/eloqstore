@@ -94,16 +94,16 @@ MemIndexPage *IndexPageManager::AllocIndexPage()
             next_free = free_head_.DequeNext();
         }
     }
-    assert(next_free->IsDetached());
-    assert(!next_free->IsPinned());
+    CHECK(next_free->IsDetached());
+    CHECK(!next_free->IsPinned());
     next_free->in_free_list_ = false;
     return next_free;
 }
 
 void IndexPageManager::FreeIndexPage(MemIndexPage *page)
 {
-    assert(page->IsDetached());
-    assert(!page->IsPinned());
+    CHECK(page->IsDetached());
+    CHECK(!page->IsPinned());
     page->in_free_list_ = true;
     free_head_.EnqueNext(page);
 }
@@ -112,10 +112,10 @@ void IndexPageManager::EnqueueIndexPage(MemIndexPage *page)
 {
     if (page->prev_ != nullptr)
     {
-        assert(page->next_ != nullptr);
+        CHECK(page->next_ != nullptr);
         page->Deque();
     }
-    assert(page->prev_ == nullptr && page->next_ == nullptr);
+    CHECK(page->prev_ == nullptr && page->next_ == nullptr);
     active_head_.EnqueNext(page);
 }
 
@@ -254,7 +254,7 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
             // arrives, this dictionary can be discarded since no value has been
             // written. Otherwise, the dictionary can still be used to compress
             // subsequent values.
-            assert(cow_meta.manifest_size_ == 0);
+            CHECK(cow_meta.manifest_size_ == 0);
         }
         cow_meta.compression_ = meta->compression_;
     }
@@ -299,13 +299,13 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
                                   CowRootMeta new_meta)
 {
     auto *entry = root_meta_mgr_.Find(tbl_ident);
-    assert(entry != nullptr);
+    CHECK(entry != nullptr);
     RootMeta &meta = entry->meta_;
     meta.root_id_ = new_meta.root_id_;
     meta.ttl_root_id_ = new_meta.ttl_root_id_;
     if (meta.mapper_ != nullptr && !Options()->data_append_mode)
     {
-        assert(new_meta.mapper_ != nullptr);
+        CHECK(new_meta.mapper_ != nullptr);
         MappingSnapshot *prev_snapshot = meta.mapper_->GetMapping();
         prev_snapshot->next_snapshot_ = new_meta.mapper_->GetMappingSnapshot();
     }
@@ -378,8 +378,8 @@ void IndexPageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
     // Puts back file pages freed in this mapping snapshot
     if (!mapping->to_free_file_pages_.empty())
     {
-        assert(meta.mapper_ != nullptr);
-        assert(!Options()->data_append_mode);
+        CHECK(meta.mapper_ != nullptr);
+        CHECK(!Options()->data_append_mode);
         auto pool =
             static_cast<PooledFilePages *>(meta.mapper_->FilePgAllocator());
         pool->Free(std::move(mapping->to_free_file_pages_));
@@ -414,7 +414,7 @@ bool IndexPageManager::Evict()
 
 bool IndexPageManager::RecyclePage(MemIndexPage *page)
 {
-    assert(!page->IsPinned());
+    CHECK(!page->IsPinned());
     RootMetaMgr::Entry *entry = root_meta_mgr_.Find(*page->tbl_ident_);
     if (entry != nullptr)
     {
@@ -430,8 +430,8 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
 
     // Removes the page from the active list.
     page->Deque();
-    assert(page->page_id_ != MaxPageId);
-    assert(page->file_page_id_ != MaxFilePageId);
+    CHECK(page->page_id_ != MaxPageId);
+    CHECK(page->file_page_id_ != MaxFilePageId);
     page->page_id_ = MaxPageId;
     page->file_page_id_ = MaxFilePageId;
     page->tbl_ident_ = nullptr;

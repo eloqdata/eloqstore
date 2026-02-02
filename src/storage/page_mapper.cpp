@@ -364,7 +364,7 @@ PageMapper::PageMapper(const PageMapper &rhs)
     src_tbl.ApplyPendingTo(mapping_->mapping_tbl_);
     src_tbl.FinishCopying();
 
-    assert(file_page_allocator_->MaxFilePageId() ==
+    CHECK(file_page_allocator_->MaxFilePageId() ==
            rhs.file_page_allocator_->MaxFilePageId());
     freed_pages_ = rhs.freed_pages_;
 }
@@ -432,7 +432,7 @@ void PageMapper::FreePage(PageId page_id)
 void PageMapper::FreePage(PageId page_id, const char *file, int line)
 {
     auto &map = Mapping();
-    assert(page_id < map.size());
+    CHECK(page_id < map.size());
     auto it = freed_pages_.find(page_id);
     if (it != freed_pages_.end())
     {
@@ -518,12 +518,12 @@ bool PageMapper::DebugStat() const
             min_fp_id = std::min(min_fp_id, fp_id);
         }
     }
-    assert(cnt == tbl.size() - free_page_cnt_);
+    CHECK(cnt == tbl.size() - free_page_cnt_);
     auto allocator = dynamic_cast<AppendAllocator *>(FilePgAllocator());
     if (allocator != nullptr && min_fp_id != MaxFilePageId)
     {
         FileId min_file_id = min_fp_id >> Options()->pages_per_file_shift;
-        assert(allocator->MinFileId() <= min_file_id);
+        CHECK(allocator->MinFileId() <= min_file_id);
     }
     return true;
 }
@@ -532,7 +532,7 @@ bool PageMapper::DebugStat() const
 void PageMapper::UpdateMapping(PageId page_id, FilePageId file_page_id)
 {
     auto &map = Mapping();
-    assert(page_id < map.size());
+    CHECK(page_id < map.size());
     if (ShouldTracePage(page_id))
     {
         LOG(INFO) << "TracePage UpdateMapping: page_id=" << page_id
@@ -580,7 +580,7 @@ FilePageId MappingSnapshot::ToFilePage(PageId page_id) const
     {
         return MaxFilePageId;
     }
-    assert(page_id < mapping_tbl_.size());
+    CHECK(page_id < mapping_tbl_.size());
     return ToFilePage(mapping_tbl_.Get(page_id));
 }
 
@@ -606,19 +606,19 @@ FilePageId MappingSnapshot::ToFilePage(uint64_t val) const
 
 PageId MappingSnapshot::GetNextFree(PageId page_id) const
 {
-    assert(page_id < mapping_tbl_.size());
+    CHECK(page_id < mapping_tbl_.size());
     uint64_t val = mapping_tbl_.Get(page_id);
     if (val == InvalidValue)
     {
         return MaxPageId;
     }
-    assert(GetValType(val) == ValType::PageId);
+    CHECK(GetValType(val) == ValType::PageId);
     return DecodeId(val);
 }
 
 void MappingSnapshot::AddFreeFilePage(FilePageId file_page)
 {
-    assert(file_page != MaxFilePageId);
+    CHECK(file_page != MaxFilePageId);
     to_free_file_pages_.emplace_back(file_page);
 }
 
@@ -646,7 +646,7 @@ void MappingSnapshot::Unswizzling(MemIndexPage *page)
 
 MemIndexPage *MappingSnapshot::GetSwizzlingPointer(PageId page_id) const
 {
-    assert(page_id < mapping_tbl_.size());
+    CHECK(page_id < mapping_tbl_.size());
     uint64_t val = mapping_tbl_.Get(page_id);
     if (IsSwizzlingPointer(val))
     {
@@ -659,16 +659,16 @@ MemIndexPage *MappingSnapshot::GetSwizzlingPointer(PageId page_id) const
 void MappingSnapshot::AddSwizzling(PageId page_id, MemIndexPage *idx_page)
 {
     auto &mapping_tbl = mapping_tbl_;
-    assert(page_id < mapping_tbl.size());
+    CHECK(page_id < mapping_tbl.size());
 
     uint64_t val = mapping_tbl.Get(page_id);
     if (IsSwizzlingPointer(val))
     {
-        assert(reinterpret_cast<MemIndexPage *>(val) == idx_page);
+        CHECK(reinterpret_cast<MemIndexPage *>(val) == idx_page);
     }
     else
     {
-        assert(DecodeId(val) == idx_page->GetFilePageId());
+        CHECK(DecodeId(val) == idx_page->GetFilePageId());
         mapping_tbl.Set(page_id, reinterpret_cast<uint64_t>(idx_page));
     }
 }
@@ -753,8 +753,8 @@ std::unique_ptr<FilePageAllocator> AppendAllocator::Clone()
 
 void AppendAllocator::UpdateStat(FileId min_file_id, uint32_t hole_cnt)
 {
-    assert(min_file_id >= min_file_id_);
-    assert((min_file_id << pages_per_file_shift_) <= max_fp_id_);
+    CHECK(min_file_id >= min_file_id_);
+    CHECK((min_file_id << pages_per_file_shift_) <= max_fp_id_);
     min_file_id_ = min_file_id;
     empty_file_cnt_ = hole_cnt;
 }
@@ -767,7 +767,7 @@ FileId AppendAllocator::MinFileId() const
 size_t AppendAllocator::SpaceSize() const
 {
     FilePageId min_fp_id = min_file_id_ << pages_per_file_shift_;
-    assert(max_fp_id_ >= min_fp_id);
+    CHECK(max_fp_id_ >= min_fp_id);
     return (max_fp_id_ - min_fp_id) -
            (empty_file_cnt_ << pages_per_file_shift_);
 }
