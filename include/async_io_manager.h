@@ -462,7 +462,8 @@ public:
                            uint64_t term = 0);
     virtual int OpenFile(const TableIdent &tbl_id,
                          FileId file_id,
-                         bool direct,
+                         uint64_t flags,
+                         uint64_t mode,
                          uint64_t term = 0);
     virtual KvError SyncFile(LruFD::Ref fd);
     virtual KvError SyncFiles(const TableIdent &tbl_id,
@@ -660,7 +661,8 @@ private:
                    uint64_t term = 0) override;
     int OpenFile(const TableIdent &tbl_id,
                  FileId file_id,
-                 bool direct,
+                 uint64_t flags,
+                 uint64_t mode,
                  uint64_t term = 0) override;
     KvError SyncFile(LruFD::Ref fd) override;
     KvError SyncFiles(const TableIdent &tbl_id,
