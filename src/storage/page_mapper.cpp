@@ -580,7 +580,10 @@ FilePageId MappingSnapshot::ToFilePage(PageId page_id) const
     {
         return MaxFilePageId;
     }
-    CHECK(page_id < mapping_tbl_.size());
+    CHECK(page_id < mapping_tbl_.size())
+        << "page_id=" << page_id << ", mapping_size=" << mapping_tbl_.size()
+        << ", table "
+        << (tbl_ident_ != nullptr ? tbl_ident_->ToString() : "null");
     return ToFilePage(mapping_tbl_.Get(page_id));
 }
 
@@ -606,7 +609,10 @@ FilePageId MappingSnapshot::ToFilePage(uint64_t val) const
 
 PageId MappingSnapshot::GetNextFree(PageId page_id) const
 {
-    CHECK(page_id < mapping_tbl_.size());
+    CHECK(page_id < mapping_tbl_.size())
+        << "page_id=" << page_id << ", mapping_size=" << mapping_tbl_.size()
+        << ", table "
+        << (tbl_ident_ != nullptr ? tbl_ident_->ToString() : "null");
     uint64_t val = mapping_tbl_.Get(page_id);
     if (val == InvalidValue)
     {
@@ -646,7 +652,10 @@ void MappingSnapshot::Unswizzling(MemIndexPage *page)
 
 MemIndexPage *MappingSnapshot::GetSwizzlingPointer(PageId page_id) const
 {
-    CHECK(page_id < mapping_tbl_.size());
+    CHECK(page_id < mapping_tbl_.size())
+        << "page_id=" << page_id << ", mapping_size=" << mapping_tbl_.size()
+        << ", table "
+        << (tbl_ident_ != nullptr ? tbl_ident_->ToString() : "null");
     uint64_t val = mapping_tbl_.Get(page_id);
     if (IsSwizzlingPointer(val))
     {
