@@ -97,8 +97,15 @@ KvError ScanIterator::BuildIndexStack(std::string_view key)
     PageId page_id = root_id_;
     while (true)
     {
-        auto [node, err] =
-            shard->IndexManager()->FindPage(mapping_.Get(), page_id);
+        MappingSnapshot *mapping = mapping_.Get();
+        const size_t mapping_size = mapping->mapping_tbl_.size();
+        if (static_cast<size_t>(page_id) >= mapping_size)
+        {
+            LOG(FATAL)
+                << "ScanTask root page_id out of range, page_id=" << page_id
+                << " mapping_size=" << mapping_size << " table " << tbl_id_;
+        }
+        auto [node, err] = shard->IndexManager()->FindPage(mapping, page_id);
         if (err != KvError::NoError)
         {
             ClearIndexStack();
@@ -138,8 +145,17 @@ KvError ScanIterator::AdvanceToNextLeaf()
             PageId descend_id = child_id;
             while (true)
             {
+                MappingSnapshot *mapping = mapping_.Get();
+                const size_t mapping_size = mapping->mapping_tbl_.size();
+                if (static_cast<size_t>(descend_id) >= mapping_size)
+                {
+                    LOG(FATAL)
+                        << "ScanTask descend_id out of range, descend_id="
+                        << descend_id << " mapping_size=" << mapping_size
+                        << " table " << tbl_id_;
+                }
                 auto [node, err] =
-                    shard->IndexManager()->FindPage(mapping_.Get(), descend_id);
+                    shard->IndexManager()->FindPage(mapping, descend_id);
                 if (err != KvError::NoError)
                 {
                     ClearIndexStack();

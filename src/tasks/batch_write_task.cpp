@@ -330,8 +330,16 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
 
     if (root_id != MaxPageId)
     {
-        auto [root_page, err] = shard->IndexManager()->FindPage(
-            cow_meta_.old_mapping_.Get(), root_id);
+        auto *mapping = cow_meta_.old_mapping_.Get();
+        const size_t mapping_size = mapping->mapping_tbl_.size();
+        if (static_cast<size_t>(root_id) >= mapping_size)
+        {
+            LOG(FATAL) << "ApplyBatch root_id out of range, root_id=" << root_id
+                       << " mapping_size=" << mapping_size << " table "
+                       << tbl_ident_;
+        }
+        auto [root_page, err] =
+            shard->IndexManager()->FindPage(mapping, root_id);
         CHECK_KV_ERR(err);
         stack_.emplace_back(
             std::make_unique<IndexStackEntry>(root_page, Options()));
@@ -1304,8 +1312,15 @@ std::string BatchWriteTask::RightBound(bool is_data_page)
 
 KvError BatchWriteTask::DeleteTree(PageId page_id, bool update_prev)
 {
-    auto [idx_page, err] = shard->IndexManager()->FindPage(
-        cow_meta_.mapper_->GetMapping(), page_id);
+    auto *mapping = cow_meta_.mapper_->GetMapping();
+    const size_t mapping_size = mapping->mapping_tbl_.size();
+    if (static_cast<size_t>(page_id) >= mapping_size)
+    {
+        LOG(FATAL) << "DeleteTree page_id out of range, page_id=" << page_id
+                   << " mapping_size=" << mapping_size << " table "
+                   << tbl_ident_;
+    }
+    auto [idx_page, err] = shard->IndexManager()->FindPage(mapping, page_id);
     CHECK_KV_ERR(err);
     idx_page->Pin();
     IndexPageIter iter(idx_page, Options());
@@ -1481,8 +1496,15 @@ void BatchWriteTask::AdvanceIndexPageIter(IndexPageIter &iter, bool &is_valid)
 std::pair<MemIndexPage *, KvError> BatchWriteTask::TruncateIndexPage(
     PageId page_id, std::string_view trunc_pos)
 {
-    auto [idx_page, err] = shard->IndexManager()->FindPage(
-        cow_meta_.mapper_->GetMapping(), page_id);
+    auto *mapping = cow_meta_.mapper_->GetMapping();
+    const size_t mapping_size = mapping->mapping_tbl_.size();
+    if (static_cast<size_t>(page_id) >= mapping_size)
+    {
+        LOG(FATAL)
+            << "TruncateIndexPage page_id out of range, page_id=" << page_id
+            << " mapping_size=" << mapping_size << " table " << tbl_ident_;
+    }
+    auto [idx_page, err] = shard->IndexManager()->FindPage(mapping, page_id);
     if (err != KvError::NoError)
     {
         return {nullptr, err};
