@@ -347,7 +347,6 @@ PageMapper::PageMapper(const PageMapper &rhs)
     ThdTask()->YieldToLowPQ();
 
     src_tbl.ApplyPendingTo(mapping_->mapping_tbl_);
-    ThdTask()->YieldToLowPQ();
     src_tbl.FinishCopying();
 
     assert(file_page_allocator_->MaxFilePageId() ==
