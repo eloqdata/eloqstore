@@ -3,6 +3,7 @@
 #include <cassert>
 #include <cstdint>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -272,6 +273,21 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
         {
             using_fp_ids_set.insert(fp_id);
         }
+    }
+
+    if (root_ != MaxPageId && static_cast<size_t>(root_) >= m_table.size())
+    {
+        LOG(FATAL) << "Replay root_id out of range, root_id=" << root_
+                   << " mapping_size=" << m_table.size() << " table "
+                   << (tbl_ident != nullptr ? tbl_ident->ToString() : "null");
+    }
+    if (ttl_root_ != MaxPageId &&
+        static_cast<size_t>(ttl_root_) >= m_table.size())
+    {
+        LOG(FATAL) << "Replay ttl_root_id out of range, ttl_root_id="
+                   << ttl_root_ << " mapping_size=" << m_table.size()
+                   << " table "
+                   << (tbl_ident != nullptr ? tbl_ident->ToString() : "null");
     }
 
     if (opts_->data_append_mode)
