@@ -358,7 +358,8 @@ PageId PageMapper::GetPage()
     if (free_page_head_ == MaxPageId)
     {
         auto ret = map.PushBack(MappingSnapshot::InvalidValue);
-        LOG(INFO) << "GetPage from new:" << ret;
+        LOG(INFO) << "GetPage from new:" << ret << " for "
+                  << ((WriteTask *) ThdTask())->TableId();
         return ret;
     }
     else
@@ -490,7 +491,9 @@ FilePageId MappingSnapshot::ToFilePage(PageId page_id) const
     {
         return MaxFilePageId;
     }
-    assert(page_id < mapping_tbl_.size());
+    CHECK(page_id < mapping_tbl_.size())
+        << "page_id=" << page_id
+        << ", mapping_tbl.size()=" << mapping_tbl_.size();
     return ToFilePage(mapping_tbl_.Get(page_id));
 }
 
@@ -516,7 +519,9 @@ FilePageId MappingSnapshot::ToFilePage(uint64_t val) const
 
 PageId MappingSnapshot::GetNextFree(PageId page_id) const
 {
-    assert(page_id < mapping_tbl_.size());
+    CHECK(page_id < mapping_tbl_.size())
+        << "page_id=" << page_id
+        << ", mapping_tbl.size()=" << mapping_tbl_.size();
     uint64_t val = mapping_tbl_.Get(page_id);
     if (val == InvalidValue)
     {
@@ -556,7 +561,9 @@ void MappingSnapshot::Unswizzling(MemIndexPage *page)
 
 MemIndexPage *MappingSnapshot::GetSwizzlingPointer(PageId page_id) const
 {
-    assert(page_id < mapping_tbl_.size());
+    CHECK(page_id < mapping_tbl_.size())
+        << "page_id=" << page_id
+        << ", mapping_tbl.size()=" << mapping_tbl_.size();
     uint64_t val = mapping_tbl_.Get(page_id);
     if (IsSwizzlingPointer(val))
     {

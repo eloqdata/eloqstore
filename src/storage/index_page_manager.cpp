@@ -435,7 +435,7 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
     assert(page->page_id_ != MaxPageId);
     assert(page->file_page_id_ != MaxFilePageId);
     LOG(INFO) << "FreeIndexPage " << page->page_id_ << " for "
-              << ((WriteTask *) ThdTask())->TableId();
+              << ((WriteTask *) ThdTask())->TableId() << ", ptr:" << page;
     page->page_id_ = MaxPageId;
     page->file_page_id_ = MaxFilePageId;
     page->tbl_ident_ = nullptr;
