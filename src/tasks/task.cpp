@@ -28,6 +28,7 @@ void KvTask::Yield()
 
 void KvTask::YieldToLowPQ()
 {
+    return;
     shard->low_priority_ready_tasks_.Enqueue(this);
     shard->main_ = shard->main_.resume();
 }

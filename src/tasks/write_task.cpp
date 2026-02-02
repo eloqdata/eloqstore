@@ -92,6 +92,8 @@ KvError WriteTask::WritePage(VarPage page, FilePageId file_page_id)
     else
     {
         YieldToLowPQ();
+        // shard->low_priority_ready_tasks_.Enqueue(this);
+        // shard->main_ = shard->main_.resume();
     }
     return KvError::NoError;
 }
@@ -228,7 +230,7 @@ KvError WriteTask::FlushManifest()
     file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
                                         IoMgr()->ProcessTerm());
     SerializeFileIdTermMapping(*file_term_mapping, term_buf);
-    YieldToLowPQ();
+    // YieldToLowPQ();
 
     if (need_empty_snapshot)
     {

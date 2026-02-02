@@ -183,7 +183,7 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
         return;
     }
     ResizeInternal(src.logical_size_, /*init_new_chunks=*/false);
-    ThdTask()->YieldToLowPQ();
+    // ThdTask()->YieldToLowPQ();
     for (size_t chunk_idx = 0; chunk_idx < base_.size(); ++chunk_idx)
     {
         size_t offset = chunk_idx << kChunkShift;
@@ -196,7 +196,7 @@ void MappingSnapshot::MappingTbl::CopyFrom(const MappingTbl &src)
         std::memcpy(base_[chunk_idx]->data(),
                     src.base_[chunk_idx]->data(),
                     copy_elems * sizeof(uint64_t));
-        ThdTask()->YieldToLowPQ();
+        // ThdTask()->YieldToLowPQ();
     }
 }
 
@@ -610,7 +610,7 @@ void MappingSnapshot::Serialize(ManifestBuffer &dst) const
         dst.AppendVarint64(val);
         if (can_yield && (i & 511) == 0)
         {
-            ThdTask()->YieldToLowPQ();
+            // ThdTask()->YieldToLowPQ();
         }
     }
 }

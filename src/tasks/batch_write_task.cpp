@@ -330,7 +330,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         }
         err = ApplyOnePage(cidx, now_ms);
         CHECK_KV_ERR(err);
-        YieldToLowPQ();
+        // YieldToLowPQ();
     }
     // Flush all dirty leaf data pages in leaf_triple_.
     assert(TripleElement(2) == nullptr);
@@ -346,7 +346,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         auto [new_page, err] = Pop();
         CHECK_KV_ERR(err);
         new_root = new_page;
-        YieldToLowPQ();
+        // YieldToLowPQ();
     }
     root_id = new_root == nullptr ? MaxPageId : new_root->GetPageId();
 
