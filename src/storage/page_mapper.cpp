@@ -33,6 +33,7 @@ MappingSnapshot::MappingSnapshot(IndexPageManager *idx_mgr,
                                  MappingTbl tbl)
     : idx_mgr_(idx_mgr), tbl_ident_(tbl_id), mapping_tbl_(std::move(tbl))
 {
+    mapping_tbl_.SetTableIdent(tbl_id);
 }
 
 MappingSnapshot::MappingTbl::MappingTbl() = default;
@@ -105,6 +106,11 @@ void MappingSnapshot::MappingTbl::SetChunkArena(MappingChunkArena *arena)
     chunk_arena_ = arena;
 }
 
+void MappingSnapshot::MappingTbl::SetTableIdent(const TableIdent *tbl_ident)
+{
+    tbl_ident_ = tbl_ident;
+}
+
 void MappingSnapshot::MappingTbl::StartCopying()
 {
     under_copying_ = true;
@@ -173,7 +179,9 @@ uint64_t MappingSnapshot::MappingTbl::Get(PageId page_id) const
 
     }
     CHECK(static_cast<size_t>(page_id) < logical_size_)
-        << "page_id=" << page_id << ", logical_size=" << logical_size_;
+        << "page_id=" << page_id << ", logical_size=" << logical_size_
+        << ", table "
+        << (tbl_ident_ != nullptr ? tbl_ident_->ToString() : "null");
     const size_t chunk_idx = static_cast<size_t>(page_id) >> kChunkShift;
     const size_t chunk_offset = static_cast<size_t>(page_id) & kChunkMask;
     return (*base_[chunk_idx])[chunk_offset];

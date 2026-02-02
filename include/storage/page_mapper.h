@@ -72,6 +72,7 @@ struct MappingSnapshot
         size_t capacity() const;
         void SetVectorArena(MappingArena *arena);
         void SetChunkArena(MappingChunkArena *arena);
+        void SetTableIdent(const TableIdent *tbl_ident);
         void StartCopying();
         void FinishCopying();
         void ApplyChanges();
@@ -109,6 +110,7 @@ struct MappingSnapshot
         size_t logical_size_{0};
         MappingArena *vector_arena_{nullptr};
         MappingChunkArena *chunk_arena_{nullptr};
+        const TableIdent *tbl_ident_{nullptr};
     };
 
     MappingSnapshot(IndexPageManager *idx_mgr,
