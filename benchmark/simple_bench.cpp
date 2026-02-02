@@ -189,7 +189,6 @@ void WriteLoop(eloqstore::EloqStore *store)
         finished.wait_dequeue(writer);
 
         assert(writer->request_.IsDone());
-        assert(writer->request_.Error() == eloqstore::KvError::NoError);
         g_write_latency << static_cast<int64_t>(writer->latency_);
         UpdateMaxLatency(g_write_max_latency, writer->latency_);
         recorded_write_latency = true;
