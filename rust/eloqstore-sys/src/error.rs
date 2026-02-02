@@ -18,6 +18,7 @@ pub enum KvError {
     NoPermission,
     CloudErr,
     IoFail,
+    Unknown,
 }
 
 impl KvError {
@@ -38,7 +39,11 @@ impl KvError {
             12 => KvError::NoPermission,
             13 => KvError::CloudErr,
             14 => KvError::IoFail,
-            _ => KvError::NoError,
+            _ => {
+                #[cfg(debug_assertions)]
+                eprintln!("Unknown error code from C API: {}", err);
+                KvError::Unknown
+            }
         }
     }
 
@@ -68,6 +73,7 @@ impl std::fmt::Display for KvError {
             KvError::CloudErr => "Cloud service is unavailable",
             KvError::Timeout => "Operation timeout",
             KvError::NoPermission => "Operation not permitted",
+            KvError::Unknown => "Unknown error",
         };
         write!(f, "{}", msg)
     }

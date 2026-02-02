@@ -119,27 +119,35 @@ fn test_all_apis() {
     // ============================================================
     println!("\n--- Paginated Scan operation ---\n");
 
-    // 创建一个新的table来避免数据冲突
+    // Create a new table to avoid data conflicts
     let pagination_table =
         TableIdentifier::new("pagination_table", 0).expect("Failed to create pagination table");
 
-    // 插入专门用于分页测试的数据
+    // Insert data specifically for pagination testing
     println!("Inserting 100 key-value pairs for pagination test...");
-    // 构造批量升序key列表
+    // Construct batch ascending key list
     let mut keys: Vec<String> = (0..100).map(|i| format!("key_{:03}", i)).collect();
     keys.sort();
     let mut write_req = WriteRequest::new(pagination_table.clone());
     for key in keys {
-        write_req = write_req.put(key.as_bytes(), format!("value_{}", key).as_bytes(), ts + 3000 );
+        write_req = write_req.put(
+            key.as_bytes(),
+            format!("value_{}", key).as_bytes(),
+            ts + 3000,
+        );
     }
     store.exec_sync(write_req).expect("exec_sync");
     println!("✓ Inserted 100 key-value pairs for pagination test");
 
-    let scan_req = ScanRequest::new(pagination_table.clone()).range(b"key_020", b"key_080", true).pagination(20, usize::MAX);
+    let scan_req = ScanRequest::new(pagination_table.clone())
+        .range(b"key_020", b"key_080", true)
+        .pagination(20, usize::MAX);
     let result = store.exec_sync(scan_req).expect("exec_sync");
     println!("✓ Scanned entries: {:?}", result.entries.len());
     for entry in result.entries {
-        assert!(entry.key < "key_020".as_bytes().to_vec() || entry.key > "key_080".as_bytes().to_vec());
+        assert!(
+            entry.key >= "key_020".as_bytes().to_vec() && entry.key <= "key_080".as_bytes().to_vec()
+        );
     }
     println!("✓ Scanned 20 entries from [key_020, key_080)");
 

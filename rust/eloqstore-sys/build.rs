@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    // 在构建前初始化并更新 git submodule
-    // vendor/{src,include,external} 已通过软链接指向仓库根目录
+    // Initialize and update git submodule before build
+    // vendor/{src,include,external} are soft-linked to repository root
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     if let Ok(repo_root) = manifest_dir.join("../..").canonicalize() {
         if repo_root.join(".git").exists() {
@@ -15,7 +15,7 @@ fn main() {
                 .status();
             if let Ok(s) = status {
                 if !s.success() {
-                    panic!("git submodule update --init --recursive 执行失败，请手动在仓库根目录执行");
+                    panic!("git submodule update --init --recursive failed, please manually execute in repository root");
                 }
             }
         }
@@ -42,34 +42,34 @@ fn main() {
     // Look for the combined shared library first
     let combined_lib = build_dir.join("libeloqstore_combine.so");
     let combined_lib_dest = lib_dir.join("libeloqstore_combine.so");
-    
+
     if combined_lib.exists() {
         // Copy the combined shared library to the lib directory
         fs::copy(&combined_lib, &combined_lib_dest)
             .expect("Failed to copy libeloqstore_combine.so");
-        
+
         // Copy to OUT_DIR so it can be embedded via include_bytes! in embedded_lib.rs
         if let Ok(out_dir) = std::env::var("OUT_DIR") {
             let embedded_lib_path = PathBuf::from(&out_dir).join("libeloqstore_combine.so");
             fs::copy(&combined_lib, &embedded_lib_path)
                 .expect("Failed to copy libeloqstore_combine.so to OUT_DIR for embedding");
         }
-        
+
         println!("cargo:rustc-link-search=native={}", lib_dir.display());
-        
+
         // Strategy to help runtime loader find libeloqstore_combine.so:
         // 1. Copy .so to target/debug/ and target/release/ for easy access
         // 2. Set rpath with $ORIGIN to find .so relative to executable location
         // 3. Also set absolute path as fallback
-        
+
         let lib_dir_str = lib_dir.display().to_string();
-        
+
         // Strategy: Copy .so to target/debug/ and target/release/ directories
         // so executables can find it via $ORIGIN/.. rpath
         // This avoids the need for complex path calculations or environment variables
-        
+
         let mut copied_to_target = false;
-        
+
         // Try to detect target directory from OUT_DIR
         // OUT_DIR format: target/debug/build/eloqstore-sys-<hash>/out
         // Go up 3 levels: out -> build -> eloqstore-sys-<hash> -> build -> target/debug
@@ -85,7 +85,7 @@ fn main() {
                         }
                     }
                 }
-                
+
                 // Also copy to the other profile (debug <-> release)
                 if let Some(target_base) = target_profile_dir.parent() {
                     let other_profile = if target_profile_dir.ends_with("debug") {
@@ -101,13 +101,17 @@ fn main() {
                 }
             }
         }
-        
+
         // Fallback: try CARGO_TARGET_DIR if set
         if !copied_to_target {
             if let Ok(target_dir) = std::env::var("CARGO_TARGET_DIR") {
-                let target_debug_lib = PathBuf::from(&target_dir).join("debug").join("libeloqstore_combine.so");
-                let target_release_lib = PathBuf::from(&target_dir).join("release").join("libeloqstore_combine.so");
-                
+                let target_debug_lib = PathBuf::from(&target_dir)
+                    .join("debug")
+                    .join("libeloqstore_combine.so");
+                let target_release_lib = PathBuf::from(&target_dir)
+                    .join("release")
+                    .join("libeloqstore_combine.so");
+
                 if let Some(parent) = target_debug_lib.parent() {
                     let _ = fs::create_dir_all(parent);
                     let _ = fs::copy(&combined_lib_dest, &target_debug_lib);
@@ -118,7 +122,7 @@ fn main() {
                 }
             }
         }
-        
+
         // Set rpath to find .so relative to executable
         // $ORIGIN refers to the directory containing the executable
         // For examples: target/debug/examples/basic_usage -> $ORIGIN/../.. points to target/debug/
@@ -127,7 +131,7 @@ fn main() {
         println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/../..");
         // Also add absolute path as fallback (for cargo run/test scenarios)
         println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir_str);
-        
+
         // Choose linking strategy:
         // 1. Static linking (ELOQSTORE_STATIC_EXE=1): Link static library directly - no external .so needed
         // 2. Dynamic linking (default): Use .so file (requires .so to be available at runtime)
@@ -135,7 +139,7 @@ fn main() {
         // For fully self-contained executables, use static linking:
         //   ELOQSTORE_STATIC_EXE=1 cargo build --example basic_usage
         let use_static = std::env::var("ELOQSTORE_STATIC_EXE").is_ok();
-        
+
         if use_static {
             // Fully static: link the static library directly (no external .so needed)
             let static_lib = build_dir.join("libeloqstore.a");
@@ -143,7 +147,7 @@ fn main() {
                 fs::copy(&static_lib, lib_dir.join("libeloqstore.a"))
                     .expect("Failed to copy libeloqstore.a");
                 println!("cargo:rustc-link-lib=static=eloqstore");
-                
+
                 // Also need to link all abseil libraries statically
                 let absl_dir = build_dir.join("external/abseil/absl");
                 if absl_dir.exists() {
@@ -176,7 +180,7 @@ fn main() {
             // Dynamic linking: use the combined shared library (requires .so at runtime)
             println!("cargo:rustc-link-lib=dylib=eloqstore_combine");
         }
-        
+
         // Link system libraries
         // In static mode, we need to link all dependencies that libeloqstore.a depends on
         if use_static {
@@ -197,12 +201,12 @@ fn main() {
             println!("cargo:rustc-link-lib=aws-c-cal");
             println!("cargo:rustc-link-lib=aws-c-common");
         }
-        
+
         // System libraries that are always needed (pthread, dl, stdc++)
         println!("cargo:rustc-link-lib=pthread");
         println!("cargo:rustc-link-lib=dl");
         println!("cargo:rustc-link-lib=stdc++");
-        
+
         // zstd in dynamic mode (if not using static)
         if !use_static {
             println!("cargo:rustc-link-lib=zstd");
@@ -278,7 +282,7 @@ fn main() {
     println!("cargo:rerun-if-changed=vendor/CMakeLists.txt");
     println!("cargo:rerun-if-changed=vendor/src/");
     println!("cargo:rerun-if-changed=vendor/include/");
-    // 仓库根目录的 submodule 与 external 变更时重新构建
+    // Rebuild when repository root's submodule or external changes
     println!("cargo:rerun-if-changed=../../.gitmodules");
     println!("cargo:rerun-if-changed=../../external/");
 }

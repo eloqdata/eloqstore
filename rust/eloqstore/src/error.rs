@@ -17,26 +17,28 @@ pub enum KvError {
     NoPermission,
     CloudErr,
     IoFail,
+    Unknown,
 }
 
 impl From<CEloqStoreStatus> for KvError {
     fn from(status: CEloqStoreStatus) -> Self {
-        match status {
-            CEloqStoreStatus::Ok => KvError::NoError,
-            CEloqStoreStatus::InvalidArgs => KvError::InvalidArgs,
-            CEloqStoreStatus::NotFound => KvError::NotFound,
-            CEloqStoreStatus::NotRunning => KvError::NotRunning,
-            CEloqStoreStatus::Corrupted => KvError::Corrupted,
-            CEloqStoreStatus::EndOfFile => KvError::EndOfFile,
-            CEloqStoreStatus::OutOfSpace => KvError::OutOfSpace,
-            CEloqStoreStatus::OutOfMem => KvError::OutOfMem,
-            CEloqStoreStatus::OpenFileLimit => KvError::OpenFileLimit,
-            CEloqStoreStatus::TryAgain => KvError::TryAgain,
-            CEloqStoreStatus::Busy => KvError::Busy,
-            CEloqStoreStatus::Timeout => KvError::Timeout,
-            CEloqStoreStatus::NoPermission => KvError::NoPermission,
-            CEloqStoreStatus::CloudErr => KvError::CloudErr,
-            CEloqStoreStatus::IoFail => KvError::IoFail,
+        match status as u8 {
+            0 => KvError::NoError,
+            1 => KvError::InvalidArgs,
+            2 => KvError::NotFound,
+            3 => KvError::NotRunning,
+            4 => KvError::Corrupted,
+            5 => KvError::EndOfFile,
+            6 => KvError::OutOfSpace,
+            7 => KvError::OutOfMem,
+            8 => KvError::OpenFileLimit,
+            9 => KvError::TryAgain,
+            10 => KvError::Busy,
+            11 => KvError::Timeout,
+            12 => KvError::NoPermission,
+            13 => KvError::CloudErr,
+            14 => KvError::IoFail,
+            _ => KvError::Unknown,
         }
     }
 }
@@ -59,6 +61,7 @@ impl std::fmt::Display for KvError {
             KvError::NoPermission => write!(f, "no permission"),
             KvError::CloudErr => write!(f, "cloud error"),
             KvError::IoFail => write!(f, "I/O failure"),
+            KvError::Unknown => write!(f, "unknown error"),
         }
     }
 }
@@ -84,6 +87,7 @@ impl std::convert::From<KvError> for std::io::Error {
             KvError::NoPermission => Self::new(PermissionDenied, "no permission"),
             KvError::CloudErr => Self::new(Other, "cloud error"),
             KvError::IoFail => Self::new(Other, "I/O failure"),
+            KvError::Unknown => Self::new(Other, "unknown error"),
         }
     }
 }

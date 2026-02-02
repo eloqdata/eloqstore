@@ -9,7 +9,7 @@ extern "C" {
 #endif
 
 // ============================================================
-// 错误码定义
+// Error code definitions
 // ============================================================
 typedef enum CEloqStoreStatus {
     CEloqStoreStatus_Ok = 0,
@@ -30,7 +30,7 @@ typedef enum CEloqStoreStatus {
 } CEloqStoreStatus;
 
 // ============================================================
-// 不透明句柄类型
+// Opaque handle types
 // ============================================================
 typedef void* CEloqStoreHandle;
 typedef void* CTableIdentHandle;
@@ -38,7 +38,7 @@ typedef void* CScanRequestHandle;
 typedef void* CBatchWriteHandle;
 
 // ============================================================
-// 写入操作枚举
+// Write operation enum
 // ============================================================
 typedef enum CWriteOp {
     CWriteOp_Upsert = 0,
@@ -46,7 +46,7 @@ typedef enum CWriteOp {
 } CWriteOp;
 
 // ============================================================
-// 输入结构体
+// Input structures
 // ============================================================
 typedef struct CKvEntry {
     const uint8_t* key;
@@ -68,10 +68,10 @@ typedef struct CWriteEntry {
 } CWriteEntry;
 
 // ============================================================
-// 输出结构体
+// Output structures
 // ============================================================
 
-// Get 操作结果
+// Get operation result
 typedef struct CGetResult {
     const uint8_t* value;
     size_t value_len;
@@ -80,7 +80,7 @@ typedef struct CGetResult {
     bool found;
 } CGetResult;
 
-// Floor 操作结果
+// Floor operation result
 typedef struct CFloorResult {
     const uint8_t* key;
     size_t key_len;
@@ -91,7 +91,7 @@ typedef struct CFloorResult {
     bool found;
 } CFloorResult;
 
-// Scan 结果条目
+// Scan result entries
 typedef struct CScanEntry {
     const uint8_t* key;
     size_t key_len;
@@ -101,7 +101,7 @@ typedef struct CScanEntry {
     uint64_t expire_ts;
 } CScanEntry;
 
-// Scan 操作结果
+// Scan operation result
 typedef struct CScanResult {
     CScanEntry* entries;
     size_t num_entries;
@@ -110,7 +110,7 @@ typedef struct CScanResult {
 } CScanResult;
 
 // ============================================================
-// 选项 API
+// Options API
 // ============================================================
 
 CEloqStoreHandle CEloqStore_Options_Create(void);
@@ -136,7 +136,7 @@ void CEloqStore_Options_SetCloudVerifySsl(CEloqStoreHandle opts, bool verify);
 bool CEloqStore_Options_Validate(CEloqStoreHandle opts);
 
 // ============================================================
-// 引擎生命周期
+// Engine lifecycle
 // ============================================================
 
 CEloqStoreHandle CEloqStore_Create(CEloqStoreHandle options);
@@ -147,7 +147,7 @@ void CEloqStore_Stop(CEloqStoreHandle store);
 bool CEloqStore_IsStopped(CEloqStoreHandle store);
 
 // ============================================================
-// 表标识符
+// Table identifier
 // ============================================================
 
 CTableIdentHandle CEloqStore_TableIdent_Create(const char* table_name, uint32_t partition_id);
@@ -156,10 +156,10 @@ const char* CEloqStore_TableIdent_GetName(CTableIdentHandle ident);
 uint32_t CEloqStore_TableIdent_GetPartition(CTableIdentHandle ident);
 
 // ============================================================
-// 扁平化写入 API（简单操作）
+// Flattened write API (simple operations)
 // ============================================================
 
-// 单条 Put 操作（内部使用 BatchWrite 实现）
+// Single Put operation (implemented using BatchWrite)
 CEloqStoreStatus CEloqStore_Put(
     CEloqStoreHandle store,
     CTableIdentHandle table,
@@ -170,10 +170,10 @@ CEloqStoreStatus CEloqStore_Put(
     uint64_t timestamp
 );
 
-// 批量 Put 操作 - 一次性写入多对 key-value
-// keys: key 指针数组
-// values: value 指针数组
-// count: 元素数量
+// Batch Put operation - write multiple key-value pairs at once
+// keys: key pointer array
+// values: value pointer array
+// count: element count
 CEloqStoreStatus CEloqStore_PutBatch(
     CEloqStoreHandle store,
     CTableIdentHandle table,
@@ -185,7 +185,7 @@ CEloqStoreStatus CEloqStore_PutBatch(
     uint64_t timestamp
 );
 
-// 批量 Put 操作（使用 CWriteEntry 数组）
+// Batch Put operation (using CWriteEntry array)
 CEloqStoreStatus CEloqStore_PutEntries(
     CEloqStoreHandle store,
     CTableIdentHandle table,
@@ -193,7 +193,7 @@ CEloqStoreStatus CEloqStore_PutEntries(
     size_t count
 );
 
-// 单条 Delete 操作（内部使用 BatchWrite 实现）
+// Single Delete operation (implemented using BatchWrite)
 CEloqStoreStatus CEloqStore_Delete(
     CEloqStoreHandle store,
     CTableIdentHandle table,
@@ -202,7 +202,7 @@ CEloqStoreStatus CEloqStore_Delete(
     uint64_t timestamp
 );
 
-// 批量 Delete 操作 - 一次性删除多个 key
+// Batch Delete operation - delete multiple keys at once
 CEloqStoreStatus CEloqStore_DeleteBatch(
     CEloqStoreHandle store,
     CTableIdentHandle table,
@@ -213,7 +213,7 @@ CEloqStoreStatus CEloqStore_DeleteBatch(
 );
 
 // ============================================================
-// 扁平化读取 API（简单操作）
+// Flattened read API (simple operations)
 // ============================================================
 
 CEloqStoreStatus CEloqStore_Get(
@@ -232,14 +232,14 @@ CEloqStoreStatus CEloqStore_Floor(
     CFloorResult* out_result
 );
 
-// 释放 Get 结果（由 C++ 分配）
+// Free Get result (allocated by C++)
 void CEloqStore_FreeGetResult(CGetResult* result);
 
-// 释放 Floor 结果（由 C++ 分配）
+// Free Floor result (allocated by C++)
 void CEloqStore_FreeFloorResult(CFloorResult* result);
 
 // ============================================================
-// Scan 请求 API（复杂操作 - 保留 Request 模式）
+// Scan request API (complex operations - preserve Request pattern)
 // ============================================================
 
 CScanRequestHandle CEloqStore_ScanRequest_Create(void);
@@ -264,11 +264,11 @@ CEloqStoreStatus CEloqStore_ExecScan(
     CScanResult* out_result
 );
 
-// 释放 Scan 结果（由 C++ 分配）
+// Free Scan result (allocated by C++)
 void CEloqStore_FreeScanResult(CScanResult* result);
 
 // ============================================================
-// BatchWrite 请求 API（复杂操作 - 保留 Request 模式）
+// BatchWrite request API (complex operations - preserve Request pattern)
 // ============================================================
 
 CBatchWriteHandle CEloqStore_BatchWrite_Create(void);
@@ -293,7 +293,7 @@ CEloqStoreStatus CEloqStore_ExecBatchWrite(
 );
 
 // ============================================================
-// 错误信息查询
+// Error message query
 // ============================================================
 
 const char* CEloqStore_GetLastError(CEloqStoreHandle store);

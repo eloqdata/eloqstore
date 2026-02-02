@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <mutex>
+#include <unordered_map>
 
 #include "eloq_store.h"
 #include "kv_options.h"
@@ -13,7 +14,7 @@
 using namespace eloqstore;
 
 // ============================================================
-// 线程局部存储用于错误消息
+// Thread-local storage for error messages
 // ============================================================
 static thread_local std::string g_last_error_message;
 static std::mutex g_error_mutex;
@@ -29,7 +30,17 @@ static void clear_last_error() {
 }
 
 // ============================================================
-// 错误码转换
+// Owned scan result storage (avoids dangling pointers into request)
+// ============================================================
+struct OwnedScanResult {
+    std::vector<CScanEntry> entries;
+    std::vector<uint8_t> key_value_buffer;
+};
+static std::mutex g_scan_result_mutex;
+static std::unordered_map<CScanResult*, std::unique_ptr<OwnedScanResult>> g_owned_scan_results;
+
+// ============================================================
+// Error code conversion
 // ============================================================
 static CEloqStoreStatus kv_error_to_c(KvError err) {
     switch (err) {
@@ -52,7 +63,7 @@ static CEloqStoreStatus kv_error_to_c(KvError err) {
     }
 }
 
-// 存储 C++ 对象到句柄的映射（用于扁平化 API）
+// Store C++ objects to handle mapping (for flattened API)
 static std::mutex g_request_mutex;
 static thread_local ReadRequest* g_last_read_req = nullptr;
 static thread_local FloorRequest* g_last_floor_req = nullptr;
@@ -60,7 +71,7 @@ static thread_local FloorRequest* g_last_floor_req = nullptr;
 extern "C" {
 
 // ============================================================
-// 选项 API（使用新命名）
+// Options API (using new naming)
 // ============================================================
 
 CEloqStoreHandle CEloqStore_Options_Create(void) {
@@ -148,7 +159,7 @@ bool CEloqStore_Options_Validate(CEloqStoreHandle opts) {
 }
 
 // ============================================================
-// 引擎生命周期
+// Engine lifecycle
 // ============================================================
 
 CEloqStoreHandle CEloqStore_Create(CEloqStoreHandle options) {
@@ -200,7 +211,7 @@ bool CEloqStore_IsStopped(CEloqStoreHandle store) {
 }
 
 // ============================================================
-// 表标识符
+// Table identifier
 // ============================================================
 
 CTableIdentHandle CEloqStore_TableIdent_Create(const char* table_name, uint32_t partition_id) {
@@ -235,8 +246,8 @@ uint32_t CEloqStore_TableIdent_GetPartition(CTableIdentHandle ident) {
 }
 
 // ============================================================
-// 扁平化写入 API（简单操作）
-// 使用 BatchWriteRequest 实现
+// Flattened write API (simple operations)
+// Implemented using BatchWriteRequest
 // ============================================================
 
 CEloqStoreStatus CEloqStore_Put(
@@ -257,7 +268,7 @@ CEloqStoreStatus CEloqStore_Put(
     auto* cpp_table = reinterpret_cast<TableIdent*>(table);
     
     try {
-        // 创建临时的 BatchWriteRequest 来执行 Put
+        // Create temporary BatchWriteRequest to execute Put
         std::vector<WriteDataEntry> batch;
         WriteDataEntry entry;
         entry.key_ = std::string(reinterpret_cast<const char*>(key), key_len);
@@ -296,7 +307,7 @@ CEloqStoreStatus CEloqStore_Delete(
     auto* cpp_table = reinterpret_cast<TableIdent*>(table);
     
     try {
-        // 创建临时的 BatchWriteRequest 来执行 Delete
+        // Create temporary BatchWriteRequest to execute Delete
         std::vector<WriteDataEntry> batch;
         WriteDataEntry entry;
         entry.key_ = std::string(reinterpret_cast<const char*>(key), key_len);
@@ -318,7 +329,7 @@ CEloqStoreStatus CEloqStore_Delete(
 }
 
 // ============================================================
-// 批量写入 API
+// Batch write API
 // ============================================================
 
 CEloqStoreStatus CEloqStore_PutBatch(
@@ -453,8 +464,8 @@ CEloqStoreStatus CEloqStore_DeleteBatch(
 }
 
 // ============================================================
-// 扁平化读取 API（简单操作）
-// 使用 ReadRequest/FloorRequest 实现
+// Flattened read API (simple operations)
+// Implemented using ReadRequest/FloorRequest
 // ============================================================
 
 CEloqStoreStatus CEloqStore_Get(
@@ -473,7 +484,7 @@ CEloqStoreStatus CEloqStore_Get(
     auto* cpp_table = reinterpret_cast<TableIdent*>(table);
     
     try {
-        // 创建临时的 ReadRequest 来执行 Get
+        // Create temporary ReadRequest to execute Get
         ReadRequest req;
         req.SetArgs(*cpp_table, std::string(reinterpret_cast<const char*>(key), key_len));
         
@@ -520,7 +531,7 @@ CEloqStoreStatus CEloqStore_Floor(
     auto* cpp_table = reinterpret_cast<TableIdent*>(table);
     
     try {
-        // 创建临时的 FloorRequest 来执行 Floor
+        // Create temporary FloorRequest to execute Floor
         FloorRequest req;
         req.SetArgs(*cpp_table, std::string(reinterpret_cast<const char*>(key), key_len));
         
@@ -558,7 +569,7 @@ CEloqStoreStatus CEloqStore_Floor(
 }
 
 // ============================================================
-// Scan 请求 API（复杂操作 - 保留 Request 模式）
+// Scan request API (complex operations - preserve Request pattern)
 // ============================================================
 
 CScanRequestHandle CEloqStore_ScanRequest_Create(void) {
@@ -594,15 +605,15 @@ void CEloqStore_ScanRequest_SetRange(
 ) {
     if (req) {
         auto* cpp_req = reinterpret_cast<ScanRequest*>(req);
-        std::string_view begin_sv, end_sv;
+        std::string begin_str, end_str;
         if (begin_key && begin_key_len > 0) {
-            begin_sv = std::string_view(reinterpret_cast<const char*>(begin_key), begin_key_len);
+            begin_str.assign(reinterpret_cast<const char*>(begin_key), begin_key_len);
         }
         if (end_key && end_key_len > 0) {
-            end_sv = std::string_view(reinterpret_cast<const char*>(end_key), end_key_len);
+            end_str.assign(reinterpret_cast<const char*>(end_key), end_key_len);
         }
-        // Note: ScanRequest 的 SetArgs 需要 table 参数
-        // 这里简化处理，用户应使用原始的 SetArgs API
+        // Apply range: call SetArgs again with currently set table, write begin/end
+        cpp_req->SetArgs(cpp_req->TableId(), begin_str, end_str, begin_inclusive);
     }
 }
 
@@ -638,30 +649,45 @@ CEloqStoreStatus CEloqStore_ExecScan(
             return kv_error_to_c(err);
         }
         
-        auto entries = cpp_req->Entries();
+        const auto& entries = cpp_req->Entries();
         auto [count, size] = cpp_req->ResultSize();
         
-        // 分配结果数组（调用方需通过 CEloqStore_FreeScanResult 释放）
-        static thread_local std::vector<CScanEntry> result_entries;
-        result_entries.clear();
-        result_entries.reserve(entries.size());
-        
+        // Free any previous owned result for this pointer (avoid leak if caller reuses)
+        {
+            std::lock_guard<std::mutex> lock(g_scan_result_mutex);
+            g_owned_scan_results.erase(out_result);
+        }
+        auto owned = std::make_unique<OwnedScanResult>();
+        owned->entries.reserve(entries.size());
+        owned->key_value_buffer.reserve(static_cast<size_t>(size) + entries.size() * 2 * sizeof(size_t));
         for (const auto& entry : entries) {
+            const size_t key_len = entry.key_.size();
+            const size_t value_len = entry.value_.size();
+            const size_t key_off = owned->key_value_buffer.size();
+            owned->key_value_buffer.insert(owned->key_value_buffer.end(),
+                reinterpret_cast<const uint8_t*>(entry.key_.data()),
+                reinterpret_cast<const uint8_t*>(entry.key_.data()) + key_len);
+            const size_t value_off = owned->key_value_buffer.size();
+            owned->key_value_buffer.insert(owned->key_value_buffer.end(),
+                reinterpret_cast<const uint8_t*>(entry.value_.data()),
+                reinterpret_cast<const uint8_t*>(entry.value_.data()) + value_len);
             CScanEntry e;
-            e.key = reinterpret_cast<const uint8_t*>(entry.key_.data());
-            e.key_len = entry.key_.size();
-            e.value = reinterpret_cast<const uint8_t*>(entry.value_.data());
-            e.value_len = entry.value_.size();
+            e.key = owned->key_value_buffer.data() + key_off;
+            e.key_len = key_len;
+            e.value = owned->key_value_buffer.data() + value_off;
+            e.value_len = value_len;
             e.timestamp = entry.timestamp_;
             e.expire_ts = entry.expire_ts_;
-            result_entries.push_back(e);
+            owned->entries.push_back(e);
         }
-        
-        out_result->entries = result_entries.data();
-        out_result->num_entries = result_entries.size();
+        out_result->entries = owned->entries.data();
+        out_result->num_entries = owned->entries.size();
         out_result->total_size = size;
         out_result->has_more = cpp_req->HasRemaining();
-        
+        {
+            std::lock_guard<std::mutex> lock(g_scan_result_mutex);
+            g_owned_scan_results[out_result] = std::move(owned);
+        }
         return CEloqStoreStatus_Ok;
     } catch (const std::exception& e) {
         set_last_error(e.what());
@@ -671,6 +697,8 @@ CEloqStoreStatus CEloqStore_ExecScan(
 
 void CEloqStore_FreeScanResult(CScanResult* result) {
     if (result) {
+        std::lock_guard<std::mutex> lock(g_scan_result_mutex);
+        g_owned_scan_results.erase(result);
         result->entries = nullptr;
         result->num_entries = 0;
         result->total_size = 0;
@@ -679,7 +707,7 @@ void CEloqStore_FreeScanResult(CScanResult* result) {
 }
 
 // ============================================================
-// BatchWrite 请求 API（复杂操作 - 保留 Request 模式）
+// BatchWrite request API (complex operations - preserve Request pattern)
 // ============================================================
 
 CBatchWriteHandle CEloqStore_BatchWrite_Create(void) {
@@ -752,7 +780,7 @@ CEloqStoreStatus CEloqStore_ExecBatchWrite(
 }
 
 // ============================================================
-// 错误信息查询
+// Error message query
 // ============================================================
 
 const char* CEloqStore_GetLastError(CEloqStoreHandle store) {
@@ -761,7 +789,7 @@ const char* CEloqStore_GetLastError(CEloqStoreHandle store) {
 }
 
 // ============================================================
-// 内存释放函数（用于 Get/Floor 结果）
+// Memory free functions (for Get/Floor results)
 // ============================================================
 
 void CEloqStore_FreeGetResult(CGetResult* result) {

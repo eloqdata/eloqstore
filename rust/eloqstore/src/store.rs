@@ -216,6 +216,9 @@ impl EloqStore {
         values: &[&[u8]],
         ts: u64,
     ) -> Result<(), KvError> {
+        if keys.len() != values.len() {
+            return Err(KvError::InvalidArgs);
+        }
         let mut req = WriteRequest::new(tbl.clone());
         for (k, v) in keys.iter().zip(values.iter()) {
             req = req.put(k, v, ts);

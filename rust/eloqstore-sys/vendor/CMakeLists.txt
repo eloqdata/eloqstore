@@ -297,7 +297,7 @@ else()
     endif()
 endif()
 
-# vendor/{src,include,external} 已通过软链接指向仓库根目录，无需额外配置
+# vendor/{src,include,external} are soft-linked to repository root, no additional configuration needed
 # Skip git submodule update for Rust FFI build - build.rs runs it from repo root
 if (NOT BUILD_FOR_RUST)
     find_package(Git QUIET)

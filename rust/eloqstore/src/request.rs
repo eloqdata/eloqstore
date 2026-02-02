@@ -308,24 +308,29 @@ impl WriteRequest {
     }
 
     fn execute_batch(&self, store: &EloqStore) -> Result<WriteResponse, KvError> {
-        let keys: Vec<&[u8]> = self.entries.iter().map(|e| e.key.as_slice()).collect();
-        let values: Vec<&[u8]> = self.entries.iter().map(|e| e.value.as_slice()).collect();
-
         unsafe {
-            let key_ptrs: Vec<*const u8> = keys.iter().map(|k| k.as_ptr()).collect();
-            let key_lens: Vec<usize> = keys.iter().map(|k| k.len()).collect();
-            let value_ptrs: Vec<*const u8> = values.iter().map(|v| v.as_ptr()).collect();
-            let value_lens: Vec<usize> = values.iter().map(|v| v.len()).collect();
+            let mut c_entries: Vec<eloqstore_sys::CWriteEntry> =
+                Vec::with_capacity(self.entries.len());
+            for e in &self.entries {
+                c_entries.push(eloqstore_sys::CWriteEntry {
+                    key: e.key.as_ptr(),
+                    key_len: e.key.len(),
+                    value: e.value.as_ptr(),
+                    value_len: e.value.len(),
+                    timestamp: e.timestamp,
+                    op: match e.op {
+                        WriteOp::Upsert => eloqstore_sys::CWriteOp::Upsert,
+                        WriteOp::Delete => eloqstore_sys::CWriteOp::Delete,
+                    },
+                    expire_ts: e.expire_ts,
+                });
+            }
 
-            let status = eloqstore_sys::CEloqStore_PutBatch(
+            let status = eloqstore_sys::CEloqStore_PutEntries(
                 store.ptr,
                 self.table.ptr,
-                key_ptrs.as_ptr(),
-                key_lens.as_ptr(),
-                value_ptrs.as_ptr(),
-                value_lens.as_ptr(),
-                self.entries.len(),
-                self.entries[0].timestamp,
+                c_entries.as_ptr(),
+                c_entries.len(),
             );
 
             match status {
