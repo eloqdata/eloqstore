@@ -384,11 +384,44 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
 
     CHECK(!stack_.empty());
     MemIndexPage *new_root = nullptr;
+    const size_t stack_size_before_pop = stack_.size();
+    PageId last_top_page_id = MaxPageId;
+    FilePageId last_top_file_page_id = MaxFilePageId;
+    bool last_top_is_leaf = false;
+    size_t last_stack_size = 0;
+    PageId last_new_root_page_id = MaxPageId;
+    FilePageId last_new_root_file_page_id = MaxFilePageId;
+    bool last_new_root_detached = false;
+    bool last_new_root_pinned = false;
+    bool last_new_root_in_free_list = false;
     while (!stack_.empty())
     {
+        {
+            IndexStackEntry *top_entry = stack_.back().get();
+            last_top_page_id = top_entry->idx_page_ != nullptr
+                                   ? top_entry->idx_page_->GetPageId()
+                                   : MaxPageId;
+            last_top_file_page_id =
+                top_entry->idx_page_ != nullptr
+                    ? top_entry->idx_page_->GetFilePageId()
+                    : MaxFilePageId;
+            last_top_is_leaf =
+                top_entry->idx_page_ != nullptr
+                    ? top_entry->idx_page_->IsPointingToLeaf()
+                    : false;
+            last_stack_size = stack_.size();
+        }
         auto [new_page, err] = Pop();
         CHECK_KV_ERR(err);
         new_root = new_page;
+        if (new_root != nullptr)
+        {
+            last_new_root_page_id = new_root->GetPageId();
+            last_new_root_file_page_id = new_root->GetFilePageId();
+            last_new_root_detached = new_root->IsDetached();
+            last_new_root_pinned = new_root->IsPinned();
+            last_new_root_in_free_list = new_root->InFreeList();
+        }
         YieldToLowPQ();
     }
     root_id = new_root == nullptr ? MaxPageId : new_root->GetPageId();
@@ -400,9 +433,34 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         if (root_id != MaxPageId &&
             static_cast<size_t>(root_id) >= mapping_size)
         {
+            const size_t old_mapping_size =
+                cow_meta_.old_mapping_ ? cow_meta_.old_mapping_->mapping_tbl_.size()
+                                       : 0;
+            FilePageId root_file_id =
+                new_root != nullptr ? new_root->GetFilePageId() : MaxFilePageId;
             LOG(FATAL) << "ApplyBatch updated root_id out of range, root_id="
                        << root_id << " table " << tbl_ident_
                        << " mapping_size=" << mapping_size
+                       << " old_mapping_size=" << old_mapping_size
+                       << " stack_size_before_pop=" << stack_size_before_pop
+                       << " root_file_id=" << root_file_id
+                       << " root_detached="
+                       << (new_root ? new_root->IsDetached() : false)
+                       << " root_pinned="
+                       << (new_root ? new_root->IsPinned() : false)
+                       << " root_in_free_list="
+                       << (new_root ? new_root->InFreeList() : false)
+                       << " last_stack_size=" << last_stack_size
+                       << " last_top_page_id=" << last_top_page_id
+                       << " last_top_file_page_id=" << last_top_file_page_id
+                       << " last_top_is_leaf=" << last_top_is_leaf
+                       << " last_new_root_page_id=" << last_new_root_page_id
+                       << " last_new_root_file_page_id="
+                       << last_new_root_file_page_id
+                       << " last_new_root_detached=" << last_new_root_detached
+                       << " last_new_root_pinned=" << last_new_root_pinned
+                       << " last_new_root_in_free_list="
+                       << last_new_root_in_free_list
                        << " update_ttl=" << update_ttl;
         }
     }
