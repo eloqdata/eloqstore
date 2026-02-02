@@ -301,15 +301,28 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
     auto *entry = root_meta_mgr_.Find(tbl_ident);
     CHECK(entry != nullptr);
     RootMeta &meta = entry->meta_;
-    if (new_meta.root_id_ == 1002 || new_meta.ttl_root_id_ == 1002)
+    if (new_meta.mapper_ != nullptr)
     {
-        LOG(WARNING) << "UpdateRoot set root_id=1002 for table " << tbl_ident
-                     << " root_id=" << new_meta.root_id_
-                     << " ttl_root_id=" << new_meta.ttl_root_id_
-                     << " mapping_size="
-                     << (new_meta.mapper_
-                             ? new_meta.mapper_->GetMapping()->mapping_tbl_.size()
-                             : 0);
+        const size_t mapping_size =
+            new_meta.mapper_->GetMapping()->mapping_tbl_.size();
+        if ((new_meta.root_id_ != MaxPageId &&
+             static_cast<size_t>(new_meta.root_id_) >= mapping_size) ||
+            (new_meta.ttl_root_id_ != MaxPageId &&
+             static_cast<size_t>(new_meta.ttl_root_id_) >= mapping_size))
+        {
+            LOG(FATAL)
+                << "UpdateRoot out of range for table " << tbl_ident
+                << " root_id=" << new_meta.root_id_
+                << " ttl_root_id=" << new_meta.ttl_root_id_
+                << " mapping_size=" << mapping_size;
+        }
+        if (new_meta.root_id_ == 1002 || new_meta.ttl_root_id_ == 1002)
+        {
+            LOG(WARNING) << "UpdateRoot set root_id=1002 for table "
+                         << tbl_ident << " root_id=" << new_meta.root_id_
+                         << " ttl_root_id=" << new_meta.ttl_root_id_
+                         << " mapping_size=" << mapping_size;
+        }
     }
     meta.root_id_ = new_meta.root_id_;
     meta.ttl_root_id_ = new_meta.ttl_root_id_;

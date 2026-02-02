@@ -398,6 +398,14 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
             cow_meta_.mapper_ ? cow_meta_.mapper_->GetMapping() : nullptr;
         const size_t mapping_size =
             mapping ? mapping->mapping_tbl_.size() : 0;
+        if (root_id != MaxPageId &&
+            static_cast<size_t>(root_id) >= mapping_size)
+        {
+            LOG(FATAL) << "ApplyBatch updated root_id out of range, root_id="
+                       << root_id << " table " << tbl_ident_
+                       << " mapping_size=" << mapping_size
+                       << " update_ttl=" << update_ttl;
+        }
         LOG(WARNING) << "ApplyBatch updated root_id=1002, table " << tbl_ident_
                      << " mapping_size=" << mapping_size
                      << " update_ttl=" << update_ttl;
