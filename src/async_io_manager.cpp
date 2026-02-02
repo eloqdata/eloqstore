@@ -1187,7 +1187,6 @@ int IouringMgr::OpenAt(FdIdx dir_fd,
                        bool fixed_target)
 {
     EvictFD();
-    io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
     open_how how = {.flags = flags, .mode = mode, .resolve = 0};
     if (fixed_target)
     {
@@ -1195,13 +1194,9 @@ int IouringMgr::OpenAt(FdIdx dir_fd,
         if (idx == UINT32_MAX)
         {
             LOG(ERROR) << "register file slot used up";
-            // The SQE won't be submitted, so undo the bookkeeping done in
-            // GetSQE to keep inflight accounting balanced.
-            ThdTask()->inflight_io_--;
-            assert(prepared_sqe_ > 0);
-            prepared_sqe_--;
             return -EMFILE;
         }
+        io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
         io_uring_prep_openat2_direct(sqe, dir_fd.first, path, &how, idx);
         int res = ThdTask()->WaitIoResult();
         if (res < 0)
@@ -1213,6 +1208,7 @@ int IouringMgr::OpenAt(FdIdx dir_fd,
         return static_cast<int>(idx);
     }
 
+    io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
     io_uring_prep_openat2(sqe, dir_fd.first, path, &how);
     int fd = ThdTask()->WaitIoResult();
     if (fd < 0)
@@ -1650,43 +1646,6 @@ bool IouringMgr::HasOtherFile(const TableIdent &tbl_id) const
     }
 
     return false;
-}
-
-int IouringMgr::RegisterFile(int fd)
-{
-    uint32_t idx = AllocRegisterIndex();
-    if (idx == UINT32_MAX)
-    {
-        DLOG(WARNING) << "register file slot used up: " << lru_fd_count_;
-        return -1;
-    }
-    io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
-    io_uring_prep_files_update(sqe, &fd, 1, idx);
-    int res = ThdTask()->WaitIoResult();
-    if (res < 0)
-    {
-        LOG(ERROR) << "failed to register file " << fd << " at " << idx << ": "
-                   << strerror(-res);
-        FreeRegisterIndex(idx);
-        return -1;
-    }
-    return idx;
-}
-
-int IouringMgr::UnregisterFile(int idx)
-{
-    int fd = -1;
-    io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
-    io_uring_prep_files_update(sqe, &fd, 1, idx);
-    int res = ThdTask()->WaitIoResult();
-    if (res < 0)
-    {
-        LOG(ERROR) << "can't unregister file at " << idx << ": "
-                   << strerror(-res);
-    }
-
-    FreeRegisterIndex(idx);
-    return res;
 }
 
 int IouringMgr::Fallocate(FdIdx fd, uint64_t size)
