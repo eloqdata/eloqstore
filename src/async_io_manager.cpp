@@ -1002,7 +1002,7 @@ void IouringMgr::SetFileIdTerm(const TableIdent &tbl_id,
     mapping_ptr->insert_or_assign(file_id, term);
 }
 
-uint16_t IouringMgr::LookupRegisteredBufferIndex(const char *ptr) const
+inline uint16_t IouringMgr::LookupRegisteredBufferIndex(const char *ptr) const
 {
     DCHECK(buffers_registered_);
     DCHECK(ptr != nullptr);
@@ -1470,8 +1470,7 @@ int IouringMgr::Statx(FdIdx fd, const char *path, struct statx *result)
 int IouringMgr::StatxAt(FdIdx dir_fd, const char *path, struct statx *result)
 {
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
-    io_uring_prep_statx(
-        sqe, dir_fd.first, path, 0, STATX_BASIC_STATS, result);
+    io_uring_prep_statx(sqe, dir_fd.first, path, 0, STATX_BASIC_STATS, result);
     return ThdTask()->WaitIoResult();
 }
 
@@ -1507,8 +1506,8 @@ int IouringMgr::CloseDirect(int idx)
     int res = ThdTask()->WaitIoResult();
     if (res < 0)
     {
-        LOG(ERROR) << "close direct file " << idx << " failed: "
-                   << strerror(-res);
+        LOG(ERROR) << "close direct file " << idx
+                   << " failed: " << strerror(-res);
     }
     if (res == 0)
     {
