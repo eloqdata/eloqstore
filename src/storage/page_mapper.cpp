@@ -374,6 +374,9 @@ PageId PageMapper::GetPage()
                               ? mapping_->tbl_ident_->ToString()
                               : "null")
                       << " map_size=" << map.size()
+                      << " mapper=" << static_cast<const void *>(this)
+                      << " mapping="
+                      << static_cast<const void *>(mapping_.Get())
                       << " free_head=" << free_page_head_;
         }
         return ret;
@@ -404,6 +407,9 @@ PageId PageMapper::GetPage()
                               ? mapping_->tbl_ident_->ToString()
                               : "null")
                       << " map_size=" << map.size()
+                      << " mapper=" << static_cast<const void *>(this)
+                      << " mapping="
+                      << static_cast<const void *>(mapping_.Get())
                       << " next_free=" << free_page_head_;
         }
         return free_page;
@@ -438,6 +444,8 @@ void PageMapper::FreePage(PageId page_id, const char *file, int line)
                           ? mapping_->tbl_ident_->ToString()
                           : "null")
                   << " current_at=" << file << ":" << line
+                  << " mapper=" << static_cast<const void *>(this)
+                  << " mapping=" << static_cast<const void *>(mapping_.Get())
                   << " free_head_before=" << free_page_head_
                   << " map_size=" << map.size();
     }
@@ -524,7 +532,9 @@ void PageMapper::UpdateMapping(PageId page_id, FilePageId file_page_id)
                   << (mapping_->tbl_ident_ != nullptr
                           ? mapping_->tbl_ident_->ToString()
                           : "null")
-                  << " map_size=" << map.size();
+                  << " map_size=" << map.size()
+                  << " mapper=" << static_cast<const void *>(this)
+                  << " mapping=" << static_cast<const void *>(mapping_.Get());
     }
     uint64_t val = MappingSnapshot::EncodeFilePageId(file_page_id);
     map.Set(page_id, val);
