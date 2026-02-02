@@ -82,6 +82,19 @@ std::pair<PageId, KvError> BatchWriteTask::Seek(std::string_view key)
         //           << ", current page id " << idx_entry->idx_page_->GetPageId()
         //           << ", got " << page_id;
         CHECK(page_id != MaxPageId);
+        const size_t mapping_size =
+            cow_meta_.mapper_->GetMapping()->mapping_tbl_.size();
+        if (static_cast<size_t>(page_id) >= mapping_size)
+        {
+            LOG(FATAL) << "Seek produced out-of-range page_id=" << page_id
+                       << " mapping_size=" << mapping_size << " table "
+                       << tbl_ident_ << " key=" << key
+                       << " current_idx_page_id="
+                       << idx_entry->idx_page_->GetPageId()
+                       << " current_idx_file_page_id="
+                       << idx_entry->idx_page_->GetFilePageId()
+                       << " idx_page_ptr=" << idx_entry->idx_page_;
+        }
         PageId current_id = idx_entry->idx_page_->GetPageId();
         if (page_id == current_id)
         {

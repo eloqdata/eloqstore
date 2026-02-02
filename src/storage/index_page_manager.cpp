@@ -502,6 +502,19 @@ KvError IndexPageManager::SeekIndex(MappingSnapshot *mapping,
         IndexPageIter idx_it{node, Options()};
         idx_it.Seek(key);
         PageId child_id = idx_it.GetPageId();
+        const size_t mapping_size = mapping->mapping_tbl_.size();
+        if (static_cast<size_t>(child_id) >= mapping_size)
+        {
+            LOG(FATAL) << "SeekIndex produced out-of-range child_id="
+                       << child_id << " mapping_size=" << mapping_size
+                       << " table "
+                       << (mapping->tbl_ident_ != nullptr
+                               ? mapping->tbl_ident_->ToString()
+                               : "null")
+                       << " parent_page_id=" << node->GetPageId()
+                       << " parent_file_page_id=" << node->GetFilePageId()
+                       << " parent_ptr=" << node;
+        }
 
         if (node->IsPointingToLeaf())
         {
