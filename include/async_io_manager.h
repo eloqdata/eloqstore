@@ -440,8 +440,6 @@ public:
     int Rename(FdIdx dir_fd, const char *old_path, const char *new_path);
     int Close(int fd);
     int CloseDirect(int idx);
-    int RegisterFile(int fd);
-    int UnregisterFile(int idx);
     int Fallocate(FdIdx fd, uint64_t size);
     int UnlinkAt(FdIdx dir_fd, const char *path, bool rmdir);
     /**
