@@ -52,14 +52,22 @@ KvError BatchWriteTask::SeekStack(std::string_view search_key)
             }
             else
             {
-                auto [_, err] = Pop();
+                auto [page, err] = Pop();
                 CHECK_KV_ERR(err);
+                if (page != nullptr)
+                {
+                    page->Unpin();
+                }
             }
         }
         else
         {
-            auto [_, err] = Pop();
+            auto [page, err] = Pop();
             CHECK_KV_ERR(err);
+            if (page != nullptr)
+            {
+                page->Unpin();
+            }
         }
     }
     return KvError::NoError;
@@ -756,10 +764,6 @@ std::pair<MemIndexPage *, KvError> BatchWriteTask::Pop()
     if (stack_entry->changes_.empty())
     {
         MemIndexPage *page = stack_entry->idx_page_;
-        if (page != nullptr)
-        {
-            page->Unpin();
-        }
         stack_.pop_back();
         return {page, KvError::NoError};
     }
