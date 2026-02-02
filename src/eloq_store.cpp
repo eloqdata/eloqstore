@@ -115,13 +115,15 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
                          << "file, bumping to " << opts.local_space_limit;
         }
 
-        if (opts.fd_limit > max_fd_limit)
+        size_t count_used_fd = utils::CountUsedFD();
+        if (opts.fd_limit > max_fd_limit + num_reserved_fd + count_used_fd)
         {
             LOG(WARNING) << "fd_limit * data_page_size * (1 << "
                             "pages_per_file_shift) exceeds local_space_limit, "
                          << "clamping fd_limit from " << opts.fd_limit << " to "
-                         << max_fd_limit;
-            opts.fd_limit = static_cast<uint32_t>(max_fd_limit);
+                         << max_fd_limit + num_reserved_fd + count_used_fd;
+            opts.fd_limit = static_cast<uint32_t>(max_fd_limit) +
+                            num_reserved_fd + count_used_fd;
         }
     }
     else if (opts.prewarm_cloud_cache)

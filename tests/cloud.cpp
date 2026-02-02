@@ -1015,7 +1015,6 @@ TEST_CASE("cloud store cached file LRU", "[cloud]")
 {
     eloqstore::KvOptions options = cloud_options;
     options.manifest_limit = 8 << 10;
-    options.fd_limit = 2;
     options.local_space_limit = 2 << 20;
     options.num_retained_archives = 1;
     options.archive_interval_secs = 3;
