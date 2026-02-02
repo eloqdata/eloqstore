@@ -1195,6 +1195,11 @@ int IouringMgr::OpenAt(FdIdx dir_fd,
         if (idx == UINT32_MAX)
         {
             LOG(ERROR) << "register file slot used up";
+            // The SQE won't be submitted, so undo the bookkeeping done in
+            // GetSQE to keep inflight accounting balanced.
+            ThdTask()->inflight_io_--;
+            assert(prepared_sqe_ > 0);
+            prepared_sqe_--;
             return -EMFILE;
         }
         io_uring_prep_openat2_direct(sqe, dir_fd.first, path, &how, idx);
