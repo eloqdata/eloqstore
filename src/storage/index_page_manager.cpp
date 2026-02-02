@@ -316,13 +316,6 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
                 << " ttl_root_id=" << new_meta.ttl_root_id_
                 << " mapping_size=" << mapping_size;
         }
-        if (new_meta.root_id_ == 1002 || new_meta.ttl_root_id_ == 1002)
-        {
-            LOG(WARNING) << "UpdateRoot set root_id=1002 for table "
-                         << tbl_ident << " root_id=" << new_meta.root_id_
-                         << " ttl_root_id=" << new_meta.ttl_root_id_
-                         << " mapping_size=" << mapping_size;
-        }
     }
     meta.root_id_ = new_meta.root_id_;
     meta.ttl_root_id_ = new_meta.ttl_root_id_;

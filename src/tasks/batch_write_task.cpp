@@ -392,7 +392,6 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
         YieldToLowPQ();
     }
     root_id = new_root == nullptr ? MaxPageId : new_root->GetPageId();
-    if (root_id == 1002)
     {
         auto *mapping =
             cow_meta_.mapper_ ? cow_meta_.mapper_->GetMapping() : nullptr;
@@ -406,9 +405,6 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
                        << " mapping_size=" << mapping_size
                        << " update_ttl=" << update_ttl;
         }
-        LOG(WARNING) << "ApplyBatch updated root_id=1002, table " << tbl_ident_
-                     << " mapping_size=" << mapping_size
-                     << " update_ttl=" << update_ttl;
     }
 
     return KvError::NoError;
