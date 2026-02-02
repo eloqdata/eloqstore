@@ -148,6 +148,10 @@ pub struct EloqStore {
     pub(crate) ptr: CEloqStoreHandle,
 }
 
+// EloqStore 是线程安全的（C++ 实现支持多线程并发访问）
+unsafe impl Send for EloqStore {}
+unsafe impl Sync for EloqStore {}
+
 impl EloqStore {
     pub fn new(opts: &Options) -> Result<Self, KvError> {
         let ptr = unsafe { eloqstore_sys::CEloqStore_Create(opts.as_ptr()) };

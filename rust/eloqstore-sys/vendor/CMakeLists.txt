@@ -12,18 +12,18 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 option(BUILD_FOR_RUST "Whether to build for Rust FFI" OFF)
-option(STATIC_ALL_DEPS "Static link all dependencies into combined .so" OFF)
 if (BUILD_FOR_RUST)
     set(WITH_UNIT_TESTS OFF)
     set(WITH_EXAMPLE OFF)
     set(WITH_DB_STRESS OFF)
     set(WITH_BENCHMARK OFF)
     message(STATUS "Building for Rust FFI - disabled unnecessary targets")
-    # Enable static linking by default for Rust FFI
+    # Default STATIC_ALL_DEPS to ON for Rust FFI if not explicitly set
     if (NOT DEFINED STATIC_ALL_DEPS)
         set(STATIC_ALL_DEPS ON)
     endif()
 endif()
+option(STATIC_ALL_DEPS "Static link all dependencies into combined .so" OFF)
 
 if (STATIC_ALL_DEPS)
     message(STATUS "Static linking all dependencies into combined library")

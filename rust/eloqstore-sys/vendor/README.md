@@ -29,9 +29,9 @@ vendor/
 
 ### Modify Core Business Code
 Modify directly in **repository root**, no need to sync to vendor:
-- Modify `/src/*.cpp` → vendor automatically生效 (soft link)
-- Modify `/include/*.h` → vendor automatically生效 (soft link)
-- Modify `/external/*` → vendor automatically生效 (soft link)
+- Modify `/src/*.cpp` → vendor automatically (soft link)
+- Modify `/include/*.h` → vendor automatically (soft link)
+- Modify `/external/*` → vendor automatically (soft link)
 
 ### Modify FFI-Specific Code
 Modify in `vendor/ffi/` directory:
