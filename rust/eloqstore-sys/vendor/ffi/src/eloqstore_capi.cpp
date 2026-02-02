@@ -11,7 +11,14 @@
 #include "kv_options.h"
 #include "types.h"
 
-using namespace eloqstore;
+using eloqstore::BatchWriteRequest;
+using eloqstore::EloqStore;
+using eloqstore::FloorRequest;
+using eloqstore::KvError;
+using eloqstore::KvOptions;
+using eloqstore::ReadRequest;
+using eloqstore::ScanRequest;
+using eloqstore::TableIdentifier;
 
 // ============================================================
 // Thread-local storage for error messages
@@ -80,6 +87,10 @@ static CEloqStoreStatus kv_error_to_c(KvError err)
         return CEloqStoreStatus_CloudErr;
     case KvError::IoFail:
         return CEloqStoreStatus_IoFail;
+    case KvError::ExpiredTerm:
+        return CEloqStoreStatus_ExpiredTerm;
+    case KvError::CloudNoManifest:
+        return CEloqStoreStatus_CloudNoManifest;
     default:
         return CEloqStoreStatus_InvalidArgs;
     }
@@ -1049,5 +1060,4 @@ extern "C"
             result->found = false;
         }
     }
-
 }  // extern "C"

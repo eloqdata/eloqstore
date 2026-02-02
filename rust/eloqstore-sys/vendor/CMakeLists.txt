@@ -614,7 +614,6 @@ set(ABSL_LIBS_FOR_RUST
     absl::bind_front
     absl::overload
     absl::low_level_alloc
-    absl::throw_delegate
     absl::exponential_biased
     absl::periodic_sampler
     absl::profile_builder
@@ -633,8 +632,6 @@ set(ABSL_LIBS_FOR_RUST
     absl::cord_rep_btree
     absl::cord_rep_flat
     absl::cord_rep_consume
-    absl::cordz_handle
-    absl::int128
     absl::low_level_scheduling
     absl::thread_identity
     absl::thread_annotations

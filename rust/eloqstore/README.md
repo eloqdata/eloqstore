@@ -164,7 +164,7 @@ opts.set_buffer_pool_size(1024 * 1024 * 256); // 256MB
 opts.set_data_page_size(4096);
 
 // Add store paths
-opts.add_store_path("/path/to/data");
+opts.add_store_path("/path/to/data")?;
 
 // Enable data append mode
 opts.set_data_append_mode(true);

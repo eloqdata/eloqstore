@@ -32,22 +32,21 @@ impl Request for ReadRequest {
             match status {
                 eloqstore_sys::CEloqStoreStatus::Ok if result.found => {
                     let value = std::slice::from_raw_parts(result.value, result.value_len).to_vec();
+                    // Save timestamp and expire_ts before freeing the result
+                    let timestamp = result.timestamp;
+                    let expire_ts = result.expire_ts;
                     eloqstore_sys::CEloqStore_FreeGetResult(&mut result);
                     Ok(ReadResponse {
                         value,
-                        timestamp: result.timestamp,
-                        expire_ts: result.expire_ts,
+                        timestamp,
+                        expire_ts,
                     })
                 }
                 eloqstore_sys::CEloqStoreStatus::Ok => {
                     if !result.value.is_null() {
                         eloqstore_sys::CEloqStore_FreeGetResult(&mut result);
                     }
-                    Ok(ReadResponse {
-                        value: vec![],
-                        timestamp: 0,
-                        expire_ts: 0,
-                    })
+                    Err(KvError::NotFound)
                 }
                 _ => Err(status.into()),
             }
@@ -88,12 +87,15 @@ impl Request for FloorRequest {
                 eloqstore_sys::CEloqStoreStatus::Ok if result.found => {
                     let key = std::slice::from_raw_parts(result.key, result.key_len).to_vec();
                     let value = std::slice::from_raw_parts(result.value, result.value_len).to_vec();
+                    // Save timestamp and expire_ts before freeing the result
+                    let timestamp = result.timestamp;
+                    let expire_ts = result.expire_ts;
                     eloqstore_sys::CEloqStore_FreeFloorResult(&mut result);
                     Ok(FloorResponse {
                         key,
                         value,
-                        timestamp: result.timestamp,
-                        expire_ts: result.expire_ts,
+                        timestamp,
+                        expire_ts,
                     })
                 }
                 eloqstore_sys::CEloqStoreStatus::Ok => Err(KvError::NotFound),
@@ -188,10 +190,12 @@ impl Request for ScanRequest {
                             expire_ts: e.expire_ts,
                         });
                     }
+                    // Save has_more before freeing the result
+                    let has_more = result.has_more;
                     eloqstore_sys::CEloqStore_FreeScanResult(&mut result);
                     ScanResponse {
                         entries,
-                        has_more: result.has_more,
+                        has_more,
                     }
                 }
                 _ => {

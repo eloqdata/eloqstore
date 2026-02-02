@@ -11,12 +11,11 @@ vendor/
 ├── src -> ../../../src            # Soft link: C++ core source code
 ├── include -> ../../../include    # Soft link: C++ header files
 ├── ffi/                           # FFI dedicated files (only 2 files)
-│   ├── src/
-│   │   └── eloqstore_capi.cpp    # Rust FFI C API implementation
-│   └── include/
-│       └── eloqstore_capi.h      # Rust FFI C API header file
-└── tools/                         # Tools (optional)
-    └── page_checksum_tool.cpp
+    ├── src/
+    │   └── eloqstore_capi.cpp    # Rust FFI C API implementation
+    └── include/
+        └── eloqstore_capi.h      # Rust FFI C API header file
+
 ```
 
 ## Design Principles

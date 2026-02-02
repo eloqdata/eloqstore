@@ -28,7 +28,7 @@ fn main() -> Result<(), eloqstore::KvError> {
     println!("1. Configuring EloqStore...");
     let mut opts = Options::new()?;
     opts.set_num_threads(1);
-    opts.add_store_path("tmp/eloqstore_example");
+    opts.add_store_path("tmp/eloqstore_example")?;
     println!("   ✓ Store path: tmp/eloqstore_example\n");
 
     // ============================================================

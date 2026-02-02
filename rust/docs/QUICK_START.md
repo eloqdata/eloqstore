@@ -94,7 +94,7 @@ fn main() -> Result<(), eloqstore::KvError> {
     // 1) Configure
     let mut opts = Options::new()?;
     opts.set_num_threads(1);
-    opts.add_store_path("/tmp/eloqstore_demo");
+    opts.add_store_path("/tmp/eloqstore_demo")?;
 
     // 2) Start store
     let mut store = EloqStore::new(&opts)?;
@@ -120,6 +120,34 @@ Build and run:
 ```bash
 cargo run
 ```
+
+## Building Static Executables (Optional)
+
+For self-contained executables that don't require `libeloqstore_combine.so` at runtime, use static linking:
+
+```bash
+# Build a static executable
+export ELOQSTORE_STATIC_EXE=1
+cargo build --release --example basic_usage
+
+# Verify it doesn't depend on .so
+ldd target/release/examples/basic_usage | grep eloqstore
+# Should show nothing
+
+# Run it - no .so file needed!
+./target/release/examples/basic_usage
+```
+
+**Note**: Static executables still require some system dynamic libraries (libc, libpthread, libzstd, etc.), but these are standard libraries available in our [CI Docker image](https://hub.docker.com/r/eloqdata/eloq-dev-ci-ubuntu2404) or any modern Linux distribution.
+
+**When to use static linking**:
+- Single-process deployments
+- Quick and stable deployment
+- When you want a self-contained executable
+
+**When to use dynamic linking**:
+- Multiple processes on the same device (saves memory)
+- Smaller executable size is important
 
 ## Run the SDK smoke test (optional)
 

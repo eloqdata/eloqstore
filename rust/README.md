@@ -20,9 +20,7 @@ This repository is a Cargo workspace with:
 ### Documentation (index)
 
 - **API overview & examples**: [docs/API.md](docs/API.md)
-- **C API design notes**: [docs/C_API_DESIGN.md](docs/C_API_DESIGN.md)
 - **Linking model & troubleshooting**: [docs/LINKING.md](docs/LINKING.md)
-- **Static executable (no .so needed)**: [docs/STATIC_EXECUTABLE.md](docs/STATIC_EXECUTABLE.md)
 
 ## Quick example
 
@@ -41,7 +39,7 @@ use eloqstore::{EloqStore, Options, TableIdentifier};
 fn main() -> Result<(), eloqstore::KvError> {
     let mut opts = Options::new()?;
     opts.set_num_threads(1);
-    opts.add_store_path("tmp/eloqstore_demo");
+    opts.add_store_path("tmp/eloqstore_demo")?;
 
     let mut store = EloqStore::new(&opts)?;
     store.start()?;
@@ -84,20 +82,63 @@ After building, executables are located at:
 
 ### Static vs Dynamic Linking
 
-**Dynamic linking (default)**:
+#### Dynamic Linking (Default)
+
+**How it works**:
 - Requires `libeloqstore_combine.so` to be available at runtime
+- The dynamic linker (ld.so) loads the `.so` file before your program's `main()` runs
+- The `.so` file must exist as a **separate file** on the filesystem
+
+**Characteristics**:
 - Smaller executable size
 - Better for multi-process scenarios (shared .so in memory)
 - Use: `cargo build --example basic_usage`
 - **Deployment**: Place `libeloqstore_combine.so` in a standard library path (e.g., `/usr/local/lib`) or set `LD_LIBRARY_PATH`
 
-**Static linking (recommended for single-process deployment)**:
+#### Static Linking (Recommended for Self-Contained Executables)
+
+**How it works**:
+- Link all dependencies **statically** into the executable
+- No external `.so` files needed
+- Link `libeloqstore.a` (static library) directly into the executable
+- Link all Abseil libraries and system dependencies statically
+
+**How to enable**:
+```bash
+export ELOQSTORE_STATIC_EXE=1
+cargo build --release --example basic_usage
+```
+
+**Characteristics**:
 - Most dependencies baked into the executable
 - No `libeloqstore_combine.so` needed
-- **Note**: Still requires some system dynamic libraries (libc, libpthread, etc.) - these are available in our [CI Docker image](https://hub.docker.com/r/eloqdata/eloq-dev-ci-ubuntu2404)
+- **Note**: Still requires some system dynamic libraries (libc, libpthread, libzstd, etc.) - these are standard system libraries available in our [CI Docker image](https://hub.docker.com/r/eloqdata/eloq-dev-ci-ubuntu2404) or any modern Linux distribution
 - Larger executable size (~30-50MB)
-- Use: `ELOQSTORE_STATIC_EXE=1 cargo build --release --example basic_usage`
+- Longer link time
 - **Best for**: Single-process deployments, quick and stable deployment
+
+**Verify it's static**:
+```bash
+# Check that eloqstore_combine.so is NOT a dependency
+ldd target/release/examples/basic_usage | grep eloqstore
+# Should show nothing (or "not a dynamic executable")
+
+# Test: remove .so and verify it still works
+mv target/release/libeloqstore_combine.so target/release/libeloqstore_combine.so.bak
+./target/release/examples/basic_usage  # Should still work!
+mv target/release/libeloqstore_combine.so.bak target/release/libeloqstore_combine.so
+```
+
+**Trade-offs**:
+- ✅ **Pros**: No `libeloqstore_combine.so` needed, easier single-process deployment, more stable
+- ❌ **Cons**: Larger executable size (~30-50MB), longer link time, still needs system libs
+- ⚠️ **Multi-process scenario**: If running multiple eloqstore processes, dynamic linking is more memory-efficient (shared .so in memory)
+
+**Why .so can't be "embedded"**:
+- Dynamic libraries (.so) must be loaded by the system's dynamic linker (ld.so)
+- The dynamic linker runs **before** your `main()` function
+- It needs the .so as a **separate file** on the filesystem
+- You **cannot** embed a .so "inside" an executable in a way that the dynamic linker can use it directly
 
 **Recommendation**:
 - **Single process, quick deployment**: Use static linking (`ELOQSTORE_STATIC_EXE=1`)

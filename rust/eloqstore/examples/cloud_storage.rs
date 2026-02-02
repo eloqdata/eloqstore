@@ -2,6 +2,8 @@
 //!
 //! This example demonstrates how to configure and use EloqStore with
 //! S3-compatible cloud storage as the primary storage backend.
+//!
+//! Run with: `cargo run --example cloud_storage`
 
 use eloqstore::{EloqStore, Options, TableIdentifier};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -26,15 +28,15 @@ fn main() -> Result<(), eloqstore::KvError> {
 
     // Basic configuration
     opts.set_num_threads(4);
-    opts.add_store_path("/tmp/eloqstore_cloud_cache");
+    opts.add_store_path("/tmp/eloqstore_cloud_cache").expect("Failed to add store path");
     opts.set_data_append_mode(true); // Required for cloud storage
     opts.set_enable_compression(true);
 
     // Cloud storage configuration
-    opts.set_cloud_store_path("eloqstore/example_bucket");
-    opts.set_cloud_provider("aws");
-    opts.set_cloud_region("us-east-1");
-    opts.set_cloud_credentials("minioadmin", "minioadmin");
+    opts.set_cloud_store_path("eloqstore/example_bucket").expect("Failed to set cloud store path");
+    opts.set_cloud_provider("aws").expect("Failed to set cloud provider");
+    opts.set_cloud_region("us-east-1").expect("Failed to set cloud region");
+    opts.set_cloud_credentials("minioadmin", "minioadmin").expect("Failed to set cloud credentials");
     opts.set_cloud_verify_ssl(false);
 
     // Note: The following cloud options are not yet exposed in the C API:
@@ -144,27 +146,4 @@ fn main() -> Result<(), eloqstore::KvError> {
     println!("3. Update cloud_store_path to 'eloqstore/test-bucket'");
 
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_cloud_options_creation() {
-        // Test that cloud options can be created without errors
-        let mut opts = Options::new().unwrap();
-
-        // Set cloud configuration
-        opts.set_cloud_store_path("test-bucket/test-prefix");
-        opts.set_cloud_provider("aws");
-        opts.set_cloud_region("us-west-2");
-        opts.set_cloud_credentials("test-key", "test-secret");
-        opts.set_cloud_verify_ssl(true);
-
-        // Options should be valid (even without actual cloud connection)
-        // Note: validate() may fail without proper cloud configuration
-        // but the options struct should be created successfully
-        assert!(true, "Cloud options created successfully");
-    }
 }

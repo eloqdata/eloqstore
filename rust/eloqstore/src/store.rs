@@ -21,7 +21,7 @@ impl Options {
     }
 
     pub fn set_num_threads(&mut self, n: u32) {
-        unsafe { eloqstore_sys::CEloqStore_Options_SetNumThreads(self.ptr, n) }
+        unsafe { eloqstore_sys::CEloqStore_Options_SetNumThreads(self.ptr, n as u16) }
     }
 
     pub fn set_buffer_pool_size(&mut self, size: u64) {
@@ -29,12 +29,14 @@ impl Options {
     }
 
     pub fn set_data_page_size(&mut self, size: u32) {
-        unsafe { eloqstore_sys::CEloqStore_Options_SetDataPageSize(self.ptr, size) }
+        unsafe { eloqstore_sys::CEloqStore_Options_SetDataPageSize(self.ptr, size as u16) }
     }
 
-    pub fn add_store_path<P: AsRef<Path>>(&mut self, path: P) {
-        let path = CString::new(path.as_ref().to_string_lossy().as_bytes()).unwrap();
+    pub fn add_store_path<P: AsRef<Path>>(&mut self, path: P) -> Result<(), KvError> {
+        let path = CString::new(path.as_ref().to_string_lossy().as_bytes())
+            .map_err(|_| KvError::InvalidArgs)?;
         unsafe { eloqstore_sys::CEloqStore_Options_AddStorePath(self.ptr, path.as_ptr()) }
+        Ok(())
     }
 
     pub fn set_data_append_mode(&mut self, enable: bool) {
@@ -45,24 +47,44 @@ impl Options {
         unsafe { eloqstore_sys::CEloqStore_Options_SetEnableCompression(self.ptr, enable) }
     }
 
-    pub fn set_cloud_store_path(&mut self, path: &str) {
-        let path = CString::new(path).unwrap();
+    pub fn set_cloud_store_path(&mut self, path: &str) -> Result<(), KvError> {
+        // CString is created here and passed to C API. The C++ code copies the string
+        // into a std::string, so it's safe for the CString to be dropped when this
+        // method returns.
+        let path = CString::new(path)
+            .map_err(|_| KvError::InvalidArgs)?;
         unsafe { eloqstore_sys::CEloqStore_Options_SetCloudStorePath(self.ptr, path.as_ptr()) }
+        Ok(())
     }
 
-    pub fn set_cloud_provider(&mut self, provider: &str) {
-        let provider = CString::new(provider).unwrap();
+    pub fn set_cloud_provider(&mut self, provider: &str) -> Result<(), KvError> {
+        // CString is created here and passed to C API. The C++ code copies the string
+        // into a std::string, so it's safe for the CString to be dropped when this
+        // method returns.
+        let provider = CString::new(provider)
+            .map_err(|_| KvError::InvalidArgs)?;
         unsafe { eloqstore_sys::CEloqStore_Options_SetCloudProvider(self.ptr, provider.as_ptr()) }
+        Ok(())
     }
 
-    pub fn set_cloud_region(&mut self, region: &str) {
-        let region = CString::new(region).unwrap();
+    pub fn set_cloud_region(&mut self, region: &str) -> Result<(), KvError> {
+        // CString is created here and passed to C API. The C++ code copies the string
+        // into a std::string, so it's safe for the CString to be dropped when this
+        // method returns.
+        let region = CString::new(region)
+            .map_err(|_| KvError::InvalidArgs)?;
         unsafe { eloqstore_sys::CEloqStore_Options_SetCloudRegion(self.ptr, region.as_ptr()) }
+        Ok(())
     }
 
-    pub fn set_cloud_credentials(&mut self, access_key: &str, secret_key: &str) {
-        let access_key = CString::new(access_key).unwrap();
-        let secret_key = CString::new(secret_key).unwrap();
+    pub fn set_cloud_credentials(&mut self, access_key: &str, secret_key: &str) -> Result<(), KvError> {
+        // CString is created here and passed to C API. The C++ code copies the strings
+        // into std::string objects, so it's safe for the CStrings to be dropped when
+        // this method returns.
+        let access_key = CString::new(access_key)
+            .map_err(|_| KvError::InvalidArgs)?;
+        let secret_key = CString::new(secret_key)
+            .map_err(|_| KvError::InvalidArgs)?;
         unsafe {
             eloqstore_sys::CEloqStore_Options_SetCloudCredentials(
                 self.ptr,
@@ -70,6 +92,7 @@ impl Options {
                 secret_key.as_ptr(),
             )
         }
+        Ok(())
     }
 
     pub fn set_cloud_verify_ssl(&mut self, verify: bool) {
@@ -100,7 +123,8 @@ pub struct TableIdentifier {
 
 impl TableIdentifier {
     pub fn new(name: &str, partition_id: u32) -> Result<Self, KvError> {
-        let name = CString::new(name).unwrap();
+        let name = CString::new(name)
+            .map_err(|_| KvError::InvalidArgs)?;
         let ptr =
             unsafe { eloqstore_sys::CEloqStore_TableIdent_Create(name.as_ptr(), partition_id) };
         if ptr.is_null() {
@@ -148,7 +172,6 @@ pub struct EloqStore {
     pub(crate) ptr: CEloqStoreHandle,
 }
 
-// EloqStore 是线程安全的（C++ 实现支持多线程并发访问）
 unsafe impl Send for EloqStore {}
 unsafe impl Sync for EloqStore {}
 
@@ -187,11 +210,10 @@ impl EloqStore {
 
     pub fn get(&self, tbl: &TableIdentifier, key: &[u8]) -> Result<Option<Vec<u8>>, KvError> {
         let req = crate::ReadRequest::new(tbl.clone(), key);
-        let resp = self.exec_sync(req)?;
-        if resp.value.is_empty() {
-            Ok(None)
-        } else {
-            Ok(Some(resp.value))
+        match self.exec_sync(req) {
+            Ok(resp) => Ok(Some(resp.value)),
+            Err(KvError::NotFound) => Ok(None),
+            Err(e) => Err(e),
         }
     }
 

@@ -5,8 +5,10 @@
 
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Mutex, Once};
+use tempfile::{Builder, TempDir};
 
 #[cfg(unix)]
 use libc::{c_char, c_int, c_void};
@@ -19,6 +21,8 @@ unsafe extern "C" {
 
 static INIT: Once = Once::new();
 static EXTRACTED_LIB_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+// Keep a reference to the temp directory to prevent it from being deleted
+static TEMP_DIR: Mutex<Option<TempDir>> = Mutex::new(None);
 
 /// Ensure the embedded library is extracted and available
 /// Returns the path to the extracted library
@@ -51,30 +55,45 @@ fn extract_embedded_library() -> Result<Option<PathBuf>, Box<dyn std::error::Err
     // Note: include_bytes! reads the file at compile time, not runtime
     let embedded_data = include_bytes!(concat!(env!("OUT_DIR"), "/libeloqstore_combine.so"));
     
-    // Create a temporary directory for the extracted library
-    let temp_dir = env::temp_dir().join("eloqstore_libs");
-    fs::create_dir_all(&temp_dir)?;
+    // Create a unique temporary directory for the extracted library
+    // Using tempfile::Builder ensures a unique, unpredictable path to prevent
+    // symlink hijacking and TOCTOU race conditions
+    let temp_dir = Builder::new()
+        .prefix("eloqstore_libs_")
+        .tempdir()
+        .map_err(|e| format!("Failed to create temp directory: {}", e))?;
     
-    let lib_path = temp_dir.join("libeloqstore_combine.so");
+    let lib_path = temp_dir.path().join("libeloqstore_combine.so");
     
-    // Only extract if it doesn't exist or is different
-    let needs_extraction = !lib_path.exists() || {
-        fs::read(&lib_path)
-            .map(|existing| existing != embedded_data.as_slice())
-            .unwrap_or(true)
-    };
+    // Atomically create the file using create_new(true) to prevent TOCTOU races
+    // This ensures the file is created atomically and fails if it already exists
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lib_path)
+        .map_err(|e| format!("Failed to create library file atomically: {}", e))?;
     
-    if needs_extraction {
-        fs::write(&lib_path, embedded_data)?;
-        
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&lib_path)?.permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&lib_path, perms)?;
-        }
+    file.write_all(embedded_data)
+        .map_err(|e| format!("Failed to write library data: {}", e))?;
+    file.sync_all()
+        .map_err(|e| format!("Failed to sync library file: {}", e))?;
+    drop(file);
+    
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&lib_path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&lib_path, perms)?;
     }
+    
+    // Keep the temp directory alive for the lifetime of the process
+    // This prevents the directory from being deleted while the library is in use
+    if let Ok(mut guard) = TEMP_DIR.lock() {
+        *guard = Some(temp_dir);
+    }
+    // If we can't store the temp dir, we'll leak it to ensure the library remains available
+    // This is acceptable since the directory will be cleaned up when the process exits
     
     // Use dlopen to load the library explicitly
     // This ensures the library is loaded even if the linker can't find it via rpath

@@ -479,7 +479,7 @@ fn simple_bench() {
 
     let mut opts = Options::new().expect("options");
     opts.set_num_threads(partitions.max(1));
-    opts.add_store_path(path.as_ref());
+    opts.add_store_path(path.as_ref()).expect("Failed to add store path");
     let mut store = EloqStore::new(&opts).expect("store");
     store.start().expect("start");
 

@@ -1,27 +1,28 @@
-# EloqStore Linking Library Issue Analysis
+# EloqStore Linking and Dependency Management
 
-## 1. Background
+## Overview
 
-EloqStore is an embedded key-value database written in C++, which exposes a Rust interface via Rust FFI.
+EloqStore is an embedded key-value database written in C++, which exposes a Rust interface via Rust FFI. This document explains how dependencies are linked and managed in the build process.
 
-**Core challenge**:
-The C++ project depends on multiple third-party libraries. The key problem is how to correctly link these libraries within Rust’s build system.
+**Core challenge**: The C++ project depends on multiple third-party libraries. The key problem is how to correctly link these libraries within Rust's build system.
 
 ---
 
-## 1.1 Update: Combined Shared Library Mode (Current)
+## Current Approach: Combined Shared Library
 
-To address the problems of “requiring end users to install many shared libraries themselves”, version drift, and security concerns, `eloqstore-sys` now prefers a **combined shared library** approach:
+To address the problems of "requiring end users to install many shared libraries themselves", version drift, and security concerns, `eloqstore-sys` now prefers a **combined shared library** approach:
 
 - **CMake** builds `libeloqstore_combine.so`
 - It tries to **statically link** as many third-party dependencies as possible into this `.so` (to reduce runtime external dependencies)
 - **Rust** only links `eloqstore_combine` (plus a small set of system libraries)
 
-If building the combined library fails, it falls back to the legacy mode: `libeloqstore.a` + Rust explicitly links a list of dependency libraries (see below).
+If building the combined library fails, it falls back to the legacy mode: `libeloqstore.a` + Rust explicitly links a list of dependency libraries.
 
-## 2. Dependency Analysis
+---
 
-### 2.1 Project Structure
+## Dependency Analysis
+
+### Project Structure
 
 ```
 rust-eloqstore/
@@ -37,7 +38,7 @@ rust-eloqstore/
 │           └── inih/            # 308KB - INI file parser
 ```
 
-### 2.2 Dependency List
+### Dependency List
 
 | Library             | Size           | Purpose                                          | Required                       |
 | ------------------- | -------------- | ------------------------------------------------ | ------------------------------ |
@@ -50,16 +51,16 @@ rust-eloqstore/
 
 ---
 
-## 3. Linking Strategy
+## Linking Strategy
 
-### 3.1 Combined Shared Library (Recommended)
+### Combined Shared Library (Recommended)
 
-The current implementation moves as much of the “dependency discovery / link-order complexity” as possible into CMake, so Rust only links a single combined library:
+The current implementation moves as much of the "dependency discovery / link-order complexity" as possible into CMake, so Rust only links a single combined library:
 
 - **CMake (`eloqstore-sys/vendor/CMakeLists.txt`)**
   - With `BUILD_FOR_RUST=ON` and `STATIC_ALL_DEPS=ON`, it builds `eloqstore_combine` (shared) → `libeloqstore_combine.so`
   - For `glog/jsoncpp`: if the system only provides library files (e.g. `libglog.a`) but no CMake package target (like `glog::glog`), an IMPORTED target is created as a fallback
-  - For `zstd`: if the system static library `libzstd.a` is not built with `-fPIC`, it prefers the dynamic library `libzstd.so*` (see 5.4)
+  - For `zstd`: if the system static library `libzstd.a` is not built with `-fPIC`, it prefers the dynamic library `libzstd.so*` (see Troubleshooting section)
 
 - **Rust (`eloqstore-sys/build.rs`)**
   - Runs CMake with `STATIC_ALL_DEPS=ON`
@@ -75,11 +76,11 @@ println!("cargo:rustc-link-lib=stdc++");
 println!("cargo:rustc-link-lib=zstd");
 ```
 
-### 3.2 Static Linking vs Dynamic Linking (Legacy / Fallback)
+### Static Linking vs Dynamic Linking (Legacy / Fallback)
 
 If `libeloqstore_combine.so` cannot be built, we fall back to the legacy mode: build `libeloqstore.a`, and Rust explicitly links Abseil / system dependencies (more sensitive to link order).
 
-### 3.2 Build Pipeline
+### Build Pipeline
 
 ```
 cargo build
@@ -92,16 +93,14 @@ build.rs executes
 4. Rust linker produces final artifact
 ```
 
-### 3.3 Link Order Issues
+### Link Order Issues
 
-**Problem**:
-The linker is sensitive to library order.
+**Problem**: The linker is sensitive to library order.
 
-**Solution**:
-In the primary path (combined shared library), link-order issues are mostly handled **inside CMake**, and Rust no longer needs to manually list many `cargo:rustc-link-lib` entries. In the fallback path, explicit ordering may still be needed.
+**Solution**: In the primary path (combined shared library), link-order issues are mostly handled **inside CMake**, and Rust no longer needs to manually list many `cargo:rustc-link-lib` entries. In the fallback path, explicit ordering may still be needed.
 
 ```rust
-// build.rs
+// build.rs (fallback mode)
 fn main() {
     // Link in dependency order
     // First: Abseil (lowest-level dependencies)
@@ -121,18 +120,165 @@ fn main() {
 
 ---
 
-## 4. External Dependency Handling
+## Static Linking Dependencies into `libeloqstore_combine.so`
 
-### 4.1 System Dependencies (CMake Find / Imported Targets)
+### Overview
+
+With `STATIC_ALL_DEPS` enabled, CMake will:
+
+1. Prefer static variants (`.a`) of dependencies when possible
+2. Build a combined shared library `libeloqstore_combine.so`
+3. Let Rust `build.rs` detect and link the combined library automatically
+
+**Important Note**: When building a shared library, any static libraries linked into it **must be compiled with `-fPIC`**. Some system-provided static libraries (notably `libzstd.a` on some distros) may not be PIC, in which case we fall back to using the corresponding `.so` for that dependency.
+
+### Usage
+
+#### 1) Ensure required libraries are installed
+
+Ideally, your system should provide static libraries (`.a`) for:
+
+- glog (`libglog.a`)
+- jsoncpp (`libjsoncpp.a`)
+- curl (`libcurl.a`)
+- liburing (`liburing.a`)
+- boost_context (`libboost_context.a`)
+- AWS SDK (e.g. `libaws-cpp-sdk-s3.a`, `libaws-cpp-sdk-core.a`, …)
+
+For `zstd`, you have two options:
+
+- **Recommended**: provide the dynamic library (`libzstd.so*`) and let the combined library depend on it
+- **Fully static**: rebuild `libzstd.a` with `-fPIC`
+
+#### 2) Build
+
+Just build the Rust crate as usual:
+
+```bash
+cd rust-eloqstore/eloqstore-sys
+cargo build
+```
+
+`build.rs` will:
+
+- Configure CMake with `STATIC_ALL_DEPS=ON`
+- Build `libeloqstore_combine.so`
+- Link against the combined library rather than individually listing every dependency in Rust
+
+#### 3) Verify
+
+After the build, inspect the produced shared library:
+
+```bash
+# Locate the library (path may vary by profile)
+ls -lh target/**/build/**/out/build/libeloqstore_combine.so
+
+# Inspect runtime dependencies (ideally only a small set of system libs + maybe libzstd.so)
+ldd target/**/build/**/out/build/libeloqstore_combine.so
+```
+
+---
+
+## Building Dependencies from Source (Static)
+
+If your system does not provide the needed static libraries, build them from source.
+
+### glog
+
+```bash
+git clone https://github.com/eloqdata/glog.git
+cd glog
+cmake -S . -B build -DBUILD_SHARED_LIBS=OFF
+cmake --build build
+sudo cmake --build build --target install
+```
+
+### jsoncpp
+
+```bash
+git clone https://github.com/open-source-parsers/jsoncpp.git
+cd jsoncpp
+cmake -S . -B build -DBUILD_SHARED_LIBS=OFF -DCMAKE_BUILD_TYPE=Release
+cmake --build build
+sudo cmake --build build --target install
+```
+
+### curl
+
+```bash
+# Download and extract curl sources (adjust version)
+wget https://curl.se/download/curl-8.x.x.tar.gz
+tar -xzf curl-8.x.x.tar.gz
+cd curl-8.x.x
+./configure --disable-shared --enable-static --with-ssl
+make
+sudo make install
+```
+
+### zstd (PIC static library)
+
+If you need `libzstd.a` to be linkable into a shared library, ensure it is built with PIC.
+One simple approach is to build via CMake and enable PIC explicitly:
+
+```bash
+git clone https://github.com/facebook/zstd.git
+cd zstd
+cmake -S build/cmake -B build-pic -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+cmake --build build-pic -j"$(nproc)"
+sudo cmake --install build-pic
+```
+
+### liburing
+
+```bash
+git clone https://github.com/axboe/liburing.git
+cd liburing
+./configure --cc=gcc --cxx=g++
+make
+sudo make install
+```
+
+### boost_context
+
+```bash
+# Download Boost sources (adjust version)
+wget https://boostorg.jfrog.io/artifactory/main/release/1.xx.x/source/boost_1_xx_x.tar.gz
+tar -xzf boost_1_xx_x.tar.gz
+cd boost_1_xx_x
+./bootstrap.sh --with-libraries=context
+./b2 link=static
+sudo ./b2 install
+```
+
+### AWS SDK (S3 only)
+
+```bash
+git clone --recurse-submodules https://github.com/aws/aws-sdk-cpp.git
+cd aws-sdk-cpp
+mkdir build && cd build
+cmake .. \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_SHARED_LIBS=OFF \
+  -DENABLE_TESTING=OFF \
+  -DBUILD_ONLY="s3"
+cmake --build . -j"$(nproc)"
+sudo cmake --install .
+```
+
+---
+
+## External Dependency Handling
+
+### System Dependencies (CMake Find / Imported Targets)
 
 In the current mode, dependency discovery is centralized in CMake:
 
 - Prefer `find_package(...)` to obtain standard targets (e.g. `glog::glog`, `jsoncpp_lib`)
-- If the system only provides library files but no corresponding targets, create IMPORTED targets as a fallback (to avoid “target not found”)
+- If the system only provides library files but no corresponding targets, create IMPORTED targets as a fallback (to avoid "target not found")
 
 Rust no longer enumerates dependency libraries via `pkg-config`; Rust links the combined library plus a small set of system libraries.
 
-### 4.2 Internal External Libraries (vendor Directory)
+### Internal External Libraries (vendor Directory)
 
 For libraries under `vendor/external/`:
 
@@ -157,9 +303,9 @@ target_link_libraries(eloqstore PRIVATE absl::base absl::strings)
 
 ---
 
-## 5. Common Issues
+## Common Issues and Troubleshooting
 
-### 5.1 Incorrect Link Order
+### Incorrect Link Order
 
 **Symptom**:
 
@@ -167,8 +313,7 @@ target_link_libraries(eloqstore PRIVATE absl::base absl::strings)
 undefined reference to `absl::flat_hash_map'
 ```
 
-**Solution**:
-Ensure dependency libraries appear *after* their users in the link order.
+**Solution**: Ensure dependency libraries appear *after* their users in the link order.
 
 ```rust
 // Incorrect order
@@ -182,7 +327,7 @@ println!("cargo:rustc-link-lib=static=absl");      // Dependency later
 
 ---
 
-### 5.2 Duplicate Symbols
+### Duplicate Symbols
 
 **Symptom**:
 
@@ -190,8 +335,7 @@ println!("cargo:rustc-link-lib=static=absl");      // Dependency later
 multiple definition of `absl::base_internal::InitGoogleLogging()'
 ```
 
-**Solution**:
-Ensure Abseil is linked only once.
+**Solution**: Ensure Abseil is linked only once.
 
 ```cmake
 # Disable unnecessary Abseil components
@@ -203,7 +347,7 @@ abseil_cmake_configure(
 
 ---
 
-### 5.3 Static Library Search Path Issues
+### Static Library Search Path Issues
 
 **Symptom**:
 
@@ -211,8 +355,7 @@ abseil_cmake_configure(
 cannot find -l:libabsl_base.a
 ```
 
-**Solution**:
-Add library search paths in `build.rs`.
+**Solution**: Add library search paths in `build.rs`.
 
 ```rust
 fn add_search_paths() {
@@ -226,7 +369,7 @@ fn add_search_paths() {
 
 ---
 
-### 5.4 `-fPIC` / relocation error when building `libeloqstore_combine.so`
+### `-fPIC` / Relocation Error When Building `libeloqstore_combine.so`
 
 **Symptom** (typical example):
 
@@ -234,23 +377,45 @@ fn add_search_paths() {
 /usr/bin/ld: .../libzstd.a(...): relocation ... can not be used when making a shared object; recompile with -fPIC
 ```
 
-**Cause**：
-Linking a **static library not compiled with `-fPIC`** (commonly the system-provided `libzstd.a`) into a shared object `.so` will fail.
+**Cause**: Linking a **static library not compiled with `-fPIC`** (commonly the system-provided `libzstd.a`) into a shared object `.so` will fail.
 
 **Solutions**:
 
 1. **Use the dynamic version of the library** (recommended, easiest)  
    Our CMake logic already prefers `zstd` `.so` in this case. Ensure `libzstd.so*` exists on the system (common Ubuntu path: `/usr/lib/x86_64-linux-gnu/`).
 
-2. **Rebuild the static library from source with PIC enabled** (if you want “fully static”)  
+2. **Rebuild the static library from source with PIC enabled** (if you want "fully static")  
    Rebuild the zstd static library with `-fPIC`, then point CMake to your PIC-enabled `libzstd.a`.
 
 3. **Accept that the combined library may keep a small number of dynamic dependencies**  
    In practice, `libeloqstore_combine.so` still bundles most dependencies, while `zstd` (or a few others) may remain dynamically linked. This is still safer and more controllable than requiring users to install many dependencies manually.
 
-## 6. Optimization Strategies
+---
 
-### 6.1 Reducing Package Size
+### CMake Cannot Find a Library
+
+If CMake cannot locate headers/libs, try setting a prefix:
+
+```bash
+export CMAKE_PREFIX_PATH=/usr/local:$CMAKE_PREFIX_PATH
+cargo build
+```
+
+---
+
+### Disable Static Bundling
+
+If needed, you can disable static bundling by changing `eloqstore-sys/build.rs` to pass:
+
+```rust
+.define("STATIC_ALL_DEPS", "OFF")
+```
+
+---
+
+## Optimization Strategies
+
+### Reducing Package Size
 
 | Strategy                  | Effect                       | Risk                                  |
 | ------------------------- | ---------------------------- | ------------------------------------- |
@@ -260,7 +425,7 @@ Linking a **static library not compiled with `-fPIC`** (commonly the system-prov
 
 ---
 
-### 6.2 Optional Cloud Storage Feature
+### Optional Cloud Storage Feature
 
 Controlled via feature flags:
 
@@ -286,9 +451,9 @@ fn main() {
 
 ---
 
-## 7. Distribution Strategy
+## Distribution Strategy
 
-### 7.1 Strategy Comparison
+### Strategy Comparison
 
 | Strategy                    | Source Size | User Experience          | Use Case                       |
 | --------------------------- | ----------- | ------------------------ | ------------------------------ |
@@ -299,7 +464,7 @@ fn main() {
 
 ---
 
-### 7.2 Recommended Approach: Prebuilt Binaries + Rust FFI
+### Recommended Approach: Prebuilt Binaries + Rust FFI
 
 ```
 Release artifacts:
@@ -322,22 +487,36 @@ eloqstore-sys = { version = "0.1", features = ["prebuilt"] }
 
 ---
 
-## 8. Summary
+## Notes and Benefits
+
+### Notes
+
+- **Binary size**: statically bundling dependencies increases the size of the produced `.so`
+- **Licensing**: verify license compatibility for all bundled dependencies
+- **System libraries**: some libraries (e.g. `libc`, `libpthread`) remain dynamic on most Linux distributions
+- **Testing**: always run integration tests after changing link mode
+
+### Benefits
+
+- **Safer**: reduces dependency on user-installed shared libraries and version drift
+- **More portable**: easier deployment as a single primary `.so`
+- **Simpler**: fewer moving parts for consumers
+
+---
+
+## Summary
 
 ### Core Principles
 
 1. **Layered handling**
-
    * System dependencies: detected via pkg-config or CMake
    * Vendor dependencies: built as submodules
    * Proprietary code: statically linked
 
 2. **Explicit link order**
-
    * User library → Third-party libraries → System libraries
 
 3. **On-demand compilation**
-
    * Use feature flags to control optional functionality
    * Cloud storage, metrics, etc. as optional components
 
@@ -351,4 +530,3 @@ eloqstore-sys = { version = "0.1", features = ["prebuilt"] }
 | Combined shared library     | ✅ Working (primary path)   |
 | Fallback static linking     | ✅ Working (secondary path) |
 | PIC-related edge cases      | ⚠️ Some static libs (e.g. zstd) may fail without `-fPIC` |
-

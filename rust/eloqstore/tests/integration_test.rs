@@ -15,7 +15,7 @@ fn test_all_apis() {
 
     let mut opts = Options::new().expect("Failed to create options");
     opts.set_num_threads(1);
-    opts.add_store_path("tmp/eloqstore_demo");
+    opts.add_store_path("tmp/eloqstore_demo").expect("Failed to add store path");
     let mut store = EloqStore::new(&opts).expect("Failed to create store");
     store.start().expect("Failed to start store");
 
@@ -90,9 +90,9 @@ fn test_all_apis() {
 
     // Using ReadRequest
     let read_req = ReadRequest::new(table.clone(), b"nonexistent");
-    let resp = store.exec_sync(read_req).expect("exec_sync");
-    assert!(resp.value.is_empty());
-    println!("✓ exec_sync(ReadRequest{{key: nonexistent}}) -> empty (expected)");
+    let resp = store.exec_sync(read_req);
+    assert!(resp.is_err() && resp.unwrap_err() == eloqstore::KvError::NotFound);
+    println!("✓ exec_sync(ReadRequest{{key: nonexistent}}) -> NotFound (expected)");
 
     // Using WriteRequest with chain
     let write_req = WriteRequest::new(table.clone()).put(b"req_key", b"req_value", ts);

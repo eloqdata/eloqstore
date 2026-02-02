@@ -4,7 +4,7 @@
 
 mod embedded_lib;
 
-use std::os::raw::{c_char, c_uchar, c_uint, c_ulonglong, c_void};
+use std::os::raw::{c_char, c_uchar, c_uint, c_ulonglong, c_ushort, c_void};
 use std::sync::Once;
 
 // Ensure embedded library is available at startup
@@ -83,7 +83,7 @@ mod ffi {
     #![allow(non_snake_case)]
     #![allow(unused)]
 
-    use std::os::raw::{c_char, c_uchar, c_uint, c_ulonglong, c_void};
+    use std::os::raw::{c_char, c_uchar, c_uint, c_ulonglong, c_ushort, c_void};
 
     #[repr(u8)]
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -120,9 +120,9 @@ mod ffi {
     unsafe extern "C" {
         pub fn CEloqStore_Options_Create() -> CEloqStoreHandle;
         pub fn CEloqStore_Options_Destroy(opts: CEloqStoreHandle);
-        pub fn CEloqStore_Options_SetNumThreads(opts: CEloqStoreHandle, n: c_uint);
+        pub fn CEloqStore_Options_SetNumThreads(opts: CEloqStoreHandle, n: c_ushort);
         pub fn CEloqStore_Options_SetBufferPoolSize(opts: CEloqStoreHandle, size: c_ulonglong);
-        pub fn CEloqStore_Options_SetDataPageSize(opts: CEloqStoreHandle, size: c_uint);
+        pub fn CEloqStore_Options_SetDataPageSize(opts: CEloqStoreHandle, size: c_ushort);
         pub fn CEloqStore_Options_AddStorePath(opts: CEloqStoreHandle, path: *const c_char);
         pub fn CEloqStore_Options_SetDataAppendMode(opts: CEloqStoreHandle, enable: bool);
         pub fn CEloqStore_Options_SetEnableCompression(opts: CEloqStoreHandle, enable: bool);

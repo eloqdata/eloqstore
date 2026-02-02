@@ -4,21 +4,23 @@ use libc::c_int;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KvError {
     NoError = 0,
-    InvalidArgs,
-    NotFound,
-    NotRunning,
-    Corrupted,
-    EndOfFile,
-    OutOfSpace,
-    OutOfMem,
-    OpenFileLimit,
-    TryAgain,
-    Busy,
-    Timeout,
-    NoPermission,
-    CloudErr,
-    IoFail,
-    Unknown,
+    InvalidArgs = 1,
+    NotFound = 2,
+    NotRunning = 3,
+    Corrupted = 4,
+    EndOfFile = 5,
+    OutOfSpace = 6,
+    OutOfMem = 7,
+    OpenFileLimit = 8,
+    TryAgain = 9,
+    Busy = 10,
+    Timeout = 11,
+    NoPermission = 12,
+    CloudErr = 13,
+    IoFail = 14,
+    ExpiredTerm = 15,
+    CloudNoManifest = 16,
+    Unknown = 255,
 }
 
 impl KvError {
@@ -39,6 +41,8 @@ impl KvError {
             12 => KvError::NoPermission,
             13 => KvError::CloudErr,
             14 => KvError::IoFail,
+            15 => KvError::ExpiredTerm,
+            16 => KvError::CloudNoManifest,
             _ => {
                 #[cfg(debug_assertions)]
                 eprintln!("Unknown error code from C API: {}", err);
@@ -73,6 +77,8 @@ impl std::fmt::Display for KvError {
             KvError::CloudErr => "Cloud service is unavailable",
             KvError::Timeout => "Operation timeout",
             KvError::NoPermission => "Operation not permitted",
+            KvError::ExpiredTerm => "Expired term",
+            KvError::CloudNoManifest => "No manifest found in cloud but the directory is not empty",
             KvError::Unknown => "Unknown error",
         };
         write!(f, "{}", msg)
