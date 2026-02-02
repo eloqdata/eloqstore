@@ -49,6 +49,7 @@ protected:
 
     std::pair<PageId, FilePageId> AllocatePage(PageId page_id);
     void FreePage(PageId page_id);
+    void FreePage(PageId page_id, const char *file, int line);
 
     FilePageId ToFilePage(PageId page_id);
 

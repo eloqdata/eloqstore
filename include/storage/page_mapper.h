@@ -4,6 +4,7 @@
 #include <deque>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -354,6 +355,7 @@ public:
 
     PageId GetPage();
     void FreePage(PageId page_id);
+    void FreePage(PageId page_id, const char *file, int line);
     FilePageAllocator *FilePgAllocator() const;
 
     /**
@@ -377,6 +379,7 @@ private:
     PageId free_page_head_{MaxPageId};
     uint32_t free_page_cnt_{0};
     std::unique_ptr<FilePageAllocator> file_page_allocator_{nullptr};
+    std::unordered_map<PageId, std::string> freed_pages_;
 
     friend class Replayer;
 };

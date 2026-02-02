@@ -350,6 +350,7 @@ PageMapper::PageMapper(const PageMapper &rhs)
 
     assert(file_page_allocator_->MaxFilePageId() ==
            rhs.file_page_allocator_->MaxFilePageId());
+    freed_pages_ = rhs.freed_pages_;
 }
 
 PageId PageMapper::GetPage()
@@ -364,6 +365,16 @@ PageId PageMapper::GetPage()
     else
     {
         PageId free_page = free_page_head_;
+        auto it = freed_pages_.find(free_page);
+        if (it == freed_pages_.end())
+        {
+            LOG(FATAL) << "GetPage: free list corruption, page_id " << free_page
+                       << " not tracked as freed, table "
+                       << (mapping_->tbl_ident_ != nullptr
+                               ? mapping_->tbl_ident_->ToString()
+                               : "null");
+        }
+        freed_pages_.erase(it);
         // The free page head points to the next free page.
         free_page_head_ = mapping_->GetNextFree(free_page);
         // Sets the free page's mapped file page to null.
@@ -376,8 +387,25 @@ PageId PageMapper::GetPage()
 
 void PageMapper::FreePage(PageId page_id)
 {
+    FreePage(page_id, "unknown", 0);
+}
+
+void PageMapper::FreePage(PageId page_id, const char *file, int line)
+{
     auto &map = Mapping();
     assert(page_id < map.size());
+    auto it = freed_pages_.find(page_id);
+    if (it != freed_pages_.end())
+    {
+        LOG(FATAL) << "FreePage: double free detected, page_id " << page_id
+                   << " table "
+                   << (mapping_->tbl_ident_ != nullptr
+                           ? mapping_->tbl_ident_->ToString()
+                           : "null")
+                   << " previous_at=" << it->second
+                   << " current_at=" << file << ":" << line;
+    }
+    freed_pages_[page_id] = std::string(file) + ":" + std::to_string(line);
     uint64_t val = free_page_head_ == MaxPageId
                        ? MappingSnapshot::InvalidValue
                        : MappingSnapshot::EncodePageId(free_page_head_);

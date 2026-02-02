@@ -185,13 +185,18 @@ std::pair<PageId, FilePageId> WriteTask::AllocatePage(PageId page_id)
 
 void WriteTask::FreePage(PageId page_id)
 {
+    FreePage(page_id, "unknown", 0);
+}
+
+void WriteTask::FreePage(PageId page_id, const char *file, int line)
+{
     if (!Options()->data_append_mode)
     {
         // Free file page.
         FilePageId file_page = ToFilePage(page_id);
         cow_meta_.old_mapping_->AddFreeFilePage(file_page);
     }
-    cow_meta_.mapper_->FreePage(page_id);
+    cow_meta_.mapper_->FreePage(page_id, file, line);
     wal_builder_.DeleteMapping(page_id);
 }
 
