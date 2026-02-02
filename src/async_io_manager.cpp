@@ -2763,10 +2763,9 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
 
     if (!found)
     {
-        LOG(ERROR) << "CloudStoreMgr::GetManifest: no manifest found "
-                      "for table "
-                   << tbl_id;
-        return {nullptr, KvError::CloudNoManifest};
+        // No manifest found; this partition does not belong to the current
+        // restore database.
+        return {nullptr, KvError::NotFound};
     }
 
     selected_term = best_term;

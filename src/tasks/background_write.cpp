@@ -291,6 +291,12 @@ KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
     assert(Options()->num_retained_archives > 0);
 
     KvError compact_err = CompactDataFile();
+    if (compact_err == KvError::NotFound)
+    {
+        // Partitions without manifest files (e.g., only term files) are
+        // normal, archive is considered complete.
+        return KvError::NoError;
+    }
     CHECK_KV_ERR(compact_err);
 
     auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_ident_);
