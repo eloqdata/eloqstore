@@ -121,6 +121,7 @@ void Shard::WorkLoop()
 
     while (true)
     {
+        ts_ = ReadTimeMicroseconds();
 #ifdef ELOQSTORE_WITH_TXSERVICE
         // Metrics collection: start timing the round (one iteration = one
         // round)
