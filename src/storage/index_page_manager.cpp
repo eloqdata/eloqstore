@@ -436,7 +436,7 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
     page->file_page_id_ = MaxFilePageId;
     page->tbl_ident_ = nullptr;
 
-    LOG(INFO) << "FreeIndexPage " << page->page_id_;
+    // LOG(INFO) << "FreeIndexPage " << page->page_id_;
     FreeIndexPage(page);
     return true;
 }

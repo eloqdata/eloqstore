@@ -122,7 +122,7 @@ private:
                     task->Abort();
                     if (err == KvError::OutOfMem)
                     {
-                        LOG(ERROR) << "Task is aborted due to out of memory";
+                        // LOG(ERROR) << "Task is aborted due to out of memory";
                     }
                 }
 

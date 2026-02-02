@@ -78,27 +78,27 @@ std::pair<PageId, KvError> BatchWriteTask::Seek(std::string_view key)
         IndexPageIter &idx_iter = idx_entry->idx_page_iter_;
         idx_iter.Seek(key);
         PageId page_id = idx_iter.GetPageId();
-        LOG(INFO) << "For " << tbl_ident_ << ", seek key: " << key
-                  << ", current page id " << idx_entry->idx_page_->GetPageId()
-                  << ", got " << page_id;
+        // LOG(INFO) << "For " << tbl_ident_ << ", seek key: " << key
+        //           << ", current page id " << idx_entry->idx_page_->GetPageId()
+        //           << ", got " << page_id;
         assert(page_id != MaxPageId);
         if (idx_entry->idx_page_->IsPointingToLeaf())
         {
-            LOG(INFO) << "For " << tbl_ident_ << " break";
+            // LOG(INFO) << "For " << tbl_ident_ << " break";
             break;
         }
         assert(!stack_.back()->is_leaf_index_);
         auto [node, err] = shard->IndexManager()->FindPage(
             cow_meta_.mapper_->GetMapping(), page_id);
-        LOG(INFO) << "For " << tbl_ident_ << ", find page_id: " << page_id;
+        // LOG(INFO) << "For " << tbl_ident_ << ", find page_id: " << page_id;
         if (err != KvError::NoError)
         {
-            LOG(INFO) << "For " << tbl_ident_ << " return";
+            // LOG(INFO) << "For " << tbl_ident_ << " return";
             return {MaxPageId, err};
         }
         node->Pin();
         stack_.emplace_back(std::make_unique<IndexStackEntry>(node, Options()));
-        LOG(INFO) << "For " << tbl_ident_ << " stack size: " << stack_.size();
+        // LOG(INFO) << "For " << tbl_ident_ << " stack size: " << stack_.size();
     }
     stack_.back()->is_leaf_index_ = true;
     return {stack_.back()->idx_page_iter_.GetPageId(), KvError::NoError};
@@ -1009,7 +1009,7 @@ KvError BatchWriteTask::FlushIndexPage(MemIndexPage *idx_page,
 {
     // Flushes the built index page.
     idx_page->SetPageId(page_id);
-    LOG(INFO) << "FlushIndexPage " << page_id << " for " << tbl_ident_;
+    // LOG(INFO) << "FlushIndexPage " << page_id << " for " << tbl_ident_;
     KvError err = WritePage(idx_page);
     CHECK_KV_ERR(err);
 

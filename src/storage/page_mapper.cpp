@@ -163,6 +163,7 @@ uint64_t MappingSnapshot::MappingTbl::Get(PageId page_id) const
         {
             return it->second;
         }
+
     }
     CHECK(static_cast<size_t>(page_id) < logical_size_)
         << "page_id=" << page_id << ", logical_size=" << logical_size_;
@@ -359,7 +360,7 @@ PageId PageMapper::GetPage()
     if (free_page_head_ == MaxPageId)
     {
         auto ret = map.PushBack(MappingSnapshot::InvalidValue);
-        LOG(INFO) << "GetPage from new:" << ret;
+        // LOG(INFO) << "GetPage from new:" << ret;
         return ret;
     }
     else

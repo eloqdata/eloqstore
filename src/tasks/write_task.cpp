@@ -40,7 +40,7 @@ void WriteTask::Reset(const TableIdent &tbl_id)
 
 void WriteTask::Abort()
 {
-    LOG(INFO) << "WriteTask to " << tbl_ident_ << " is aborted";
+    // LOG(INFO) << "WriteTask to " << tbl_ident_ << " is aborted";
     if (!Options()->data_append_mode)
     {
         IoMgr()->AbortWrite(tbl_ident_);
@@ -58,7 +58,7 @@ KvError WriteTask::WritePage(DataPage &&page)
 {
     SetChecksum({page.PagePtr(), Options()->data_page_size});
     auto [_, fp_id] = AllocatePage(page.GetPageId());
-    LOG(INFO) << "DataPage allocate " << page.GetPageId() << " for " << tbl_ident_;
+    // LOG(INFO) << "DataPage allocate " << page.GetPageId() << " for " << tbl_ident_;
     return WritePage(std::move(page), fp_id);
 }
 
@@ -73,7 +73,7 @@ KvError WriteTask::WritePage(MemIndexPage *page)
 {
     SetChecksum({page->PagePtr(), Options()->data_page_size});
     auto [page_id, file_page_id] = AllocatePage(page->GetPageId());
-    LOG(INFO) << "MemIndexPage allocate " << page_id << " for " << tbl_ident_;
+    // LOG(INFO) << "MemIndexPage allocate " << page_id << " for " << tbl_ident_;
     page->SetPageId(page_id);
     page->SetFilePageId(file_page_id);
     return WritePage(page, file_page_id);
@@ -179,7 +179,7 @@ std::pair<PageId, FilePageId> WriteTask::AllocatePage(PageId page_id)
 
     cow_meta_.mapper_->UpdateMapping(page_id, file_page_id);
     wal_builder_.UpdateMapping(page_id, file_page_id);
-    LOG(INFO) << "Allocate page=" << page_id << " for " << tbl_ident_;
+    // LOG(INFO) << "Allocate page=" << page_id << " for " << tbl_ident_;
     return {page_id, file_page_id};
 }
 
