@@ -265,13 +265,13 @@ KvError BatchWriteTask::Apply()
     err = ApplyBatch(cow_meta_.root_id_, true);
     if (err != KvError::NoError)
     {
-        WaitWrite();
+        (void) WaitWrite();
         return err;
     }
     err = ApplyTTLBatch();
     if (err != KvError::NoError)
     {
-        WaitWrite();
+        (void) WaitWrite();
         return err;
     }
     err = UpdateMeta();
