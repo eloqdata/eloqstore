@@ -274,7 +274,6 @@ KvError BatchWriteTask::Apply()
         WaitWrite();
         return err;
     }
-    CHECK_KV_ERR(err);
     err = UpdateMeta();
     CHECK_KV_ERR(err);
     TriggerTTL();
