@@ -34,14 +34,9 @@ private:
     KvError LoadApplyingPage(PageId page_id);
     std::pair<MemIndexPage *, KvError> Pop();
 
-    struct DirtyIndexPage
-    {
-        ~DirtyIndexPage();
-        std::string key_;
-        MemIndexPage *page_{nullptr};
-        PageId page_id_{MaxPageId};
-    };
-    KvError FinishIndexPage(DirtyIndexPage &prev_page,
+    KvError FinishIndexPage(MemIndexPage *&prev_page,
+                            std::string &prev_key,
+                            PageId &prev_page_id,
                             std::string cur_page_key);
     KvError FlushIndexPage(MemIndexPage *new_page,
                            std::string idx_page_key,
