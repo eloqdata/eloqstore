@@ -822,20 +822,13 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     bool create,
     uint64_t term)
 {
-    auto it_tbl = tables_.find(tbl_id);
-    if (it_tbl == tables_.end())
+    auto [it_tbl, inserted] = tables_.try_emplace(tbl_id);
+    if (inserted)
     {
-        auto [it, _] = tables_.try_emplace(tbl_id);
-        it->second.tbl_id_ = &it->first;
-        it_tbl = it;
+        it_tbl->second.tbl_id_ = &it_tbl->first;
     }
     PartitionFiles *tbl = &it_tbl->second;
-    auto it_fd = tbl->fds_.find(file_id);
-    if (it_fd == tbl->fds_.end())
-    {
-        auto [it, _] = tbl->fds_.try_emplace(file_id, tbl, file_id, term);
-        it_fd = it;
-    }
+    auto [it_fd, _] = tbl->fds_.try_emplace(file_id, tbl, file_id, term);
     LruFD::Ref lru_fd(&it_fd->second, this);
 
     // Avoid multiple coroutines from concurrently opening or closing the same
@@ -898,7 +891,10 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     }
     else
     {
-        fd = OpenFile(tbl_id, file_id, direct, term);
+        uint64_t flags =
+            O_RDWR | (direct ? O_DIRECT : 0) | (create ? O_CREAT : 0);
+        uint64_t mode = create ? 0644 : 0;
+        fd = OpenFile(tbl_id, file_id, flags, mode, term);
         if (fd == -ENOENT && create)
         {
             // This must be data file because manifest should always be
@@ -1156,28 +1152,24 @@ int IouringMgr::CreateFile(LruFD::Ref dir_fd, FileId file_id, uint64_t term)
 
 int IouringMgr::OpenFile(const TableIdent &tbl_id,
                          FileId file_id,
-                         bool direct,
+                         uint64_t flags,
+                         uint64_t mode,
                          uint64_t term)
 {
-    uint64_t flags = O_RDWR;
     fs::path path = tbl_id.ToString();
     if (file_id == LruFD::kManifest)
     {
-        if (direct)
-        {
-            flags |= O_DIRECT;
-        }
         path.append(ManifestFileName(term));
     }
     else
     {
         // Data file is always opened with O_DIRECT.
-        flags |= O_DIRECT;
+        assert((flags & O_DIRECT) == O_DIRECT);
         assert(file_id <= LruFD::kMaxDataFile);
         path.append(DataFileName(file_id, term));
     }
     FdIdx root_fd = GetRootFD(tbl_id);
-    return OpenAt(root_fd, path.c_str(), flags);
+    return OpenAt(root_fd, path.c_str(), flags, mode);
 }
 
 int IouringMgr::OpenAt(FdIdx dir_fd,
@@ -3267,14 +3259,15 @@ int CloudStoreMgr::CreateFile(LruFD::Ref dir_fd, FileId file_id, uint64_t term)
 
 int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
                             FileId file_id,
-                            bool direct,
+                            uint64_t flags,
+                            uint64_t mode,
                             uint64_t term)
 {
     FileKey key = FileKey(tbl_id, ToFilename(file_id, term));
     if (DequeClosedFile(key))
     {
         // Try to open the file cached locally.
-        int res = IouringMgr::OpenFile(tbl_id, file_id, direct, term);
+        int res = IouringMgr::OpenFile(tbl_id, file_id, flags, mode, term);
         if (res < 0 && res != -ENOENT)
         {
             EnqueClosedFile(std::move(key));
@@ -3306,7 +3299,7 @@ int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
     }
 
     // Try to open the successfully downloaded file.
-    res = IouringMgr::OpenFile(tbl_id, file_id, direct, term);
+    res = IouringMgr::OpenFile(tbl_id, file_id, flags, mode, term);
     if (res < 0 && res != -ENOENT)
     {
         EnqueClosedFile(std::move(key));
