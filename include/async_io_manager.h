@@ -434,7 +434,7 @@ public:
                bool fixed_target = true);
     int Read(FdIdx fd, char *dst, size_t n, uint64_t offset);
     int Write(FdIdx fd, const char *src, size_t n, uint64_t offset);
-    int Fdatasync(FdIdx fd);
+    virtual int Fdatasync(FdIdx fd);
     int Statx(FdIdx fd, const char *path, struct statx *result);
     int StatxAt(FdIdx dir_fd, const char *path, struct statx *result);
     int Rename(FdIdx dir_fd, const char *old_path, const char *new_path);
@@ -461,7 +461,8 @@ public:
     virtual KvError SyncFiles(const TableIdent &tbl_id,
                               std::span<LruFD::Ref> fds);
     KvError CloseFiles(std::span<LruFD::Ref> fds);
-    KvError FdatasyncFiles(const TableIdent &tbl_id, std::span<LruFD::Ref> fds);
+    virtual KvError FdatasyncFiles(const TableIdent &tbl_id,
+                                   std::span<LruFD::Ref> fds);
     virtual KvError CloseFile(LruFD::Ref fd_ref);
     bool HasOtherFile(const TableIdent &tbl_id) const;
 
@@ -590,6 +591,16 @@ public:
     size_t ActivePrewarmTasks() const
     {
         return active_prewarm_tasks_;
+    }
+    // Cloud mode does not need fsync.
+    int Fdatasync(FdIdx fd) override
+    {
+        return 0;
+    }
+    KvError FdatasyncFiles(const TableIdent &tbl_id,
+                           std::span<LruFD::Ref> fds) override
+    {
+        return KvError::NoError;
     }
     void RegisterPrewarmActive();
     void UnregisterPrewarmActive();
