@@ -32,7 +32,7 @@ std::atomic<uint64_t> Shard::tsc_cycles_per_microsecond_{0};
 
 #ifdef NDEBUG
 DEFINE_uint64(max_processing_time_microseconds,
-              500,
+              400,
               "Max processing time in microseconds for low priority tasks.");
 #else
 DEFINE_uint64(max_processing_time_microseconds,
@@ -508,7 +508,8 @@ bool Shard::ExecuteReadyTasks()
         }
         if (DurationMicroseconds(ts_) >= FLAGS_max_processing_time_microseconds)
         {
-            goto finish;
+            // run at least one low-priority task to avoid starvation.
+            break;
         }
     }
 
