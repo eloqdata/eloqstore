@@ -730,20 +730,13 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     bool create,
     uint64_t term)
 {
-    auto it_tbl = tables_.find(tbl_id);
-    if (it_tbl == tables_.end())
+    auto [it_tbl, inserted] = tables_.try_emplace(tbl_id);
+    if (inserted)
     {
-        auto [it, _] = tables_.try_emplace(tbl_id);
-        it->second.tbl_id_ = &it->first;
-        it_tbl = it;
+        it_tbl->second.tbl_id_ = &it_tbl->first;
     }
     PartitionFiles *tbl = &it_tbl->second;
-    auto it_fd = tbl->fds_.find(file_id);
-    if (it_fd == tbl->fds_.end())
-    {
-        auto [it, _] = tbl->fds_.try_emplace(file_id, tbl, file_id, term);
-        it_fd = it;
-    }
+    auto [it_fd, _] = tbl->fds_.try_emplace(file_id, tbl, file_id, term);
     LruFD::Ref lru_fd(&it_fd->second, this);
 
     // Avoid multiple coroutines from concurrently opening or closing the same
