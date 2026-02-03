@@ -31,7 +31,7 @@ public:
     static uint16_t const leftmost_ptr_offset =
         page_size_offset + sizeof(uint16_t);
 
-    explicit MemIndexPage(bool alloc = true) : page_(alloc) {};
+    explicit MemIndexPage(bool alloc = true) : page_(alloc){};
     uint16_t ContentLength() const;
     uint16_t RestartNum() const;
 
@@ -138,13 +138,77 @@ private:
     friend class IndexPageManager;
 };
 
+class IndexPageHandle
+{
+public:
+    IndexPageHandle() = default;
+    explicit IndexPageHandle(MemIndexPage *page)
+    {
+        Reset(page);
+    }
+
+    IndexPageHandle(const IndexPageHandle &) = delete;
+    IndexPageHandle &operator=(const IndexPageHandle &) = delete;
+
+    IndexPageHandle(IndexPageHandle &&other) noexcept : page_(other.page_)
+    {
+        other.page_ = nullptr;
+    }
+    IndexPageHandle &operator=(IndexPageHandle &&other) noexcept
+    {
+        if (this != &other)
+        {
+            Reset();
+            page_ = other.page_;
+            other.page_ = nullptr;
+        }
+        return *this;
+    }
+
+    ~IndexPageHandle()
+    {
+        Reset();
+    }
+
+    void Reset(MemIndexPage *page = nullptr)
+    {
+        if (page_ != nullptr)
+        {
+            page_->Unpin();
+        }
+        page_ = page;
+        if (page_ != nullptr)
+        {
+            page_->Pin();
+        }
+    }
+
+    MemIndexPage *Get() const
+    {
+        return page_;
+    }
+
+    MemIndexPage *operator->() const
+    {
+        return page_;
+    }
+
+    explicit operator bool() const
+    {
+        return page_ != nullptr;
+    }
+
+private:
+    MemIndexPage *page_{nullptr};
+};
+
 class IndexPageIter
 {
 public:
     using uptr = std::unique_ptr<IndexPageIter>;
 
     IndexPageIter() = delete;
-    IndexPageIter(const MemIndexPage *index_page, const KvOptions *opts);
+    IndexPageIter(const IndexPageHandle &handle, const KvOptions *opts);
     IndexPageIter(std::string_view page_view, const KvOptions *opts);
 
     bool HasNext() const

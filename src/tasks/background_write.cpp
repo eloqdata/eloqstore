@@ -4,6 +4,7 @@
 #include <memory>  // for std::shared_ptr
 #include <string>
 
+#include "storage/mem_index_page.h"
 #include "storage/shard.h"
 #include "utils.h"
 
@@ -19,31 +20,32 @@ public:
     ~MovingCachedPages()
     {
         // Moving operations are aborted
-        for (auto [page, src_fp_id] : pages_)
+        for (auto &entry : pages_)
         {
-            page->SetFilePageId(src_fp_id);
-            page->Unpin();
+            entry.handle->SetFilePageId(entry.src_fp_id);
         }
     }
-    void Add(MemIndexPage *page, FilePageId dest_fp_id)
+    void Add(IndexPageHandle handle, FilePageId src_fp_id)
     {
-        page->Pin();
-        FilePageId src_fp_id = page->GetFilePageId();
-        page->SetFilePageId(dest_fp_id);
-        pages_.emplace_back(page, src_fp_id);
+        pages_.push_back({std::move(handle), src_fp_id});
     }
     void Finish()
     {
         // Moving operations are succeed
-        for (auto [page, _] : pages_)
+        for (auto &entry : pages_)
         {
-            page->Unpin();
+            entry.handle.Reset();
         }
         pages_.clear();
     }
 
 private:
-    std::vector<std::pair<MemIndexPage *, FilePageId>> pages_;
+    struct Entry
+    {
+        IndexPageHandle handle;
+        FilePageId src_fp_id;
+    };
+    std::vector<Entry> pages_;
 };
 
 namespace
@@ -229,14 +231,16 @@ KvError BackgroundWrite::CompactDataFile()
             move_batch_fp_ids.clear();
             for (auto [fp_id, page_id] : batch_ids)
             {
-                MemIndexPage *page =
-                    cow_meta_.old_mapping_->GetSwizzlingPointer(page_id);
-                if (page != nullptr)
+                IndexPageHandle handle =
+                    cow_meta_.old_mapping_->GetSwizzlingHandle(page_id);
+                if (handle)
                 {
                     auto [_, new_fp_id] = AllocatePage(page_id);
-                    moving_cached.Add(page, new_fp_id);
-                    err = WritePage(page, new_fp_id);
+                    FilePageId src_fp_id = handle->GetFilePageId();
+                    handle->SetFilePageId(new_fp_id);
+                    err = WritePage(handle, new_fp_id);
                     CHECK_KV_ERR(err);
+                    moving_cached.Add(std::move(handle), src_fp_id);
                 }
                 else
                 {
