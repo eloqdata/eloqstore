@@ -235,7 +235,6 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
         idx_mgr,
         tbl_ident,
         MappingSnapshot::MappingTbl(std::move(mapping_tbl_))));
-    mapping->mapping_tbl_.SetChunkArena(idx_mgr->MapperChunkArena());
     auto mapper = std::make_unique<PageMapper>(std::move(mapping));
     auto &m_table = mapper->GetMapping()->mapping_tbl_;
 

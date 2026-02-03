@@ -60,6 +60,8 @@ class PagesPool
 public:
     using UPtr = std::unique_ptr<char, decltype(&std::free)>;
     PagesPool(const KvOptions *options);
+    // Takes ownership of registered_buffer; it must be free()-compatible.
+    // Do not free manually; PagesPool will free upon destruction.
     void Init(void *registered_buffer = nullptr, size_t buffer_size = 0);
     char *Allocate();
     void Free(char *ptr);

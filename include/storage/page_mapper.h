@@ -69,8 +69,6 @@ struct MappingSnapshot
         void reserve(size_t n);
         size_t size() const;
         size_t capacity() const;
-        void SetVectorArena(MappingArena *arena);
-        void SetChunkArena(MappingChunkArena *arena);
         void StartCopying();
         void FinishCopying();
         void ApplyChanges();

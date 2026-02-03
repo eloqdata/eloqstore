@@ -39,6 +39,11 @@ namespace eloqstore
 
 bool EloqStore::ValidateOptions(KvOptions &opts)
 {
+    if (opts.max_inflight_write == 0)
+    {
+        LOG(ERROR) << "Option max_inflight_write cannot be zero";
+        return false;
+    }
     if ((opts.data_page_size & (page_align - 1)) != 0)
     {
         LOG(ERROR) << "Option data_page_size is not page aligned";
