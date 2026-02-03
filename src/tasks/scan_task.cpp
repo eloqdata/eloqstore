@@ -81,15 +81,7 @@ void ScanIterator::ResetPrefetchState()
 
 void ScanIterator::ClearIndexStack()
 {
-    while (!index_stack_.empty())
-    {
-        IndexFrame &frame = index_stack_.back();
-        if (frame.page != nullptr)
-        {
-            frame.page->Unpin();
-        }
-        index_stack_.pop_back();
-    }
+    index_stack_.clear();
 }
 
 KvError ScanIterator::BuildIndexStack(std::string_view key)
@@ -97,24 +89,23 @@ KvError ScanIterator::BuildIndexStack(std::string_view key)
     PageId page_id = root_id_;
     while (true)
     {
-        auto [node, err] =
+        auto [handle, err] =
             shard->IndexManager()->FindPage(mapping_.Get(), page_id);
         if (err != KvError::NoError)
         {
             ClearIndexStack();
             return err;
         }
-        node->Pin();
-        IndexPageIter idx_it{node, Options()};
+        IndexPageIter idx_it{handle, Options()};
         idx_it.Seek(key);
-        index_stack_.push_back(IndexFrame{node, idx_it});
+        index_stack_.emplace_back(std::move(handle), std::move(idx_it));
         if (idx_it.GetPageId() == MaxPageId)
         {
             ClearIndexStack();
             return KvError::EndOfFile;
         }
         PageId child_id = idx_it.GetPageId();
-        if (node->IsPointingToLeaf())
+        if (index_stack_.back().handle->IsPointingToLeaf())
         {
             return KvError::NoError;
         }
@@ -130,7 +121,7 @@ KvError ScanIterator::AdvanceToNextLeaf()
         if (frame.iter.HasNext() && frame.iter.Next())
         {
             PageId child_id = frame.iter.GetPageId();
-            if (frame.page->IsPointingToLeaf())
+            if (frame.handle->IsPointingToLeaf())
             {
                 return KvError::NoError;
             }
@@ -138,27 +129,25 @@ KvError ScanIterator::AdvanceToNextLeaf()
             PageId descend_id = child_id;
             while (true)
             {
-                auto [node, err] =
+                auto [handle, err] =
                     shard->IndexManager()->FindPage(mapping_.Get(), descend_id);
                 if (err != KvError::NoError)
                 {
                     ClearIndexStack();
                     return err;
                 }
-                node->Pin();
-                IndexPageIter it{node, Options()};
+                IndexPageIter it{handle, Options()};
                 bool ok = it.Next();
                 CHECK(ok);
-                index_stack_.push_back(IndexFrame{node, it});
+                index_stack_.emplace_back(std::move(handle), std::move(it));
                 PageId next_child = it.GetPageId();
-                if (node->IsPointingToLeaf())
+                if (index_stack_.back().handle->IsPointingToLeaf())
                 {
                     return KvError::NoError;
                 }
                 descend_id = next_child;
             }
         }
-        frame.page->Unpin();
         index_stack_.pop_back();
     }
     return KvError::EndOfFile;

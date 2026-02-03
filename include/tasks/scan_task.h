@@ -36,8 +36,13 @@ public:
 private:
     struct IndexFrame
     {
-        MemIndexPage *page;
+        IndexFrame(IndexPageHandle handle_in, IndexPageIter iter_in)
+            : iter(std::move(iter_in)), handle(std::move(handle_in))
+        {
+        }
+
         IndexPageIter iter;
+        IndexPageHandle handle;
     };
 
     const TableIdent tbl_id_;

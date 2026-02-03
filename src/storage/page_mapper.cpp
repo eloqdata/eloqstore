@@ -16,6 +16,7 @@
 #include "coding.h"
 #include "manifest_buffer.h"
 #include "storage/index_page_manager.h"
+#include "storage/mem_index_page.h"
 #include "storage/shard.h"
 #include "tasks/task.h"
 
@@ -535,16 +536,16 @@ void MappingSnapshot::Unswizzling(MemIndexPage *page)
     }
 }
 
-MemIndexPage *MappingSnapshot::GetSwizzlingPointer(PageId page_id) const
+IndexPageHandle MappingSnapshot::GetSwizzlingHandle(PageId page_id) const
 {
     assert(page_id < mapping_tbl_.size());
     uint64_t val = mapping_tbl_.Get(page_id);
     if (IsSwizzlingPointer(val))
     {
         MemIndexPage *idx_page = reinterpret_cast<MemIndexPage *>(val);
-        return idx_page;
+        return IndexPageHandle(idx_page);
     }
-    return nullptr;
+    return IndexPageHandle();
 }
 
 void MappingSnapshot::AddSwizzling(PageId page_id, MemIndexPage *idx_page)

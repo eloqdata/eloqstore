@@ -17,16 +17,16 @@ struct IndexOp
 class IndexStackEntry
 {
 public:
-    IndexStackEntry(MemIndexPage *page, const KvOptions *opts)
-        : idx_page_(page), idx_page_iter_(page, opts)
+    IndexStackEntry(IndexPageHandle handle, const KvOptions *opts)
+        : idx_page_iter_(handle, opts), handle_(std::move(handle))
     {
     }
 
     IndexStackEntry(const IndexStackEntry &) = delete;
     IndexStackEntry(IndexStackEntry &&rhs) = delete;
 
-    MemIndexPage *idx_page_{nullptr};
     IndexPageIter idx_page_iter_;
+    IndexPageHandle handle_{};
     std::vector<IndexOp> changes_{};
     bool is_leaf_index_{false};
 };

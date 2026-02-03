@@ -90,7 +90,8 @@ std::string MemIndexPage::String(const KvOptions *opts) const
     }
     str.append(std::to_string(GetPageId()));
     str.push_back('|');
-    IndexPageIter iter(this, opts);
+    IndexPageHandle handle(const_cast<MemIndexPage *>(this));
+    IndexPageIter iter(handle, opts);
     while (iter.HasNext())
     {
         iter.Next();
@@ -104,17 +105,34 @@ std::string MemIndexPage::String(const KvOptions *opts) const
     return str;
 }
 
-IndexPageIter::IndexPageIter(const MemIndexPage *index_page,
+IndexPageIter::IndexPageIter(const IndexPageHandle &handle,
                              const KvOptions *opts)
     : comparator_(opts->comparator_),
-      page_(index_page == nullptr ? std::string_view{}
-                                  : std::string_view{index_page->PagePtr(),
-                                                     opts->data_page_size}),
-      restart_num_(index_page == nullptr ? 0 : index_page->RestartNum()),
-      restart_offset_(index_page == nullptr
-                          ? 0
-                          : index_page->ContentLength() -
-                                (1 + restart_num_) * sizeof(uint16_t)),
+      page_(
+          [&handle, opts]()
+          {
+              const MemIndexPage *index_page = handle.Get();
+              return index_page == nullptr
+                         ? std::string_view{}
+                         : std::string_view{index_page->PagePtr(),
+                                            opts->data_page_size};
+          }()),
+      restart_num_(
+          [&handle]()
+          {
+              const MemIndexPage *index_page = handle.Get();
+              return index_page == nullptr ? 0 : index_page->RestartNum();
+          }()),
+      restart_offset_(
+          [&handle]()
+          {
+              const MemIndexPage *index_page = handle.Get();
+              return index_page == nullptr
+                         ? 0
+                         : index_page->ContentLength() -
+                               (1 + index_page->RestartNum()) *
+                                   sizeof(uint16_t);
+          }()),
       curr_offset_(MemIndexPage::leftmost_ptr_offset)
 {
 }
