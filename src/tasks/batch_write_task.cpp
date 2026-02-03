@@ -18,7 +18,6 @@ BatchWriteTask::BatchWriteTask()
     : idx_page_builder_(Options()), data_page_builder_(Options())
 {
     overflow_ptrs_.reserve(Options()->overflow_pointers * 4);
-
 }
 
 KvError BatchWriteTask::SeekStack(std::string_view search_key)
