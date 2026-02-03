@@ -59,7 +59,8 @@ protected:
 
     KvError WritePage(DataPage &&page);
     KvError WritePage(OverflowPage &&page);
-    KvError WritePage(MemIndexPage *page);
+    KvError WritePage(IndexPageHandle &page);
+    KvError WritePage(IndexPageHandle &page, FilePageId file_page_id);
     KvError WritePage(VarPage page, FilePageId file_page_id);
 
     // Track whether FileIdTermMapping changed in this write task.

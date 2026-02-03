@@ -26,6 +26,7 @@
 #include "concurrentqueue/concurrentqueue.h"
 #include "direct_io_buffer.h"
 #include "error.h"
+#include "storage/mem_index_page.h"
 #include "storage/object_store.h"
 #include "tasks/prewarm_task.h"
 #include "tasks/task.h"
@@ -36,6 +37,7 @@ namespace eloqstore
 class WriteReq;
 class WriteTask;
 class MemIndexPage;
+class IndexPageHandle;
 class CloudStorageService;
 class Shard;
 
@@ -50,7 +52,7 @@ public:
 using ManifestFilePtr = std::unique_ptr<ManifestFile>;
 
 // TODO(zhanghao): consider using inheritance instead of variant
-using VarPage = std::variant<MemIndexPage *, DataPage, OverflowPage, Page>;
+using VarPage = std::variant<IndexPageHandle, DataPage, OverflowPage, Page>;
 char *VarPagePtr(const VarPage &page);
 enum class VarPageType : uint8_t
 {

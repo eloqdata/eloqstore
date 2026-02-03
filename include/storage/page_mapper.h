@@ -15,6 +15,7 @@
 namespace eloqstore
 {
 class IndexPageManager;
+class IndexPageHandle;
 class MemIndexPage;
 class ManifestBuilder;
 class ManifestBuffer;
@@ -138,7 +139,7 @@ struct MappingSnapshot
      * @param page
      */
     void Unswizzling(MemIndexPage *page);
-    MemIndexPage *GetSwizzlingPointer(PageId page_id) const;
+    IndexPageHandle GetSwizzlingHandle(PageId page_id) const;
     void AddSwizzling(PageId page_id, MemIndexPage *idx_page);
 
     static bool IsSwizzlingPointer(uint64_t val);
@@ -281,14 +282,14 @@ class AppendAllocator : public FilePageAllocator
 {
 public:
     AppendAllocator(const KvOptions *opts)
-        : FilePageAllocator(opts, 0), min_file_id_(0), empty_file_cnt_(0) {};
+        : FilePageAllocator(opts, 0), min_file_id_(0), empty_file_cnt_(0){};
     AppendAllocator(const KvOptions *opts,
                     FileId min_file_id,
                     FilePageId max_fp_id,
                     uint32_t empty_cnt)
         : FilePageAllocator(opts, max_fp_id),
           min_file_id_(min_file_id),
-          empty_file_cnt_(empty_cnt) {};
+          empty_file_cnt_(empty_cnt){};
     AppendAllocator(const AppendAllocator &rhs) = default;
     std::unique_ptr<FilePageAllocator> Clone() override;
 
@@ -322,12 +323,11 @@ private:
 class PooledFilePages : public FilePageAllocator
 {
 public:
-    explicit PooledFilePages(const KvOptions *opts)
-        : FilePageAllocator(opts) {};
+    explicit PooledFilePages(const KvOptions *opts) : FilePageAllocator(opts){};
     PooledFilePages(const KvOptions *opts,
                     FilePageId next_id,
                     std::vector<uint32_t> free_ids)
-        : FilePageAllocator(opts, next_id), free_ids_(std::move(free_ids)) {};
+        : FilePageAllocator(opts, next_id), free_ids_(std::move(free_ids)){};
     PooledFilePages(const PooledFilePages &rhs) = default;
     std::unique_ptr<FilePageAllocator> Clone() override;
 
@@ -346,7 +346,7 @@ class PageMapper
 {
 public:
     explicit PageMapper(MappingSnapshot::Ref mapping)
-        : mapping_(std::move(mapping)) {};
+        : mapping_(std::move(mapping)){};
     PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident);
     PageMapper(const PageMapper &rhs);
 

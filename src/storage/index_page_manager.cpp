@@ -317,20 +317,20 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
     root_meta_mgr_.EvictIfNeeded();
 }
 
-std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
+std::pair<IndexPageHandle, KvError> IndexPageManager::FindPage(
     MappingSnapshot *mapping, PageId page_id)
 {
     while (true)
     {
         // First checks swizzling pointers.
-        MemIndexPage *idx_page = mapping->GetSwizzlingPointer(page_id);
-        if (idx_page == nullptr)
+        IndexPageHandle handle = mapping->GetSwizzlingHandle(page_id);
+        if (!handle)
         {
             // This is the first request to load the page.
             MemIndexPage *new_page = AllocIndexPage();
             if (new_page == nullptr)
             {
-                return {nullptr, KvError::OutOfMem};
+                return {IndexPageHandle(), KvError::OutOfMem};
             }
             FilePageId file_page_id = mapping->ToFilePage(page_id);
             new_page->SetPageId(page_id);
@@ -346,21 +346,21 @@ std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(
                 new_page->waiting_.WakeAll();
                 mapping->Unswizzling(new_page);
                 FreeIndexPage(new_page);
-                return {nullptr, err};
+                return {IndexPageHandle(), err};
             }
             FinishIo(mapping, new_page);
             new_page->waiting_.WakeAll();
-            return {new_page, KvError::NoError};
+            return {IndexPageHandle(new_page), KvError::NoError};
         }
-        if (idx_page->IsDetached())
+        if (handle->IsDetached())
         {
             // This page is not loaded yet.
-            idx_page->waiting_.Wait(ThdTask());
+            handle->waiting_.Wait(ThdTask());
         }
         else
         {
-            EnqueueIndexPage(idx_page);
-            return {idx_page, KvError::NoError};
+            EnqueueIndexPage(handle.Get());
+            return {std::move(handle), KvError::NoError};
         }
     }
 }
@@ -461,22 +461,18 @@ KvError IndexPageManager::SeekIndex(MappingSnapshot *mapping,
     PageId current_id = page_id;
     while (true)
     {
-        auto [node, err] = FindPage(mapping, current_id);
+        auto [handle, err] = FindPage(mapping, current_id);
         CHECK_KV_ERR(err);
-        node->Pin();
-
-        IndexPageIter idx_it{node, Options()};
+        IndexPageIter idx_it{handle, Options()};
         idx_it.Seek(key);
         PageId child_id = idx_it.GetPageId();
 
-        if (node->IsPointingToLeaf())
+        if (handle->IsPointingToLeaf())
         {
             result = child_id;
-            node->Unpin();
             return KvError::NoError;
         }
 
-        node->Unpin();
         current_id = child_id;
     }
 }

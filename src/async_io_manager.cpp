@@ -61,7 +61,7 @@ char *VarPagePtr(const VarPage &page)
     switch (VarPageType(page.index()))
     {
     case VarPageType::MemIndexPage:
-        ptr = std::get<MemIndexPage *>(page)->PagePtr();
+        ptr = std::get<IndexPageHandle>(page)->PagePtr();
         break;
     case VarPageType::DataPage:
         ptr = std::get<DataPage>(page).PagePtr();
@@ -2162,7 +2162,7 @@ void IouringMgr::WriteReq::SetPage(VarPage page)
     switch (VarPageType(page.index()))
     {
     case VarPageType::MemIndexPage:
-        page_.emplace<MemIndexPage *>(std::get<MemIndexPage *>(page));
+        page_.emplace<IndexPageHandle>(std::move(std::get<IndexPageHandle>(page)));
         break;
     case VarPageType::DataPage:
         page_.emplace<DataPage>(std::move(std::get<DataPage>(page)));
