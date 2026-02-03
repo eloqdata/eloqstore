@@ -44,9 +44,12 @@ MappingSnapshot::MappingTbl::~MappingTbl()
 {
     if (vector_arena_ != nullptr)
     {
+        CHECK(chunk_arena_ != nullptr);
         clear();
         vector_arena_->Release(std::move(base_));
+        return;
     }
+    CHECK(chunk_arena_ == nullptr);
 }
 
 void MappingSnapshot::MappingTbl::clear()
@@ -77,25 +80,6 @@ size_t MappingSnapshot::MappingTbl::size() const
 size_t MappingSnapshot::MappingTbl::capacity() const
 {
     return base_.size() * kChunkSize;
-}
-
-void MappingSnapshot::MappingTbl::SetVectorArena(MappingArena *arena)
-{
-    if (vector_arena_ == arena)
-    {
-        return;
-    }
-    CHECK(base_.empty());
-    vector_arena_ = arena;
-    if (vector_arena_ != nullptr)
-    {
-        base_ = vector_arena_->Acquire();
-    }
-}
-
-void MappingSnapshot::MappingTbl::SetChunkArena(MappingChunkArena *arena)
-{
-    chunk_arena_ = arena;
 }
 
 void MappingSnapshot::MappingTbl::StartCopying()
