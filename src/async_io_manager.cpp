@@ -211,63 +211,123 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
     registered_buf_shift_ = 0;
     registered_buf_count_ = 0;
     registered_last_slice_size_ = 0;
+    prewrite_buffers_registered_ = false;
+    prewrite_buf_base_ = nullptr;
+    prewrite_buf_size_ = 0;
+    prewrite_buf_count_ = 0;
+    prewrite_last_slice_size_ = 0;
+    prewrite_buf_start_idx_ = 0;
+    prewrite_buf_owner_.reset();
+
+    std::unique_ptr<char, decltype(&std::free)> page_pool_buf{nullptr,
+                                                              &std::free};
     if (pool_bytes > 0)
     {
         void *raw_ptr = nullptr;
         int aligned = posix_memalign(&raw_ptr, page_align, pool_bytes);
         if (aligned == 0 && raw_ptr != nullptr)
         {
-            std::unique_ptr<char, decltype(&std::free)> buffer{
-                static_cast<char *>(raw_ptr), &std::free};
-            memset(buffer.get(), 0, pool_bytes);
-            std::vector<iovec> iovecs;
-            size_t remaining = pool_bytes;
-            size_t offset = 0;
-            uint64_t idx = 0;
-            while (remaining > 0)
-            {
-                size_t chunk_size = std::min(remaining, kMaxRegisteredBytes);
-                iovec iov = {.iov_base = buffer.get() + offset,
-                             .iov_len = chunk_size};
-                iovecs.push_back(iov);
-                remaining -= chunk_size;
-                offset += chunk_size;
-                idx++;
-            }
-
-            if (iovecs.size() > std::numeric_limits<uint16_t>::max())
-            {
-                LOG(WARNING)
-                    << "too many registered buffer slices: " << iovecs.size();
-                ret = -1;
-            }
-            else
-            {
-                ret = io_uring_register_buffers(
-                    &ring_, iovecs.data(), iovecs.size());
-            }
-            if (ret < 0)
-            {
-                LOG(WARNING) << "failed to register buffers: " << ret
-                             << ", falling back to unregistered pages";
-            }
-            else
-            {
-                buffers_registered_ = true;
-                registered_buffers = true;
-                registered_buf_base_ = buffer.get();
-                registered_buf_stride_ = kMaxRegisteredBytes;
-                registered_buf_shift_ = 30;
-                registered_buf_count_ = static_cast<uint16_t>(iovecs.size());
-                registered_last_slice_size_ =
-                    iovecs.empty() ? 0 : iovecs.back().iov_len;
-                shard->PagePool()->Init(buffer.release(), pool_bytes);
-            }
+            page_pool_buf.reset(static_cast<char *>(raw_ptr));
+            memset(page_pool_buf.get(), 0, pool_bytes);
         }
         else
         {
             LOG(WARNING) << "posix_memalign failed for registered pool, error: "
                          << aligned;
+        }
+    }
+
+    const size_t prewrite_bytes =
+        options_->data_append_mode ? options_->DataFileSize() : 0;
+    if (prewrite_bytes > 0)
+    {
+        void *raw_ptr = nullptr;
+        int aligned = posix_memalign(&raw_ptr, page_align, prewrite_bytes);
+        if (aligned == 0 && raw_ptr != nullptr)
+        {
+            prewrite_buf_owner_.reset(static_cast<char *>(raw_ptr));
+            memset(prewrite_buf_owner_.get(), 0, prewrite_bytes);
+            prewrite_buf_base_ = prewrite_buf_owner_.get();
+            prewrite_buf_size_ = prewrite_bytes;
+        }
+        else
+        {
+            LOG(WARNING) << "posix_memalign failed for prewrite buffer, error: "
+                         << aligned;
+        }
+    }
+
+    std::vector<iovec> iovecs;
+    uint16_t page_pool_slices = 0;
+    if (page_pool_buf != nullptr && pool_bytes > 0)
+    {
+        size_t remaining = pool_bytes;
+        size_t offset = 0;
+        while (remaining > 0)
+        {
+            size_t chunk_size = std::min(remaining, kMaxRegisteredBytes);
+            iovec iov = {.iov_base = page_pool_buf.get() + offset,
+                         .iov_len = chunk_size};
+            iovecs.push_back(iov);
+            remaining -= chunk_size;
+            offset += chunk_size;
+            page_pool_slices++;
+        }
+    }
+
+    prewrite_buf_start_idx_ = static_cast<uint16_t>(iovecs.size());
+    if (prewrite_buf_owner_ != nullptr && prewrite_bytes > 0)
+    {
+        size_t remaining = prewrite_bytes;
+        size_t offset = 0;
+        while (remaining > 0)
+        {
+            size_t chunk_size = std::min(remaining, kMaxRegisteredBytes);
+            iovec iov = {.iov_base = prewrite_buf_owner_.get() + offset,
+                         .iov_len = chunk_size};
+            iovecs.push_back(iov);
+            remaining -= chunk_size;
+            offset += chunk_size;
+            prewrite_buf_count_++;
+            prewrite_last_slice_size_ = chunk_size;
+        }
+    }
+
+    if (!iovecs.empty())
+    {
+        if (iovecs.size() > std::numeric_limits<uint16_t>::max())
+        {
+            LOG(WARNING)
+                << "too many registered buffer slices: " << iovecs.size();
+            ret = -1;
+        }
+        else
+        {
+            ret = io_uring_register_buffers(&ring_, iovecs.data(), iovecs.size());
+        }
+        if (ret < 0)
+        {
+            LOG(WARNING) << "failed to register buffers: " << ret
+                         << ", falling back to unregistered pages/prewrite";
+        }
+        else
+        {
+            if (page_pool_slices > 0)
+            {
+                buffers_registered_ = true;
+                registered_buffers = true;
+                registered_buf_base_ = page_pool_buf.get();
+                registered_buf_stride_ = kMaxRegisteredBytes;
+                registered_buf_shift_ = 30;
+                registered_buf_count_ = page_pool_slices;
+                registered_last_slice_size_ =
+                    page_pool_slices == 0 ? 0 : iovecs[page_pool_slices - 1].iov_len;
+                shard->PagePool()->Init(page_pool_buf.release(), pool_bytes);
+            }
+            if (prewrite_buf_count_ > 0)
+            {
+                prewrite_buffers_registered_ = true;
+            }
         }
     }
 
@@ -762,6 +822,31 @@ KvError ToKvError(int err_no)
     }
 }
 
+static int KvErrorToErrno(KvError err)
+{
+    switch (err)
+    {
+    case KvError::NoError:
+        return 0;
+    case KvError::OutOfMem:
+        return ENOMEM;
+    case KvError::OutOfSpace:
+        return ENOSPC;
+    case KvError::NoPermission:
+        return EPERM;
+    case KvError::OpenFileLimit:
+        return EMFILE;
+    case KvError::TryAgain:
+        return EAGAIN;
+    case KvError::Busy:
+        return EBUSY;
+    case KvError::NotFound:
+        return ENOENT;
+    default:
+        return EIO;
+    }
+}
+
 std::pair<void *, IouringMgr::UserDataType> IouringMgr::DecodeUserData(
     uint64_t user_data)
 {
@@ -1149,6 +1234,15 @@ int IouringMgr::CreateFile(LruFD::Ref dir_fd, FileId file_id, uint64_t term)
             // Avoid update metadata (file size) of file frequently in append
             // write mode.
             Fallocate({fd, true}, options_->DataFileSize());
+            KvError prewrite_err =
+                PreWriteZero({fd, true}, options_->DataFileSize());
+            if (prewrite_err != KvError::NoError)
+            {
+                LOG(ERROR) << "prewrite failed for data file " << filename
+                           << ": " << ErrorString(prewrite_err);
+                CloseDirect(fd);
+                return -KvErrorToErrno(prewrite_err);
+            }
         }
     }
     return fd;
@@ -1239,6 +1333,106 @@ int IouringMgr::Write(FdIdx fd, const char *src, size_t n, uint64_t offset)
     }
     io_uring_prep_write(sqe, fd.first, src, n, offset);
     return ThdTask()->WaitIoResult();
+}
+
+KvError IouringMgr::PreWriteZero(FdIdx fd, size_t file_size)
+{
+    if (file_size == 0)
+    {
+        return KvError::NoError;
+    }
+
+    const bool use_registered =
+        prewrite_buffers_registered_ && prewrite_buf_base_ != nullptr &&
+        prewrite_buf_count_ > 0;
+    const char *buffer = prewrite_buf_base_;
+    std::unique_ptr<char, decltype(&std::free)> tmp_buf{nullptr, &std::free};
+    if (buffer == nullptr)
+    {
+        void *raw_ptr = nullptr;
+        int aligned = posix_memalign(&raw_ptr, page_align, file_size);
+        if (aligned != 0 || raw_ptr == nullptr)
+        {
+            LOG(WARNING) << "posix_memalign failed for prewrite buffer, error: "
+                         << aligned;
+            return KvError::OutOfMem;
+        }
+        tmp_buf.reset(static_cast<char *>(raw_ptr));
+        std::memset(tmp_buf.get(), 0, file_size);
+        buffer = tmp_buf.get();
+    }
+    if (!use_registered)
+    {
+        LOG(WARNING) << "prewrite using unregistered buffer";
+    }
+
+    if (use_registered)
+    {
+        const size_t slice_size = 1ull << 30;
+        for (uint16_t idx = 0; idx < prewrite_buf_count_; ++idx)
+        {
+            size_t chunk =
+                (idx + 1 == prewrite_buf_count_) ? prewrite_last_slice_size_
+                                                 : slice_size;
+            if (chunk == 0)
+            {
+                continue;
+            }
+            size_t offset = static_cast<size_t>(idx) * slice_size;
+            size_t remaining = chunk;
+            while (remaining > 0)
+            {
+                io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
+                if (fd.second)
+                {
+                    sqe->flags |= IOSQE_FIXED_FILE;
+                }
+                uint16_t buf_index = prewrite_buf_start_idx_ + idx;
+                const char *ptr = buffer + offset;
+                io_uring_prep_write_fixed(
+                    sqe, fd.first, ptr, remaining, offset, buf_index);
+                int res = ThdTask()->WaitIoResult();
+                if (res < 0)
+                {
+                    return ToKvError(res);
+                }
+                if (res == 0)
+                {
+                    return KvError::IoFail;
+                }
+                remaining -= static_cast<size_t>(res);
+                offset += static_cast<size_t>(res);
+            }
+        }
+    }
+    else
+    {
+        size_t remaining = file_size;
+        size_t offset = 0;
+        const size_t max_batch = 1ull << 30;
+        while (remaining > 0)
+        {
+            size_t batch = std::min(remaining, max_batch);
+            int res = Write(fd, buffer + offset, batch, offset);
+            if (res < 0)
+            {
+                return ToKvError(res);
+            }
+            if (res == 0)
+            {
+                return KvError::IoFail;
+            }
+            remaining -= static_cast<size_t>(res);
+            offset += static_cast<size_t>(res);
+        }
+    }
+
+    int res = Fdatasync(fd);
+    if (res < 0)
+    {
+        return ToKvError(res);
+    }
+    return KvError::NoError;
 }
 
 KvError IouringMgr::SyncFile(LruFD::Ref fd)

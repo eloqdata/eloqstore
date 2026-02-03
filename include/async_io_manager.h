@@ -442,6 +442,7 @@ public:
     int CloseDirect(int idx);
     int Fallocate(FdIdx fd, uint64_t size);
     int UnlinkAt(FdIdx dir_fd, const char *path, bool rmdir);
+    KvError PreWriteZero(FdIdx fd, size_t file_size);
     /**
      * @brief Write content to a file with given name in the directory.
      * This is often used to write snapshot of manifest atomically.
@@ -528,6 +529,14 @@ public:
     uint8_t registered_buf_shift_{0};
     uint16_t registered_buf_count_{0};
     size_t registered_last_slice_size_{0};
+    bool prewrite_buffers_registered_{false};
+    char *prewrite_buf_base_{nullptr};
+    size_t prewrite_buf_size_{0};
+    uint16_t prewrite_buf_count_{0};
+    size_t prewrite_last_slice_size_{0};
+    uint16_t prewrite_buf_start_idx_{0};
+    std::unique_ptr<char, decltype(&std::free)> prewrite_buf_owner_{nullptr,
+                                                                    &std::free};
     io_uring ring_;
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};
