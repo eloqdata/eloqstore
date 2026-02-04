@@ -127,6 +127,7 @@ mod ffi {
         NoPermission,
         CloudErr,
         IoFail,
+        ExpiredTerm,
     }
 
     #[repr(u8)]

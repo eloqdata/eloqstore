@@ -355,9 +355,11 @@ extern "C"
     {
         if (!ident)
             return nullptr;
-        static thread_local std::string name;
-        name = reinterpret_cast<TableIdent *>(ident)->tbl_name_;
-        return name.c_str();
+        // Return a pointer to the internal std::string's buffer.
+        // The pointer is valid as long as the TableIdent object exists and is not modified.
+        // Callers should copy the string immediately if they need to keep it beyond
+        // the lifetime of the TableIdent object or if they may call GetName again.
+        return reinterpret_cast<TableIdent *>(ident)->tbl_name_.c_str();
     }
 
     uint32_t CEloqStore_TableIdent_GetPartition(CTableIdentHandle ident)

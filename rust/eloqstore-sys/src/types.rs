@@ -18,13 +18,14 @@ pub struct TableIdent {
 }
 
 impl TableIdent {
-    pub fn new(tbl_name: &str, partition_id: u32) -> Self {
-        let c_name = CString::new(tbl_name).unwrap();
+    pub fn new(tbl_name: &str, partition_id: u32) -> Result<Self, String> {
+        let c_name = CString::new(tbl_name)
+            .map_err(|e| format!("Invalid table name: contains null byte - {}", e))?;
         let ptr = c_name.into_raw();
-        Self {
+        Ok(Self {
             tbl_name: ptr,
             partition_id,
-        }
+        })
     }
 
     pub fn table_name(&self) -> Option<String> {
