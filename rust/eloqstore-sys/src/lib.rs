@@ -128,6 +128,7 @@ mod ffi {
         CloudErr,
         IoFail,
         ExpiredTerm,
+        OssInsufficientStorage,
     }
 
     #[repr(u8)]

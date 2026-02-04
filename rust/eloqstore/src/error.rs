@@ -18,6 +18,7 @@ pub enum KvError {
     CloudErr,
     IoFail,
     ExpiredTerm,
+    OssInsufficientStorage,
     Unknown,
 }
 
@@ -40,7 +41,8 @@ impl From<CEloqStoreStatus> for KvError {
             13 => KvError::CloudErr,
             14 => KvError::IoFail,
             15 => KvError::ExpiredTerm,
-            _ => KvError::Unknown, // Maps any unknown error codes (including CloudNoManifest if C API returns it)
+            16 => KvError::OssInsufficientStorage,
+            _ => KvError::Unknown,
         }
     }
 }
@@ -64,6 +66,7 @@ impl std::fmt::Display for KvError {
             KvError::CloudErr => write!(f, "cloud error"),
             KvError::IoFail => write!(f, "I/O failure"),
             KvError::ExpiredTerm => write!(f, "expired term"),
+            KvError::OssInsufficientStorage => write!(f, "object storage insufficient storage"),
             KvError::Unknown => write!(f, "unknown error"),
         }
     }
@@ -91,6 +94,7 @@ impl std::convert::From<KvError> for std::io::Error {
             KvError::CloudErr => Self::new(Other, "cloud error"),
             KvError::IoFail => Self::new(Other, "I/O failure"),
             KvError::ExpiredTerm => Self::new(Other, "expired term"),
+            KvError::OssInsufficientStorage => Self::new(StorageFull, "object storage insufficient storage"),
             KvError::Unknown => Self::new(Other, "unknown error"),
         }
     }

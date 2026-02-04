@@ -89,10 +89,8 @@ static CEloqStoreStatus kv_error_to_c(KvError err)
         return CEloqStoreStatus_IoFail;
     case KvError::ExpiredTerm:
         return CEloqStoreStatus_ExpiredTerm;
-    // Note: CloudNoManifest is defined in C API but not yet in C++ KvError
-    // enum. If C++ code adds CloudNoManifest, uncomment the following: case
-    // KvError::CloudNoManifest:
-    //     return CEloqStoreStatus_CloudNoManifest;
+    case KvError::OssInsufficientStorage:
+        return CEloqStoreStatus_OssInsufficientStorage;
     default:
         return CEloqStoreStatus_InvalidArgs;
     }

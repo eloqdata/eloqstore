@@ -19,6 +19,7 @@ pub enum KvError {
     CloudErr = 13,
     IoFail = 14,
     ExpiredTerm = 15,
+    OssInsufficientStorage = 16,
     Unknown = 255,
 }
 
@@ -41,6 +42,7 @@ impl KvError {
             13 => KvError::CloudErr,
             14 => KvError::IoFail,
             15 => KvError::ExpiredTerm,
+            16 => KvError::OssInsufficientStorage,
             _ => {
                 #[cfg(debug_assertions)]
                 eprintln!("Unknown error code from C API: {}", err);
@@ -76,6 +78,7 @@ impl std::fmt::Display for KvError {
             KvError::Timeout => "Operation timeout",
             KvError::NoPermission => "Operation not permitted",
             KvError::ExpiredTerm => "Expired term",
+            KvError::OssInsufficientStorage => "Object storage insufficient storage",
             KvError::Unknown => "Unknown error",
         };
         write!(f, "{}", msg)

@@ -30,7 +30,7 @@ extern "C"
         CEloqStoreStatus_CloudErr,
         CEloqStoreStatus_IoFail,
         CEloqStoreStatus_ExpiredTerm,
-        CEloqStoreStatus_CloudNoManifest,
+        CEloqStoreStatus_OssInsufficientStorage,
     } CEloqStoreStatus;
 
     // ============================================================
