@@ -180,15 +180,15 @@ extern "C"
     void CEloqStore_TableIdent_Destroy(CTableIdentHandle ident);
     /**
      * Get the table name from a TableIdent handle.
-     * 
+     *
      * @param ident The TableIdent handle
      * @return A pointer to the table name string, or nullptr if ident is null.
-     * 
-     * @note The returned pointer is valid as long as the TableIdent object exists
-     *       and is not modified. Callers should copy the string immediately if they
-     *       need to keep it beyond the lifetime of the TableIdent object or if they
-     *       may call GetName again on a different TableIdent (which would invalidate
-     *       the previous pointer if not copied).
+     *
+     * @note The returned pointer is valid as long as the TableIdent object
+     * exists and is not modified. Callers should copy the string immediately if
+     * they need to keep it beyond the lifetime of the TableIdent object or if
+     * they may call GetName again on a different TableIdent (which would
+     * invalidate the previous pointer if not copied).
      */
     const char *CEloqStore_TableIdent_GetName(CTableIdentHandle ident);
     uint32_t CEloqStore_TableIdent_GetPartition(CTableIdentHandle ident);

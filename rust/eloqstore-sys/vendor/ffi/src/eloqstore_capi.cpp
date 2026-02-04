@@ -356,9 +356,10 @@ extern "C"
         if (!ident)
             return nullptr;
         // Return a pointer to the internal std::string's buffer.
-        // The pointer is valid as long as the TableIdent object exists and is not modified.
-        // Callers should copy the string immediately if they need to keep it beyond
-        // the lifetime of the TableIdent object or if they may call GetName again.
+        // The pointer is valid as long as the TableIdent object exists and is
+        // not modified. Callers should copy the string immediately if they need
+        // to keep it beyond the lifetime of the TableIdent object or if they
+        // may call GetName again.
         return reinterpret_cast<TableIdent *>(ident)->tbl_name_.c_str();
     }
 
