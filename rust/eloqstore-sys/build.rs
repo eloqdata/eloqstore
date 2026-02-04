@@ -3,6 +3,24 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+fn add_usr_local_link_search_paths_if_needed() {
+    // Some CI/container images install libraries (e.g. glog) under /usr/local/lib.
+    // The linker does not always search /usr/local/lib by default, so we add it
+    // when we detect commonly required libraries there.
+    for dir in ["/usr/local/lib", "/usr/local/lib64"] {
+        let d = PathBuf::from(dir);
+        if !d.is_dir() {
+            continue;
+        }
+        let has_glog = d.join("libglog.so").exists() || d.join("libglog.so.1").exists();
+        let has_gflags =
+            d.join("libgflags.so").exists() || d.join("libgflags.so.2").exists();
+        if has_glog || has_gflags {
+            println!("cargo:rustc-link-search=native={}", d.display());
+        }
+    }
+}
+
 fn main() {
     // Initialize and update git submodule before build
     // vendor/{src,include,external} are soft-linked to repository root
@@ -193,6 +211,8 @@ fn main() {
         // Link system libraries
         // In static mode, we need to link all dependencies that libeloqstore.a depends on
         if use_static {
+            add_usr_local_link_search_paths_if_needed();
+
             // Static mode: link all system dependencies that libeloqstore.a needs
             println!("cargo:rustc-link-lib=zstd");
             println!("cargo:rustc-link-lib=glog");
@@ -266,6 +286,7 @@ fn main() {
         }
 
         // System libraries that need to be linked (fallback mode)
+        add_usr_local_link_search_paths_if_needed();
         println!("cargo:rustc-link-lib=zstd");
         println!("cargo:rustc-link-lib=glog");
         println!("cargo:rustc-link-lib=gflags");
