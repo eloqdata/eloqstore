@@ -23,20 +23,18 @@ using eloqstore::WriteDataEntry;
 using eloqstore::WriteOp;
 
 // ============================================================
-// Thread-local storage for error messages
+// Thread-local storage for error messages (no mutex: each thread
+// has its own copy, and typical usage is sequential set-then-get)
 // ============================================================
 static thread_local std::string g_last_error_message;
-static std::mutex g_error_mutex;
 
 static void set_last_error(const std::string &msg)
 {
-    std::lock_guard<std::mutex> lock(g_error_mutex);
     g_last_error_message = msg;
 }
 
 static void clear_last_error()
 {
-    std::lock_guard<std::mutex> lock(g_error_mutex);
     g_last_error_message.clear();
 }
 
@@ -91,8 +89,10 @@ static CEloqStoreStatus kv_error_to_c(KvError err)
         return CEloqStoreStatus_IoFail;
     case KvError::ExpiredTerm:
         return CEloqStoreStatus_ExpiredTerm;
-    case KvError::CloudNoManifest:
-        return CEloqStoreStatus_CloudNoManifest;
+    // Note: CloudNoManifest is defined in C API but not yet in C++ KvError enum.
+    // If C++ code adds CloudNoManifest, uncomment the following:
+    // case KvError::CloudNoManifest:
+    //     return CEloqStoreStatus_CloudNoManifest;
     default:
         return CEloqStoreStatus_InvalidArgs;
     }
@@ -1020,7 +1020,6 @@ extern "C"
 
     const char *CEloqStore_GetLastError(CEloqStoreHandle store)
     {
-        std::lock_guard<std::mutex> lock(g_error_mutex);
         return g_last_error_message.empty() ? nullptr
                                             : g_last_error_message.c_str();
     }

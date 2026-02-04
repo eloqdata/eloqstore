@@ -21,6 +21,14 @@ fn main() {
         }
     }
 
+    // Parallel CMake build: use NUM_JOBS (set by Cargo) or CPU count
+    let num_jobs = std::env::var("NUM_JOBS")
+        .ok()
+        .and_then(|s| s.parse::<u32>().ok())
+        .or_else(|| std::thread::available_parallelism().ok().map(|p| p.get() as u32))
+        .unwrap_or(1)
+        .max(1);
+
     // Enable static linking of all dependencies
     let dst = Config::new("vendor")
         .define("CMAKE_CXX_STANDARD", "20")
@@ -31,6 +39,7 @@ fn main() {
         .define("WITH_DB_STRESS", "OFF")
         .define("WITH_BENCHMARK", "OFF")
         .define("ELOQ_MODULE_ENABLED", "OFF")
+        .build_arg(format!("-j{}", num_jobs))
         .build();
 
     let build_dir = dst.join("build");
