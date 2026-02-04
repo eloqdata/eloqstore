@@ -74,6 +74,14 @@ jobs:
         run: |
           ctest --test-dir build/tests/ --output-on-failure -V
 
+
+      - name: Build Rust SDK with static linking
+        run: |
+          cd rust
+          rustup default stable
+          ELOQSTORE_STATIC_EXE=1 cargo build --release --example basic_usage
+          ./target/release/examples/basic_usage
+
       - name: Remove ci-approved label after run
         if: ${{ always() }}
         uses: actions-ecosystem/action-remove-labels@v1
