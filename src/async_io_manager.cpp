@@ -3308,11 +3308,6 @@ int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
 
 KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
 {
-    if (int res = IouringMgr::Fdatasync(fd.FdPair()); res < 0)
-    {
-        return ToKvError(res);
-    }
-
     FileId file_id = fd.Get()->file_id_;
     if (file_id != LruFD::kDirectory)
     {
@@ -3341,8 +3336,6 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
 KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
                                  std::span<LruFD::Ref> fds)
 {
-    KvError err = FdatasyncFiles(tbl_id, fds);
-    CHECK_KV_ERR(err);
     std::vector<std::string> filenames;
     for (LruFD::Ref fd : fds)
     {
@@ -3353,7 +3346,7 @@ KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
             filenames.emplace_back(ToFilename(file_id, term));
         }
     }
-    err = UploadFiles(tbl_id, std::move(filenames));
+    KvError err = UploadFiles(tbl_id, std::move(filenames));
     if (err != KvError::NoError)
     {
         return err;
