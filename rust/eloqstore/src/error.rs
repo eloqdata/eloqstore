@@ -18,7 +18,6 @@ pub enum KvError {
     CloudErr,
     IoFail,
     ExpiredTerm,
-    CloudNoManifest,
     Unknown,
 }
 
@@ -41,8 +40,7 @@ impl From<CEloqStoreStatus> for KvError {
             13 => KvError::CloudErr,
             14 => KvError::IoFail,
             15 => KvError::ExpiredTerm,
-            16 => KvError::CloudNoManifest,
-            _ => KvError::Unknown,
+            _ => KvError::Unknown, // Maps any unknown error codes (including CloudNoManifest if C API returns it)
         }
     }
 }
@@ -66,7 +64,6 @@ impl std::fmt::Display for KvError {
             KvError::CloudErr => write!(f, "cloud error"),
             KvError::IoFail => write!(f, "I/O failure"),
             KvError::ExpiredTerm => write!(f, "expired term"),
-            KvError::CloudNoManifest => write!(f, "no manifest found in cloud but the directory is not empty"),
             KvError::Unknown => write!(f, "unknown error"),
         }
     }
@@ -94,7 +91,6 @@ impl std::convert::From<KvError> for std::io::Error {
             KvError::CloudErr => Self::new(Other, "cloud error"),
             KvError::IoFail => Self::new(Other, "I/O failure"),
             KvError::ExpiredTerm => Self::new(Other, "expired term"),
-            KvError::CloudNoManifest => Self::new(Other, "no manifest found in cloud but the directory is not empty"),
             KvError::Unknown => Self::new(Other, "unknown error"),
         }
     }
