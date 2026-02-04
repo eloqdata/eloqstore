@@ -1596,7 +1596,7 @@ void AsyncHttpManager::ScheduleRetry(ObjectStore::Task *task,
     pending_retries_.emplace(deadline, task);
 }
 
-uint32_t AsyncHttpManager::ComputeBackoffMs(uint8_t attempt) const
+uint32_t AsyncHttpManager::ComputeBackoffMs(uint8_t attempt)
 {
     if (attempt == 0)
     {
@@ -1609,7 +1609,7 @@ uint32_t AsyncHttpManager::ComputeBackoffMs(uint8_t attempt) const
     return static_cast<uint32_t>(delay);
 }
 
-bool AsyncHttpManager::IsCurlRetryable(CURLcode code) const
+bool AsyncHttpManager::IsCurlRetryable(CURLcode code)
 {
     switch (code)
     {
@@ -1628,7 +1628,7 @@ bool AsyncHttpManager::IsCurlRetryable(CURLcode code) const
     }
 }
 
-bool AsyncHttpManager::IsHttpRetryable(int64_t response_code) const
+bool AsyncHttpManager::IsHttpRetryable(int64_t response_code)
 {
     switch (response_code)
     {
@@ -1644,7 +1644,7 @@ bool AsyncHttpManager::IsHttpRetryable(int64_t response_code) const
     }
 }
 
-KvError AsyncHttpManager::ClassifyHttpError(int64_t response_code) const
+KvError AsyncHttpManager::ClassifyHttpError(int64_t response_code)
 {
     switch (response_code)
     {
@@ -1663,12 +1663,14 @@ KvError AsyncHttpManager::ClassifyHttpError(int64_t response_code) const
     case 504:
     case 505:
         return KvError::Timeout;
+    case 507:
+        return KvError::OssInsufficientStorage;
     default:
         return KvError::CloudErr;
     }
 }
 
-KvError AsyncHttpManager::ClassifyCurlError(CURLcode code) const
+KvError AsyncHttpManager::ClassifyCurlError(CURLcode code)
 {
     switch (code)
     {

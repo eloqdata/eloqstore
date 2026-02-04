@@ -28,6 +28,7 @@ enum struct KvError : uint8_t
     CloudErr,
     IoFail,
     ExpiredTerm,
+    OssInsufficientStorage,
 
 };
 

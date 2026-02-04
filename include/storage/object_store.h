@@ -301,11 +301,11 @@ private:
     void ProcessPendingRetries();
     void ScheduleRetry(ObjectStore::Task *task,
                        std::chrono::steady_clock::duration delay);
-    uint32_t ComputeBackoffMs(uint8_t attempt) const;
-    bool IsCurlRetryable(CURLcode code) const;
-    bool IsHttpRetryable(int64_t response_code) const;
-    KvError ClassifyHttpError(int64_t response_code) const;
-    KvError ClassifyCurlError(CURLcode code) const;
+    static uint32_t ComputeBackoffMs(uint8_t attempt);
+    static bool IsCurlRetryable(CURLcode code);
+    static bool IsHttpRetryable(int64_t response_code);
+    static KvError ClassifyHttpError(int64_t response_code);
+    static KvError ClassifyCurlError(CURLcode code);
     void OnTaskFinished(ObjectStore::Task *task);
 
     static size_t WriteCallback(void *contents,
