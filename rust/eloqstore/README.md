@@ -17,7 +17,7 @@ use eloqstore::{EloqStore, Options, TableIdentifier};
 fn main() -> Result<(), eloqstore::KvError> {
     // Configure the store
     let mut opts = Options::new()?;
-    opts.set_num_threads(4);
+    opts.set_num_threads(4)?;
     opts.add_store_path("/tmp/eloqstore_data");
 
     // Create and start the store
@@ -161,7 +161,7 @@ opts.set_num_threads(4);
 opts.set_buffer_pool_size(1024 * 1024 * 256); // 256MB
 
 // Configure data page size (in bytes)
-opts.set_data_page_size(4096);
+opts.set_data_page_size(4096)?;
 
 // Add store paths
 opts.add_store_path("/path/to/data")?;

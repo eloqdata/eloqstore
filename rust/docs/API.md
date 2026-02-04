@@ -29,7 +29,7 @@ use eloqstore::{EloqStore, Options, TableIdentifier};
 fn main() -> Result<(), eloqstore::KvError> {
     // Configure storage options
     let mut opts = Options::new()?;
-    opts.set_num_threads(4);
+    opts.set_num_threads(4)?;
     opts.add_store_path("/tmp/eloqstore_data")?;
 
     // Create and start the store instance
@@ -95,13 +95,15 @@ impl Options {
     pub fn new() -> Result<Self, KvError>;
     
     /// Set number of worker threads
-    pub fn set_num_threads(&mut self, n: u32);
+    /// Returns an error if n exceeds u16::MAX (65535)
+    pub fn set_num_threads(&mut self, n: u32) -> Result<(), KvError>;
     
     /// Add a storage path
     pub fn add_store_path(&mut self, path: &str) -> Result<(), KvError>;
     
     /// Set data page size (bytes)
-    pub fn set_data_page_size(&mut self, size: u32);
+    /// Returns an error if size exceeds u16::MAX (65535)
+    pub fn set_data_page_size(&mut self, size: u32) -> Result<(), KvError>;
     
     /// Set buffer pool size (bytes)
     pub fn set_buffer_pool_size(&mut self, size: u64);

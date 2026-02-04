@@ -38,7 +38,7 @@ use eloqstore::{EloqStore, Options, TableIdentifier};
 
 fn main() -> Result<(), eloqstore::KvError> {
     let mut opts = Options::new()?;
-    opts.set_num_threads(1);
+    opts.set_num_threads(1)?;
     opts.add_store_path("tmp/eloqstore_demo")?;
 
     let mut store = EloqStore::new(&opts)?;

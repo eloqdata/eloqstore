@@ -27,7 +27,7 @@ fn main() -> Result<(), eloqstore::KvError> {
     let mut opts = Options::new()?;
 
     // Basic configuration
-    opts.set_num_threads(4);
+    opts.set_num_threads(4).expect("Failed to set num threads");
     opts.add_store_path("/tmp/eloqstore_cloud_cache").expect("Failed to add store path");
     opts.set_data_append_mode(true); // Required for cloud storage
     opts.set_enable_compression(true);

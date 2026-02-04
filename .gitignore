@@ -43,3 +43,6 @@ install
 .idea
 
 test-data
+
+target
+tmp

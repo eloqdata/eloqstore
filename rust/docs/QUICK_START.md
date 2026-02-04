@@ -93,7 +93,7 @@ fn timestamp_ms() -> u64 {
 fn main() -> Result<(), eloqstore::KvError> {
     // 1) Configure
     let mut opts = Options::new()?;
-    opts.set_num_threads(1);
+    opts.set_num_threads(1)?;
     opts.add_store_path("/tmp/eloqstore_demo")?;
 
     // 2) Start store

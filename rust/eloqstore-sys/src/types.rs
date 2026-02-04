@@ -204,6 +204,19 @@ impl Default for KvOptions {
 }
 
 impl KvOptions {
+    /// Helper function to safely set a CString pointer, freeing the old one if it exists
+    fn set_cstring_ptr(ptr: &mut *mut c_char, value: &str) {
+        unsafe {
+            // Free the old CString if it exists
+            if !ptr.is_null() {
+                let _ = CString::from_raw(*ptr);
+            }
+        }
+        // Create new CString and take ownership of the raw pointer
+        let c_str = CString::new(value).unwrap();
+        *ptr = c_str.into_raw();
+    }
+
     pub fn with_path<P: AsRef<std::path::Path>>(path: P) -> Self {
         let mut opts = Self::default();
         opts.set_store_path(path.as_ref());
@@ -224,8 +237,7 @@ impl KvOptions {
 
     pub fn set_store_path<P: AsRef<std::path::Path>>(&mut self, path: P) {
         let path_str = path.as_ref().to_string_lossy();
-        let c_path = CString::new(path_str.as_bytes()).unwrap();
-        self.cloud_store_path = c_path.into_raw();
+        Self::set_cstring_ptr(&mut self.cloud_store_path, &path_str);
     }
 
     pub fn set_cloud_credentials(
@@ -235,10 +247,10 @@ impl KvOptions {
         access_key: &str,
         secret_key: &str,
     ) {
-        self.cloud_provider = CString::new(provider).unwrap().into_raw();
-        self.cloud_region = CString::new(region).unwrap().into_raw();
-        self.cloud_access_key = CString::new(access_key).unwrap().into_raw();
-        self.cloud_secret_key = CString::new(secret_key).unwrap().into_raw();
+        Self::set_cstring_ptr(&mut self.cloud_provider, provider);
+        Self::set_cstring_ptr(&mut self.cloud_region, region);
+        Self::set_cstring_ptr(&mut self.cloud_access_key, access_key);
+        Self::set_cstring_ptr(&mut self.cloud_secret_key, secret_key);
     }
 }
 

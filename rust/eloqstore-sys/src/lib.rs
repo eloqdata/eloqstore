@@ -5,19 +5,43 @@
 mod embedded_lib;
 
 use std::os::raw::{c_char, c_uchar, c_uint, c_ulonglong, c_ushort, c_void};
-use std::sync::Once;
+use std::sync::{Once, Mutex};
 
 // Ensure embedded library is available at startup
 static INIT: Once = Once::new();
+// Store initialization result: None = not initialized yet, Some(Ok(())) = success, Some(Err(_)) = failure
+static INIT_RESULT: Mutex<Option<Result<(), String>>> = Mutex::new(None);
 
 /// Ensure the embedded library is extracted and available before FFI calls
 /// This is called automatically when creating Options, but can be called manually if needed
-pub fn ensure_library_loaded() {
+/// Returns an error if library extraction or loading fails
+pub fn ensure_library_loaded() -> Result<(), String> {
+    // Check if we've already initialized (success or failure)
+    {
+        let result_guard = INIT_RESULT.lock().map_err(|e| format!("Mutex poison: {}", e))?;
+        if let Some(ref result) = *result_guard {
+            return result.clone();
+        }
+    }
+    
+    // Initialize (only runs once)
     INIT.call_once(|| {
-        // Try to ensure the library is available
-        // This will extract it from embedded data if needed and dlopen it
-        let _ = embedded_lib::ensure_library_available();
+        let result = embedded_lib::ensure_library_available()
+            .map(|_| ())
+            .map_err(|e| e);
+        
+        // Store the result for future calls
+        if let Ok(mut guard) = INIT_RESULT.lock() {
+            *guard = Some(result);
+        }
     });
+    
+    // Retrieve and return the stored result
+    let result_guard = INIT_RESULT.lock().map_err(|e| format!("Mutex poison: {}", e))?;
+    result_guard
+        .as_ref()
+        .expect("Initialization should have completed")
+        .clone()
 }
 
 pub use self::ffi::CEloqStoreStatus;

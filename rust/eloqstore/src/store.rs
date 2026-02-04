@@ -11,7 +11,14 @@ pub struct Options {
 impl Options {
     pub fn new() -> Result<Self, KvError> {
         // Ensure embedded library is available before calling FFI functions
-        eloqstore_sys::ensure_library_loaded();
+        eloqstore_sys::ensure_library_loaded()
+            .map_err(|e| {
+                // Convert library loading error to KvError::IoFail
+                // The error message from ensure_library_loaded contains details about
+                // why library extraction or loading failed
+                eprintln!("Failed to load embedded library: {}", e);
+                KvError::IoFail
+            })?;
         let ptr = unsafe { eloqstore_sys::CEloqStore_Options_Create() };
         if ptr.is_null() {
             Err(KvError::OutOfMem)
@@ -20,16 +27,24 @@ impl Options {
         }
     }
 
-    pub fn set_num_threads(&mut self, n: u32) {
+    pub fn set_num_threads(&mut self, n: u32) -> Result<(), KvError> {
+        if n > u16::MAX as u32 {
+            return Err(KvError::InvalidArgs);
+        }
         unsafe { eloqstore_sys::CEloqStore_Options_SetNumThreads(self.ptr, n as u16) }
+        Ok(())
     }
 
     pub fn set_buffer_pool_size(&mut self, size: u64) {
         unsafe { eloqstore_sys::CEloqStore_Options_SetBufferPoolSize(self.ptr, size) }
     }
 
-    pub fn set_data_page_size(&mut self, size: u32) {
+    pub fn set_data_page_size(&mut self, size: u32) -> Result<(), KvError> {
+        if size > u16::MAX as u32 {
+            return Err(KvError::InvalidArgs);
+        }
         unsafe { eloqstore_sys::CEloqStore_Options_SetDataPageSize(self.ptr, size as u16) }
+        Ok(())
     }
 
     pub fn add_store_path<P: AsRef<Path>>(&mut self, path: P) -> Result<(), KvError> {
@@ -273,8 +288,11 @@ impl EloqStore {
         key: &[u8],
     ) -> Result<Option<(Vec<u8>, Vec<u8>)>, KvError> {
         let req = crate::FloorRequest::new(tbl.clone(), key);
-        let resp = self.exec_sync(req)?;
-        Ok(Some((resp.key, resp.value)))
+        match self.exec_sync(req) {
+            Ok(resp) => Ok(Some((resp.key, resp.value))),
+            Err(KvError::NotFound) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     pub fn scan(

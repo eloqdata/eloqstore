@@ -14,7 +14,7 @@ fn test_all_apis() {
     println!("=======================\n");
 
     let mut opts = Options::new().expect("Failed to create options");
-    opts.set_num_threads(1);
+    opts.set_num_threads(1).expect("Failed to set num threads");
     opts.add_store_path("tmp/eloqstore_demo").expect("Failed to add store path");
     let mut store = EloqStore::new(&opts).expect("Failed to create store");
     store.start().expect("Failed to start store");
@@ -146,7 +146,7 @@ fn test_all_apis() {
     println!("✓ Scanned entries: {:?}", result.entries.len());
     for entry in result.entries {
         assert!(
-            entry.key >= "key_020".as_bytes().to_vec() && entry.key <= "key_080".as_bytes().to_vec()
+            entry.key >= "key_020".as_bytes().to_vec() && entry.key < "key_080".as_bytes().to_vec()
         );
     }
     println!("✓ Scanned 20 entries from [key_020, key_080)");
