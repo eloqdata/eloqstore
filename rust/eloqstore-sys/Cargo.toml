@@ -1,0 +1,16 @@
+[package]
+name = "eloqstore-sys"
+version = "0.1.0"
+edition = "2024"
+build = "build.rs"
+
+[dependencies]
+libc = "0.2"
+tempfile = "3"
+
+[features]
+default = []
+metrics = []
+
+[build-dependencies]
+cmake = "0.1"
