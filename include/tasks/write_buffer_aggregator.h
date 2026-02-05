@@ -15,6 +15,7 @@ struct WriteBufferBatch
 {
     char *buffer{nullptr};
     uint16_t buffer_index{0};
+    bool use_fixed{true};
     FileId file_id{0};
     uint64_t start_offset{0};
     size_t bytes{0};
@@ -34,7 +35,8 @@ public:
     void SetBuffer(char *buffer,
                    uint16_t buffer_index,
                    FileId file_id,
-                   uint64_t start_offset);
+                   uint64_t start_offset,
+                   bool use_fixed);
     bool CanAppend(FileId file_id, uint64_t offset, size_t size) const;
     char *TryReserve(FileId file_id, uint64_t offset, size_t size);
     void AddPage(VarPage page, char *release_ptr, uint16_t release_index);
@@ -45,6 +47,7 @@ private:
     size_t buffer_size_{0};
     char *buffer_{nullptr};
     uint16_t buffer_index_{0};
+    bool use_fixed_{true};
     FileId file_id_{0};
     uint64_t start_offset_{0};
     uint64_t next_offset_{0};

@@ -306,10 +306,12 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
             iovecs.push_back(iov);
             offset += write_buf_size_;
         }
+        write_buf_slots_.clear();
+        write_buf_slots_.resize(write_buf_count_);
         write_buf_free_ = nullptr;
         for (uint16_t i = 0; i < write_buf_count_; ++i)
         {
-            auto *slot = new WriteBufSlot();
+            WriteBufSlot *slot = &write_buf_slots_[i];
             slot->index = i;
             slot->next = write_buf_free_;
             write_buf_free_ = slot;
@@ -332,17 +334,15 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
         if (ret < 0)
         {
             LOG(WARNING) << "failed to register buffers: " << ret
-                         << ", falling back to unregistered pages";
-            write_buf_.reset();
-            write_buf_size_ = 0;
-            write_buf_pool_size_ = 0;
-            write_buf_count_ = 0;
-            write_buf_index_base_ = 0;
+                         << ", falling back to unregistered buffers";
+            write_buf_registered_ = false;
         }
         else
         {
             buffers_registered_ = true;
             registered_buffers = true;
+            write_buf_registered_ = (write_buf_ != nullptr &&
+                                     write_buf_count_ > 0);
             if (page_buffer != nullptr)
             {
                 registered_buf_base_ = page_buffer.get();
@@ -363,6 +363,10 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
                 shard->PagePool()->Init();
             }
         }
+    }
+    else
+    {
+        write_buf_registered_ = false;
     }
 
     if (!registered_buffers)
@@ -388,7 +392,6 @@ char *IouringMgr::AcquireWriteBuffer(uint16_t &buf_index)
     write_buf_free_ = slot->next;
     buf_index = static_cast<uint16_t>(write_buf_index_base_ + slot->index);
     char *ptr = write_buf_.get() + (slot->index * write_buf_size_);
-    delete slot;
     return ptr;
 }
 
@@ -398,9 +401,10 @@ void IouringMgr::ReleaseWriteBuffer(char *ptr, uint16_t buf_index)
     {
         return;
     }
-    uint16_t local_index = static_cast<uint16_t>(buf_index - write_buf_index_base_);
-    auto *slot = new WriteBufSlot();
-    slot->index = local_index;
+    uint16_t local_index =
+        static_cast<uint16_t>(buf_index - write_buf_index_base_);
+    assert(local_index < write_buf_slots_.size());
+    WriteBufSlot *slot = &write_buf_slots_[local_index];
     slot->next = write_buf_free_;
     write_buf_free_ = slot;
     write_buf_waiting_.WakeOne();
@@ -704,9 +708,10 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
                                       char *buf_ptr,
                                       size_t bytes,
                                       uint16_t buf_index,
-                                      std::vector<VarPage> pages,
-                                      std::vector<char *> release_ptrs,
-                                      std::vector<uint16_t> release_indices)
+                                      std::vector<VarPage> &pages,
+                                      std::vector<char *> &release_ptrs,
+                                      std::vector<uint16_t> &release_indices,
+                                      bool use_fixed)
 {
     uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
     auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id, true, true, term);
@@ -723,6 +728,7 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
         std::move(pages));
     req->release_ptrs_ = std::move(release_ptrs);
     req->release_indices_ = std::move(release_indices);
+    req->use_fixed_ = use_fixed;
 
     if (!req->pages_.empty())
     {
@@ -736,8 +742,16 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
     {
         sqe->flags |= IOSQE_FIXED_FILE;
     }
-    io_uring_prep_write_fixed(
-        sqe, fd, buf_ptr, bytes, static_cast<off_t>(offset), buf_index);
+    if (use_fixed)
+    {
+        io_uring_prep_write_fixed(
+            sqe, fd, buf_ptr, bytes, static_cast<off_t>(offset), buf_index);
+    }
+    else
+    {
+        io_uring_prep_write(
+            sqe, fd, buf_ptr, bytes, static_cast<off_t>(offset));
+    }
     return KvError::NoError;
 }
 
@@ -2176,6 +2190,7 @@ void IouringMgr::MergedWriteReqPool::Free(MergedWriteReq *req)
     req->task_ = nullptr;
     req->buf_ptr_ = nullptr;
     req->buf_index_ = 0;
+    req->use_fixed_ = true;
     req->bytes_ = 0;
     req->offset_ = 0;
     req->next_ = free_list_;

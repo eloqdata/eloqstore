@@ -11,6 +11,7 @@ void WriteBufferAggregator::Reset()
 {
     buffer_ = nullptr;
     buffer_index_ = 0;
+    use_fixed_ = true;
     file_id_ = 0;
     start_offset_ = 0;
     next_offset_ = 0;
@@ -33,10 +34,12 @@ bool WriteBufferAggregator::HasData() const
 void WriteBufferAggregator::SetBuffer(char *buffer,
                                       uint16_t buffer_index,
                                       FileId file_id,
-                                      uint64_t start_offset)
+                                      uint64_t start_offset,
+                                      bool use_fixed)
 {
     buffer_ = buffer;
     buffer_index_ = buffer_index;
+    use_fixed_ = use_fixed;
     file_id_ = file_id;
     start_offset_ = start_offset;
     next_offset_ = start_offset;
@@ -109,6 +112,7 @@ WriteBufferBatch WriteBufferAggregator::TakeBatch()
     WriteBufferBatch batch;
     batch.buffer = buffer_;
     batch.buffer_index = buffer_index_;
+    batch.use_fixed = use_fixed_;
     batch.file_id = file_id_;
     batch.start_offset = start_offset_;
     batch.bytes = used_;
@@ -118,6 +122,7 @@ WriteBufferBatch WriteBufferAggregator::TakeBatch()
 
     buffer_ = nullptr;
     buffer_index_ = 0;
+    use_fixed_ = true;
     file_id_ = 0;
     start_offset_ = 0;
     next_offset_ = 0;

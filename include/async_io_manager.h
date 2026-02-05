@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <span>
@@ -141,15 +142,20 @@ public:
     {
         return false;
     }
+    virtual bool WriteBufferUseFixed() const
+    {
+        return false;
+    }
     virtual KvError SubmitMergedWrite(const TableIdent &tbl_id,
                                       FileId file_id,
                                       uint64_t offset,
                                       char *buf_ptr,
                                       size_t bytes,
                                       uint16_t buf_index,
-                                      std::vector<VarPage> pages,
-                                      std::vector<char *> release_ptrs,
-                                      std::vector<uint16_t> release_indices)
+                                      std::vector<VarPage> &pages,
+                                      std::vector<char *> &release_ptrs,
+                                      std::vector<uint16_t> &release_indices,
+                                      bool use_fixed)
     {
         (void) tbl_id;
         (void) file_id;
@@ -160,6 +166,7 @@ public:
         (void) pages;
         (void) release_ptrs;
         (void) release_indices;
+        (void) use_fixed;
         return KvError::InvalidArgs;
     }
     /**
@@ -270,15 +277,20 @@ public:
     {
         return write_buf_size_ > 0 && write_buf_ != nullptr;
     }
+    bool WriteBufferUseFixed() const override
+    {
+        return write_buf_registered_;
+    }
     KvError SubmitMergedWrite(const TableIdent &tbl_id,
                               FileId file_id,
                               uint64_t offset,
                               char *buf_ptr,
                               size_t bytes,
                               uint16_t buf_index,
-                              std::vector<VarPage> pages,
-                              std::vector<char *> release_ptrs,
-                              std::vector<uint16_t> release_indices) override;
+                              std::vector<VarPage> &pages,
+                              std::vector<char *> &release_ptrs,
+                              std::vector<uint16_t> &release_indices,
+                              bool use_fixed) override;
     void InitBackgroundJob() override;
 
     std::pair<Page, KvError> ReadPage(const TableIdent &tbl_id,
@@ -450,6 +462,7 @@ public:
         LruFD::Ref fd_ref_;
         char *buf_ptr_{nullptr};
         uint16_t buf_index_{0};
+        bool use_fixed_{true};
         size_t bytes_{0};
         uint64_t offset_{0};
         std::vector<VarPage> pages_;
@@ -629,12 +642,14 @@ public:
     size_t write_buf_size_{0};
     size_t write_buf_pool_size_{0};
     uint16_t write_buf_count_{0};
+    bool write_buf_registered_{false};
     uint16_t write_buf_index_base_{0};
     struct WriteBufSlot
     {
         WriteBufSlot *next{nullptr};
         uint16_t index{0};
     };
+    std::vector<WriteBufSlot> write_buf_slots_;
     WriteBufSlot *write_buf_free_{nullptr};
     WaitingZone write_buf_waiting_;
 

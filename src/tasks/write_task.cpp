@@ -59,7 +59,12 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     wal_builder_.Reset();
     file_id_term_mapping_dirty_ = false;
     cow_meta_ = CowRootMeta();
-    append_aggregator_ = WriteBufferAggregator(Options()->write_buffer_size);
+    size_t buf_size = Options()->write_buffer_size;
+    if (buf_size == 0)
+    {
+        buf_size = 1 * MB;
+    }
+    append_aggregator_ = WriteBufferAggregator(buf_size);
     append_aggregator_.Reset();
 }
 
@@ -106,7 +111,6 @@ KvError WriteTask::WritePage(VarPage page, FilePageId file_page_id)
 {
     const KvOptions *opts = Options();
     assert(ValidateChecksum({VarPagePtr(page), opts->data_page_size}));
-    VarPageType type = VarPageType(page.index());
     if (opts->data_append_mode && IoMgr()->HasWriteBufferPool())
     {
         return AppendWritePage(std::move(page), file_page_id);
@@ -154,7 +158,8 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
         {
             return KvError::OutOfMem;
         }
-        append_aggregator_.SetBuffer(buf, buf_index, file_id, offset);
+        bool use_fixed = IoMgr()->WriteBufferUseFixed();
+        append_aggregator_.SetBuffer(buf, buf_index, file_id, offset, use_fixed);
     }
 
     char *dst = append_aggregator_.TryReserve(file_id, offset, page_size);
@@ -191,18 +196,22 @@ void WriteTask::FlushAppendWrites()
         return;
     }
 
-    KvError err = IoMgr()->SubmitMergedWrite(
-        tbl_ident_,
-        batch.file_id,
-        batch.start_offset,
-        batch.buffer,
-        batch.bytes,
-        batch.buffer_index,
-        std::move(batch.pages),
-        std::move(batch.release_ptrs),
-        std::move(batch.release_indices));
+    KvError err = IoMgr()->SubmitMergedWrite(tbl_ident_,
+                                             batch.file_id,
+                                             batch.start_offset,
+                                             batch.buffer,
+                                             batch.bytes,
+                                             batch.buffer_index,
+                                             batch.pages,
+                                             batch.release_ptrs,
+                                             batch.release_indices,
+                                             batch.use_fixed);
     if (err != KvError::NoError)
     {
+        for (VarPage &page : batch.pages)
+        {
+            WritePageCallback(std::move(page), err);
+        }
         IoMgr()->ReleaseWriteBuffer(batch.buffer, batch.buffer_index);
         for (size_t i = 0; i < batch.release_ptrs.size(); ++i)
         {
