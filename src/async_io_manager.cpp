@@ -218,7 +218,8 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
     write_buf_count_ = 0;
     write_buf_index_base_ = 0;
 
-    std::unique_ptr<char, decltype(&std::free)> page_buffer{nullptr, &std::free};
+    std::unique_ptr<char, decltype(&std::free)> page_buffer{nullptr,
+                                                            &std::free};
     std::vector<iovec> iovecs;
     uint16_t page_iov_count = 0;
 
@@ -263,8 +264,7 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
             write_pool_bytes % page_align != 0)
         {
             size_t aligned_buf = (write_buf_size / page_align) * page_align;
-            size_t aligned_pool =
-                (write_pool_bytes / page_align) * page_align;
+            size_t aligned_pool = (write_pool_bytes / page_align) * page_align;
             LOG(WARNING) << "write buffer size not aligned, adjusted from "
                          << write_buf_size << "/" << write_pool_bytes << " to "
                          << aligned_buf << "/" << aligned_pool;
@@ -345,8 +345,8 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
         {
             buffers_registered_ = true;
             registered_buffers = true;
-            write_buf_registered_ = (write_buf_ != nullptr &&
-                                     write_buf_count_ > 0);
+            write_buf_registered_ =
+                (write_buf_ != nullptr && write_buf_count_ > 0);
             if (page_buffer != nullptr)
             {
                 registered_buf_base_ = page_buffer.get();
@@ -354,7 +354,9 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
                 registered_buf_shift_ = 30;
                 registered_buf_count_ = page_iov_count;
                 registered_last_slice_size_ =
-                    registered_buf_count_ == 0 ? 0 : iovecs[page_iov_count - 1].iov_len;
+                    registered_buf_count_ == 0
+                        ? 0
+                        : iovecs[page_iov_count - 1].iov_len;
                 shard->PagePool()->Init(page_buffer.release(), pool_bytes);
             }
             else
@@ -722,14 +724,14 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;
 
-    auto *req = merged_write_req_pool_->Alloc(
-        static_cast<WriteTask *>(ThdTask()),
-        std::move(fd_ref),
-        buf_ptr,
-        buf_index,
-        bytes,
-        offset,
-        std::move(pages));
+    auto *req =
+        merged_write_req_pool_->Alloc(static_cast<WriteTask *>(ThdTask()),
+                                      std::move(fd_ref),
+                                      buf_ptr,
+                                      buf_index,
+                                      bytes,
+                                      offset,
+                                      std::move(pages));
     req->release_ptrs_ = std::move(release_ptrs);
     req->release_indices_ = std::move(release_indices);
     req->use_fixed_ = use_fixed;

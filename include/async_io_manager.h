@@ -596,7 +596,7 @@ public:
     class MergedWriteReqPool
     {
     public:
-        MergedWriteReqPool(uint32_t pool_size);
+        explicit MergedWriteReqPool(uint32_t pool_size);
         MergedWriteReq *Alloc(WriteTask *task,
                               LruFD::Ref fd,
                               char *buf_ptr,

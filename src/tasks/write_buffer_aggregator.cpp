@@ -1,5 +1,7 @@
 #include "tasks/write_buffer_aggregator.h"
 
+#include <utility>
+
 namespace eloqstore
 {
 WriteBufferAggregator::WriteBufferAggregator(size_t buffer_size)
