@@ -250,11 +250,15 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
         }
     }
 
-    if (options_->data_append_mode && options_->write_buffer_pool_size > 0 &&
-        options_->write_buffer_size > 0)
+    if (options_->data_append_mode && options_->write_buffer_ratio > 0.0 &&
+        options_->write_buffer_size > 0 && options_->buffer_pool_size > 0)
     {
         size_t write_buf_size = options_->write_buffer_size;
-        size_t write_pool_bytes = options_->write_buffer_pool_size;
+        size_t write_pool_bytes = static_cast<size_t>(
+            static_cast<double>(options_->buffer_pool_size) *
+            options_->write_buffer_ratio);
+        write_pool_bytes =
+            std::min(write_pool_bytes, options_->buffer_pool_size);
         if (write_buf_size % page_align != 0 ||
             write_pool_bytes % page_align != 0)
         {
@@ -291,7 +295,7 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
         else
         {
             LOG(WARNING)
-                << "write buffer pool size is smaller than buffer size";
+                << "write_buffer_ratio is too small to allocate write buffers";
         }
     }
 
