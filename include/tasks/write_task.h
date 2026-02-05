@@ -5,8 +5,8 @@
 #include "storage/index_page_manager.h"
 #include "storage/page_mapper.h"
 #include "storage/root_meta.h"
-#include "tasks/write_buffer_aggregator.h"
 #include "tasks/task.h"
+#include "tasks/write_buffer_aggregator.h"
 #include "types.h"
 
 namespace eloqstore
