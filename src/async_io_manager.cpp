@@ -83,8 +83,8 @@ bool VarPageRegistered(const VarPage &page)
     {
     case VarPageType::MemIndexPage:
     {
-        MemIndexPage *idx = std::get<MemIndexPage *>(page);
-        return idx != nullptr && idx->IsRegistered();
+        const IndexPageHandle &handle = std::get<IndexPageHandle>(page);
+        return handle.Get() != nullptr && handle->IsRegistered();
     }
     case VarPageType::DataPage:
         return std::get<DataPage>(page).IsRegistered();
