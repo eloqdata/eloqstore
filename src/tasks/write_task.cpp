@@ -164,7 +164,8 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
             return KvError::OutOfMem;
         }
         bool use_fixed = IoMgr()->WriteBufferUseFixed();
-        append_aggregator_.SetBuffer(buf, buf_index, file_id, offset, use_fixed);
+        append_aggregator_.SetBuffer(
+            buf, buf_index, file_id, offset, use_fixed);
     }
 
     char *dst = append_aggregator_.TryReserve(file_id, offset, page_size);

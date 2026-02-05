@@ -2,8 +2,8 @@
 
 #include <glog/logging.h>
 
-#include <bit>
 #include <algorithm>
+#include <bit>
 #include <boost/algorithm/string.hpp>
 #include <cctype>
 #include <charconv>
@@ -217,8 +217,8 @@ int KvOptions::LoadFromIni(const char *path)
     }
     if (reader.HasValue(sec_run, "write_buffer_ratio"))
     {
-        write_buffer_ratio = reader.GetReal(
-            sec_run, "write_buffer_ratio", write_buffer_ratio);
+        write_buffer_ratio =
+            reader.GetReal(sec_run, "write_buffer_ratio", write_buffer_ratio);
     }
     if (reader.HasValue(sec_run, "allow_reuse_local_caches"))
     {
