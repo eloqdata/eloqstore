@@ -54,6 +54,21 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
         LOG(ERROR) << "Option coroutine_stack_size is not page aligned";
         return false;
     }
+    if (opts.write_buffer_size != 0 || opts.write_buffer_ratio != 0.0)
+    {
+        if (opts.write_buffer_size == 0 || opts.write_buffer_ratio <= 0.0 ||
+            opts.write_buffer_ratio >= 1.0)
+        {
+            LOG(ERROR) << "write_buffer_size must be non-zero and "
+                          "write_buffer_ratio must be in (0, 1) when enabled";
+            return false;
+        }
+        if ((opts.write_buffer_size & (page_align - 1)) != 0)
+        {
+            LOG(ERROR) << "write_buffer_size must be page aligned";
+            return false;
+        }
+    }
 
     if (opts.overflow_pointers == 0 ||
         opts.overflow_pointers > max_overflow_pointers)

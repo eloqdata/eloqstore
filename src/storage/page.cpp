@@ -46,11 +46,6 @@ Page::Page(bool alloc)
     }
 }
 
-Page::Page(char *ptr)
-{
-    ptr_ = reinterpret_cast<uintptr_t>(ptr);
-}
-
 Page::Page(Page &&other) noexcept : ptr_(other.ptr_)
 {
     other.ptr_ = 0;

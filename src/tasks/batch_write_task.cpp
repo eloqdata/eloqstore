@@ -1697,7 +1697,39 @@ std::pair<bool, KvError> BatchWriteTask::TruncateDataPage(
 
     const Comparator *cmp = shard->IndexManager()->GetComparator();
     DataPageIter iter{&page, Options()};
+    const KvOptions *opts = Options();
+    bool has_kept_entry = false;
+    if (iter.Next())
+    {
+        if (cmp->Compare(iter.Key(), trunc_pos) < 0)
+        {
+            has_kept_entry = true;
+        }
+    }
+
+    if (!has_kept_entry)
+    {
+        // All entries are truncated or page is empty.
+        FreePage(page.GetPageId());
+
+        uint32_t prev_page_id = page.PrevPageId();
+        if (prev_page_id == MaxPageId)
+        {
+            return {false, KvError::NoError};
+        }
+        auto [prev_page, err] = LoadDataPage(prev_page_id);
+        if (err != KvError::NoError)
+        {
+            return {false, err};
+        }
+        prev_page.SetNextPageId(MaxPageId);
+        err = WritePage(std::move(prev_page));
+        return {false, err};
+    }
+
+    // Rebuild page.
     data_page_builder_.Reset();
+    iter.Reset(&page, opts->data_page_size);
     bool has_trunc_tail = false;
     while (iter.Next())
     {
@@ -1730,37 +1762,15 @@ std::pair<bool, KvError> BatchWriteTask::TruncateDataPage(
         } while (iter.Next());
     }
 
-    if (data_page_builder_.IsEmpty())
-    {
-        FreePage(page.GetPageId());
-
-        uint32_t prev_page_id = page.PrevPageId();
-        if (prev_page_id == MaxPageId)
-        {
-            return {false, KvError::NoError};
-        }
-        // The previous data page will become the new tail data page.
-        // We don't need to update the previous page id of the next data page.
-        auto [prev_page, err] = LoadDataPage(prev_page_id);
-        if (err != KvError::NoError)
-        {
-            return {false, err};
-        }
-        prev_page.SetNextPageId(MaxPageId);
-        err = WritePage(std::move(prev_page));
-        return {false, err};
-    }
-    else
-    {
-        // This currently updated data page will become the new tail data page.
-        DataPage new_page(page_id);
-        std::string_view page_view = data_page_builder_.Finish();
-        memcpy(new_page.PagePtr(), page_view.data(), page_view.size());
-        new_page.SetNextPageId(MaxPageId);
-        new_page.SetPrevPageId(page.PrevPageId());
-        err = WritePage(std::move(new_page));
-        return {true, err};
-    }
+    // This currently updated data page will become the new tail data page.
+    std::string_view page_view = data_page_builder_.Finish();
+    DataPage new_page(page_id);
+    memcpy(new_page.PagePtr(), page_view.data(), page_view.size());
+    new_page.SetNextPageId(MaxPageId);
+    new_page.SetPrevPageId(page.PrevPageId());
+    SetChecksum({new_page.PagePtr(), opts->data_page_size});
+    err = WritePage(std::move(new_page));
+    return {true, err};
 }
 
 KvError BatchWriteTask::CleanExpiredKeys()

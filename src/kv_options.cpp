@@ -3,6 +3,7 @@
 #include <glog/logging.h>
 
 #include <bit>
+#include <algorithm>
 #include <boost/algorithm/string.hpp>
 #include <cctype>
 #include <charconv>
@@ -208,6 +209,17 @@ int KvOptions::LoadFromIni(const char *path)
         direct_io_buffer_pool_size = reader.GetUnsigned(
             sec_run, "direct_io_buffer_pool_size", direct_io_buffer_pool_size);
     }
+    if (reader.HasValue(sec_run, "write_buffer_size"))
+    {
+        std::string write_buffer_size_str =
+            reader.Get(sec_run, "write_buffer_size", "");
+        write_buffer_size = ParseSizeWithUnit(write_buffer_size_str);
+    }
+    if (reader.HasValue(sec_run, "write_buffer_ratio"))
+    {
+        write_buffer_ratio = reader.GetReal(
+            sec_run, "write_buffer_ratio", write_buffer_ratio);
+    }
     if (reader.HasValue(sec_run, "allow_reuse_local_caches"))
     {
         allow_reuse_local_caches =
@@ -223,6 +235,8 @@ int KvOptions::LoadFromIni(const char *path)
         prewarm_task_count =
             reader.GetUnsigned(sec_run, "prewarm_task_count", 1);
     }
+
+    write_buffer_ratio = std::clamp(write_buffer_ratio, 0.0, 1.0);
     constexpr char sec_permanent[] = "permanent";
     if (!reader.HasSection(sec_permanent))
     {
@@ -343,6 +357,8 @@ bool KvOptions::operator==(const KvOptions &other) const
            max_cloud_concurrency == other.max_cloud_concurrency &&
            cloud_request_threads == other.cloud_request_threads &&
            direct_io_buffer_pool_size == other.direct_io_buffer_pool_size &&
+           write_buffer_size == other.write_buffer_size &&
+           write_buffer_ratio == other.write_buffer_ratio &&
            allow_reuse_local_caches == other.allow_reuse_local_caches &&
            prewarm_cloud_cache == other.prewarm_cloud_cache &&
            prewarm_task_count == other.prewarm_task_count &&
