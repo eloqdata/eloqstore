@@ -126,6 +126,16 @@ struct KvOptions
      */
     uint32_t direct_io_buffer_pool_size = 128;
     /**
+     * @brief Size of each write buffer used for append-mode aggregation.
+     * Only take effect when data_append_mode is enabled.
+     */
+    uint64_t write_buffer_size = 1 * MB;
+    /**
+     * @brief Total size of write buffer pool per shard.
+     * Only take effect when data_append_mode is enabled.
+     */
+    uint64_t write_buffer_pool_size = 64 * MB;
+    /**
      * @brief Reuse files already present in the local cache directory when the
      * store starts.
      */

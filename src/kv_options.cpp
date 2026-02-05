@@ -208,6 +208,18 @@ int KvOptions::LoadFromIni(const char *path)
         direct_io_buffer_pool_size = reader.GetUnsigned(
             sec_run, "direct_io_buffer_pool_size", direct_io_buffer_pool_size);
     }
+    if (reader.HasValue(sec_run, "write_buffer_size"))
+    {
+        std::string write_buffer_size_str =
+            reader.Get(sec_run, "write_buffer_size", "");
+        write_buffer_size = ParseSizeWithUnit(write_buffer_size_str);
+    }
+    if (reader.HasValue(sec_run, "write_buffer_pool_size"))
+    {
+        std::string write_buffer_pool_size_str =
+            reader.Get(sec_run, "write_buffer_pool_size", "");
+        write_buffer_pool_size = ParseSizeWithUnit(write_buffer_pool_size_str);
+    }
     if (reader.HasValue(sec_run, "allow_reuse_local_caches"))
     {
         allow_reuse_local_caches =
@@ -343,6 +355,8 @@ bool KvOptions::operator==(const KvOptions &other) const
            max_cloud_concurrency == other.max_cloud_concurrency &&
            cloud_request_threads == other.cloud_request_threads &&
            direct_io_buffer_pool_size == other.direct_io_buffer_pool_size &&
+           write_buffer_size == other.write_buffer_size &&
+           write_buffer_pool_size == other.write_buffer_pool_size &&
            allow_reuse_local_caches == other.allow_reuse_local_caches &&
            prewarm_cloud_cache == other.prewarm_cloud_cache &&
            prewarm_task_count == other.prewarm_task_count &&

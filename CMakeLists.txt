@@ -122,6 +122,7 @@ set(ELOQ_STORE_SOURCES
         src/tasks/archive_crond.cpp
         src/tasks/background_write.cpp
         src/tasks/batch_write_task.cpp
+        src/tasks/write_buffer_aggregator.cpp
         src/tasks/prewarm_task.cpp
         src/tasks/read_task.cpp
         src/tasks/scan_task.cpp

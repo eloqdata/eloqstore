@@ -21,7 +21,6 @@ public:
 
     // Reset the contents as if the DataPageBuilder was just constructed.
     void Reset();
-
     // REQUIRES: Finish() has not been called since the last call to Reset().
     // REQUIRES: key is larger than any previously added key
     bool Add(std::string_view key,
