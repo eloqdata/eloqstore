@@ -634,7 +634,8 @@ FileId FilePageAllocator::CurrentFileId() const
 
 FilePageId FilePageAllocator::Allocate()
 {
-    return max_fp_id_++;
+    FilePageId file_page_id = max_fp_id_++;
+    return file_page_id;
 }
 
 std::unique_ptr<FilePageAllocator> AppendAllocator::Clone()

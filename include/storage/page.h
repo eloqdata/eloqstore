@@ -35,7 +35,6 @@ public:
                                                  << (sizeof(uintptr_t) * 8 - 1);
 
     Page(bool alloc);
-    Page(char *ptr);
     Page(Page &&other) noexcept;
     Page &operator=(Page &&other) noexcept;
     Page(const Page &) = delete;

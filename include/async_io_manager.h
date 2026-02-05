@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <optional>
 #include <span>
@@ -121,6 +122,53 @@ public:
     {
         __builtin_unreachable();
     }
+
+    // Append-mode write buffer pool helpers (default no-op).
+    virtual char *AcquireWriteBuffer(uint16_t &buf_index)
+    {
+        (void) buf_index;
+        return nullptr;
+    }
+    virtual void ReleaseWriteBuffer(char *ptr, uint16_t buf_index)
+    {
+        (void) ptr;
+        (void) buf_index;
+    }
+    virtual size_t WriteBufferSize() const
+    {
+        return 0;
+    }
+    virtual bool HasWriteBufferPool() const
+    {
+        return false;
+    }
+    virtual bool WriteBufferUseFixed() const
+    {
+        return false;
+    }
+    virtual KvError SubmitMergedWrite(const TableIdent &tbl_id,
+                                      FileId file_id,
+                                      uint64_t offset,
+                                      char *buf_ptr,
+                                      size_t bytes,
+                                      uint16_t buf_index,
+                                      std::vector<VarPage> &pages,
+                                      std::vector<char *> &release_ptrs,
+                                      std::vector<uint16_t> &release_indices,
+                                      bool use_fixed)
+    {
+        (void) tbl_id;
+        (void) file_id;
+        (void) offset;
+        (void) buf_ptr;
+        (void) bytes;
+        (void) buf_index;
+        (void) pages;
+        (void) release_ptrs;
+        (void) release_indices;
+        (void) use_fixed;
+        return KvError::InvalidArgs;
+    }
     /**
      * @brief Get the number of currently open file descriptors.
      * @return Number of open file descriptors, or 0 if not applicable.
@@ -219,6 +267,30 @@ public:
     KvError Init(Shard *shard) override;
     void Submit() override;
     void PollComplete() override;
+    char *AcquireWriteBuffer(uint16_t &buf_index) override;
+    void ReleaseWriteBuffer(char *ptr, uint16_t buf_index) override;
+    size_t WriteBufferSize() const override
+    {
+        return write_buf_size_;
+    }
+    bool HasWriteBufferPool() const override
+    {
+        return write_buf_size_ > 0 && write_buf_ != nullptr;
+    }
+    bool WriteBufferUseFixed() const override
+    {
+        return write_buf_registered_;
+    }
+    KvError SubmitMergedWrite(const TableIdent &tbl_id,
+                              FileId file_id,
+                              uint64_t offset,
+                              char *buf_ptr,
+                              size_t bytes,
+                              uint16_t buf_index,
+                              std::vector<VarPage> &pages,
+                              std::vector<char *> &release_ptrs,
+                              std::vector<uint16_t> &release_indices,
+                              bool use_fixed) override;
     void InitBackgroundJob() override;
 
     std::pair<Page, KvError> ReadPage(const TableIdent &tbl_id,
@@ -362,7 +434,8 @@ public:
     {
         KvTask,
         BaseReq,
-        WriteReq
+        WriteReq,
+        MergedWriteReq
     };
 
     struct BaseReq
@@ -381,6 +454,21 @@ public:
         LruFD::Ref fd_ref_;
         WriteTask *task_{nullptr};
         WriteReq *next_{nullptr};
+    };
+
+    struct MergedWriteReq
+    {
+        WriteTask *task_{nullptr};
+        LruFD::Ref fd_ref_;
+        char *buf_ptr_{nullptr};
+        uint16_t buf_index_{0};
+        bool use_fixed_{true};
+        size_t bytes_{0};
+        uint64_t offset_{0};
+        std::vector<VarPage> pages_;
+        std::vector<char *> release_ptrs_;
+        std::vector<uint16_t> release_indices_;
+        MergedWriteReq *next_{nullptr};
     };
 
     class PartitionFiles
@@ -505,10 +593,30 @@ public:
         WaitingZone waiting_;
     };
 
+    class MergedWriteReqPool
+    {
+    public:
+        MergedWriteReqPool(uint32_t pool_size);
+        MergedWriteReq *Alloc(WriteTask *task,
+                              LruFD::Ref fd,
+                              char *buf_ptr,
+                              uint16_t buf_index,
+                              size_t bytes,
+                              uint64_t offset,
+                              std::vector<VarPage> pages);
+        void Free(MergedWriteReq *req);
+
+    private:
+        std::unique_ptr<MergedWriteReq[]> pool_;
+        MergedWriteReq *free_list_;
+        WaitingZone waiting_;
+    };
+
     /**
      * @brief This is only used in non-append mode.
      */
     std::unique_ptr<WriteReqPool> write_req_pool_{nullptr};
+    std::unique_ptr<MergedWriteReqPool> merged_write_req_pool_{nullptr};
 
     std::unordered_map<TableIdent, PartitionFiles> tables_;
     // Per-table FileIdTermMapping storage. Mapping is shared between
@@ -530,6 +638,21 @@ public:
     uint8_t registered_buf_shift_{0};
     uint16_t registered_buf_count_{0};
     size_t registered_last_slice_size_{0};
+    std::unique_ptr<char, decltype(&std::free)> write_buf_{nullptr, &std::free};
+    size_t write_buf_size_{0};
+    size_t write_buf_pool_size_{0};
+    uint16_t write_buf_count_{0};
+    bool write_buf_registered_{false};
+    uint16_t write_buf_index_base_{0};
+    struct WriteBufSlot
+    {
+        WriteBufSlot *next{nullptr};
+        uint16_t index{0};
+    };
+    std::vector<WriteBufSlot> write_buf_slots_;
+    WriteBufSlot *write_buf_free_{nullptr};
+    WaitingZone write_buf_waiting_;
+
     io_uring ring_;
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};

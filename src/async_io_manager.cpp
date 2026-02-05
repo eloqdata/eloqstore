@@ -129,6 +129,7 @@ IouringMgr::IouringMgr(const KvOptions *opts, uint32_t fd_limit)
 
     uint32_t pool_size = options_->max_inflight_write;
     write_req_pool_ = std::make_unique<WriteReqPool>(pool_size);
+    merged_write_req_pool_ = std::make_unique<MergedWriteReqPool>(pool_size);
 }
 
 IouringMgr::~IouringMgr()
@@ -211,57 +212,35 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
     registered_buf_shift_ = 0;
     registered_buf_count_ = 0;
     registered_last_slice_size_ = 0;
+    write_buf_.reset();
+    write_buf_size_ = 0;
+    write_buf_pool_size_ = 0;
+    write_buf_count_ = 0;
+    write_buf_index_base_ = 0;
+
+    std::unique_ptr<char, decltype(&std::free)> page_buffer{nullptr, &std::free};
+    std::vector<iovec> iovecs;
+    uint16_t page_iov_count = 0;
+
     if (pool_bytes > 0)
     {
         void *raw_ptr = nullptr;
         int aligned = posix_memalign(&raw_ptr, page_align, pool_bytes);
         if (aligned == 0 && raw_ptr != nullptr)
         {
-            std::unique_ptr<char, decltype(&std::free)> buffer{
-                static_cast<char *>(raw_ptr), &std::free};
-            memset(buffer.get(), 0, pool_bytes);
-            std::vector<iovec> iovecs;
+            page_buffer.reset(static_cast<char *>(raw_ptr));
+            memset(page_buffer.get(), 0, pool_bytes);
             size_t remaining = pool_bytes;
             size_t offset = 0;
-            uint64_t idx = 0;
             while (remaining > 0)
             {
                 size_t chunk_size = std::min(remaining, kMaxRegisteredBytes);
-                iovec iov = {.iov_base = buffer.get() + offset,
+                iovec iov = {.iov_base = page_buffer.get() + offset,
                              .iov_len = chunk_size};
                 iovecs.push_back(iov);
+                page_iov_count++;
                 remaining -= chunk_size;
                 offset += chunk_size;
-                idx++;
-            }
-
-            if (iovecs.size() > std::numeric_limits<uint16_t>::max())
-            {
-                LOG(WARNING)
-                    << "too many registered buffer slices: " << iovecs.size();
-                ret = -1;
-            }
-            else
-            {
-                ret = io_uring_register_buffers(
-                    &ring_, iovecs.data(), iovecs.size());
-            }
-            if (ret < 0)
-            {
-                LOG(WARNING) << "failed to register buffers: " << ret
-                             << ", falling back to unregistered pages";
-            }
-            else
-            {
-                buffers_registered_ = true;
-                registered_buffers = true;
-                registered_buf_base_ = buffer.get();
-                registered_buf_stride_ = kMaxRegisteredBytes;
-                registered_buf_shift_ = 30;
-                registered_buf_count_ = static_cast<uint16_t>(iovecs.size());
-                registered_last_slice_size_ =
-                    iovecs.empty() ? 0 : iovecs.back().iov_len;
-                shard->PagePool()->Init(buffer.release(), pool_bytes);
             }
         }
         else
@@ -269,6 +248,125 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
             LOG(WARNING) << "posix_memalign failed for registered pool, error: "
                          << aligned;
         }
+    }
+
+    if (options_->data_append_mode && options_->write_buffer_pool_size > 0 &&
+        options_->write_buffer_size > 0)
+    {
+        size_t write_buf_size = options_->write_buffer_size;
+        size_t write_pool_bytes = options_->write_buffer_pool_size;
+        if (write_buf_size % page_align != 0 ||
+            write_pool_bytes % page_align != 0)
+        {
+            size_t aligned_buf = (write_buf_size / page_align) * page_align;
+            size_t aligned_pool =
+                (write_pool_bytes / page_align) * page_align;
+            LOG(WARNING) << "write buffer size not aligned, adjusted from "
+                         << write_buf_size << "/" << write_pool_bytes << " to "
+                         << aligned_buf << "/" << aligned_pool;
+            write_buf_size = aligned_buf;
+            write_pool_bytes = aligned_pool;
+        }
+        if (write_buf_size > 0 && write_pool_bytes >= write_buf_size)
+        {
+            void *raw_ptr = nullptr;
+            int aligned =
+                posix_memalign(&raw_ptr, page_align, write_pool_bytes);
+            if (aligned == 0 && raw_ptr != nullptr)
+            {
+                write_buf_.reset(static_cast<char *>(raw_ptr));
+                memset(write_buf_.get(), 0, write_pool_bytes);
+                write_buf_size_ = write_buf_size;
+                write_buf_pool_size_ = write_pool_bytes;
+                write_buf_count_ =
+                    static_cast<uint16_t>(write_pool_bytes / write_buf_size);
+            }
+            else
+            {
+                LOG(WARNING)
+                    << "posix_memalign failed for write buffers, error: "
+                    << aligned;
+            }
+        }
+        else
+        {
+            LOG(WARNING)
+                << "write buffer pool size is smaller than buffer size";
+        }
+    }
+
+    if (write_buf_ != nullptr && write_buf_count_ > 0)
+    {
+        write_buf_index_base_ = static_cast<uint16_t>(iovecs.size());
+        size_t offset = 0;
+        for (uint16_t i = 0; i < write_buf_count_; ++i)
+        {
+            iovec iov = {.iov_base = write_buf_.get() + offset,
+                         .iov_len = write_buf_size_};
+            iovecs.push_back(iov);
+            offset += write_buf_size_;
+        }
+        write_buf_slots_.clear();
+        write_buf_slots_.resize(write_buf_count_);
+        write_buf_free_ = nullptr;
+        for (uint16_t i = 0; i < write_buf_count_; ++i)
+        {
+            WriteBufSlot *slot = &write_buf_slots_[i];
+            slot->index = i;
+            slot->next = write_buf_free_;
+            write_buf_free_ = slot;
+        }
+    }
+
+    if (!iovecs.empty())
+    {
+        if (iovecs.size() > std::numeric_limits<uint16_t>::max())
+        {
+            LOG(WARNING) << "too many registered buffer slices: "
+                         << iovecs.size();
+            ret = -1;
+        }
+        else
+        {
+            ret =
+                io_uring_register_buffers(&ring_, iovecs.data(), iovecs.size());
+        }
+        if (ret < 0)
+        {
+            LOG(WARNING) << "failed to register buffers: " << ret
+                         << ", falling back to unregistered buffers";
+            write_buf_registered_ = false;
+        }
+        else
+        {
+            buffers_registered_ = true;
+            registered_buffers = true;
+            write_buf_registered_ = (write_buf_ != nullptr &&
+                                     write_buf_count_ > 0);
+            if (page_buffer != nullptr)
+            {
+                registered_buf_base_ = page_buffer.get();
+                registered_buf_stride_ = kMaxRegisteredBytes;
+                registered_buf_shift_ = 30;
+                registered_buf_count_ = page_iov_count;
+                registered_last_slice_size_ =
+                    registered_buf_count_ == 0 ? 0 : iovecs[page_iov_count - 1].iov_len;
+                shard->PagePool()->Init(page_buffer.release(), pool_bytes);
+            }
+            else
+            {
+                registered_buf_base_ = nullptr;
+                registered_buf_stride_ = 0;
+                registered_buf_shift_ = 0;
+                registered_buf_count_ = 0;
+                registered_last_slice_size_ = 0;
+                shard->PagePool()->Init();
+            }
+        }
+    }
+    else
+    {
+        write_buf_registered_ = false;
     }
 
     if (!registered_buffers)
@@ -282,6 +380,35 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
     }
 
     return KvError::NoError;
+}
+
+char *IouringMgr::AcquireWriteBuffer(uint16_t &buf_index)
+{
+    while (write_buf_free_ == nullptr)
+    {
+        write_buf_waiting_.Wait(ThdTask());
+    }
+    WriteBufSlot *slot = write_buf_free_;
+    write_buf_free_ = slot->next;
+    buf_index = static_cast<uint16_t>(write_buf_index_base_ + slot->index);
+    char *ptr = write_buf_.get() + (slot->index * write_buf_size_);
+    return ptr;
+}
+
+void IouringMgr::ReleaseWriteBuffer(char *ptr, uint16_t buf_index)
+{
+    if (write_buf_ == nullptr || write_buf_size_ == 0)
+    {
+        return;
+    }
+    uint16_t local_index =
+        static_cast<uint16_t>(buf_index - write_buf_index_base_);
+    assert(local_index < write_buf_slots_.size());
+    WriteBufSlot *slot = &write_buf_slots_[local_index];
+    slot->next = write_buf_free_;
+    write_buf_free_ = slot;
+    write_buf_waiting_.WakeOne();
+    (void) ptr;
 }
 
 void IouringMgr::InitBackgroundJob()
@@ -571,6 +698,59 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
     else
     {
         io_uring_prep_write(sqe, fd, ptr, options_->data_page_size, offset);
+    }
+    return KvError::NoError;
+}
+
+KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
+                                      FileId file_id,
+                                      uint64_t offset,
+                                      char *buf_ptr,
+                                      size_t bytes,
+                                      uint16_t buf_index,
+                                      std::vector<VarPage> &pages,
+                                      std::vector<char *> &release_ptrs,
+                                      std::vector<uint16_t> &release_indices,
+                                      bool use_fixed)
+{
+    uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
+    auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id, true, true, term);
+    CHECK_KV_ERR(err);
+    fd_ref.Get()->dirty_ = true;
+
+    auto *req = merged_write_req_pool_->Alloc(
+        static_cast<WriteTask *>(ThdTask()),
+        std::move(fd_ref),
+        buf_ptr,
+        buf_index,
+        bytes,
+        offset,
+        std::move(pages));
+    req->release_ptrs_ = std::move(release_ptrs);
+    req->release_indices_ = std::move(release_indices);
+    req->use_fixed_ = use_fixed;
+
+    if (!req->pages_.empty())
+    {
+        req->task_->inflight_io_ +=
+            static_cast<uint32_t>(req->pages_.size() - 1);
+    }
+
+    io_uring_sqe *sqe = GetSQE(UserDataType::MergedWriteReq, req);
+    auto [fd, registered] = req->fd_ref_.FdPair();
+    if (registered)
+    {
+        sqe->flags |= IOSQE_FIXED_FILE;
+    }
+    if (use_fixed)
+    {
+        io_uring_prep_write_fixed(
+            sqe, fd, buf_ptr, bytes, static_cast<off_t>(offset), buf_index);
+    }
+    else
+    {
+        io_uring_prep_write(
+            sqe, fd, buf_ptr, bytes, static_cast<off_t>(offset));
     }
     return KvError::NoError;
 }
@@ -1095,6 +1275,40 @@ void IouringMgr::PollComplete()
             task = req->task_;
             write_req_pool_->Free(req);
             break;
+        }
+        case UserDataType::MergedWriteReq:
+        {
+            MergedWriteReq *req = static_cast<MergedWriteReq *>(ptr);
+            KvError err;
+            if (cqe->res < 0)
+            {
+                err = ToKvError(cqe->res);
+            }
+            else if (static_cast<size_t>(cqe->res) < req->bytes_)
+            {
+                err = KvError::TryAgain;
+            }
+            else
+            {
+                err = KvError::NoError;
+            }
+
+            for (VarPage &page : req->pages_)
+            {
+                req->task_->WritePageCallback(std::move(page), err);
+                req->task_->FinishIo();
+            }
+            ReleaseWriteBuffer(req->buf_ptr_, req->buf_index_);
+            for (size_t i = 0; i < req->release_ptrs_.size(); ++i)
+            {
+                if (req->release_ptrs_[i] != nullptr)
+                {
+                    ReleaseWriteBuffer(req->release_ptrs_[i],
+                                       req->release_indices_[i]);
+                }
+            }
+            merged_write_req_pool_->Free(req);
+            continue;
         }
         default:
             assert(false);
@@ -1921,6 +2135,64 @@ void IouringMgr::WriteReqPool::Free(WriteReq *req)
 {
     req->fd_ref_ = nullptr;
 
+    req->next_ = free_list_;
+    free_list_ = req;
+    waiting_.WakeOne();
+}
+
+IouringMgr::MergedWriteReqPool::MergedWriteReqPool(uint32_t pool_size)
+{
+    assert(pool_size > 0);
+    pool_ = std::make_unique<MergedWriteReq[]>(pool_size);
+    free_list_ = nullptr;
+    for (size_t i = 0; i < pool_size; i++)
+    {
+        pool_[i].pages_.clear();
+        pool_[i].task_ = nullptr;
+        pool_[i].next_ = free_list_;
+        free_list_ = &pool_[i];
+    }
+}
+
+IouringMgr::MergedWriteReq *IouringMgr::MergedWriteReqPool::Alloc(
+    WriteTask *task,
+    LruFD::Ref fd,
+    char *buf_ptr,
+    uint16_t buf_index,
+    size_t bytes,
+    uint64_t offset,
+    std::vector<VarPage> pages)
+{
+    while (free_list_ == nullptr)
+    {
+        waiting_.Wait(ThdTask());
+    }
+    MergedWriteReq *req = free_list_;
+    free_list_ = req->next_;
+
+    req->task_ = task;
+    req->fd_ref_ = std::move(fd);
+    req->buf_ptr_ = buf_ptr;
+    req->buf_index_ = buf_index;
+    req->bytes_ = bytes;
+    req->offset_ = offset;
+    req->pages_ = std::move(pages);
+    req->next_ = nullptr;
+    return req;
+}
+
+void IouringMgr::MergedWriteReqPool::Free(MergedWriteReq *req)
+{
+    req->pages_.clear();
+    req->release_ptrs_.clear();
+    req->release_indices_.clear();
+    req->fd_ref_ = nullptr;
+    req->task_ = nullptr;
+    req->buf_ptr_ = nullptr;
+    req->buf_index_ = 0;
+    req->use_fixed_ = true;
+    req->bytes_ = 0;
+    req->offset_ = 0;
     req->next_ = free_list_;
     free_list_ = req;
     waiting_.WakeOne();
