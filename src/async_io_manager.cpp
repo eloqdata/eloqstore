@@ -1990,7 +1990,7 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
     assert((io_size & (alignment - 1)) == 0);
     assert((reinterpret_cast<uintptr_t>(write_ptr) & (alignment - 1)) == 0);
     FdIdx tmp_fd_idx{tmp_fd, true};
-    const size_t write_batch_size = page_align;
+    size_t write_batch_size = Options()->write_buffer_size;
     size_t remaining = io_size;
     size_t written = 0;
     while (remaining > 0)
