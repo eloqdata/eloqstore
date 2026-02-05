@@ -192,6 +192,11 @@ struct KvOptions
      */
     std::string cloud_secret_key = "minioadmin";
     /**
+     * @brief Automatically retrieve credentials from the environment or
+     * instance metadata rather than using cloud_access_key/cloud_secret_key.
+     */
+    bool cloud_auto_credentials = false;
+    /**
      * @brief Whether to verify TLS certificates when talking to the cloud
      * endpoint.
      */

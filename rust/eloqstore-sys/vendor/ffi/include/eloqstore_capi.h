@@ -155,6 +155,8 @@ extern "C"
     void CEloqStore_Options_SetCloudCredentials(CEloqStoreHandle opts,
                                                 const char *access_key,
                                                 const char *secret_key);
+    void CEloqStore_Options_SetCloudAutoCredentials(CEloqStoreHandle opts,
+                                                    bool enable);
     void CEloqStore_Options_SetCloudVerifySsl(CEloqStoreHandle opts,
                                               bool verify);
 

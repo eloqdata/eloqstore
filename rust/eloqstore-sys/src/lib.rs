@@ -160,6 +160,10 @@ mod ffi {
             access_key: *const c_char,
             secret_key: *const c_char,
         );
+        pub fn CEloqStore_Options_SetCloudAutoCredentials(
+            opts: CEloqStoreHandle,
+            enable: bool,
+        );
         pub fn CEloqStore_Options_SetCloudVerifySsl(opts: CEloqStoreHandle, verify: bool);
         pub fn CEloqStore_Options_Validate(opts: CEloqStoreHandle) -> bool;
 

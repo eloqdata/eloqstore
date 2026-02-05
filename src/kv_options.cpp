@@ -281,6 +281,11 @@ int KvOptions::LoadFromIni(const char *path)
         cloud_secret_key =
             reader.Get(sec_permanent, "cloud_secret_key", cloud_secret_key);
     }
+    if (reader.HasValue(sec_permanent, "cloud_auto_credentials"))
+    {
+        cloud_auto_credentials = reader.GetBoolean(
+            sec_permanent, "cloud_auto_credentials", cloud_auto_credentials);
+    }
     if (reader.HasValue(sec_permanent, "cloud_verify_ssl"))
     {
         cloud_verify_ssl = reader.GetBoolean(
@@ -377,6 +382,7 @@ bool KvOptions::operator==(const KvOptions &other) const
            cloud_region == other.cloud_region &&
            cloud_access_key == other.cloud_access_key &&
            cloud_secret_key == other.cloud_secret_key &&
+           cloud_auto_credentials == other.cloud_auto_credentials &&
            cloud_verify_ssl == other.cloud_verify_ssl &&
            data_page_size == other.data_page_size &&
            pages_per_file_shift == other.pages_per_file_shift &&

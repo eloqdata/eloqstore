@@ -110,6 +110,10 @@ impl Options {
         Ok(())
     }
 
+    pub fn set_cloud_auto_credentials(&mut self, enable: bool) {
+        unsafe { eloqstore_sys::CEloqStore_Options_SetCloudAutoCredentials(self.ptr, enable) }
+    }
+
     pub fn set_cloud_verify_ssl(&mut self, verify: bool) {
         unsafe { eloqstore_sys::CEloqStore_Options_SetCloudVerifySsl(self.ptr, verify) }
     }

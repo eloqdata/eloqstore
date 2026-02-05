@@ -2,6 +2,7 @@
 
 #include <aws/core/Aws.h>
 #include <aws/core/auth/AWSCredentialsProvider.h>
+#include <aws/core/auth/AWSCredentialsProviderChain.h>
 #include <aws/core/auth/signer/AWSAuthV4Signer.h>
 #include <aws/core/client/ClientConfiguration.h>
 #include <aws/core/http/Scheme.h>
@@ -576,6 +577,14 @@ protected:
     virtual std::shared_ptr<Aws::Auth::AWSCredentialsProvider>
     BuildCredentialsProvider() const
     {
+        if (options_ && options_->cloud_auto_credentials)
+        {
+            // TODO: extend this to support GCP-native credential sources when
+            // the provider is gcs (e.g. metadata server, service accounts).
+            return Aws::MakeShared<
+                Aws::Auth::DefaultAWSCredentialsProviderChain>(
+                "eloqstore");
+        }
         return Aws::MakeShared<Aws::Auth::SimpleAWSCredentialsProvider>(
             "eloqstore",
             options_->cloud_access_key.c_str(),

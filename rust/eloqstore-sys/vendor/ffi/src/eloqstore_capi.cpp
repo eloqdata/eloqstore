@@ -233,6 +233,13 @@ extern "C"
         }
     }
 
+    void CEloqStore_Options_SetCloudAutoCredentials(CEloqStoreHandle opts,
+                                                    bool enable)
+    {
+        if (opts)
+            reinterpret_cast<KvOptions *>(opts)->cloud_auto_credentials = enable;
+    }
+
     void CEloqStore_Options_SetCloudVerifySsl(CEloqStoreHandle opts,
                                               bool verify)
     {

@@ -179,6 +179,7 @@ pub struct KvOptions {
     cloud_region: *mut c_char,
     cloud_access_key: *mut c_char,
     cloud_secret_key: *mut c_char,
+    cloud_auto_credentials: bool,
     cloud_verify_ssl: bool,
 }
 
@@ -199,6 +200,7 @@ impl Default for KvOptions {
             cloud_region: ptr::null_mut(),
             cloud_access_key: ptr::null_mut(),
             cloud_secret_key: ptr::null_mut(),
+            cloud_auto_credentials: false,
             cloud_verify_ssl: false,
         }
     }
@@ -252,6 +254,10 @@ impl KvOptions {
         Self::set_cstring_ptr(&mut self.cloud_region, region);
         Self::set_cstring_ptr(&mut self.cloud_access_key, access_key);
         Self::set_cstring_ptr(&mut self.cloud_secret_key, secret_key);
+    }
+
+    pub fn set_cloud_auto_credentials(&mut self, enable: bool) {
+        self.cloud_auto_credentials = enable;
     }
 }
 
