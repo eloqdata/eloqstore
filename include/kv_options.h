@@ -131,10 +131,10 @@ struct KvOptions
      */
     uint64_t write_buffer_size = 1 * MB;
     /**
-     * @brief Total size of write buffer pool per shard.
+     * @brief Ratio of buffer_pool_size reserved for append-mode write buffers.
      * Only take effect when data_append_mode is enabled.
      */
-    uint64_t write_buffer_pool_size = 64 * MB;
+    double write_buffer_ratio = 0.05;
     /**
      * @brief Reuse files already present in the local cache directory when the
      * store starts.

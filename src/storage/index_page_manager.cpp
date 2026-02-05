@@ -24,11 +24,16 @@ namespace eloqstore
 {
 namespace
 {
-constexpr size_t kIndexPoolLimitPercent = 95;
-
 size_t EffectiveBufferPoolLimitBytes(const KvOptions *opts)
 {
-    size_t limit = (opts->buffer_pool_size * kIndexPoolLimitPercent) / 100;
+    const double ratio = std::clamp(opts->write_buffer_ratio, 0.0, 1.0);
+    size_t reserved = static_cast<size_t>(
+        static_cast<double>(opts->buffer_pool_size) * ratio);
+    if (reserved > opts->buffer_pool_size)
+    {
+        reserved = opts->buffer_pool_size;
+    }
+    size_t limit = opts->buffer_pool_size - reserved;
     if (limit == 0)
     {
         return opts->data_page_size;
