@@ -41,7 +41,12 @@ void WriteTask::Reset(const TableIdent &tbl_id)
 void WriteTask::Abort()
 {
     LOG(INFO) << "WriteTask to " << tbl_ident_ << " is aborted";
-    if (!Options()->data_append_mode)
+    if (Options()->data_append_mode)
+    {
+        // Drain pending async writes before task is freed.
+        (void) WaitWrite();
+    }
+    else
     {
         IoMgr()->AbortWrite(tbl_ident_);
     }
