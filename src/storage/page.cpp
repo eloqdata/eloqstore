@@ -127,7 +127,7 @@ char *PagesPool::Allocate()
 {
     if (free_head_ == nullptr)
     {
-        Extend(1024);  // Extend the pool with 8 pages if free list is empty.
+        Extend(1024);  // Extend the pool with 1024 pages if free list is empty.
         assert(free_head_ != nullptr);
     }
     FreePage *head = free_head_;

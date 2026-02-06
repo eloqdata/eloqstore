@@ -72,7 +72,8 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
     if (opts.non_page_io_batch_size == 0 ||
         (opts.non_page_io_batch_size & (page_align - 1)) != 0)
     {
-        LOG(ERROR) << "non_page_io_batch_size must be non-zero and page aligned";
+        LOG(ERROR)
+            << "non_page_io_batch_size must be non-zero and page aligned";
         return false;
     }
 
