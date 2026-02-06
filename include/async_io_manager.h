@@ -66,7 +66,7 @@ class EloqStore;
 class AsyncIoManager
 {
 public:
-    explicit AsyncIoManager(const KvOptions *opts) : options_(opts) {};
+    explicit AsyncIoManager(const KvOptions *opts) : options_(opts){};
     virtual ~AsyncIoManager() = default;
     static std::unique_ptr<AsyncIoManager> Instance(const EloqStore *store,
                                                     uint32_t fd_limit);
@@ -168,6 +168,28 @@ public:
         (void) release_indices;
         (void) use_fixed;
         return KvError::InvalidArgs;
+    }
+    // Hook for cloud mode to capture freshly-written data ranges for upload.
+    // Default implementation is no-op.
+    virtual void OnFileRangeWritten(const TableIdent &tbl_id,
+                                    FileId file_id,
+                                    uint64_t term,
+                                    uint64_t offset,
+                                    std::string_view data)
+    {
+        (void) tbl_id;
+        (void) file_id;
+        (void) term;
+        (void) offset;
+        (void) data;
+    }
+    // Hook for cloud append mode: invoked when current data file is sealed
+    // (file_id switches to next), so implementation can upload it immediately.
+    virtual KvError OnDataFileSealed(const TableIdent &tbl_id, FileId file_id)
+    {
+        (void) tbl_id;
+        (void) file_id;
+        return KvError::NoError;
     }
     /**
      * @brief Get the number of currently open file descriptors.
@@ -440,7 +462,7 @@ public:
 
     struct BaseReq
     {
-        explicit BaseReq(KvTask *task = nullptr) : task_(task) {};
+        explicit BaseReq(KvTask *task = nullptr) : task_(task){};
         KvTask *task_;
         int res_{0};
         uint32_t flags_{0};
@@ -680,6 +702,7 @@ public:
     KvError CreateArchive(const TableIdent &tbl_id,
                           std::string_view snapshot,
                           uint64_t ts) override;
+    KvError AbortWrite(const TableIdent &tbl_id) override;
     void CleanManifest(const TableIdent &tbl_id) override;
 
     ObjectStore &GetObjectStore()
@@ -760,6 +783,12 @@ public:
     {
         return process_term_;
     }
+    void OnFileRangeWritten(const TableIdent &tbl_id,
+                            FileId file_id,
+                            uint64_t term,
+                            uint64_t offset,
+                            std::string_view data) override;
+    KvError OnDataFileSealed(const TableIdent &tbl_id, FileId file_id) override;
 
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
@@ -804,6 +833,19 @@ private:
                          uint64_t term = 0);
     KvError UploadFiles(const TableIdent &tbl_id,
                         std::vector<std::string> filenames);
+    KvError ReadFilePrefix(const TableIdent &tbl_id,
+                           std::string_view filename,
+                           size_t prefix_len,
+                           DirectIoBuffer &buffer);
+    void RecordUploadSegment(const TableIdent &tbl_id,
+                             const std::string &filename,
+                             uint64_t offset,
+                             std::string_view data);
+    std::vector<UploadSegment> CollectUploadSegments(const TableIdent &tbl_id,
+                                                     std::string_view filename);
+    void ClearUploadSegmentsForFile(const TableIdent &tbl_id,
+                                    std::string_view filename);
+    void ClearUploadSegmentsForTable(const TableIdent &tbl_id);
 
     bool DequeClosedFile(const FileKey &key);
     void EnqueClosedFile(FileKey key);
@@ -849,6 +891,7 @@ private:
      * @brief Locally cached files that are not currently opened.
      */
     std::unordered_map<FileKey, CachedFile> closed_files_;
+    absl::flat_hash_map<FileKey, std::vector<UploadSegment>> upload_segments_;
     CachedFile lru_file_head_;
     CachedFile lru_file_tail_;
     size_t used_local_space_{0};
@@ -967,7 +1010,7 @@ public:
     class Manifest : public ManifestFile
     {
     public:
-        explicit Manifest(std::string_view content) : content_(content) {};
+        explicit Manifest(std::string_view content) : content_(content){};
         KvError Read(char *dst, size_t n) override;
         KvError SkipPadding(size_t n) override;
 

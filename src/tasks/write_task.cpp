@@ -76,10 +76,9 @@ void WriteTask::Abort()
         // Drain pending async writes before task is freed.
         (void) WaitWrite();
     }
-    else
-    {
-        IoMgr()->AbortWrite(tbl_ident_);
-    }
+    // Always invoke AbortWrite so CloudStoreMgr can clear per-table upload
+    // segments and io manager can reset dirty state.
+    IoMgr()->AbortWrite(tbl_ident_);
 
     if (cow_meta_.old_mapping_ != nullptr)
     {
@@ -151,12 +150,25 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
     const KvOptions *opts = Options();
     const size_t page_size = opts->data_page_size;
     auto [file_id, offset] = ConvFilePageId(file_page_id);
+    const bool cloud_append_mode =
+        opts->data_append_mode && !opts->cloud_store_path.empty();
 
     char *page_ptr = VarPagePtr(page);
     if (!append_aggregator_.HasBuffer() ||
         !append_aggregator_.CanAppend(file_id, offset, page_size))
     {
+        const bool file_switched =
+            append_aggregator_.HasData() &&
+            append_aggregator_.CurrentFileId() != file_id;
+        const FileId sealed_file_id = append_aggregator_.CurrentFileId();
         FlushAppendWrites();
+        if (file_switched && cloud_append_mode)
+        {
+            KvError err = WaitWrite();
+            CHECK_KV_ERR(err);
+            err = IoMgr()->OnDataFileSealed(tbl_ident_, sealed_file_id);
+            CHECK_KV_ERR(err);
+        }
         uint16_t buf_index = 0;
         char *buf = IoMgr()->AcquireWriteBuffer(buf_index);
         if (buf == nullptr)
