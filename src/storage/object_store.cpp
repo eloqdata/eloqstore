@@ -1246,14 +1246,21 @@ bool AsyncHttpManager::SetupUploadRequest(ObjectStore::UploadTask *task,
                                           CURL *easy)
 {
     const std::string &filename = task->filename_;
-    if (task->data_buffer_.empty())
+    const bool has_inline_data = !task->data_buffer_.empty();
+    const bool has_segment_data =
+        !task->segments_.empty() || task->file_size_ == 0;
+    if (has_inline_data)
     {
-        LOG(ERROR) << "UploadTask missing data for file " << filename;
+        task->file_size_ = task->data_buffer_.size();
+    }
+    if (!has_inline_data && !has_segment_data)
+    {
+        LOG(ERROR) << "UploadTask missing upload source for file " << filename;
         task->error_ = KvError::InvalidArgs;
         return false;
     }
-    task->file_size_ = task->data_buffer_.size();
     task->buffer_offset_ = 0;
+    task->read_offset_ = 0;
 
     std::string key = ComposeKey(task->tbl_id_, filename);
     task->json_data_ = backend_->CreateSignedUrl(CloudHttpMethod::kPut, key);
@@ -1265,11 +1272,23 @@ bool AsyncHttpManager::SetupUploadRequest(ObjectStore::UploadTask *task,
 
     curl_easy_setopt(easy, CURLOPT_URL, task->json_data_.c_str());
     curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, "PUT");
-    curl_easy_setopt(easy, CURLOPT_UPLOAD, 0L);
-    curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->data_buffer_.data());
-    curl_easy_setopt(easy,
-                     CURLOPT_POSTFIELDSIZE_LARGE,
-                     static_cast<curl_off_t>(task->file_size_));
+    if (has_inline_data)
+    {
+        curl_easy_setopt(easy, CURLOPT_UPLOAD, 0L);
+        curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->data_buffer_.data());
+        curl_easy_setopt(easy,
+                         CURLOPT_POSTFIELDSIZE_LARGE,
+                         static_cast<curl_off_t>(task->file_size_));
+    }
+    else
+    {
+        curl_easy_setopt(easy, CURLOPT_UPLOAD, 1L);
+        curl_easy_setopt(easy, CURLOPT_READFUNCTION, ReadUploadCallback);
+        curl_easy_setopt(easy, CURLOPT_READDATA, task);
+        curl_easy_setopt(easy,
+                         CURLOPT_INFILESIZE_LARGE,
+                         static_cast<curl_off_t>(task->file_size_));
+    }
     task->headers_ = nullptr;
     task->headers_ = curl_slist_append(task->headers_, "Expect:");
 
@@ -1416,6 +1435,70 @@ size_t AsyncHttpManager::HeaderCallback(char *buffer,
     return size * nitems;
 }
 
+size_t AsyncHttpManager::ReadUploadCallback(char *buffer,
+                                            size_t size,
+                                            size_t nitems,
+                                            void *userdata)
+{
+    if (buffer == nullptr || userdata == nullptr)
+    {
+        return CURL_READFUNC_ABORT;
+    }
+    auto *task = static_cast<ObjectStore::UploadTask *>(userdata);
+    const size_t capacity = size * nitems;
+    if (capacity == 0)
+    {
+        return 0;
+    }
+    if (task->read_offset_ >= task->file_size_)
+    {
+        return 0;
+    }
+
+    size_t total_to_fill = std::min<size_t>(
+        capacity, static_cast<size_t>(task->file_size_ - task->read_offset_));
+    size_t filled = 0;
+    while (filled < total_to_fill)
+    {
+        const uint64_t abs_offset = task->read_offset_ + filled;
+        bool copied_from_segment = false;
+        for (const UploadSegment &segment : task->segments_)
+        {
+            const uint64_t seg_begin = segment.offset;
+            const size_t seg_size = segment.data.size();
+            if (seg_size == 0)
+            {
+                continue;
+            }
+            const uint64_t seg_end =
+                seg_begin + static_cast<uint64_t>(seg_size);
+            if (abs_offset < seg_begin || abs_offset >= seg_end)
+            {
+                continue;
+            }
+
+            const size_t in_seg =
+                static_cast<size_t>(abs_offset - seg_begin);
+            const size_t seg_avail = seg_size - in_seg;
+            const size_t chunk = std::min(seg_avail, total_to_fill - filled);
+            std::memcpy(buffer + filled, segment.data.data() + in_seg, chunk);
+            filled += chunk;
+            copied_from_segment = true;
+            break;
+        }
+        if (copied_from_segment)
+        {
+            continue;
+        }
+        LOG(ERROR) << "Upload segments do not cover offset " << abs_offset
+                   << " for " << task->filename_;
+        return CURL_READFUNC_ABORT;
+    }
+
+    task->read_offset_ += filled;
+    return filled;
+}
+
 void AsyncHttpManager::ProcessCompletedRequests()
 {
     if (IsIdle())
@@ -1527,6 +1610,10 @@ void AsyncHttpManager::ProcessCompletedRequests()
 
 void AsyncHttpManager::CleanupTaskResources(ObjectStore::Task *task)
 {
+    if (task == nullptr)
+    {
+        return;
+    }
     curl_slist_free_all(task->headers_);
     task->headers_ = nullptr;
 }

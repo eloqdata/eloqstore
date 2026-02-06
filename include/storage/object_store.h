@@ -30,6 +30,12 @@ struct CloudObjectInfo;
 
 namespace eloqstore
 {
+struct UploadSegment
+{
+    uint64_t offset{0};
+    DirectIoBuffer data;
+};
+
 class KvTask;
 class CloudStoreMgr;
 class AsyncHttpManager;
@@ -154,6 +160,8 @@ public:
         size_t file_size_{0};
         DirectIoBuffer data_buffer_;
         size_t buffer_offset_{0};
+        std::vector<UploadSegment> segments_;
+        uint64_t read_offset_{0};
         // For If-Match header
         std::string if_match_{};
         // For If-None-Match header (use "*" for create)
@@ -317,6 +325,10 @@ private:
                                  size_t size,
                                  size_t nitems,
                                  void *userdata);
+    static size_t ReadUploadCallback(char *buffer,
+                                     size_t size,
+                                     size_t nitems,
+                                     void *userdata);
 
     static constexpr uint32_t kInitialRetryDelayMs = 10'000;
     static constexpr uint32_t kMaxRetryDelayMs = 40'000;

@@ -169,6 +169,20 @@ public:
         (void) use_fixed;
         return KvError::InvalidArgs;
     }
+    // Hook for cloud mode to capture freshly-written data ranges for upload.
+    // Default implementation is no-op.
+    virtual void OnFileRangeWritten(const TableIdent &tbl_id,
+                                    FileId file_id,
+                                    uint64_t term,
+                                    uint64_t offset,
+                                    std::string_view data)
+    {
+        (void) tbl_id;
+        (void) file_id;
+        (void) term;
+        (void) offset;
+        (void) data;
+    }
     /**
      * @brief Get the number of currently open file descriptors.
      * @return Number of open file descriptors, or 0 if not applicable.
@@ -680,6 +694,7 @@ public:
     KvError CreateArchive(const TableIdent &tbl_id,
                           std::string_view snapshot,
                           uint64_t ts) override;
+    KvError AbortWrite(const TableIdent &tbl_id) override;
     void CleanManifest(const TableIdent &tbl_id) override;
 
     ObjectStore &GetObjectStore()
@@ -760,6 +775,11 @@ public:
     {
         return process_term_;
     }
+    void OnFileRangeWritten(const TableIdent &tbl_id,
+                            FileId file_id,
+                            uint64_t term,
+                            uint64_t offset,
+                            std::string_view data) override;
 
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
@@ -804,6 +824,19 @@ private:
                          uint64_t term = 0);
     KvError UploadFiles(const TableIdent &tbl_id,
                         std::vector<std::string> filenames);
+    KvError ReadFilePrefix(const TableIdent &tbl_id,
+                           std::string_view filename,
+                           size_t prefix_len,
+                           DirectIoBuffer &buffer);
+    void RecordUploadSegment(const TableIdent &tbl_id,
+                             const std::string &filename,
+                             uint64_t offset,
+                             std::string_view data);
+    std::vector<UploadSegment> CollectUploadSegments(const TableIdent &tbl_id,
+                                                     std::string_view filename);
+    void ClearUploadSegmentsForFile(const TableIdent &tbl_id,
+                                    std::string_view filename);
+    void ClearUploadSegmentsForTable(const TableIdent &tbl_id);
 
     bool DequeClosedFile(const FileKey &key);
     void EnqueClosedFile(FileKey key);
@@ -849,6 +882,8 @@ private:
      * @brief Locally cached files that are not currently opened.
      */
     std::unordered_map<FileKey, CachedFile> closed_files_;
+    absl::flat_hash_map<FileKey, std::vector<UploadSegment>> upload_segments_;
+    size_t upload_segment_bytes_{0};
     CachedFile lru_file_head_;
     CachedFile lru_file_tail_;
     size_t used_local_space_{0};
