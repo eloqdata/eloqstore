@@ -1990,7 +1990,7 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
     assert((io_size & (alignment - 1)) == 0);
     assert((reinterpret_cast<uintptr_t>(write_ptr) & (alignment - 1)) == 0);
     FdIdx tmp_fd_idx{tmp_fd, true};
-    size_t write_batch_size = Options()->write_buffer_size;
+    size_t write_batch_size = Options()->non_page_io_batch_size;
     size_t remaining = io_size;
     size_t written = 0;
     while (remaining > 0)
@@ -3888,7 +3888,7 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
     }
 
     buffer.resize(file_size);
-    const size_t read_batch_size = page_align;
+    const size_t read_batch_size = Options()->non_page_io_batch_size;
     size_t remaining = buffer.padded_size();
     size_t read_offset = 0;
     FdIdx fd_idx{fd, false};
