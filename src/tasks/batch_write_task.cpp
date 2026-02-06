@@ -260,8 +260,6 @@ void BatchWriteTask::Abort()
 KvError BatchWriteTask::Apply()
 {
     // directly go to low priority queue and wait for scheduling
-    auto start = butil::cpuwide_time_us();
-    LOG(INFO) << "Begin Apply " << tbl_ident_;
     YieldToLowPQ();
     KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
     cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
@@ -272,19 +270,13 @@ KvError BatchWriteTask::Apply()
         (void) WaitWrite();
         return err;
     }
-    LOG(INFO) << "After ApplyBatch " << tbl_ident_ << " cost "
-              << butil::cpuwide_time_us() - start;
     err = ApplyTTLBatch();
     if (err != KvError::NoError)
     {
         (void) WaitWrite();
         return err;
     }
-    LOG(INFO) << "After ApplyBatchTTL " << tbl_ident_ << " cost "
-              << butil::cpuwide_time_us() - start;
     err = UpdateMeta();
-    LOG(INFO) << "After UpdateMeta " << tbl_ident_ << " cost "
-              << butil::cpuwide_time_us() - start;
     CHECK_KV_ERR(err);
     TriggerTTL();
     return KvError::NoError;
