@@ -90,9 +90,7 @@ bool Page::IsRegistered() const
     return (ptr_ & kRegisteredMask) != 0;
 }
 
-PagesPool::PagesPool(const KvOptions *options)
-    : options_(options),
-      initial_pages_(options->buffer_pool_size / options->data_page_size) {};
+PagesPool::PagesPool(const KvOptions *options) : options_(options) {};
 
 void PagesPool::Init(void *registered_buffer, size_t buffer_size)
 {

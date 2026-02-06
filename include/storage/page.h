@@ -82,7 +82,6 @@ private:
     };
 
     const KvOptions *options_;
-    const size_t initial_pages_;
     std::deque<MemChunk> chunks_;
     FreePage *free_head_{nullptr};
     size_t free_cnt_{0};
