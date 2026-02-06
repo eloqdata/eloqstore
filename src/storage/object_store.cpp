@@ -1246,21 +1246,27 @@ bool AsyncHttpManager::SetupUploadRequest(ObjectStore::UploadTask *task,
                                           CURL *easy)
 {
     const std::string &filename = task->filename_;
+    // Check which upload source is available:
+    // - inline_data: simple single-buffer upload (legacy path)
+    // - segment_data: segment-based upload (new path for cloud append mode)
     const bool has_inline_data = !task->data_buffer_.empty();
     const bool has_segment_data =
         !task->segments_.empty() || task->file_size_ == 0;
+    // If using inline data, file_size is determined by buffer size
     if (has_inline_data)
     {
         task->file_size_ = task->data_buffer_.size();
     }
+    // Must have at least one upload source
     if (!has_inline_data && !has_segment_data)
     {
         LOG(ERROR) << "UploadTask missing upload source for file " << filename;
         task->error_ = KvError::InvalidArgs;
         return false;
     }
-    task->buffer_offset_ = 0;
-    task->read_offset_ = 0;
+    // Reset read cursors for both upload paths
+    task->buffer_offset_ = 0;  // For inline data path
+    task->read_offset_ = 0;    // For segment-based path
 
     std::string key = ComposeKey(task->tbl_id_, filename);
     task->json_data_ = backend_->CreateSignedUrl(CloudHttpMethod::kPut, key);
@@ -1450,18 +1456,24 @@ size_t AsyncHttpManager::ReadUploadCallback(char *buffer,
     {
         return 0;
     }
+    // EOF: all bytes have been read
     if (task->read_offset_ >= task->file_size_)
     {
         return 0;
     }
 
+    // Calculate how many bytes we need to fill (up to capacity or EOF)
     size_t total_to_fill = std::min<size_t>(
         capacity, static_cast<size_t>(task->file_size_ - task->read_offset_));
     size_t filled = 0;
+    // Iterate through segments to find the one covering current read position
     while (filled < total_to_fill)
     {
         const uint64_t abs_offset = task->read_offset_ + filled;
         bool copied_from_segment = false;
+        // Linear search through segments to find the one covering abs_offset
+        // Segments should be ordered by offset, but we search all to handle
+        // any ordering (segments are validated during UploadFiles setup)
         for (const UploadSegment &segment : task->segments_)
         {
             const uint64_t seg_begin = segment.offset;
@@ -1472,11 +1484,13 @@ size_t AsyncHttpManager::ReadUploadCallback(char *buffer,
             }
             const uint64_t seg_end =
                 seg_begin + static_cast<uint64_t>(seg_size);
+            // Check if abs_offset falls within this segment's range
             if (abs_offset < seg_begin || abs_offset >= seg_end)
             {
                 continue;
             }
 
+            // Calculate offset within segment and copy available bytes
             const size_t in_seg = static_cast<size_t>(abs_offset - seg_begin);
             const size_t seg_avail = seg_size - in_seg;
             const size_t chunk = std::min(seg_avail, total_to_fill - filled);
@@ -1489,11 +1503,13 @@ size_t AsyncHttpManager::ReadUploadCallback(char *buffer,
         {
             continue;
         }
+        // This should never happen if segments are set up correctly
         LOG(ERROR) << "Upload segments do not cover offset " << abs_offset
                    << " for " << task->filename_;
         return CURL_READFUNC_ABORT;
     }
 
+    // Advance read cursor for next callback invocation
     task->read_offset_ += filled;
     return filled;
 }

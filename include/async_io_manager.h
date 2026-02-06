@@ -169,8 +169,27 @@ public:
         (void) use_fixed;
         return KvError::InvalidArgs;
     }
-    // Hook for cloud mode to capture freshly-written data ranges for upload.
-    // Default implementation is no-op.
+    /**
+     * @brief Hook for cloud mode to capture freshly-written data ranges for
+     * upload.
+     *
+     * This callback is invoked immediately after data is written to a file,
+     * allowing cloud storage implementations to track written ranges in memory
+     * for efficient segment-based uploads. The data view points to the actual
+     * bytes that were written and remains valid only during the callback.
+     *
+     * In cloud append mode, this enables uploading file tails without reading
+     * from disk by maintaining in-memory segments of recently written data.
+     *
+     * @param tbl_id Table identifier
+     * @param file_id File identifier (data file or manifest)
+     * @param term File term (for data files) or manifest term
+     * @param offset Byte offset where data was written
+     * @param data View of the written data (valid only during callback)
+     *
+     * @note Default implementation is no-op. Override in CloudStoreMgr to
+     *       record segments for later upload.
+     */
     virtual void OnFileRangeWritten(const TableIdent &tbl_id,
                                     FileId file_id,
                                     uint64_t term,
@@ -183,8 +202,28 @@ public:
         (void) offset;
         (void) data;
     }
-    // Hook for cloud append mode: invoked when current data file is sealed
-    // (file_id switches to next), so implementation can upload it immediately.
+    /**
+     * @brief Hook for cloud append mode: invoked when current data file is
+     * sealed.
+     *
+     * This callback is triggered synchronously when the write path switches to
+     * a new data file (file_id increments), indicating the previous file is
+     * complete and should be uploaded immediately. This enables immediate
+     * upload of sealed data files in cloud append mode.
+     *
+     * The call is synchronous within the current write task context. Returning
+     * an error will fail the write request and trigger AbortWrite to clean up
+     * any partial state.
+     *
+     * @param tbl_id Table identifier
+     * @param file_id The file_id that was just sealed (before switching to
+     * next)
+     *
+     * @return KvError::NoError on success, error code on failure
+     *
+     * @note Default implementation returns NoError. Override in CloudStoreMgr
+     *       to trigger immediate upload of the sealed file.
+     */
     virtual KvError OnDataFileSealed(const TableIdent &tbl_id, FileId file_id)
     {
         (void) tbl_id;
@@ -788,6 +827,8 @@ public:
                             uint64_t term,
                             uint64_t offset,
                             std::string_view data) override;
+    // Called when append-mode writing switches away from a data file.
+    // Upload success marks that file clean; failure aborts the write task.
     KvError OnDataFileSealed(const TableIdent &tbl_id, FileId file_id) override;
 
     std::pair<ManifestFilePtr, KvError> GetManifest(
@@ -833,18 +874,78 @@ private:
                          uint64_t term = 0);
     KvError UploadFiles(const TableIdent &tbl_id,
                         std::vector<std::string> filenames);
+    /**
+     * @brief Read file prefix from disk for upload fallback.
+     *
+     * When in-memory segments only cover a file tail (e.g., recent appends),
+     * this reads the file prefix [0, prefix_len) from disk to complete the
+     * upload. Used during UploadFiles when segments don't cover the entire
+     * file.
+     *
+     * @param tbl_id Table identifier
+     * @param filename File name to read
+     * @param prefix_len Number of bytes to read from file start
+     * @param buffer Output buffer (cleared and resized to prefix_len)
+     *
+     * @return KvError::NoError on success, error code on failure
+     */
     KvError ReadFilePrefix(const TableIdent &tbl_id,
                            std::string_view filename,
                            size_t prefix_len,
                            DirectIoBuffer &buffer);
+    /**
+     * @brief Capture a freshly written byte range for later segment-based
+     * upload.
+     *
+     * Records an in-memory segment that will be used during upload instead of
+     * reading from disk. Segments must be appended continuously (no gaps or
+     * overlaps). This is called from OnFileRangeWritten to track recent writes.
+     *
+     * @param tbl_id Table identifier
+     * @param filename File name (as returned by ToFilename)
+     * @param offset Byte offset where data was written
+     * @param data View of the written data (copied into segment)
+     *
+     * @note Logs errors and returns early if segments are non-contiguous or
+     *       overflow would occur. Segments are validated during
+     * CollectUploadSegments.
+     */
     void RecordUploadSegment(const TableIdent &tbl_id,
                              const std::string &filename,
                              uint64_t offset,
                              std::string_view data);
+    /**
+     * @brief Move out and erase pending segments for one file.
+     *
+     * Collects all recorded segments for a file and removes them from the
+     * internal cache. Used during UploadFiles to prepare segments for upload.
+     *
+     * @param tbl_id Table identifier
+     * @param filename File name to collect segments for
+     *
+     * @return Vector of segments (moved out, empty if none recorded)
+     */
     std::vector<UploadSegment> CollectUploadSegments(const TableIdent &tbl_id,
                                                      std::string_view filename);
+    /**
+     * @brief Clear pending segments for one file (best-effort).
+     *
+     * Removes all recorded segments for a file from the cache. Used after
+     * successful upload or when cleaning up partial state.
+     *
+     * @param tbl_id Table identifier
+     * @param filename File name to clear segments for
+     */
     void ClearUploadSegmentsForFile(const TableIdent &tbl_id,
                                     std::string_view filename);
+    /**
+     * @brief Clear all pending segments for a table.
+     *
+     * Removes all recorded segments for all files belonging to a table.
+     * Used by AbortWrite to clean up partial state on write failure.
+     *
+     * @param tbl_id Table identifier
+     */
     void ClearUploadSegmentsForTable(const TableIdent &tbl_id);
 
     bool DequeClosedFile(const FileKey &key);
@@ -891,6 +992,16 @@ private:
      * @brief Locally cached files that are not currently opened.
      */
     std::unordered_map<FileKey, CachedFile> closed_files_;
+    /**
+     * @brief In-memory upload segments keyed by (table, filename).
+     *
+     * Stores contiguous byte ranges captured via OnFileRangeWritten for
+     * segment-based uploads. Segments are collected during UploadFiles and
+     * cleared after successful upload or on AbortWrite.
+     *
+     * Key: (table_id, filename) pair identifying the file
+     * Value: Ordered vector of non-overlapping, contiguous segments
+     */
     absl::flat_hash_map<FileKey, std::vector<UploadSegment>> upload_segments_;
     CachedFile lru_file_head_;
     CachedFile lru_file_tail_;

@@ -157,15 +157,22 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
     if (!append_aggregator_.HasBuffer() ||
         !append_aggregator_.CanAppend(file_id, offset, page_size))
     {
+        // Check if we're switching to a new file (file_id changed)
+        // This indicates the previous file is now sealed
         const bool file_switched =
             append_aggregator_.HasData() &&
             append_aggregator_.CurrentFileId() != file_id;
         const FileId sealed_file_id = append_aggregator_.CurrentFileId();
+        // Flush any pending writes in the aggregator
         FlushAppendWrites();
+        // In cloud append mode, trigger immediate upload of sealed file
+        // This ensures sealed data files are uploaded promptly
         if (file_switched && cloud_append_mode)
         {
+            // Wait for flush to complete before uploading
             KvError err = WaitWrite();
             CHECK_KV_ERR(err);
+            // Trigger upload of the sealed file (may use in-memory segments)
             err = IoMgr()->OnDataFileSealed(tbl_ident_, sealed_file_id);
             CHECK_KV_ERR(err);
         }
