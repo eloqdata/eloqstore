@@ -219,8 +219,7 @@ int KvOptions::LoadFromIni(const char *path)
     {
         std::string non_page_io_batch_size_str =
             reader.Get(sec_run, "non_page_io_batch_size", "");
-        non_page_io_batch_size =
-            ParseSizeWithUnit(non_page_io_batch_size_str);
+        non_page_io_batch_size = ParseSizeWithUnit(non_page_io_batch_size_str);
     }
     if (reader.HasValue(sec_run, "write_buffer_ratio"))
     {
