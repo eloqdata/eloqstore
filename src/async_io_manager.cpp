@@ -39,6 +39,7 @@
 #endif
 
 #include <butil/time.h>
+#include <bvar/latency_recorder.h>
 
 #include "cloud_storage_service.h"
 #include "coding.h"
@@ -1216,13 +1217,17 @@ std::pair<FileId, uint32_t> IouringMgr::ConvFilePageId(
     return {file_id, offset};
 }
 
+bvar::LatencyRecorder lr_submit("profile_io_uring_submit", "us");
+
 void IouringMgr::Submit()
 {
     if (prepared_sqe_ == 0)
     {
         return;
     }
+    auto start = butil::cpuwide_time_us();
     int ret = io_uring_submit(&ring_);
+    lr_submit << butil::cpuwide_time_us() - start;
     if (__builtin_expect(ret < 0, 0))
     {
         LOG(ERROR) << "iouring submit failed " << ret;

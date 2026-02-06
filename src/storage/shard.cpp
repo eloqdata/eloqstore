@@ -506,7 +506,8 @@ bool Shard::ExecuteReadyTasks()
         {
             OnTaskFinished(task);
         }
-        if (DurationMicroseconds(ts_) >= FLAGS_max_processing_time_microseconds)
+        if (DurationMicroseconds(ts_) >=
+            FLAGS_max_processing_time_microseconds - 100)
         {
             // run at least one low-priority task to avoid starvation.
             break;
@@ -526,6 +527,7 @@ bool Shard::ExecuteReadyTasks()
         }
         if (DurationMicroseconds(ts_) >= FLAGS_max_processing_time_microseconds)
         {
+            LOG(INFO) << "low p exceeds " << DurationMicroseconds(ts_);
             goto finish;
         }
     }
@@ -818,20 +820,17 @@ uint64_t Shard::ReadTimeMicroseconds()
 #endif
 }
 
-uint64_t Shard::DurationMicroseconds(uint64_t start_us)
+inline uint64_t Shard::DurationMicroseconds(uint64_t start_us)
 {
     // Check elapsed time (returns microseconds directly)
     uint64_t end_us = ReadTimeMicroseconds();
     // Handle potential wraparound (unlikely but safe)
-    if (end_us >= start_us)
+    if (__builtin_expect(end_us >= start_us, 1))
     {
         return end_us - start_us;
     }
-    else
-    {
-        // Wraparound detected, use max value to break loop
-        return FLAGS_max_processing_time_microseconds;
-    }
+    // Wraparound detected, use max value to break loop
+    return FLAGS_max_processing_time_microseconds;
 }
 
 }  // namespace eloqstore
