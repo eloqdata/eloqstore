@@ -1218,6 +1218,7 @@ std::pair<FileId, uint32_t> IouringMgr::ConvFilePageId(
 }
 
 bvar::LatencyRecorder lr_submit("profile_io_uring_submit", "us");
+DEFINE_uint32(ioth, 1000, "");
 
 void IouringMgr::Submit()
 {
@@ -1227,7 +1228,11 @@ void IouringMgr::Submit()
     }
     auto start = butil::cpuwide_time_us();
     int ret = io_uring_submit(&ring_);
-    lr_submit << butil::cpuwide_time_us() - start;
+    auto cost = butil::cpuwide_time_us() - start;
+    if (cost > FLAGS_ioth)
+    {
+        LOG(WARNING) << "io uring cost " << cost << "us";
+    }
     if (__builtin_expect(ret < 0, 0))
     {
         LOG(ERROR) << "iouring submit failed " << ret;
