@@ -14,6 +14,8 @@
 #include <x86intrin.h>  // For __rdtsc()
 #endif
 
+#include <butil/time.h>
+
 #include "async_io_manager.h"
 #include "tasks/list_object_task.h"
 #include "utils.h"
@@ -795,6 +797,7 @@ void Shard::InitializeTscFrequency()
 
 uint64_t Shard::ReadTimeMicroseconds()
 {
+    return butil::cpuwide_time_us();
 #if defined(__x86_64__) || defined(_M_X64)
     uint64_t cycles_per_us =
         tsc_cycles_per_microsecond_.load(std::memory_order_relaxed);
@@ -823,6 +826,7 @@ uint64_t Shard::ReadTimeMicroseconds()
 inline uint64_t Shard::DurationMicroseconds(uint64_t start_us)
 {
     // Check elapsed time (returns microseconds directly)
+    return butil::cpuwide_time_us() - start_us;
     uint64_t end_us = ReadTimeMicroseconds();
     // Handle potential wraparound (unlikely but safe)
     if (__builtin_expect(end_us >= start_us, 1))
