@@ -32,6 +32,10 @@ public:
     void Reset();
     bool HasBuffer() const;
     bool HasData() const;
+    FileId CurrentFileId() const
+    {
+        return file_id_;
+    }
     void SetBuffer(char *buffer,
                    uint16_t buffer_index,
                    FileId file_id,
