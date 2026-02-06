@@ -1,5 +1,7 @@
 #include "tasks/write_task.h"
 
+#include <butil/time.h>
+
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -428,20 +430,28 @@ KvError WriteTask::FlushManifest()
 KvError WriteTask::UpdateMeta()
 {
     // Flush data pages.
+    auto start = butil::cpuwide_time_us();
     KvError err = WaitWrite();
+    LOG(INFO) << tbl_ident_ << "wait io cost" << butil::cpuwide_time_us() - start;
     CHECK_KV_ERR(err);
 
+    start = butil::cpuwide_time_us();
     err = IoMgr()->SyncData(tbl_ident_);
+    LOG(INFO) << tbl_ident_ << "sync data cost" << butil::cpuwide_time_us() - start;
     CHECK_KV_ERR(err);
 
     // Update meta data in storage and then in memory.
+    start = butil::cpuwide_time_us();
     err = FlushManifest();
+    LOG(INFO) << tbl_ident_ << "flush manifest " << butil::cpuwide_time_us() - start;
     CHECK_KV_ERR(err);
 
     // Hooks after modified partition.
     CompactIfNeeded(cow_meta_.mapper_.get());
 
+    start = butil::cpuwide_time_us();
     shard->IndexManager()->UpdateRoot(tbl_ident_, std::move(cow_meta_));
+    LOG(INFO) << tbl_ident_ << "update root " << butil::cpuwide_time_us() - start;
     return KvError::NoError;
 }
 
