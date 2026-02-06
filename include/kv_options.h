@@ -131,6 +131,11 @@ struct KvOptions
      */
     uint64_t write_buffer_size = 1 * MB;
     /**
+     * @brief Batch size for non-page direct IO (e.g. snapshot or upload IO).
+     * Must be page-aligned and non-zero.
+     */
+    uint64_t non_page_io_batch_size = 1 * MB;
+    /**
      * @brief Ratio of buffer_pool_size reserved for append-mode write buffers.
      * Only take effect when data_append_mode is enabled.
      */
@@ -200,6 +205,7 @@ struct KvOptions
     {
         return static_cast<size_t>(data_page_size) << pages_per_file_shift;
     }
+
     /**
      * @brief Amount of pages per data file (1 << pages_per_file_shift).
      * It is recommended to set a smaller file size like 4MB in append write

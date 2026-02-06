@@ -69,6 +69,12 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
             return false;
         }
     }
+    if (opts.non_page_io_batch_size == 0 ||
+        (opts.non_page_io_batch_size & (page_align - 1)) != 0)
+    {
+        LOG(ERROR) << "non_page_io_batch_size must be non-zero and page aligned";
+        return false;
+    }
 
     if (opts.overflow_pointers == 0 ||
         opts.overflow_pointers > max_overflow_pointers)

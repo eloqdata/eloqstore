@@ -215,6 +215,13 @@ int KvOptions::LoadFromIni(const char *path)
             reader.Get(sec_run, "write_buffer_size", "");
         write_buffer_size = ParseSizeWithUnit(write_buffer_size_str);
     }
+    if (reader.HasValue(sec_run, "non_page_io_batch_size"))
+    {
+        std::string non_page_io_batch_size_str =
+            reader.Get(sec_run, "non_page_io_batch_size", "");
+        non_page_io_batch_size =
+            ParseSizeWithUnit(non_page_io_batch_size_str);
+    }
     if (reader.HasValue(sec_run, "write_buffer_ratio"))
     {
         write_buffer_ratio =
@@ -358,6 +365,7 @@ bool KvOptions::operator==(const KvOptions &other) const
            cloud_request_threads == other.cloud_request_threads &&
            direct_io_buffer_pool_size == other.direct_io_buffer_pool_size &&
            write_buffer_size == other.write_buffer_size &&
+           non_page_io_batch_size == other.non_page_io_batch_size &&
            write_buffer_ratio == other.write_buffer_ratio &&
            allow_reuse_local_caches == other.allow_reuse_local_caches &&
            prewarm_cloud_cache == other.prewarm_cloud_cache &&
