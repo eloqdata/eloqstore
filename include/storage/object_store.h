@@ -34,7 +34,8 @@ namespace eloqstore
  * @brief Represents a contiguous byte range for segment-based file uploads.
  *
  * In cloud append mode, files are uploaded using segments that may be:
- * 1. In-memory buffers captured via OnFileRangeWritten (for recent writes)
+ * 1. In-memory buffers captured via OnFileRangeWritePrepared (for recent
+ *    prepared writes)
  * 2. Disk reads (for file prefixes not covered by in-memory segments)
  * 3. Zero-filled buffers (for data file tails that haven't been written yet)
  *

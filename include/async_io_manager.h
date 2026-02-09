@@ -176,31 +176,31 @@ public:
         return KvError::InvalidArgs;
     }
     /**
-     * @brief Hook for cloud mode to capture freshly-written data ranges for
-     * upload.
+     * @brief Hook for cloud mode to capture data ranges before write submit.
      *
-     * This callback is invoked immediately after data is written to a file,
-     * allowing cloud storage implementations to track written ranges in memory
-     * for efficient segment-based uploads. The data view points to the actual
-     * bytes that were written and remains valid only during the callback.
+     * This callback is invoked during write preparation (before write
+     * completion is known), allowing cloud storage implementations to track
+     * ranges in memory for efficient segment-based uploads. The data view
+     * points to the bytes scheduled for this write and remains valid only
+     * during the callback.
      *
      * In cloud append mode, this enables uploading file tails without reading
-     * from disk by maintaining in-memory segments of recently written data.
+     * from disk by maintaining in-memory segments of recently prepared writes.
      *
      * @param tbl_id Table identifier
      * @param file_id File identifier (data file or manifest)
      * @param term File term (for data files) or manifest term
-     * @param offset Byte offset where data was written
-     * @param data View of the written data (valid only during callback)
+     * @param offset Byte offset where data will be written
+     * @param data View of the write payload (valid only during callback)
      *
      * @note Default implementation is no-op. Override in CloudStoreMgr to
      *       record segments for later upload.
      */
-    virtual void OnFileRangeWritten(const TableIdent &tbl_id,
-                                    FileId file_id,
-                                    uint64_t term,
-                                    uint64_t offset,
-                                    std::string_view data)
+    virtual void OnFileRangeWritePrepared(const TableIdent &tbl_id,
+                                          FileId file_id,
+                                          uint64_t term,
+                                          uint64_t offset,
+                                          std::string_view data)
     {
         (void) tbl_id;
         (void) file_id;
@@ -828,7 +828,7 @@ public:
     {
         return process_term_;
     }
-    void OnFileRangeWritten(const TableIdent &tbl_id,
+    void OnFileRangeWritePrepared(const TableIdent &tbl_id,
                             FileId file_id,
                             uint64_t term,
                             uint64_t offset,
@@ -900,17 +900,17 @@ private:
                            size_t prefix_len,
                            DirectIoBuffer &buffer);
     /**
-     * @brief Capture a freshly written byte range for later segment-based
-     * upload.
+     * @brief Capture a prepared write range for later segment-based upload.
      *
      * Records an in-memory segment that will be used during upload instead of
      * reading from disk. Segments must be appended continuously (no gaps or
-     * overlaps). This is called from OnFileRangeWritten to track recent writes.
+     * overlaps). This is called from OnFileRangeWritePrepared to track recent
+     * writes.
      *
      * @param tbl_id Table identifier
      * @param filename File name (as returned by ToFilename)
-     * @param offset Byte offset where data was written
-     * @param data View of the written data (copied into segment)
+     * @param offset Byte offset where data will be written
+     * @param data View of the write payload (copied into segment)
      *
      * @note Logs errors and returns early if segments are non-contiguous or
      *       overflow would occur. Segments are validated during
@@ -1001,7 +1001,7 @@ private:
     /**
      * @brief In-memory upload segments keyed by (table, filename).
      *
-     * Stores contiguous byte ranges captured via OnFileRangeWritten for
+     * Stores contiguous byte ranges captured via OnFileRangeWritePrepared for
      * segment-based uploads. Segments are collected during UploadFiles and
      * cleared after successful upload or on AbortWrite.
      *
