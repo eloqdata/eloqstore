@@ -1,6 +1,7 @@
 #pragma once
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <string>
 #include <thread>
 #include <vector>
@@ -107,6 +108,17 @@ public:
     void Stop();
 
     /**
+     * @brief Signal prewarm service to do a new round of whole prewarm.
+     */
+    void PrewarmAll();
+
+    /**
+     * @brief Signal prewarm service to do a new round of prewarm for those
+     * specified tables.
+     */
+    void Prewarm(const std::vector<TableIdent> &tables);
+
+    /**
      * @brief Wait for prewarm operation to complete
      * Blocks until the prewarm thread finishes execution
      */
@@ -122,7 +134,7 @@ private:
     friend class EloqStore;
     friend class CloudStoreMgr;
     void AbortPrewarmWorkers();
-    void PrewarmCloudCache();
+    void PrewarmCloudCache(const std::string &remote_path);
     bool ListCloudObjects(const std::string &remote_path,
                           std::vector<utils::CloudObjectInfo> &details,
                           const std::string &continuation_token = std::string{},
@@ -130,9 +142,21 @@ private:
     bool ExtractPartition(const std::string &path,
                           TableIdent &tbl_id,
                           std::string &filename);
+    void PrewarmLoop();
 
+private:
     EloqStore *store_;
     std::thread thread_;
+    std::condition_variable cv_;
+    std::mutex mux_;
+
     std::atomic<bool> stop_requested_{false};
+
+    // Standby node do prewarm when received ckpt signal from master node.
+    std::atomic<bool> do_prewarm_{false};
+    // Caller might trigger PrewarmService to prewarm all or prewarm specified
+    // partitions.
+    bool prewarm_all_partitions_{false};
+    std::vector<TableIdent> prewarm_tables_;
 };
 }  // namespace eloqstore
