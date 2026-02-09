@@ -18,16 +18,7 @@ namespace eloqstore
 class DirectIoBuffer
 {
 public:
-    DirectIoBuffer()
-    {
-        size_t reserve =
-            default_reserve_bytes_.load(std::memory_order_relaxed);
-        if (reserve > 0)
-        {
-            EnsureCapacity(reserve);
-            size_ = 0;
-        }
-    }
+    DirectIoBuffer() = default;
     DirectIoBuffer(DirectIoBuffer &&other) noexcept
         : data_(std::exchange(other.data_, nullptr)),
           size_(std::exchange(other.size_, 0)),
@@ -100,6 +91,21 @@ public:
     static void UpdateDefaultReserve(size_t bytes)
     {
         default_reserve_bytes_.store(bytes);
+    }
+
+    void EnsureDefaultReserve()
+    {
+        size_t reserve =
+            default_reserve_bytes_.load(std::memory_order_relaxed);
+        if (reserve == 0 || capacity_ >= reserve)
+        {
+            return;
+        }
+        EnsureCapacity(reserve);
+        if (size_ > reserve)
+        {
+            size_ = reserve;
+        }
     }
 
     char *data()

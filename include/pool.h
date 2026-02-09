@@ -1,6 +1,7 @@
 #pragma once
 
 #include <deque>
+#include <type_traits>
 #include <utility>
 
 namespace eloqstore
@@ -16,11 +17,14 @@ public:
     {
         if (pool_.empty())
         {
-            return T();
+            T value;
+            ReserveHelper<T>::Call(value);
+            return value;
         }
         T value = std::move(pool_.back());
         pool_.pop_back();
         value.clear();
+        ReserveHelper<T>::Call(value);
         return value;
     }
 
@@ -36,6 +40,25 @@ public:
 private:
     size_t max_cached_;
     std::deque<T> pool_;
+
+    template <typename U, typename = void>
+    struct ReserveHelper
+    {
+        static void Call(U &)
+        {
+        }
+    };
+
+    template <typename U>
+    struct ReserveHelper<
+        U,
+        std::void_t<decltype(std::declval<U &>().EnsureDefaultReserve())>>
+    {
+        static void Call(U &value)
+        {
+            value.EnsureDefaultReserve();
+        }
+    };
 };
 
 }  // namespace eloqstore
