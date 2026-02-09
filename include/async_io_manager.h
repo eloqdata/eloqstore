@@ -846,6 +846,7 @@ public:
         const TableIdent &tbl_id);
 
 private:
+    struct UploadBufferState;
     // Upsert term file with limited retry logic
     // Returns NoError on success, ExpiredTerm if condition invalid, other
     // errors on failure
@@ -883,76 +884,76 @@ private:
     /**
      * @brief Read file prefix from disk for upload fallback.
      *
-     * When in-memory segments only cover a file tail (e.g., recent appends),
-     * this reads the file prefix [0, prefix_len) from disk to complete the
-     * upload. Used during UploadFiles when segments don't cover the entire
-     * file.
+     * When in-memory buffered bytes only cover a file tail (e.g., recent
+     * appends), this reads the file prefix [0, prefix_len) from disk directly
+     * into the destination buffer.
      *
      * @param tbl_id Table identifier
      * @param filename File name to read
      * @param prefix_len Number of bytes to read from file start
-     * @param buffer Output buffer (cleared and resized to prefix_len)
+     * @param buffer Destination buffer
+     * @param dst_offset Byte offset in destination buffer to place the prefix
      *
      * @return KvError::NoError on success, error code on failure
      */
     KvError ReadFilePrefix(const TableIdent &tbl_id,
                            std::string_view filename,
                            size_t prefix_len,
-                           DirectIoBuffer &buffer);
+                           DirectIoBuffer &buffer,
+                           size_t dst_offset);
     /**
-     * @brief Capture a prepared write range for later segment-based upload.
+     * @brief Capture a prepared write range into per-file upload buffer.
      *
-     * Records an in-memory segment that will be used during upload instead of
-     * reading from disk. Segments must be appended continuously (no gaps or
-     * overlaps). This is called from OnFileRangeWritePrepared to track recent
-     * writes.
+     * Records in-memory bytes for later upload using a full-file buffer model.
+     * Writes must append continuously (no gaps/overlaps) per file. Called from
+     * OnFileRangeWritePrepared.
      *
      * @param tbl_id Table identifier
      * @param filename File name (as returned by ToFilename)
      * @param offset Byte offset where data will be written
-     * @param data View of the write payload (copied into segment)
+     * @param data View of the write payload (copied into upload buffer)
      *
-     * @note Logs errors and returns early if segments are non-contiguous or
-     *       overflow would occur. Segments are validated during
-     * CollectUploadSegments.
+     * @note Logs errors and marks file state invalid when continuity/overflow
+     *       checks fail.
      */
-    void RecordUploadSegment(const TableIdent &tbl_id,
-                             const std::string &filename,
-                             uint64_t offset,
-                             std::string_view data);
+    void RecordUploadBufferRange(const TableIdent &tbl_id,
+                                 const std::string &filename,
+                                 uint64_t offset,
+                                 std::string_view data);
     /**
-     * @brief Move out and erase pending segments for one file.
+     * @brief Move out and erase pending upload buffer state for one file.
      *
-     * Collects all recorded segments for a file and removes them from the
-     * internal cache. Used during UploadFiles to prepare segments for upload.
+     * Moves buffered upload state for one file out of the internal cache.
+     * Returns false when no state exists.
      *
      * @param tbl_id Table identifier
-     * @param filename File name to collect segments for
+     * @param filename File name
+     * @param state_out Output state when found
      *
-     * @return Vector of segments (moved out, empty if none recorded)
+     * @return true if state exists and is moved out; false otherwise
      */
-    std::vector<UploadSegment> CollectUploadSegments(const TableIdent &tbl_id,
-                                                     std::string_view filename);
+    bool TakeUploadBufferState(const TableIdent &tbl_id,
+                               std::string_view filename,
+                               UploadBufferState &state_out);
     /**
-     * @brief Clear pending segments for one file (best-effort).
+     * @brief Clear pending upload state for one file (best-effort).
      *
-     * Removes all recorded segments for a file from the cache. Used after
-     * successful upload or when cleaning up partial state.
+     * Removes buffered state for one file from the cache.
      *
      * @param tbl_id Table identifier
      * @param filename File name to clear segments for
      */
-    void ClearUploadSegmentsForFile(const TableIdent &tbl_id,
-                                    std::string_view filename);
+    void ClearUploadBufferForFile(const TableIdent &tbl_id,
+                                  std::string_view filename);
     /**
-     * @brief Clear all pending segments for a table.
+     * @brief Clear all pending upload states for a table.
      *
-     * Removes all recorded segments for all files belonging to a table.
-     * Used by AbortWrite to clean up partial state on write failure.
+     * Removes all buffered upload states for files of one table. Used by
+     * AbortWrite to clean partial state on write failure.
      *
      * @param tbl_id Table identifier
      */
-    void ClearUploadSegmentsForTable(const TableIdent &tbl_id);
+    void ClearUploadBuffersForTable(const TableIdent &tbl_id);
 
     bool DequeClosedFile(const FileKey &key);
     void EnqueClosedFile(FileKey key);
@@ -998,17 +999,22 @@ private:
      * @brief Locally cached files that are not currently opened.
      */
     std::unordered_map<FileKey, CachedFile> closed_files_;
+    struct UploadBufferState
+    {
+        DirectIoBuffer buffer;
+        uint64_t start_offset{0};
+        uint64_t end_offset{0};
+        bool initialized{false};
+        bool invalid{false};
+    };
     /**
-     * @brief In-memory upload segments keyed by (table, filename).
+     * @brief In-memory upload buffers keyed by (table, filename).
      *
-     * Stores contiguous byte ranges captured via OnFileRangeWritePrepared for
-     * segment-based uploads. Segments are collected during UploadFiles and
-     * cleared after successful upload or on AbortWrite.
-     *
-     * Key: (table_id, filename) pair identifying the file
-     * Value: Ordered vector of non-overlapping, contiguous segments
+     * Stores write payloads captured via OnFileRangeWritePrepared in a
+     * contiguous per-file buffer model. State is moved out during UploadFiles
+     * and cleared on AbortWrite.
      */
-    absl::flat_hash_map<FileKey, std::vector<UploadSegment>> upload_segments_;
+    absl::flat_hash_map<FileKey, UploadBufferState> upload_buffers_;
     CachedFile lru_file_head_;
     CachedFile lru_file_tail_;
     size_t used_local_space_{0};

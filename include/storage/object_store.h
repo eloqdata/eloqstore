@@ -30,37 +30,6 @@ struct CloudObjectInfo;
 
 namespace eloqstore
 {
-/**
- * @brief Represents a contiguous byte range for segment-based file uploads.
- *
- * In cloud append mode, files are uploaded using segments that may be:
- * 1. In-memory buffers captured via OnFileRangeWritePrepared (for recent
- *    prepared writes)
- * 2. Disk reads (for file prefixes not covered by in-memory segments)
- * 3. Zero-filled buffers (for data file tails that haven't been written yet)
- *
- * Segments must be non-overlapping and contiguous when assembled for upload.
- * The upload path concatenates segments in offset order to form the complete
- * file.
- */
-struct UploadSegment
-{
-    /** Logical file offset of this segment's first byte. */
-    uint64_t offset{0};
-    /** Segment payload bytes. The upload path treats size() as logical bytes.
-     */
-    DirectIoBuffer data;
-    /** Length used when this segment represents a zero-filled range. */
-    size_t zero_fill_length{0};
-    /** True if this segment should be interpreted as zero-filled bytes. */
-    bool zero_fill{false};
-
-    size_t LogicalSize() const
-    {
-        return zero_fill ? zero_fill_length : data.size();
-    }
-};
-
 class KvTask;
 class CloudStoreMgr;
 class AsyncHttpManager;
@@ -184,16 +153,8 @@ public:
         std::string filename_;
         // Total logical object size expected by remote upload.
         size_t file_size_{0};
-        // Inline one-buffer upload source. Used by simple uploads (no
-        // segments).
+        // Inline one-buffer upload source.
         DirectIoBuffer data_buffer_;
-        // Internal cursor for inline data path.
-        size_t buffer_offset_{0};
-        // Segment-based upload source. Offsets are logical file offsets.
-        // ReadUploadCallback copies bytes from this vector by read_offset_.
-        std::vector<UploadSegment> segments_;
-        // Internal cursor used by ReadUploadCallback.
-        uint64_t read_offset_{0};
         // For If-Match header
         std::string if_match_{};
         // For If-None-Match header (use "*" for create)
@@ -357,26 +318,6 @@ private:
                                  size_t size,
                                  size_t nitems,
                                  void *userdata);
-    /**
-     * @brief CURL read callback for segment-based uploads.
-     *
-     * This callback is invoked by libcurl during HTTP PUT uploads to provide
-     * data bytes. It reads from UploadTask::segments_ in order, maintaining
-     * read_offset_ as a cursor across segments. Segments must be contiguous
-     * and cover the entire file range [0, file_size_).
-     *
-     * @param buffer Buffer to fill with upload data
-     * @param size Size of each element
-     * @param nitems Number of elements
-     * @param userdata Pointer to UploadTask instance
-     *
-     * @return Number of bytes written to buffer, 0 on EOF, CURL_READFUNC_ABORT
-     * on error
-     */
-    static size_t ReadUploadCallback(char *buffer,
-                                     size_t size,
-                                     size_t nitems,
-                                     void *userdata);
 
     static constexpr uint32_t kInitialRetryDelayMs = 10'000;
     static constexpr uint32_t kMaxRetryDelayMs = 40'000;
