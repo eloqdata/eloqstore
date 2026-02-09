@@ -2588,7 +2588,7 @@ void CloudStoreMgr::RecordUploadSegment(const TableIdent &tbl_id,
     std::vector<UploadSegment> &segments = it->second;
 
     // Validate offset + size doesn't overflow
-    const uint64_t new_size = static_cast<uint64_t>(data.size());
+    const uint64_t new_size = data.size();
     if (offset > std::numeric_limits<uint64_t>::max() - new_size)
     {
         LOG(ERROR) << "Upload segment offset overflow, table=" << tbl_id
@@ -2602,7 +2602,7 @@ void CloudStoreMgr::RecordUploadSegment(const TableIdent &tbl_id,
     if (!segments.empty())
     {
         const UploadSegment &last = segments.back();
-        const uint64_t last_size = static_cast<uint64_t>(last.data.size());
+        const uint64_t last_size = last.data.size();
         // Check last segment's end doesn't overflow
         if (last.offset > std::numeric_limits<uint64_t>::max() - last_size)
         {
@@ -2719,7 +2719,7 @@ KvError CloudStoreMgr::ReadFilePrefix(const TableIdent &tbl_id,
     KvError status = KvError::NoError;
     size_t remaining = prefix_len;
     size_t read_offset = 0;
-    const size_t read_batch_size = page_align;  // Read in page-sized chunks
+    const size_t read_batch_size = Options()->non_page_io_batch_size;
     while (remaining > 0)
     {
         size_t batch = std::min(read_batch_size, remaining);
@@ -4285,7 +4285,7 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
             CollectUploadSegments(tbl_id, task->filename_);
 
         // Calculate what range is covered by in-memory segments
-        const uint64_t file_size_u64 = static_cast<uint64_t>(task->file_size_);
+        const uint64_t file_size_u64 = task->file_size_;
         uint64_t buffered_start = file_size_u64;  // Start of in-memory segments
         uint64_t covered_end = file_size_u64;     // End of covered range
         if (!tail_segments.empty())
@@ -4298,8 +4298,7 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
             {
                 // Check for overflow
                 if (covered_end >
-                    std::numeric_limits<uint64_t>::max() -
-                        static_cast<uint64_t>(segment.data.size()))
+                    std::numeric_limits<uint64_t>::max() - segment.data.size())
                 {
                     LOG(ERROR)
                         << "Upload tail segment overflow, table=" << tbl_id
@@ -4371,8 +4370,7 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
                 return KvError::InvalidArgs;
             }
             // For data files, fill remaining with zeros (unwritten pages)
-            const size_t zero_len =
-                static_cast<size_t>(file_size_u64 - covered);
+            const size_t zero_len = file_size_u64 - covered;
             DirectIoBuffer zero_fill;
             zero_fill.resize(zero_len);
             task->segments_.push_back({covered, std::move(zero_fill)});
