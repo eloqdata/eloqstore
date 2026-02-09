@@ -303,23 +303,29 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
 void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
                                   CowRootMeta new_meta)
 {
+    ThdTask()->Step(40);
     auto *entry = root_meta_mgr_.Find(tbl_ident);
     assert(entry != nullptr);
     RootMeta &meta = entry->meta_;
     meta.root_id_ = new_meta.root_id_;
     meta.ttl_root_id_ = new_meta.ttl_root_id_;
+    ThdTask()->Step(41);
     if (meta.mapper_ != nullptr && !Options()->data_append_mode)
     {
         assert(new_meta.mapper_ != nullptr);
         MappingSnapshot *prev_snapshot = meta.mapper_->GetMapping();
         prev_snapshot->next_snapshot_ = new_meta.mapper_->GetMappingSnapshot();
     }
+    ThdTask()->Step(42);
     meta.mapper_ = std::move(new_meta.mapper_);
+    ThdTask()->Step(43);
     meta.manifest_size_ = new_meta.manifest_size_;
     meta.next_expire_ts_ = new_meta.next_expire_ts_;
     meta.compression_ = std::move(new_meta.compression_);
     root_meta_mgr_.UpdateBytes(entry, RootMetaBytes(meta));
+    ThdTask()->Step(44, 45);
     root_meta_mgr_.EvictIfNeeded();
+    ThdTask()->Step(45, 46);
 }
 
 std::pair<MemIndexPage *, KvError> IndexPageManager::FindPage(

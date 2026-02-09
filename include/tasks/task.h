@@ -1,5 +1,8 @@
 #pragma once
 
+#include <butil/time.h>
+#include <glog/logging.h>
+
 #include <boost/context/continuation.hpp>
 #include <string>
 #include <string_view>
@@ -122,6 +125,31 @@ public:
     KvRequest *req_{nullptr};
     continuation coro_;
     KvTask *next_{nullptr};
+
+    void Record(int64_t threshold)
+    {
+        record_ = true;
+        threshold_ = threshold;
+    }
+    void Step(int step)
+    {
+        step_ = step;
+        YieldToLowPQ();
+    }
+    void Step(int step1, int step2)
+    {
+        step_ = step1;
+        auto ts = butil::cpuwide_time_us() - yield_ts_;
+        if (ts > threshold_)
+        {
+            LOG(WARNING) << "YieldToLowPQ cost " << ts << " us, step " << step_;
+        }
+        step_ = step2;
+    }
+    bool record_{false};
+    int step_{0};
+    int64_t yield_ts_{};
+    int64_t threshold_{};
 };
 
 class WaitingZone

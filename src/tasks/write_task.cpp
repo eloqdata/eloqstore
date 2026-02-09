@@ -215,6 +215,7 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
 
 void WriteTask::FlushAppendWrites()
 {
+    Step(4);
     if (!append_aggregator_.HasData())
     {
         return;
@@ -229,6 +230,7 @@ void WriteTask::FlushAppendWrites()
         return;
     }
 
+    Step(5, 6);
     KvError err = IoMgr()->SubmitMergedWrite(tbl_ident_,
                                              batch.file_id,
                                              batch.start_offset,
@@ -239,6 +241,7 @@ void WriteTask::FlushAppendWrites()
                                              batch.release_ptrs,
                                              batch.release_indices,
                                              batch.use_fixed);
+    Step(6, 7);
     if (err != KvError::NoError)
     {
         for (VarPage &page : batch.pages)
@@ -256,6 +259,7 @@ void WriteTask::FlushAppendWrites()
         }
         write_err_ = err;
     }
+    Step(7, 8);
 }
 
 void WriteTask::WritePageCallback(VarPage page, KvError err)
@@ -364,6 +368,7 @@ FilePageId WriteTask::ToFilePage(PageId page_id)
 
 KvError WriteTask::FlushManifest()
 {
+    Step(30);
     // If wal_builder_ is empty but roots are MaxPageId and we have existing
     // manifest, we need to write a snapshot to mark the partition as empty
     bool need_empty_snapshot =
@@ -394,6 +399,7 @@ KvError WriteTask::FlushManifest()
     file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
                                         IoMgr()->ProcessTerm());
     SerializeFileIdTermMapping(*file_term_mapping, term_buf);
+    Step(31);
     YieldToLowPQ();
 
     if (need_empty_snapshot)
@@ -424,15 +430,20 @@ KvError WriteTask::FlushManifest()
     if (!dict_dirty && manifest_size > 0 &&
         manifest_size + log_physical_size <= opts->manifest_limit)
     {
+        Step(32);
         wal_builder_.AppendFileIdTermMapping(term_buf);
+        Step(36);
         std::string_view blob =
             wal_builder_.Finalize(cow_meta_.root_id_, cow_meta_.ttl_root_id_);
+        Step(37);
         err = IoMgr()->AppendManifest(tbl_ident_, blob, manifest_size);
+        Step(38, 39);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ += log_physical_size;
     }
     else
     {
+        Step(33);
         MappingSnapshot *mapping = cow_meta_.mapper_->GetMapping();
         FilePageId max_fp_id =
             cow_meta_.mapper_->FilePgAllocator()->MaxFilePageId();
@@ -449,26 +460,34 @@ KvError WriteTask::FlushManifest()
         cow_meta_.compression_->ClearDirty();
         file_id_term_mapping_dirty_ = false;
     }
+    Step(34);
     return KvError::NoError;
 }
 
 KvError WriteTask::UpdateMeta()
 {
+    Step(10, 11);
     // Flush data pages.
     KvError err = WaitWrite();
     CHECK_KV_ERR(err);
 
+    Step(11, 12);
+    YieldToLowPQ();
     err = IoMgr()->SyncData(tbl_ident_);
     CHECK_KV_ERR(err);
 
+    Step(12, 13);
     // Update meta data in storage and then in memory.
     err = FlushManifest();
+    Step(13, 14);
     CHECK_KV_ERR(err);
 
     // Hooks after modified partition.
     CompactIfNeeded(cow_meta_.mapper_.get());
 
+    Step(14, 15);
     shard->IndexManager()->UpdateRoot(tbl_ident_, std::move(cow_meta_));
+    Step(15, 16);
     return KvError::NoError;
 }
 

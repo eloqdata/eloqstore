@@ -23,13 +23,37 @@ void KvTask::Yield()
         << "Yield() called outside coroutine context. running_="
         << shard->running_ << ", KvTask=" << this
         << ". Yield() must only be called from within a coroutine.";
+    if (record_)
+    {
+        auto ts = butil::cpuwide_time_us() - yield_ts_;
+        if (ts > threshold_)
+        {
+            LOG(WARNING) << "YieldToLow cost " << ts << " us, step " << step_;
+        }
+    }
     shard->main_ = shard->main_.resume();
+    if (record_)
+    {
+        yield_ts_ = butil::cpuwide_time_us();
+    }
 }
 
 void KvTask::YieldToLowPQ()
 {
+    if (record_)
+    {
+        auto ts = butil::cpuwide_time_us() - yield_ts_;
+        if (ts > threshold_)
+        {
+            LOG(WARNING) << "YieldToLowPQ cost " << ts << " us, step " << step_;
+        }
+    }
     shard->low_priority_ready_tasks_.Enqueue(this);
     shard->main_ = shard->main_.resume();
+    if (record_)
+    {
+        yield_ts_ = butil::cpuwide_time_us();
+    }
 }
 
 void KvTask::Resume()

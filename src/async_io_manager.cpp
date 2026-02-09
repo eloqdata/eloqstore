@@ -740,9 +740,12 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
                                       bool use_fixed)
 {
     uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
+    ThdTask()->Step(300, 301);
     OnFileRangeWritePrepared(
         tbl_id, file_id, term, offset, std::string_view(buf_ptr, bytes));
+    ThdTask()->Step(301, 302);
     auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id, true, true, term);
+    ThdTask()->Step(302, 303);
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;
 
@@ -785,6 +788,7 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
 
 KvError IouringMgr::SyncData(const TableIdent &tbl_id)
 {
+    ThdTask()->Step(20);
     auto it_tbl = tables_.find(tbl_id);
     if (it_tbl == tables_.end())
     {
@@ -801,6 +805,7 @@ KvError IouringMgr::SyncData(const TableIdent &tbl_id)
             dirty_ids.emplace_back(file_id);
         }
     }
+    ThdTask()->Step(21);
     std::vector<LruFD::Ref> fds;
     fds.reserve(dirty_ids.size());
     for (FileId file_id : dirty_ids)
@@ -812,6 +817,7 @@ KvError IouringMgr::SyncData(const TableIdent &tbl_id)
         }
         fds.emplace_back(std::move(fd_ref));
     }
+    ThdTask()->Step(22);
     return SyncFiles(tbl_id, fds);
 }
 
@@ -1249,8 +1255,8 @@ void IouringMgr::Submit()
     {
         return;
     }
-
     int ret = 0;
+    auto t = butil::cpuwide_time_us();
     if (prepared_before == 0)
     {
         // No new SQE, but taskrun is pending. Enter kernel to drive task_work.
@@ -1259,6 +1265,11 @@ void IouringMgr::Submit()
     else
     {
         ret = io_uring_submit(&ring_);
+    }
+    t = butil::cpuwide_time_us() - t;
+    if (t > 2000)
+    {
+        LOG(WARNING) << "io_uring_submit cost " << t;
     }
 
     if (__builtin_expect(ret < 0, 0))
@@ -1505,6 +1516,7 @@ int IouringMgr::Write(FdIdx fd, const char *src, size_t n, uint64_t offset)
 
 KvError IouringMgr::SyncFile(LruFD::Ref fd)
 {
+    CHECK(false);
     int res = Fdatasync(fd.FdPair());
     if (res == 0)
     {
@@ -1961,7 +1973,10 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
     }
     // Record manifest write payload for cloud upload before submit
     // (manifest segments are tracked too).
-    OnFileRangeWritePrepared(tbl_id, LruFD::kManifest, manifest_term, offset, log);
+    ThdTask()->Step(60, 61);
+    OnFileRangeWritePrepared(
+        tbl_id, LruFD::kManifest, manifest_term, offset, log);
+    ThdTask()->Step(61, 62);
 #ifndef NDEBUG
     const PageId root =
         DecodeFixed32(log.data() + ManifestBuilder::offset_root);
@@ -1978,11 +1993,13 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
                << " checksum=" << checksum << " record size="
                << ManifestBuilder::header_bytes + payload_len;
     const bool checksum_ok = ManifestBuilder::ValidateChecksum(record_view);
+    ThdTask()->Step(62, 63);
     assert(checksum_ok);
 #endif
     auto [fd_ref, err] = OpenFD(tbl_id, LruFD::kManifest, true, manifest_term);
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;
+    ThdTask()->Step(64, 65);
 
     TEST_KILL_POINT_WEIGHT("AppendManifest:Write", 10)
 
@@ -2020,7 +2037,10 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
     }
 
     TEST_KILL_POINT_WEIGHT("AppendManifest:Sync", 10)
-    return SyncFile(std::move(fd_ref));
+    ThdTask()->Step(67, 68);
+    auto ret = SyncFile(std::move(fd_ref));
+    ThdTask()->Step(68, 69);
+    return ret;
 }
 
 int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
@@ -3038,16 +3058,6 @@ void CloudStoreMgr::Stop()
     }
 }
 
-void CloudStoreMgr::Submit()
-{
-    IouringMgr::Submit();
-}
-
-void CloudStoreMgr::PollComplete()
-{
-    IouringMgr::PollComplete();
-}
-
 bool CloudStoreMgr::NeedPrewarm() const
 {
     return options_->prewarm_cloud_cache && HasPrewarmPending();
@@ -3842,6 +3852,7 @@ int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
 
 KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
 {
+    ThdTask()->Step(90, 91);
     FileId file_id = fd.Get()->file_id_;
     KvError err = KvError::NoError;
     if (file_id != LruFD::kDirectory)
@@ -4288,6 +4299,7 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
         return KvError::InvalidArgs;
     }
 
+    ThdTask()->Step(101, 102);
     DirectIoBuffer temp_buffer;
     DirectIoBuffer *upload_buffer = nullptr;
     uint64_t start_offset = 0;

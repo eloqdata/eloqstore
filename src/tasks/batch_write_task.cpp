@@ -255,14 +255,20 @@ void BatchWriteTask::Abort()
     ttl_batch_.clear();
 }
 
+DEFINE_int64(yield_threshold, 500, "");
+
 KvError BatchWriteTask::Apply()
 {
     // directly go to low priority queue and wait for scheduling
+    yield_ts_ = butil::cpuwide_time_us();
     YieldToLowPQ();
+    Record(FLAGS_yield_threshold);
+    Step(1);
     KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
     cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     CHECK_KV_ERR(err);
     err = ApplyBatch(cow_meta_.root_id_, true);
+    Step(2);
     if (err != KvError::NoError)
     {
         (void) WaitWrite();
@@ -274,6 +280,8 @@ KvError BatchWriteTask::Apply()
         (void) WaitWrite();
         return err;
     }
+    YieldToLowPQ();
+    Step(3);
     err = UpdateMeta();
     CHECK_KV_ERR(err);
     TriggerTTL();

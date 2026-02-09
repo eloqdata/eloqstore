@@ -740,8 +740,6 @@ public:
     KvError Init(Shard *shard) override;
     bool IsIdle() override;
     void Stop() override;
-    void Submit() override;
-    void PollComplete() override;
     KvError SwitchManifest(const TableIdent &tbl_id,
                            std::string_view snapshot) override;
     KvError CreateArchive(const TableIdent &tbl_id,

@@ -765,7 +765,13 @@ void MappingSnapshot::Release()
     CHECK(ref_cnt_ > 0);
     if (--ref_cnt_ == 0)
     {
+        auto t = butil::cpuwide_time_us();
         delete this;
+        t = butil::cpuwide_time_us() - t;
+        if (t > 1000)
+        {
+            LOG(INFO) << "MappingSnapshot::Release cost " << t << " us";
+        }
     }
 }
 

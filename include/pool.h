@@ -3,6 +3,7 @@
 #include <deque>
 #include <type_traits>
 #include <utility>
+#include <glog/logging.h>
 
 namespace eloqstore
 {
@@ -26,6 +27,7 @@ public:
         {
             T value;
             ReserveHelper<T>::Call(value);
+            LOG(WARNING) << "Pool used up";
             return value;
         }
         T value = std::move(pool_.back());

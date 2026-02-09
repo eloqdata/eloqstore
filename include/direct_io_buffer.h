@@ -1,5 +1,7 @@
 #pragma once
 
+#include <glog/logging.h>
+
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
@@ -10,6 +12,7 @@
 #include <string_view>
 #include <utility>
 
+#include "kv_options.h"
 #include "storage/page.h"
 
 namespace eloqstore
@@ -95,8 +98,7 @@ public:
 
     void EnsureDefaultReserve()
     {
-        size_t reserve =
-            default_reserve_bytes_.load(std::memory_order_relaxed);
+        size_t reserve = default_reserve_bytes_.load(std::memory_order_relaxed);
         if (reserve == 0 || capacity_ >= reserve)
         {
             return;
@@ -168,6 +170,11 @@ protected:
         size_t grow = capacity_ == 0 ? alignment : capacity_ * 2;
         size_t new_capacity =
             std::max(AlignSize(min_capacity), AlignSize(grow));
+        if (new_capacity == 8 * MB)
+        {
+            LOG(INFO) << "Alloc " << new_capacity << " bytes, old capacity "
+                      << capacity_;
+        }
         char *new_data =
             static_cast<char *>(std::aligned_alloc(alignment, new_capacity));
         if (new_data == nullptr)
