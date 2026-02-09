@@ -1477,7 +1477,7 @@ size_t AsyncHttpManager::ReadUploadCallback(char *buffer,
         for (const UploadSegment &segment : task->segments_)
         {
             const uint64_t seg_begin = segment.offset;
-            const size_t seg_size = segment.data.size();
+            const size_t seg_size = segment.LogicalSize();
             if (seg_size == 0)
             {
                 continue;
@@ -1494,7 +1494,16 @@ size_t AsyncHttpManager::ReadUploadCallback(char *buffer,
             const size_t in_seg = static_cast<size_t>(abs_offset - seg_begin);
             const size_t seg_avail = seg_size - in_seg;
             const size_t chunk = std::min(seg_avail, total_to_fill - filled);
-            std::memcpy(buffer + filled, segment.data.data() + in_seg, chunk);
+            if (segment.zero_fill)
+            {
+                std::memset(buffer + filled, 0, chunk);
+            }
+            else
+            {
+                std::memcpy(buffer + filled,
+                            segment.data.data() + in_seg,
+                            chunk);
+            }
             filled += chunk;
             copied_from_segment = true;
             break;

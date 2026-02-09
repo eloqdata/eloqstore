@@ -2602,14 +2602,14 @@ void CloudStoreMgr::RecordUploadSegment(const TableIdent &tbl_id,
     if (!segments.empty())
     {
         const UploadSegment &last = segments.back();
-        const uint64_t last_size = last.data.size();
+        const uint64_t last_size = last.LogicalSize();
         // Check last segment's end doesn't overflow
         if (last.offset > std::numeric_limits<uint64_t>::max() - last_size)
         {
             LOG(ERROR) << "Upload segment tail overflow, table=" << tbl_id
                        << " filename=" << filename
                        << " tail_offset=" << last.offset
-                       << " tail_bytes=" << last.data.size();
+                       << " tail_bytes=" << last_size;
             return;
         }
         // Verify new segment starts exactly where last segment ends
@@ -4298,15 +4298,16 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
             for (const UploadSegment &segment : tail_segments)
             {
                 // Check for overflow
+                const size_t seg_size = segment.LogicalSize();
                 if (covered_end >
-                    std::numeric_limits<uint64_t>::max() - segment.data.size())
+                    std::numeric_limits<uint64_t>::max() - seg_size)
                 {
                     LOG(ERROR)
                         << "Upload tail segment overflow, table=" << tbl_id
                         << " filename=" << task->filename_;
                     return KvError::InvalidArgs;
                 }
-                covered_end += static_cast<uint64_t>(segment.data.size());
+                covered_end += static_cast<uint64_t>(seg_size);
             }
             // Validate segments don't exceed file size
             if (covered_end > file_size_u64)
@@ -4372,9 +4373,11 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
             }
             // For data files, fill remaining with zeros (unwritten pages)
             const size_t zero_len = file_size_u64 - covered;
-            DirectIoBuffer zero_fill;
-            zero_fill.resize(zero_len);
-            task->segments_.push_back({covered, std::move(zero_fill)});
+            UploadSegment zero_segment;
+            zero_segment.offset = covered;
+            zero_segment.zero_fill = true;
+            zero_segment.zero_fill_length = zero_len;
+            task->segments_.push_back(std::move(zero_segment));
         }
 
         pending.emplace_back(task.get());
