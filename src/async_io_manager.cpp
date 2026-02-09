@@ -25,17 +25,15 @@
 #include <memory>
 #include <span>
 #include <string>
-#include <cstring>
 #include <system_error>
 #include <thread>
 #include <tuple>
-
-#include "replayer.h"
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include "error.h"
+#include "replayer.h"
 
 #ifdef ELOQ_MODULE_ENABLED
 #include <bthread/eloq_module.h>
@@ -543,7 +541,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               offset_(offset),
               fd_ref_(std::move(fd)),
-              page_(true) {};
+              page_(true){};
 
         bool done_{false};
         uint32_t offset_;
@@ -699,7 +697,6 @@ std::pair<ManifestFilePtr, KvError> IouringMgr::GetManifest(
     auto manifest = std::make_unique<Manifest>(this, std::move(fd), file_size);
     return {std::move(manifest), KvError::NoError};
 }
-
 
 KvError IouringMgr::WritePage(const TableIdent &tbl_id,
                               VarPage page,
@@ -1525,7 +1522,7 @@ KvError IouringMgr::FdatasyncFiles(const TableIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
     };
 
@@ -1582,7 +1579,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     struct CloseReq : BaseReq
     {
         CloseReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
         int reg_idx_{-1};
         int fd_{LruFD::FdEmpty};
@@ -3484,7 +3481,9 @@ namespace
 class BufferManifest final : public ManifestFile
 {
 public:
-    explicit BufferManifest(std::string_view content) : content_(content) {}
+    explicit BufferManifest(std::string_view content) : content_(content)
+    {
+    }
 
     KvError Read(char *dst, size_t n) override
     {
@@ -3604,8 +3603,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
         } while (!continuation_token.empty());
 
         if (cloud_files.empty() ||
-            (cloud_files.size() == 1 &&
-             cloud_files[0] == CurrentTermFileName))
+            (cloud_files.size() == 1 && cloud_files[0] == CurrentTermFileName))
         {
             return {nullptr, KvError::NotFound};
         }
@@ -3691,8 +3689,8 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
     if (selected_term != process_term)
     {
         std::string promoted_name = ManifestFileName(process_term);
-        res = Rename(dir_fd.FdPair(), manifest_name.c_str(),
-                     promoted_name.c_str());
+        res = Rename(
+            dir_fd.FdPair(), manifest_name.c_str(), promoted_name.c_str());
         if (res < 0)
         {
             return {nullptr, ToKvError(res)};
@@ -4860,7 +4858,6 @@ std::pair<ManifestFilePtr, KvError> MemStoreMgr::GetManifest(
     }
     return {std::make_unique<Manifest>(it->second.wal), KvError::NoError};
 }
-
 
 KvError MemStoreMgr::WritePage(const TableIdent &tbl_id,
                                VarPage page,
