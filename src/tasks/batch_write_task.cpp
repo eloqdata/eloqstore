@@ -241,13 +241,23 @@ void BatchWriteTask::Abort()
 
 KvError BatchWriteTask::Apply()
 {
+    // directly go to low priority queue and wait for scheduling
+    YieldToLowPQ();
     KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
     cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     CHECK_KV_ERR(err);
     err = ApplyBatch(cow_meta_.root_id_, true);
-    CHECK_KV_ERR(err);
+    if (err != KvError::NoError)
+    {
+        (void) WaitWrite();
+        return err;
+    }
     err = ApplyTTLBatch();
-    CHECK_KV_ERR(err);
+    if (err != KvError::NoError)
+    {
+        (void) WaitWrite();
+        return err;
+    }
     err = UpdateMeta();
     CHECK_KV_ERR(err);
     TriggerTTL();
@@ -1543,7 +1553,11 @@ std::pair<IndexPageHandle, KvError> BatchWriteTask::TruncateIndexPage(
     err = WritePage(new_handle);
     if (err != KvError::NoError)
     {
-        shard->IndexManager()->FreeIndexPage(new_handle.Get());
+        MemIndexPage *page = new_handle.Get();
+        new_handle.Reset();
+        CHECK(page->IsDetached());
+        CHECK(!page->IsPinned());
+        shard->IndexManager()->FreeIndexPage(page);
         return {IndexPageHandle(), err};
     }
     return {std::move(new_handle), KvError::NoError};

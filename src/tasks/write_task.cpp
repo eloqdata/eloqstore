@@ -286,7 +286,13 @@ void WriteTask::WritePageCallback(VarPage page, KvError err)
         }
         else
         {
-            shard->IndexManager()->FreeIndexPage(idx_page);
+            // Only free if it's still detached (i.e., not in active list).
+            if (idx_page->IsDetached())
+            {
+                handle.Reset();
+                CHECK(!idx_page->IsPinned());
+                shard->IndexManager()->FreeIndexPage(idx_page);
+            }
         }
         break;
     }
