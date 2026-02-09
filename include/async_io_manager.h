@@ -905,8 +905,9 @@ private:
      * @brief Capture a prepared write range into per-file upload buffer.
      *
      * Records in-memory bytes for later upload using a full-file buffer model.
-     * Writes must append continuously (no gaps/overlaps) per file. Called from
-     * OnFileRangeWritePrepared.
+     * Writes must append continuously (no gaps/overlaps) per file. Buffer data
+     * is stored by file-absolute offset, so byte at file offset X is at
+     * buffer[X]. Called from OnFileRangeWritePrepared.
      *
      * @param tbl_id Table identifier
      * @param filename File name (as returned by ToFilename)
@@ -1011,8 +1012,8 @@ private:
      * @brief In-memory upload buffers keyed by (table, filename).
      *
      * Stores write payloads captured via OnFileRangeWritePrepared in a
-     * contiguous per-file buffer model. State is moved out during UploadFiles
-     * and cleared on AbortWrite.
+     * contiguous per-file buffer model with file-absolute layout. State is
+     * moved out during UploadFiles and cleared on AbortWrite.
      */
     absl::flat_hash_map<FileKey, UploadBufferState> upload_buffers_;
     CachedFile lru_file_head_;

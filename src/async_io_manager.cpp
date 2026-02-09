@@ -2629,15 +2629,9 @@ void CloudStoreMgr::RecordUploadBufferRange(const TableIdent &tbl_id,
         return;
     }
 
-    if (new_end < state.start_offset)
-    {
-        state.invalid = true;
-        LOG(ERROR) << "Upload buffer range underflow, table=" << tbl_id
-                   << " filename=" << filename << " start_offset="
-                   << state.start_offset << " new_end=" << new_end;
-        return;
-    }
-    uint64_t required_u64 = new_end - state.start_offset;
+    // Keep buffer in file-absolute layout: data for file offset X is stored at
+    // buffer[X]. This allows UploadFiles to directly use this buffer for cURL.
+    uint64_t required_u64 = new_end;
     if (required_u64 > std::numeric_limits<size_t>::max())
     {
         state.invalid = true;
@@ -2647,7 +2641,7 @@ void CloudStoreMgr::RecordUploadBufferRange(const TableIdent &tbl_id,
         return;
     }
     size_t required = static_cast<size_t>(required_u64);
-    size_t write_offset = static_cast<size_t>(offset - state.start_offset);
+    size_t write_offset = static_cast<size_t>(offset);
     state.buffer.resize(required);
     std::memcpy(state.buffer.data() + write_offset, data.data(), data.size());
     state.end_offset = new_end;
@@ -4368,22 +4362,28 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
             return KvError::InvalidArgs;
         }
 
-        size_t buffered_bytes = static_cast<size_t>(covered_end - buffered_start);
         if (has_upload_state && upload_state.initialized &&
-            upload_state.buffer.size() != buffered_bytes)
+            upload_state.buffer.size() != static_cast<size_t>(covered_end))
         {
             cleanup_task_buffers();
             recycle_upload_state();
             LOG(ERROR) << "Upload buffer size mismatch, table=" << tbl_id
                        << " filename=" << task->filename_
-                       << " expected_bytes=" << buffered_bytes
+                       << " expected_bytes=" << covered_end
                        << " actual_bytes=" << upload_state.buffer.size()
                        << " start_offset=" << buffered_start
                        << " end_offset=" << covered_end;
             return KvError::InvalidArgs;
         }
 
-        task->data_buffer_ = direct_io_buffer_pool_.Acquire();
+        if (has_upload_state && upload_state.initialized)
+        {
+            task->data_buffer_ = std::move(upload_state.buffer);
+        }
+        else
+        {
+            task->data_buffer_ = direct_io_buffer_pool_.Acquire();
+        }
         task->data_buffer_.resize(file_size);
         if (buffered_start > 0)
         {
@@ -4399,13 +4399,6 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
                 recycle_upload_state();
                 return err;
             }
-        }
-        if (has_upload_state && upload_state.initialized && buffered_bytes > 0)
-        {
-            std::memcpy(task->data_buffer_.data() +
-                            static_cast<size_t>(buffered_start),
-                        upload_state.buffer.data(),
-                        buffered_bytes);
         }
         recycle_upload_state();
 
