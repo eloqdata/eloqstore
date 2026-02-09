@@ -1146,6 +1146,11 @@ void TruncateRequest::SetArgs(TableIdent tbl_id, std::string position)
     position_ = position_storage_;
 }
 
+void ReopenRequest::SetArgs(TableIdent tbl_id)
+{
+    SetTableId(std::move(tbl_id));
+}
+
 void DropTableRequest::SetArgs(std::string table_name)
 {
     if (!table_name.empty())

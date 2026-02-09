@@ -56,6 +56,10 @@ public:
 
     std::pair<MemIndexPage::Handle, KvError> FindPage(MappingSnapshot *mapping,
                                                       PageId page_id);
+    // Install an externally built snapshot (e.g. pulled from remote manifest)
+    // into the RootMeta version chain without performing local COW writes.
+    KvError InstallExternalSnapshot(const TableIdent &tbl_ident);
+
 
     void FreeMappingSnapshot(MappingSnapshot *mapping);
 

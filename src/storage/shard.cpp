@@ -17,6 +17,7 @@
 
 #include "async_io_manager.h"
 #include "tasks/list_object_task.h"
+#include "tasks/reopen_task.h"
 #include "utils.h"
 
 #ifdef ELOQSTORE_WITH_TXSERVICE
@@ -456,6 +457,16 @@ bool Shard::ProcessReq(KvRequest *req)
         };
         StartTask(task, req, lbd);
         return true;
+    }
+    case RequestType::Reopen:
+    {
+        ReopenTask *task = task_mgr_.GetReopenTask();
+        auto lbd = [task, req]() -> KvError
+        {
+            return task->Reopen(req->TableId());
+        };
+        StartTask(task, req, lbd);
+        break;
     }
     case RequestType::BatchWrite:
     {

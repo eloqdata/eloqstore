@@ -1011,6 +1011,86 @@ TEST_CASE("cloud store with restart", "[cloud]")
     store->Stop();
 }
 
+TEST_CASE("cloud reopen refreshes manifest via archive swap", "[cloud][reopen]")
+{
+    eloqstore::KvOptions options = cloud_archive_opts;
+    options.store_path = {"/tmp/test-data-reopen"};
+    options.cloud_store_path += "/reopen-refresh";
+
+    CleanupStore(options);
+
+    eloqstore::TableIdent tbl_id{"reopen", 0};
+    eloqstore::EloqStore *store = InitStore(options);
+    MapVerifier verifier(tbl_id, store, false);
+
+    // Version 1 data and archive snapshot.
+    verifier.Upsert(0, 50);
+    auto v1_dataset = verifier.DataSet();
+    REQUIRE_FALSE(v1_dataset.empty());
+
+    eloqstore::ArchiveRequest archive_req;
+    archive_req.SetTableId(tbl_id);
+    bool ok = store->ExecAsyn(&archive_req);
+    REQUIRE(ok);
+    archive_req.Wait();
+    REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
+
+    // Version 2 data (current manifest).
+    verifier.Upsert(100, 120);
+    verifier.Upsert(130, 140);
+
+    const std::string &cloud_root = options.cloud_store_path;
+    const std::string partition = tbl_id.ToString();
+    const std::string partition_remote = cloud_root + "/" + partition;
+    std::vector<std::string> cloud_files =
+        ListCloudFiles(options, cloud_root, partition);
+    REQUIRE_FALSE(cloud_files.empty());
+
+    std::string current_manifest;
+    std::string archive_manifest;
+    for (const std::string &filename : cloud_files)
+    {
+        if (eloqstore::IsArchiveFile(filename))
+        {
+            archive_manifest = filename;
+        }
+        else if (filename.rfind(eloqstore::FileNameManifest, 0) == 0)
+        {
+            current_manifest = filename;
+        }
+    }
+    REQUIRE_FALSE(current_manifest.empty());
+    REQUIRE_FALSE(archive_manifest.empty());
+
+    uint64_t term = eloqstore::ManifestTermFromFilename(current_manifest);
+    REQUIRE(term > 0);
+
+    uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
+    std::string backup_manifest = eloqstore::ArchiveName(term, backup_ts);
+
+    // Move current manifest aside, then promote archive manifest.
+    REQUIRE(MoveCloudFile(options,
+                          partition_remote,
+                          current_manifest,
+                          backup_manifest));
+    REQUIRE(MoveCloudFile(options,
+                          partition_remote,
+                          archive_manifest,
+                          current_manifest));
+
+    // Reopen to pull refreshed manifest and verify version rollback.
+    eloqstore::ReopenRequest reopen_req;
+    reopen_req.SetArgs(tbl_id);
+    store->ExecSync(&reopen_req);
+    REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
+
+    verifier.SwitchDataSet(v1_dataset);
+    verifier.Validate();
+
+    store->Stop();
+    CleanupStore(options);
+}
+
 TEST_CASE("cloud store cached file LRU", "[cloud]")
 {
     eloqstore::KvOptions options = cloud_options;

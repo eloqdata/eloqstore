@@ -51,7 +51,7 @@ const eloqstore::KvOptions archive_opts = {
 };
 const eloqstore::KvOptions cloud_options = {
     .manifest_limit = 1 << 20,
-    .fd_limit = 30 + eloqstore::num_reserved_fd,
+    .fd_limit = 100 + eloqstore::num_reserved_fd,
     .local_space_limit = 200 << 20,  // 100MB
     .store_path = {"/tmp/test-data"},
     .cloud_store_path = "eloqstore/unit-test",

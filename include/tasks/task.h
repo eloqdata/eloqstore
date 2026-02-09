@@ -47,6 +47,7 @@ enum struct TaskType
     EvictFile,
     Prewarm,
     ListObject,
+    Reopen,
     BatchWrite,
     BackgroundWrite
 };

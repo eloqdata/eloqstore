@@ -39,6 +39,7 @@ enum class RequestType : uint8_t
     Floor,
     Scan,
     ListObject,
+    Reopen,
     BatchWrite,
     Truncate,
     DropTable,
@@ -60,6 +61,8 @@ inline const char *RequestTypeToString(RequestType type)
         return "scan";
     case RequestType::ListObject:
         return "list_object";
+    case RequestType::Reopen:
+        return "reopen";
     case RequestType::BatchWrite:
         return "batch_write";
     case RequestType::Truncate:
@@ -317,6 +320,16 @@ private:
     bool recursive_{false};
     std::string continuation_token_;       // input token
     std::string next_continuation_token_;  // output token
+};
+
+class ReopenRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::Reopen;
+    }
+    void SetArgs(TableIdent tbl_id);
 };
 
 class WriteRequest : public KvRequest

@@ -42,6 +42,8 @@ std::string_view WriteTask::TaskTypeName() const
         return "Scan";
     case TaskType::ListObject:
         return "ListObject";
+    case TaskType::Reopen:
+        return "Reopen";
     default:
         return "Unknown";
     }

@@ -7,6 +7,7 @@
 #include "kv_options.h"
 #include "tasks/list_object_task.h"
 #include "tasks/read_task.h"
+#include "tasks/reopen_task.h"
 #include "tasks/task.h"
 
 using namespace boost::context;
@@ -20,6 +21,7 @@ uint32_t background_write_pool_size_default = 1024;
 uint32_t read_pool_size_default = 2048;
 uint32_t scan_pool_size_default = 2048;
 uint32_t list_object_pool_size_default = 512;
+uint32_t reopen_pool_size_default = 256;
 }  // namespace
 
 TaskManager::TaskManager(const KvOptions *opts)
@@ -33,7 +35,8 @@ TaskManager::TaskManager(const KvOptions *opts)
                      !(opts != nullptr && opts->max_write_concurrency > 0)),
       read_pool_(read_pool_size_default),
       scan_pool_(scan_pool_size_default),
-      list_object_pool_(list_object_pool_size_default)
+      list_object_pool_(list_object_pool_size_default),
+      reopen_pool_(reopen_pool_size_default)
 {
     if (opts != nullptr && opts->max_write_concurrency > 0)
     {
@@ -58,13 +61,15 @@ void TaskManager::SetPoolSizesForTest(uint32_t batch_write_pool_size,
                                       uint32_t background_write_pool_size,
                                       uint32_t read_pool_size,
                                       uint32_t scan_pool_size,
-                                      uint32_t list_object_pool_size)
+                                      uint32_t list_object_pool_size,
+                                      uint32_t reopen_pool_size)
 {
     batch_write_pool_size_default = batch_write_pool_size;
     background_write_pool_size_default = background_write_pool_size;
     read_pool_size_default = read_pool_size;
     scan_pool_size_default = scan_pool_size;
     list_object_pool_size_default = list_object_pool_size;
+    reopen_pool_size_default = reopen_pool_size;
 }
 
 BatchWriteTask *TaskManager::GetBatchWriteTask(const TableIdent &tbl_id)
@@ -119,6 +124,12 @@ ListObjectTask *TaskManager::GetListObjectTask()
     return list_object_pool_.GetTask();
 }
 
+ReopenTask *TaskManager::GetReopenTask()
+{
+    num_active_++;
+    return reopen_pool_.GetTask();
+}
+
 void TaskManager::FreeTask(KvTask *task)
 {
     CHECK(task->status_ == TaskStatus::Finished);
@@ -144,6 +155,9 @@ void TaskManager::FreeTask(KvTask *task)
         break;
     case TaskType::ListObject:
         list_object_pool_.FreeTask(static_cast<ListObjectTask *>(task));
+        break;
+    case TaskType::Reopen:
+        reopen_pool_.FreeTask(static_cast<ReopenTask *>(task));
         break;
     case TaskType::EvictFile:
         assert(false && "EvictFile task should not be freed here");

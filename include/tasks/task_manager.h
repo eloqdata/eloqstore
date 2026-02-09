@@ -9,6 +9,7 @@
 #include "tasks/background_write.h"
 #include "tasks/batch_write_task.h"
 #include "tasks/list_object_task.h"
+#include "tasks/reopen_task.h"
 #include "tasks/read_task.h"
 #include "tasks/scan_task.h"
 #include "types.h"
@@ -26,13 +27,15 @@ public:
                                     uint32_t background_write_pool_size,
                                     uint32_t read_pool_size,
                                     uint32_t scan_pool_size,
-                                    uint32_t list_object_pool_size);
+                                    uint32_t list_object_pool_size,
+                                    uint32_t reopen_pool_size);
 
     BatchWriteTask *GetBatchWriteTask(const TableIdent &tbl_id);
     BackgroundWrite *GetBackgroundWrite(const TableIdent &tbl_id);
     ReadTask *GetReadTask();
     ScanTask *GetScanTask();
     ListObjectTask *GetListObjectTask();
+    ReopenTask *GetReopenTask();
     void FreeTask(KvTask *task);
 
     void AddExternalTask();
@@ -105,6 +108,7 @@ private:
     TaskPool<ReadTask> read_pool_;
     TaskPool<ScanTask> scan_pool_;
     TaskPool<ListObjectTask> list_object_pool_;
+    TaskPool<ReopenTask> reopen_pool_;
     size_t num_active_{0};
     size_t num_active_write_{0};
     size_t max_write_concurrency_{std::numeric_limits<size_t>::max()};

@@ -173,6 +173,8 @@ private:
             return "scan";
         case RequestType::ListObject:
             return "list_object";
+        case RequestType::Reopen:
+            return "reopen";
         case RequestType::BatchWrite:
             return "batch_write";
         case RequestType::Truncate:

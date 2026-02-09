@@ -841,6 +841,8 @@ public:
 
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
+    std::pair<ManifestFilePtr, KvError> RefreshManifest(
+        const TableIdent &tbl_id);
 
     // Read term file from cloud, returns {term_value, etag, error}
     // If file doesn't exist (404), returns {0, "", NotFound}

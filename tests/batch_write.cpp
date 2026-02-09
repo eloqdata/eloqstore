@@ -301,12 +301,12 @@ TEST_CASE("batch write task pool cleaned after abort", "[batch_write]")
     {
         PoolSizeGuard()
         {
-            eloqstore::TaskManager::SetPoolSizesForTest(1, 1, 1, 1, 1);
+            eloqstore::TaskManager::SetPoolSizesForTest(1, 1, 1, 1, 1, 1);
         }
         ~PoolSizeGuard()
         {
             eloqstore::TaskManager::SetPoolSizesForTest(
-                1024, 1024, 2048, 2048, 512);
+                1024, 1024, 2048, 2048, 512, 256);
         }
     } guard;
 

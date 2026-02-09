@@ -25,9 +25,12 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <cstring>
 #include <system_error>
 #include <thread>
 #include <tuple>
+
+#include "replayer.h"
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -696,6 +699,7 @@ std::pair<ManifestFilePtr, KvError> IouringMgr::GetManifest(
     auto manifest = std::make_unique<Manifest>(this, std::move(fd), file_size);
     return {std::move(manifest), KvError::NoError};
 }
+
 
 KvError IouringMgr::WritePage(const TableIdent &tbl_id,
                               VarPage page,
@@ -3475,6 +3479,242 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     return IouringMgr::GetManifest(tbl_id);
 }
 
+namespace
+{
+class BufferManifest final : public ManifestFile
+{
+public:
+    explicit BufferManifest(std::string_view content) : content_(content) {}
+
+    KvError Read(char *dst, size_t n) override
+    {
+        if (content_.size() < n)
+        {
+            return KvError::EndOfFile;
+        }
+        std::memcpy(dst, content_.data(), n);
+        content_.remove_prefix(n);
+        return KvError::NoError;
+    }
+
+    KvError SkipPadding(size_t n) override
+    {
+        if (content_.size() < n)
+        {
+            return KvError::EndOfFile;
+        }
+        content_.remove_prefix(n);
+        return KvError::NoError;
+    }
+
+private:
+    std::string_view content_;
+};
+}  // namespace
+
+std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
+    const TableIdent &tbl_id)
+{
+    // Always fetch the latest manifest from cloud, even if local exists.
+    LruFD::Ref old_fd = GetOpenedFD(tbl_id, LruFD::kManifest);
+    if (old_fd != nullptr)
+    {
+        CloseFile(std::move(old_fd));
+    }
+
+    uint64_t process_term = ProcessTerm();
+    KvError term_err = UpsertTermFile(tbl_id, process_term);
+    if (term_err != KvError::NoError)
+    {
+        return {nullptr, term_err};
+    }
+
+    uint64_t selected_term = process_term;
+    DirectIoBuffer buffer;
+    auto download_to_buffer = [&](uint64_t term) -> KvError
+    {
+        KvTask *current_task = ThdTask();
+        std::string filename = ToFilename(LruFD::kManifest, term);
+        ObjectStore::DownloadTask download_task(&tbl_id, filename);
+        download_task.SetKvTask(current_task);
+        download_task.response_data_ =
+            std::move(direct_io_buffer_pool_.Acquire());
+        AcquireCloudSlot(current_task);
+        obj_store_.SubmitTask(&download_task, shard);
+        current_task->WaitIo();
+
+        if (download_task.error_ != KvError::NoError)
+        {
+            RecycleBuffer(std::move(download_task.response_data_));
+            return download_task.error_;
+        }
+        buffer = std::move(download_task.response_data_);
+        return KvError::NoError;
+    };
+
+    KvError dl_err = download_to_buffer(process_term);
+    if (dl_err == KvError::NotFound)
+    {
+        // List manifests in cloud and pick the term (ignoring archive files).
+        uint64_t best_term = 0;
+        bool found = false;
+        std::vector<std::string> cloud_files;
+        std::string remote_path =
+            tbl_id.ToString() + "/" + FileNameManifest + FileNameSeparator;
+
+        std::string continuation_token;
+        KvTask *current_task = ThdTask();
+        do
+        {
+            ObjectStore::ListTask list_task(remote_path, false);
+            list_task.SetContinuationToken(continuation_token);
+            list_task.SetKvTask(current_task);
+            AcquireCloudSlot(current_task);
+            obj_store_.SubmitTask(&list_task, shard);
+            current_task->WaitIo();
+
+            if (list_task.error_ != KvError::NoError)
+            {
+                LOG(ERROR)
+                    << "CloudStoreMgr::RefreshManifest: list objects failed "
+                    << "for " << tbl_id << " : "
+                    << ErrorString(list_task.error_);
+                return {nullptr, list_task.error_};
+            }
+
+            std::vector<std::string> batch_files;
+            std::string next_token;
+            if (!obj_store_.ParseListObjectsResponse(
+                    list_task.response_data_.view(),
+                    list_task.json_data_,
+                    &batch_files,
+                    nullptr,
+                    &next_token))
+            {
+                LOG(ERROR) << "CloudStoreMgr::RefreshManifest: parse list "
+                              "response failed for table "
+                           << tbl_id;
+                return {nullptr, KvError::Corrupted};
+            }
+
+            cloud_files.insert(cloud_files.end(),
+                               std::make_move_iterator(batch_files.begin()),
+                               std::make_move_iterator(batch_files.end()));
+            continuation_token = std::move(next_token);
+        } while (!continuation_token.empty());
+
+        if (cloud_files.empty() ||
+            (cloud_files.size() == 1 &&
+             cloud_files[0] == CurrentTermFileName))
+        {
+            return {nullptr, KvError::NotFound};
+        }
+
+        for (const std::string &name : cloud_files)
+        {
+            uint64_t term = 0;
+            std::optional<uint64_t> ts;
+            if (!ParseManifestFileSuffix(name, term, ts))
+            {
+                LOG(FATAL) << "CloudStoreMgr::RefreshManifest: failed to "
+                              "parse manifest file suffix: "
+                           << name;
+                continue;
+            }
+            if (ts.has_value())
+            {
+                continue;
+            }
+            if (term >= best_term)
+            {
+                found = true;
+                best_term = term;
+            }
+        }
+
+        if (!found)
+        {
+            return {nullptr, KvError::NotFound};
+        }
+        if (best_term > process_term)
+        {
+            LOG(ERROR) << "CloudStoreMgr::RefreshManifest: found manifest term "
+                       << best_term << " greater than process_term "
+                       << process_term << " for table " << tbl_id;
+            return {nullptr, KvError::ExpiredTerm};
+        }
+
+        selected_term = best_term;
+        dl_err = download_to_buffer(selected_term);
+    }
+
+    if (dl_err != KvError::NoError)
+    {
+        return {nullptr, dl_err};
+    }
+
+    BufferManifest buffer_manifest(buffer.view());
+    Replayer replayer(options_);
+    KvError replay_err = replayer.Replay(&buffer_manifest);
+    if (replay_err != KvError::NoError)
+    {
+        RecycleBuffer(std::move(buffer));
+        return {nullptr, replay_err};
+    }
+
+    std::string tmp_name = ManifestFileName(selected_term) + ".tmp";
+    KvError write_err = WriteFile(tbl_id, tmp_name, buffer);
+    RecycleBuffer(std::move(buffer));
+    if (write_err != KvError::NoError)
+    {
+        return {nullptr, write_err};
+    }
+
+    auto [dir_fd, dir_err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
+    if (dir_err != KvError::NoError)
+    {
+        return {nullptr, dir_err};
+    }
+
+    std::string manifest_name = ManifestFileName(selected_term);
+    int res = Rename(dir_fd.FdPair(), tmp_name.c_str(), manifest_name.c_str());
+    if (res < 0)
+    {
+        return {nullptr, ToKvError(res)};
+    }
+    res = Fdatasync(dir_fd.FdPair());
+    if (res < 0)
+    {
+        return {nullptr, ToKvError(res)};
+    }
+
+    if (selected_term != process_term)
+    {
+        std::string promoted_name = ManifestFileName(process_term);
+        res = Rename(dir_fd.FdPair(), manifest_name.c_str(),
+                     promoted_name.c_str());
+        if (res < 0)
+        {
+            return {nullptr, ToKvError(res)};
+        }
+        res = Fdatasync(dir_fd.FdPair());
+        if (res < 0)
+        {
+            return {nullptr, ToKvError(res)};
+        }
+        KvError up_err = UploadFiles(tbl_id, {promoted_name});
+        if (up_err != KvError::NoError)
+        {
+            LOG(ERROR) << "CloudStoreMgr::RefreshManifest: failed to upload "
+                       << "promoted manifest file " << promoted_name
+                       << " for table " << tbl_id << " : "
+                       << ErrorString(up_err);
+        }
+    }
+
+    return IouringMgr::GetManifest(tbl_id);
+}
+
 std::tuple<uint64_t, std::string, KvError> CloudStoreMgr::ReadTermFile(
     const TableIdent &tbl_id)
 {
@@ -4620,6 +4860,7 @@ std::pair<ManifestFilePtr, KvError> MemStoreMgr::GetManifest(
     }
     return {std::make_unique<Manifest>(it->second.wal), KvError::NoError};
 }
+
 
 KvError MemStoreMgr::WritePage(const TableIdent &tbl_id,
                                VarPage page,

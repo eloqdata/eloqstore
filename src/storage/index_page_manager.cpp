@@ -213,9 +213,10 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
             }
             meta->locked_ = false;
         }
-        else if (meta->locked_)
+        else if (meta->locked_ && meta->mapper_ == nullptr)
         {
-            // Blocked by other loading/evicting operation.
+            // Blocked by other loading/evicting operation and no usable
+            // snapshot yet.
             meta->waiting_.Wait(ThdTask());
             continue;
         }
@@ -320,6 +321,77 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
     meta.compression_ = std::move(new_meta.compression_);
     root_meta_mgr_.UpdateBytes(entry, RootMetaBytes(meta));
     root_meta_mgr_.EvictIfNeeded();
+}
+
+KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident)
+{
+    auto *cloud_mgr = dynamic_cast<CloudStoreMgr *>(IoMgr());
+    if (cloud_mgr == nullptr)
+    {
+        return KvError::InvalidArgs;
+    }
+    auto [manifest, err] = cloud_mgr->RefreshManifest(tbl_ident);
+    if (err != KvError::NoError)
+    {
+        return err;
+    }
+
+    Replayer replayer(Options());
+    err = replayer.Replay(manifest.get());
+    if (err != KvError::NoError)
+    {
+        return err;
+    }
+
+    auto [entry, inserted] = root_meta_mgr_.GetOrCreate(tbl_ident);
+    RootMeta &meta = entry->meta_;
+    auto mapper =
+        replayer.GetMapper(this, &entry->tbl_id_, IoMgr()->ProcessTerm());
+    MappingSnapshot *mapping = mapper->GetMapping();
+    meta.mapping_snapshots_.insert(mapping);
+
+    // Reuse swizzling pointers when file_page_id is unchanged.
+    for (MemIndexPage *page : meta.index_pages_)
+    {
+        PageId page_id = page->GetPageId();
+        if (page_id >= mapping->mapping_tbl_.size())
+        {
+            continue;
+        }
+        uint64_t val = mapping->mapping_tbl_.Get(page_id);
+        if (MappingSnapshot::IsFilePageId(val) &&
+            MappingSnapshot::DecodeId(val) == page->GetFilePageId())
+        {
+            mapping->AddSwizzling(page_id, page);
+        }
+    }
+
+    CowRootMeta new_meta;
+    new_meta.root_id_ = replayer.root_;
+    new_meta.ttl_root_id_ = replayer.ttl_root_;
+    new_meta.mapper_ = std::move(mapper);
+    new_meta.manifest_size_ = replayer.file_size_;
+    new_meta.next_expire_ts_ = replayer.ttl_root_ != MaxPageId ? 1 : 0;
+    if (!replayer.dict_bytes_.empty())
+    {
+        new_meta.compression_ =
+            std::make_shared<compression::DictCompression>();
+        new_meta.compression_->LoadDictionary(std::move(replayer.dict_bytes_));
+    }
+    else
+    {
+        new_meta.compression_ =
+            std::make_shared<compression::DictCompression>();
+    }
+
+    UpdateRoot(tbl_ident, std::move(new_meta));
+
+    replayer.file_id_term_mapping_->insert_or_assign(
+        IouringMgr::LruFD::kManifest, IoMgr()->ProcessTerm());
+    IoMgr()->SetFileIdTermMapping(entry->tbl_id_,
+                                  replayer.file_id_term_mapping_);
+
+    return KvError::NoError;
 }
 
 std::pair<MemIndexPage::Handle, KvError> IndexPageManager::FindPage(
