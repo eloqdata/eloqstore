@@ -323,11 +323,12 @@ private:
 class PooledFilePages : public FilePageAllocator
 {
 public:
-    explicit PooledFilePages(const KvOptions *opts) : FilePageAllocator(opts){};
+    explicit PooledFilePages(const KvOptions *opts) 
+        : FilePageAllocator(opts){};
     PooledFilePages(const KvOptions *opts,
                     FilePageId next_id,
                     std::vector<uint32_t> free_ids)
-        : FilePageAllocator(opts, next_id), free_ids_(std::move(free_ids)){};
+        : FilePageAllocator(opts, next_id), free_ids_(std::move(free_ids)) {};
     PooledFilePages(const PooledFilePages &rhs) = default;
     std::unique_ptr<FilePageAllocator> Clone() override;
 
@@ -346,7 +347,7 @@ class PageMapper
 {
 public:
     explicit PageMapper(MappingSnapshot::Ref mapping)
-        : mapping_(std::move(mapping)){};
+        : mapping_(std::move(mapping)) {};
     PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident);
     PageMapper(const PageMapper &rhs);
 
