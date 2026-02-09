@@ -771,10 +771,8 @@ std::pair<IndexPageHandle, KvError> BatchWriteTask::Pop()
             idx_page_builder_.Add(new_key, new_page_id, is_leaf_index);
         if (!success)
         {
-            err = FinishIndexPage(prev_handle,
-                                  prev_key,
-                                  prev_page_id,
-                                  std::move(curr_page_key));
+            err = FinishIndexPage(
+                prev_handle, prev_key, prev_page_id, std::move(curr_page_key));
             CHECK_KV_ERR(err);
             curr_page_key = new_key;
             idx_page_builder_.Reset();
@@ -900,18 +898,14 @@ std::pair<IndexPageHandle, KvError> BatchWriteTask::Pop()
     else
     {
         bool splited = static_cast<bool>(prev_handle);
-        err = FinishIndexPage(prev_handle,
-                              prev_key,
-                              prev_page_id,
-                              std::move(curr_page_key));
+        err = FinishIndexPage(
+            prev_handle, prev_key, prev_page_id, std::move(curr_page_key));
         if (err != KvError::NoError)
         {
             return {IndexPageHandle(), err};
         }
-        err = FlushIndexPage(prev_handle,
-                             std::move(prev_key),
-                             prev_page_id,
-                             splited);
+        err = FlushIndexPage(
+            prev_handle, std::move(prev_key), prev_page_id, splited);
         if (err != KvError::NoError)
         {
             return {IndexPageHandle(), err};
@@ -982,9 +976,9 @@ KvError BatchWriteTask::FlushIndexPage(IndexPageHandle &idx_page,
         assert(stack_.size() >= 1);
         if (stack_.size() == 1)
         {
-            stack_.emplace(
-                stack_.begin(),
-            std::make_unique<IndexStackEntry>(IndexPageHandle(), Options()));
+            stack_.emplace(stack_.begin(),
+                           std::make_unique<IndexStackEntry>(IndexPageHandle(),
+                                                             Options()));
         }
 
         IndexStackEntry *parent_entry = stack_[stack_.size() - 2].get();

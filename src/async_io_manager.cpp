@@ -2498,7 +2498,8 @@ void IouringMgr::WriteReq::SetPage(VarPage page)
     switch (VarPageType(page.index()))
     {
     case VarPageType::MemIndexPage:
-        page_.emplace<IndexPageHandle>(std::move(std::get<IndexPageHandle>(page)));
+        page_.emplace<IndexPageHandle>(
+            std::move(std::get<IndexPageHandle>(page)));
         break;
     case VarPageType::DataPage:
         page_.emplace<DataPage>(std::move(std::get<DataPage>(page)));
