@@ -720,7 +720,7 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
                                       bool use_fixed)
 {
     uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
-    OnFileRangeWritten(
+    OnFileRangeWritePrepared(
         tbl_id, file_id, term, offset, std::string_view(buf_ptr, bytes));
     auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id, true, true, term);
     CHECK_KV_ERR(err);
@@ -1911,9 +1911,9 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
     {
         SetFileIdTerm(tbl_id, LruFD::kManifest, manifest_term);
     }
-    // Record manifest write for cloud upload (manifest segments are tracked
-    // too)
-    OnFileRangeWritten(tbl_id, LruFD::kManifest, manifest_term, offset, log);
+    // Record manifest write payload for cloud upload before submit
+    // (manifest segments are tracked too).
+    OnFileRangeWritePrepared(tbl_id, LruFD::kManifest, manifest_term, offset, log);
 #ifndef NDEBUG
     const PageId root =
         DecodeFixed32(log.data() + ManifestBuilder::offset_root);
@@ -2546,15 +2546,15 @@ KvError CloudStoreMgr::Init(Shard *shard)
     return KvError::NoError;
 }
 
-void CloudStoreMgr::OnFileRangeWritten(const TableIdent &tbl_id,
+void CloudStoreMgr::OnFileRangeWritePrepared(const TableIdent &tbl_id,
                                        FileId file_id,
                                        uint64_t term,
                                        uint64_t offset,
                                        std::string_view data)
 {
     assert(!data.empty());
-    // Record this write as an in-memory segment for later upload
-    // This avoids reading from disk when uploading recent writes
+    // Record this prepared write as an in-memory segment for later upload.
+    // This avoids reading from disk when uploading recent writes.
     RecordUploadSegment(tbl_id, ToFilename(file_id, term), offset, data);
 }
 
@@ -2713,13 +2713,15 @@ KvError CloudStoreMgr::ReadFilePrefix(const TableIdent &tbl_id,
         return ToKvError(fd);
     }
 
-    // Read prefix_len bytes from file start in page-aligned batches
+    // Read prefix_len bytes from file start in larger batches to reduce
+    // per-IO overhead on shard threads.
+    const size_t read_batch_size = options_->non_page_io_batch_size;
+
     buffer.resize(prefix_len);
     FdIdx fd_idx{fd, false};
     KvError status = KvError::NoError;
     size_t remaining = prefix_len;
     size_t read_offset = 0;
-    const size_t read_batch_size = Options()->non_page_io_batch_size;
     while (remaining > 0)
     {
         size_t batch = std::min(read_batch_size, remaining);
@@ -4280,7 +4282,7 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
         CHECK_KV_ERR(err);
         task->file_size_ = file_size;
 
-        // Collect in-memory segments recorded via OnFileRangeWritten
+        // Collect in-memory segments recorded via OnFileRangeWritePrepared
         // These represent recent writes that haven't been flushed to disk yet
         std::vector<UploadSegment> tail_segments =
             CollectUploadSegments(tbl_id, task->filename_);
@@ -4714,6 +4716,7 @@ KvError MemStoreMgr::CreateArchive(const TableIdent &tbl_id,
                                    uint64_t ts)
 {
     LOG(FATAL) << "not implemented";
+    return KvError::InvalidArgs;
 }
 
 KvError MemStoreMgr::Manifest::Read(char *dst, size_t n)
