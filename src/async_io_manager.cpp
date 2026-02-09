@@ -4332,12 +4332,16 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
         // offset 0
         if (buffered_start > 0)
         {
-            DirectIoBuffer prefix_buffer;
+            DirectIoBuffer prefix_buffer = direct_io_buffer_pool_.Acquire();
             err = ReadFilePrefix(tbl_id,
                                  task->filename_,
                                  static_cast<size_t>(buffered_start),
                                  prefix_buffer);
-            CHECK_KV_ERR(err);
+            if (err != KvError::NoError)
+            {
+                direct_io_buffer_pool_.Release(std::move(prefix_buffer));
+                return err;
+            }
             task->segments_.push_back({0, std::move(prefix_buffer)});
         }
         // Append in-memory segments (they continue from buffered_start)
@@ -4422,17 +4426,26 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
     }
 
     // Check for errors and clean up segments
-    for (const auto &task : tasks)
+    KvError upload_err = KvError::NoError;
+    for (auto &task : tasks)
     {
-        if (task->error_ != KvError::NoError)
+        for (UploadSegment &segment : task->segments_)
         {
-            return task->error_;
+            if (!segment.zero_fill && !segment.data.empty())
+            {
+                direct_io_buffer_pool_.Release(std::move(segment.data));
+            }
         }
-        // Clear segments after successful upload (they're no longer needed)
+        task->segments_.clear();
+        if (task->error_ != KvError::NoError && upload_err == KvError::NoError)
+        {
+            upload_err = task->error_;
+        }
+        // Clear segments after upload attempt (they're no longer needed)
         ClearUploadSegmentsForFile(tbl_id, task->filename_);
     }
 
-    return KvError::NoError;
+    return upload_err;
 }
 
 KvError CloudStoreMgr::ReadArchiveFileAndDelete(const TableIdent &tbl_id,
