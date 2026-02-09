@@ -49,6 +49,15 @@ struct UploadSegment
     /** Segment payload bytes. The upload path treats size() as logical bytes.
      */
     DirectIoBuffer data;
+    /** Length used when this segment represents a zero-filled range. */
+    size_t zero_fill_length{0};
+    /** True if this segment should be interpreted as zero-filled bytes. */
+    bool zero_fill{false};
+
+    size_t LogicalSize() const
+    {
+        return zero_fill ? zero_fill_length : data.size();
+    }
 };
 
 class KvTask;
