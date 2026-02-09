@@ -2507,7 +2507,7 @@ CloudStoreMgr::CloudStoreMgr(const KvOptions *opts,
                              CloudStorageService *service)
     : IouringMgr(opts, fd_limit),
       file_cleaner_(this),
-      direct_io_buffer_pool_(opts->direct_io_buffer_pool_size),
+      direct_io_buffer_pool_(opts->direct_io_buffer_pool_size, true),
       obj_store_(opts, service),
       cloud_service_(service)
 {
