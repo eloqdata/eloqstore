@@ -2547,15 +2547,16 @@ KvError CloudStoreMgr::Init(Shard *shard)
 }
 
 void CloudStoreMgr::OnFileRangeWritePrepared(const TableIdent &tbl_id,
-                                       FileId file_id,
-                                       uint64_t term,
-                                       uint64_t offset,
-                                       std::string_view data)
+                                             FileId file_id,
+                                             uint64_t term,
+                                             uint64_t offset,
+                                             std::string_view data)
 {
-    assert(!data.empty());
-    // Record this prepared write as an in-memory segment for later upload.
-    // This avoids reading from disk when uploading recent writes.
-    RecordUploadSegment(tbl_id, ToFilename(file_id, term), offset, data);
+    if (data.empty())
+    {
+        return;
+    }
+    RecordUploadBufferRange(tbl_id, ToFilename(file_id, term), offset, data);
 }
 
 KvError CloudStoreMgr::OnDataFileSealed(const TableIdent &tbl_id,
@@ -2575,126 +2576,145 @@ KvError CloudStoreMgr::OnDataFileSealed(const TableIdent &tbl_id,
     return UploadFiles(tbl_id, {ToFilename(file_id, term)});
 }
 
-void CloudStoreMgr::RecordUploadSegment(const TableIdent &tbl_id,
-                                        const std::string &filename,
-                                        uint64_t offset,
-                                        std::string_view data)
+void CloudStoreMgr::RecordUploadBufferRange(const TableIdent &tbl_id,
+                                            const std::string &filename,
+                                            uint64_t offset,
+                                            std::string_view data)
 {
-    assert(!data.empty());
-
-    // Get or create the segment list for this file
-    FileKey key{tbl_id, filename};
-    auto [it, inserted] = upload_segments_.try_emplace(std::move(key));
-    std::vector<UploadSegment> &segments = it->second;
-
-    // Validate offset + size doesn't overflow
-    const uint64_t new_size = data.size();
-    if (offset > std::numeric_limits<uint64_t>::max() - new_size)
+    if (data.empty())
     {
-        LOG(ERROR) << "Upload segment offset overflow, table=" << tbl_id
+        return;
+    }
+    FileKey key{tbl_id, filename};
+    auto [it, inserted] = upload_buffers_.try_emplace(std::move(key));
+    UploadBufferState &state = it->second;
+    if (inserted)
+    {
+        state.buffer = direct_io_buffer_pool_.Acquire();
+    }
+    if (state.invalid)
+    {
+        LOG(ERROR) << "Upload buffer already marked invalid, table=" << tbl_id
+                   << " filename=" << filename << " offset=" << offset
+                   << " bytes=" << data.size() << " start_offset="
+                   << state.start_offset << " end_offset=" << state.end_offset;
+        return;
+    }
+
+    const uint64_t bytes = data.size();
+    if (offset > std::numeric_limits<uint64_t>::max() - bytes)
+    {
+        state.invalid = true;
+        LOG(ERROR) << "Upload buffer offset overflow, table=" << tbl_id
                    << " filename=" << filename << " offset=" << offset
                    << " bytes=" << data.size();
         return;
     }
+    const uint64_t new_end = offset + bytes;
 
-    // Validate continuity: new segment must append immediately after the last
-    // one
-    if (!segments.empty())
+    if (!state.initialized)
     {
-        const UploadSegment &last = segments.back();
-        const uint64_t last_size = last.LogicalSize();
-        // Check last segment's end doesn't overflow
-        if (last.offset > std::numeric_limits<uint64_t>::max() - last_size)
-        {
-            LOG(ERROR) << "Upload segment tail overflow, table=" << tbl_id
-                       << " filename=" << filename
-                       << " tail_offset=" << last.offset
-                       << " tail_bytes=" << last_size;
-            return;
-        }
-        // Verify new segment starts exactly where last segment ends
-        const uint64_t expected_offset = last.offset + last_size;
-        if (offset != expected_offset)
-        {
-            LOG(ERROR) << "Upload segments must append continuously, table="
-                       << tbl_id << " filename=" << filename
-                       << " expected_offset=" << expected_offset
-                       << " actual_offset=" << offset;
-            return;
-        }
+        state.start_offset = offset;
+        state.end_offset = offset;
+        state.initialized = true;
+    }
+    else if (offset != state.end_offset)
+    {
+        state.invalid = true;
+        LOG(ERROR) << "Upload buffer must append continuously, table=" << tbl_id
+                   << " filename=" << filename
+                   << " expected_offset=" << state.end_offset
+                   << " actual_offset=" << offset
+                   << " start_offset=" << state.start_offset;
+        return;
     }
 
-    // Create and append the new segment
-    UploadSegment segment;
-    segment.offset = offset;
-    segment.data.assign(data);  // Copy data into DirectIoBuffer
-    segments.emplace_back(std::move(segment));
-
-    if (inserted)
+    if (new_end < state.start_offset)
     {
-        DLOG(INFO) << "create upload segment cache entry table=" << tbl_id
-                   << " filename=" << filename;
+        state.invalid = true;
+        LOG(ERROR) << "Upload buffer range underflow, table=" << tbl_id
+                   << " filename=" << filename << " start_offset="
+                   << state.start_offset << " new_end=" << new_end;
+        return;
     }
+    uint64_t required_u64 = new_end - state.start_offset;
+    if (required_u64 > std::numeric_limits<size_t>::max())
+    {
+        state.invalid = true;
+        LOG(ERROR) << "Upload buffer size overflow, table=" << tbl_id
+                   << " filename=" << filename
+                   << " required_bytes=" << required_u64;
+        return;
+    }
+    size_t required = static_cast<size_t>(required_u64);
+    size_t write_offset = static_cast<size_t>(offset - state.start_offset);
+    state.buffer.resize(required);
+    std::memcpy(state.buffer.data() + write_offset, data.data(), data.size());
+    state.end_offset = new_end;
 }
 
-std::vector<UploadSegment> CloudStoreMgr::CollectUploadSegments(
-    const TableIdent &tbl_id, std::string_view filename)
+bool CloudStoreMgr::TakeUploadBufferState(const TableIdent &tbl_id,
+                                          std::string_view filename,
+                                          UploadBufferState &state_out)
 {
-    // Look up segments for this file and move them out
     FileKey key{tbl_id, std::string(filename)};
-    auto it = upload_segments_.find(key);
-    if (it == upload_segments_.end())
+    auto it = upload_buffers_.find(key);
+    if (it == upload_buffers_.end())
     {
-        return {};  // No segments recorded for this file
+        return false;
     }
-
-    // Move segments out and remove from cache (they'll be used for upload)
-    std::vector<UploadSegment> segments = std::move(it->second);
-    upload_segments_.erase(it);
-    return segments;
+    state_out = std::move(it->second);
+    upload_buffers_.erase(it);
+    return true;
 }
 
-void CloudStoreMgr::ClearUploadSegmentsForFile(const TableIdent &tbl_id,
-                                               std::string_view filename)
+void CloudStoreMgr::ClearUploadBufferForFile(const TableIdent &tbl_id,
+                                             std::string_view filename)
 {
-    // Remove segments for a specific file (called after successful upload)
     FileKey key{tbl_id, std::string(filename)};
-    auto it = upload_segments_.find(key);
-    if (it == upload_segments_.end())
+    auto it = upload_buffers_.find(key);
+    if (it == upload_buffers_.end())
     {
-        return;  // Already cleared or never existed
+        return;
     }
-    upload_segments_.erase(it);
+    RecycleBuffer(std::move(it->second.buffer));
+    upload_buffers_.erase(it);
 }
 
-void CloudStoreMgr::ClearUploadSegmentsForTable(const TableIdent &tbl_id)
+void CloudStoreMgr::ClearUploadBuffersForTable(const TableIdent &tbl_id)
 {
-    // Remove all segments for a table (called during AbortWrite)
-    // Iterate through map and erase entries matching this table
-    auto it = upload_segments_.begin();
-    while (it != upload_segments_.end())
+    auto it = upload_buffers_.begin();
+    while (it != upload_buffers_.end())
     {
         if (it->first.tbl_id_ != tbl_id)
         {
             ++it;
             continue;
         }
-        // Erase and advance iterator safely
+        RecycleBuffer(std::move(it->second.buffer));
         auto erase_it = it;
         ++it;
-        upload_segments_.erase(erase_it);
+        upload_buffers_.erase(erase_it);
     }
 }
 
 KvError CloudStoreMgr::ReadFilePrefix(const TableIdent &tbl_id,
                                       std::string_view filename,
                                       size_t prefix_len,
-                                      DirectIoBuffer &buffer)
+                                      DirectIoBuffer &buffer,
+                                      size_t dst_offset)
 {
-    buffer.clear();
     if (prefix_len == 0)
     {
         return KvError::NoError;
+    }
+    if (dst_offset > buffer.size() || prefix_len > buffer.size() - dst_offset)
+    {
+        LOG(ERROR) << "Invalid prefix destination range, table=" << tbl_id
+                   << " filename=" << filename << " prefix_len=" << prefix_len
+                   << " dst_offset=" << dst_offset
+                   << " buffer_size=" << buffer.size();
+        return KvError::InvalidArgs;
     }
 
     // Construct absolute path to file
@@ -2717,7 +2737,6 @@ KvError CloudStoreMgr::ReadFilePrefix(const TableIdent &tbl_id,
     // per-IO overhead on shard threads.
     const size_t read_batch_size = options_->non_page_io_batch_size;
 
-    buffer.resize(prefix_len);
     FdIdx fd_idx{fd, false};
     KvError status = KvError::NoError;
     size_t remaining = prefix_len;
@@ -2725,8 +2744,10 @@ KvError CloudStoreMgr::ReadFilePrefix(const TableIdent &tbl_id,
     while (remaining > 0)
     {
         size_t batch = std::min(read_batch_size, remaining);
-        int read_res =
-            Read(fd_idx, buffer.data() + read_offset, batch, read_offset);
+        int read_res = Read(fd_idx,
+                            buffer.data() + dst_offset + read_offset,
+                            batch,
+                            read_offset);
         if (read_res < 0)
         {
             status = ToKvError(read_res);
@@ -3710,9 +3731,8 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
         // This is a new cached file.
         used_local_space_ += options_->manifest_limit;
     }
-    // Record manifest snapshot as upload segment (entire manifest at offset 0)
-    // This enables segment-based upload without reading from disk
-    RecordUploadSegment(tbl_id, manifest_name, 0, snapshot);
+    // Record manifest snapshot bytes for upload (entire file at offset 0).
+    RecordUploadBufferRange(tbl_id, manifest_name, 0, snapshot);
     err = UploadFiles(tbl_id, {manifest_name});
     if (err != KvError::NoError)
     {
@@ -3746,9 +3766,8 @@ KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
     {
         return ToKvError(res);
     }
-    // Record archive manifest snapshot as upload segment (entire archive at
-    // offset 0) This enables segment-based upload without reading from disk
-    RecordUploadSegment(tbl_id, name, 0, snapshot);
+    // Record archive bytes for upload (entire file at offset 0).
+    RecordUploadBufferRange(tbl_id, name, 0, snapshot);
     err = UploadFiles(tbl_id, {name});
     IouringMgr::CloseDirect(res);
     used_local_space_ += options_->manifest_limit;
@@ -3761,9 +3780,8 @@ KvError CloudStoreMgr::AbortWrite(const TableIdent &tbl_id)
     // First abort the base I/O manager state (reset dirty flags, etc.)
     KvError err = IouringMgr::AbortWrite(tbl_id);
     CHECK_KV_ERR(err);
-    // Clear any pending upload segments that were recorded for this table
-    // to prevent uploading partial/corrupted data on retry
-    ClearUploadSegmentsForTable(tbl_id);
+    // Clear any pending upload buffer state for this table.
+    ClearUploadBuffersForTable(tbl_id);
     return KvError::NoError;
 }
 
@@ -4218,8 +4236,17 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
     tasks.reserve(filenames.size());
     std::vector<ObjectStore::UploadTask *> pending;
     pending.reserve(filenames.size());
-
+    auto cleanup_task_buffers = [this, &tasks]()
+    {
+        for (auto &task : tasks)
+        {
+            RecycleBuffer(std::move(task->data_buffer_));
+        }
+    };
     auto resolve_file_size = [this, &tbl_id](std::string_view filename,
+                                             bool is_data_file,
+                                             bool has_upload_state,
+                                             const UploadBufferState &state,
                                              size_t &file_size) -> KvError
     {
         if (filename.empty())
@@ -4228,7 +4255,7 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
         }
 
         auto [prefix, suffix] = ParseFileName(filename);
-        if (prefix == FileNameData)
+        if (is_data_file)
         {
             FileId file_id = 0;
             uint64_t term = 0;
@@ -4244,6 +4271,18 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
         {
             LOG(ERROR) << "Unsupported upload filename: " << filename;
             return KvError::InvalidArgs;
+        }
+        if (has_upload_state && state.initialized)
+        {
+            if (state.end_offset > std::numeric_limits<size_t>::max())
+            {
+                LOG(ERROR) << "Manifest upload size overflow from state, table="
+                           << tbl_id << " filename=" << filename
+                           << " end_offset=" << state.end_offset;
+                return KvError::InvalidArgs;
+            }
+            file_size = static_cast<size_t>(state.end_offset);
+            return KvError::NoError;
         }
 
         auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
@@ -4264,126 +4303,123 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
         return KvError::NoError;
     };
 
-    // Process each file and prepare segment-based upload
+    // Process each file and prepare full-buffer upload.
     for (auto &name : filenames)
     {
         auto task =
             std::make_unique<ObjectStore::UploadTask>(&tbl_id, std::move(name));
         task->SetKvTask(current_task);
         auto parsed_name = ParseFileName(task->filename_);
-        // Data files can have zero-filled tails (unwritten pages), manifests
-        // cannot
-        const bool allow_zero_tail_fill = (parsed_name.first == FileNameData);
+        const bool is_data_file = (parsed_name.first == FileNameData);
+        if (!is_data_file && parsed_name.first != FileNameManifest)
+        {
+            cleanup_task_buffers();
+            LOG(ERROR) << "Unsupported upload filename: " << task->filename_;
+            return KvError::InvalidArgs;
+        }
+        UploadBufferState upload_state;
+        bool has_upload_state =
+            TakeUploadBufferState(tbl_id, task->filename_, upload_state);
+        auto recycle_upload_state = [this, &upload_state]()
+        {
+            RecycleBuffer(std::move(upload_state.buffer));
+        };
+        if (has_upload_state && upload_state.invalid)
+        {
+            cleanup_task_buffers();
+            recycle_upload_state();
+            LOG(ERROR) << "Upload buffer state invalid, table=" << tbl_id
+                       << " filename=" << task->filename_;
+            return KvError::InvalidArgs;
+        }
 
         // Determine total file size (data files have fixed size, manifests
         // vary)
         size_t file_size = 0;
-        KvError err = resolve_file_size(task->filename_, file_size);
-        CHECK_KV_ERR(err);
+        KvError err = resolve_file_size(task->filename_,
+                                        is_data_file,
+                                        has_upload_state,
+                                        upload_state,
+                                        file_size);
+        if (err != KvError::NoError)
+        {
+            cleanup_task_buffers();
+            recycle_upload_state();
+            return err;
+        }
         task->file_size_ = file_size;
 
-        // Collect in-memory segments recorded via OnFileRangeWritePrepared
-        // These represent recent writes that haven't been flushed to disk yet
-        std::vector<UploadSegment> tail_segments =
-            CollectUploadSegments(tbl_id, task->filename_);
-
-        // Calculate what range is covered by in-memory segments
         const uint64_t file_size_u64 = task->file_size_;
-        uint64_t buffered_start = file_size_u64;  // Start of in-memory segments
-        uint64_t covered_end = file_size_u64;     // End of covered range
-        if (!tail_segments.empty())
+        uint64_t buffered_start = file_size_u64;
+        uint64_t covered_end = file_size_u64;
+        if (has_upload_state && upload_state.initialized)
         {
-            // Segments start at first segment's offset
-            buffered_start = tail_segments.front().offset;
-            covered_end = buffered_start;
-            // Calculate total covered range by summing segment sizes
-            for (const UploadSegment &segment : tail_segments)
-            {
-                // Check for overflow
-                const size_t seg_size = segment.LogicalSize();
-                if (covered_end >
-                    std::numeric_limits<uint64_t>::max() - seg_size)
-                {
-                    LOG(ERROR)
-                        << "Upload tail segment overflow, table=" << tbl_id
-                        << " filename=" << task->filename_;
-                    return KvError::InvalidArgs;
-                }
-                covered_end += static_cast<uint64_t>(seg_size);
-            }
-            // Validate segments don't exceed file size
-            if (covered_end > file_size_u64)
-            {
-                LOG(ERROR) << "Upload tail segments exceed file size, table="
-                           << tbl_id << " filename=" << task->filename_
-                           << " covered_end=" << covered_end
-                           << " file_size=" << file_size_u64;
-                return KvError::InvalidArgs;
-            }
+            buffered_start = upload_state.start_offset;
+            covered_end = upload_state.end_offset;
         }
 
-        // Build final segment list for upload:
-        // 1. File prefix [0, buffered_start) - read from disk if needed
-        // 2. In-memory segments [buffered_start, covered_end) - from
-        // tail_segments
-        // 3. Zero-filled tail [covered_end, file_size) - for data files if
-        // needed
-        task->segments_.clear();
-        task->segments_.reserve((buffered_start > 0 ? 1 : 0) +
-                                tail_segments.size());
-        // Read file prefix from disk if in-memory segments don't start at
-        // offset 0
-        if (buffered_start > 0)
+        if (buffered_start > covered_end || covered_end > file_size_u64)
         {
-            DirectIoBuffer prefix_buffer = direct_io_buffer_pool_.Acquire();
-            err = ReadFilePrefix(tbl_id,
-                                 task->filename_,
-                                 static_cast<size_t>(buffered_start),
-                                 prefix_buffer);
-            if (err != KvError::NoError)
-            {
-                direct_io_buffer_pool_.Release(std::move(prefix_buffer));
-                return err;
-            }
-            task->segments_.push_back({0, std::move(prefix_buffer)});
-        }
-        // Append in-memory segments (they continue from buffered_start)
-        for (UploadSegment &segment : tail_segments)
-        {
-            task->segments_.emplace_back(std::move(segment));
-        }
-
-        // Validate and fill any remaining gap with zeros (data files only)
-        uint64_t covered = covered_end;
-        if (covered > file_size_u64)
-        {
-            // This should have been caught above, but double-check
-            LOG(ERROR) << "Upload segments exceed file size, table=" << tbl_id
-                       << " filename=" << task->filename_
-                       << " covered=" << covered
+            cleanup_task_buffers();
+            recycle_upload_state();
+            LOG(ERROR) << "Invalid upload coverage range, table=" << tbl_id
+                       << " filename=" << task->filename_ << " start_offset="
+                       << buffered_start << " end_offset=" << covered_end
                        << " file_size=" << file_size_u64;
             return KvError::InvalidArgs;
         }
-        if (covered < file_size_u64)
+
+        size_t buffered_bytes = static_cast<size_t>(covered_end - buffered_start);
+        if (has_upload_state && upload_state.initialized &&
+            upload_state.buffer.size() != buffered_bytes)
         {
-            // Gap between covered range and file end
-            if (!allow_zero_tail_fill)
+            cleanup_task_buffers();
+            recycle_upload_state();
+            LOG(ERROR) << "Upload buffer size mismatch, table=" << tbl_id
+                       << " filename=" << task->filename_
+                       << " expected_bytes=" << buffered_bytes
+                       << " actual_bytes=" << upload_state.buffer.size()
+                       << " start_offset=" << buffered_start
+                       << " end_offset=" << covered_end;
+            return KvError::InvalidArgs;
+        }
+
+        task->data_buffer_ = direct_io_buffer_pool_.Acquire();
+        task->data_buffer_.resize(file_size);
+        if (buffered_start > 0)
+        {
+            err = ReadFilePrefix(tbl_id,
+                                 task->filename_,
+                                 static_cast<size_t>(buffered_start),
+                                 task->data_buffer_,
+                                 0);
+            if (err != KvError::NoError)
             {
-                // Manifest files must be fully covered (no zero-fill allowed)
-                LOG(ERROR) << "Upload segments do not cover the full file, "
-                              "table="
-                           << tbl_id << " filename=" << task->filename_
-                           << " covered=" << covered
-                           << " file_size=" << file_size_u64;
-                return KvError::InvalidArgs;
+                cleanup_task_buffers();
+                RecycleBuffer(std::move(task->data_buffer_));
+                recycle_upload_state();
+                return err;
             }
-            // For data files, fill remaining with zeros (unwritten pages)
-            const size_t zero_len = file_size_u64 - covered;
-            UploadSegment zero_segment;
-            zero_segment.offset = covered;
-            zero_segment.zero_fill = true;
-            zero_segment.zero_fill_length = zero_len;
-            task->segments_.push_back(std::move(zero_segment));
+        }
+        if (has_upload_state && upload_state.initialized && buffered_bytes > 0)
+        {
+            std::memcpy(task->data_buffer_.data() +
+                            static_cast<size_t>(buffered_start),
+                        upload_state.buffer.data(),
+                        buffered_bytes);
+        }
+        recycle_upload_state();
+
+        if (covered_end < file_size_u64 && !is_data_file)
+        {
+            cleanup_task_buffers();
+            RecycleBuffer(std::move(task->data_buffer_));
+            LOG(ERROR) << "Upload bytes do not cover full manifest/archive, "
+                          "table="
+                       << tbl_id << " filename=" << task->filename_
+                       << " covered_end=" << covered_end
+                       << " file_size=" << file_size_u64;
+            return KvError::InvalidArgs;
         }
 
         pending.emplace_back(task.get());
@@ -4428,24 +4464,15 @@ KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
         processed += span_size;
     }
 
-    // Check for errors and clean up segments
+    // Check for errors and release upload buffers
     KvError upload_err = KvError::NoError;
     for (auto &task : tasks)
     {
-        for (UploadSegment &segment : task->segments_)
-        {
-            if (!segment.zero_fill && !segment.data.empty())
-            {
-                direct_io_buffer_pool_.Release(std::move(segment.data));
-            }
-        }
-        task->segments_.clear();
+        RecycleBuffer(std::move(task->data_buffer_));
         if (task->error_ != KvError::NoError && upload_err == KvError::NoError)
         {
             upload_err = task->error_;
         }
-        // Clear segments after upload attempt (they're no longer needed)
-        ClearUploadSegmentsForFile(tbl_id, task->filename_);
     }
 
     return upload_err;
