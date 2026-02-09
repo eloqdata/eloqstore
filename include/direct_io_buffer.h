@@ -99,15 +99,7 @@ public:
 
     static void UpdateDefaultReserve(size_t bytes)
     {
-        size_t current = default_reserve_bytes_.load(std::memory_order_relaxed);
-        while (bytes > current &&
-               !default_reserve_bytes_.compare_exchange_weak(
-                   current,
-                   bytes,
-                   std::memory_order_relaxed,
-                   std::memory_order_relaxed))
-        {
-        }
+        default_reserve_bytes_.store(bytes);
     }
 
     char *data()
