@@ -66,7 +66,13 @@ class EloqStore;
 class AsyncIoManager
 {
 public:
-    explicit AsyncIoManager(const KvOptions *opts) : options_(opts) {};
+    explicit AsyncIoManager(const KvOptions *opts) : options_(opts)
+    {
+        if (options_ != nullptr)
+        {
+            DirectIoBuffer::UpdateDefaultReserve(options_->DataFileSize());
+        }
+    };
     virtual ~AsyncIoManager() = default;
     static std::unique_ptr<AsyncIoManager> Instance(const EloqStore *store,
                                                     uint32_t fd_limit);
