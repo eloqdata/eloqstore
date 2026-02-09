@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -17,7 +18,16 @@ namespace eloqstore
 class DirectIoBuffer
 {
 public:
-    DirectIoBuffer() = default;
+    DirectIoBuffer()
+    {
+        size_t reserve =
+            default_reserve_bytes_.load(std::memory_order_relaxed);
+        if (reserve > 0)
+        {
+            EnsureCapacity(reserve);
+            size_ = 0;
+        }
+    }
     DirectIoBuffer(DirectIoBuffer &&other) noexcept
         : data_(std::exchange(other.data_, nullptr)),
           size_(std::exchange(other.size_, 0)),
@@ -85,6 +95,19 @@ public:
     void append(std::string_view src)
     {
         append(src.data(), src.size());
+    }
+
+    static void UpdateDefaultReserve(size_t bytes)
+    {
+        size_t current = default_reserve_bytes_.load(std::memory_order_relaxed);
+        while (bytes > current &&
+               !default_reserve_bytes_.compare_exchange_weak(
+                   current,
+                   bytes,
+                   std::memory_order_relaxed,
+                   std::memory_order_relaxed))
+        {
+        }
     }
 
     char *data()
@@ -166,6 +189,7 @@ protected:
     char *data_{nullptr};
     size_t size_{0};
     size_t capacity_{0};
+    static inline std::atomic<size_t> default_reserve_bytes_{0};
 };
 
 }  // namespace eloqstore
