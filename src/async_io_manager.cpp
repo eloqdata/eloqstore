@@ -3604,6 +3604,10 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
                 err = UploadFiles(tbl_id, {ToFilename(file_id, term)});
             }
         }
+        if (err == KvError::NoError)
+        {
+            fd.Get()->dirty_ = false;
+        }
         return err;
     }
 
