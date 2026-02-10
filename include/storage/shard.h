@@ -66,7 +66,9 @@ private:
     bool ExecuteReadyTasks();
     void OnTaskFinished(KvTask *task);
     void OnReceivedReq(KvRequest *req);
-    void ProcessReq(KvRequest *req);
+    bool ProcessReq(KvRequest *req);
+    void TryStartPendingWrite(const TableIdent &tbl_id);
+    void TryDispatchPendingWrites();
 
 #ifdef ELOQ_MODULE_ENABLED
     void WorkOneRound();
@@ -203,12 +205,15 @@ private:
     {
     public:
         void PushBack(WriteRequest *req);
+        void PushFront(WriteRequest *req);
+        WriteRequest *Front();
         WriteRequest *PopFront();
         bool Empty() const;
 
         // Requests from internal
         CompactRequest compact_req_;
         CleanExpiredRequest expire_req_;
+        bool running_{false};
 
     private:
         WriteRequest *head_{nullptr};

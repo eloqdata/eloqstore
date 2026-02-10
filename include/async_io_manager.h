@@ -846,7 +846,6 @@ public:
         const TableIdent &tbl_id);
 
 private:
-    struct UploadBufferState;
     // Upsert term file with limited retry logic
     // Returns NoError on success, ExpiredTerm if condition invalid, other
     // errors on failure
@@ -879,6 +878,10 @@ private:
     KvError DownloadFile(const TableIdent &tbl_id,
                          FileId file_id,
                          uint64_t term = 0);
+    KvError UploadFile(const TableIdent &tbl_id,
+                       std::string filename,
+                       WriteTask *owner,
+                       std::string_view payload = {});
     KvError UploadFiles(const TableIdent &tbl_id,
                         std::vector<std::string> filenames);
     /**
@@ -901,60 +904,8 @@ private:
                            size_t prefix_len,
                            DirectIoBuffer &buffer,
                            size_t dst_offset);
-    /**
-     * @brief Capture a prepared write range into per-file upload buffer.
-     *
-     * Records in-memory bytes for later upload using a full-file buffer model.
-     * Writes must append continuously (no gaps/overlaps) per file. Buffer data
-     * is stored by file-absolute offset, so byte at file offset X is at
-     * buffer[X]. Called from OnFileRangeWritePrepared.
-     *
-     * @param tbl_id Table identifier
-     * @param filename File name (as returned by ToFilename)
-     * @param offset Byte offset where data will be written
-     * @param data View of the write payload (copied into upload buffer)
-     *
-     * @note Logs errors and marks file state invalid when continuity/overflow
-     *       checks fail.
-     */
-    void RecordUploadBufferRange(const TableIdent &tbl_id,
-                                 const std::string &filename,
-                                 uint64_t offset,
-                                 std::string_view data);
-    /**
-     * @brief Move out and erase pending upload buffer state for one file.
-     *
-     * Moves buffered upload state for one file out of the internal cache.
-     * Returns false when no state exists.
-     *
-     * @param tbl_id Table identifier
-     * @param filename File name
-     * @param state_out Output state when found
-     *
-     * @return true if state exists and is moved out; false otherwise
-     */
-    bool TakeUploadBufferState(const TableIdent &tbl_id,
-                               std::string_view filename,
-                               UploadBufferState &state_out);
-    /**
-     * @brief Clear pending upload state for one file (best-effort).
-     *
-     * Removes buffered state for one file from the cache.
-     *
-     * @param tbl_id Table identifier
-     * @param filename File name to clear segments for
-     */
-    void ClearUploadBufferForFile(const TableIdent &tbl_id,
-                                  std::string_view filename);
-    /**
-     * @brief Clear all pending upload states for a table.
-     *
-     * Removes all buffered upload states for files of one table. Used by
-     * AbortWrite to clean partial state on write failure.
-     *
-     * @param tbl_id Table identifier
-     */
-    void ClearUploadBuffersForTable(const TableIdent &tbl_id);
+    DirectIoBuffer AcquireCloudBuffer(KvTask *task);
+    void ReleaseCloudBuffer(DirectIoBuffer buffer);
 
     bool DequeClosedFile(const FileKey &key);
     void EnqueClosedFile(FileKey key);
@@ -1000,22 +951,6 @@ private:
      * @brief Locally cached files that are not currently opened.
      */
     std::unordered_map<FileKey, CachedFile> closed_files_;
-    struct UploadBufferState
-    {
-        DirectIoBuffer buffer;
-        uint64_t start_offset{0};
-        uint64_t end_offset{0};
-        bool initialized{false};
-        bool invalid{false};
-    };
-    /**
-     * @brief In-memory upload buffers keyed by (table, filename).
-     *
-     * Stores write payloads captured via OnFileRangeWritePrepared in a
-     * contiguous per-file buffer model with file-absolute layout. State is
-     * moved out during UploadFiles and cleared on AbortWrite.
-     */
-    absl::flat_hash_map<FileKey, UploadBufferState> upload_buffers_;
     CachedFile lru_file_head_;
     CachedFile lru_file_tail_;
     size_t used_local_space_{0};
@@ -1068,10 +1003,10 @@ private:
     // will be skipped and the latest manifest term will be used.
     uint64_t process_term_{0};
 
-    size_t inflight_upload_files_{0};
-    WaitingZone upload_slots_waiting_;
     size_t inflight_cloud_slots_{0};
     WaitingZone cloud_slot_waiting_;
+    size_t inflight_cloud_buffers_{0};
+    WaitingZone cloud_buffer_waiting_;
 
     friend class Prewarmer;
     friend class PrewarmService;

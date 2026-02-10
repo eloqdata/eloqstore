@@ -1,6 +1,8 @@
 
 #pragma once
 
+#include <cassert>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -13,10 +15,12 @@
 
 namespace eloqstore
 {
+struct KvOptions;
+
 class TaskManager
 {
 public:
-    explicit TaskManager();
+    explicit TaskManager(const KvOptions *opts);
 
     static void SetPoolSizesForTest(uint32_t batch_write_pool_size,
                                     uint32_t background_write_pool_size,
@@ -41,7 +45,8 @@ private:
     class TaskPool
     {
     public:
-        TaskPool(uint32_t size)
+        TaskPool(uint32_t size, bool allow_growth = true)
+            : allow_growth_(allow_growth)
         {
             if (size > 0)
             {
@@ -64,6 +69,10 @@ private:
                 assert(task->status_ == TaskStatus::Idle);
                 return task;
             }
+            if (!allow_growth_)
+            {
+                return nullptr;
+            }
             auto &task = ext_pool_.emplace_back(std::make_unique<T>());
             return task.get();
         }
@@ -79,11 +88,7 @@ private:
         std::unique_ptr<T[]> init_pool_{nullptr};
         std::vector<std::unique_ptr<T>> ext_pool_;
         T *free_head_{nullptr};
-
-        // TODO(zhanghao): TaskPool should have a capacity limit.
-        // Push KvRequest that need new KvTask to the back of this list when
-        // capacity limit is reached.
-        // KvRequest* head_{nullptr}, tail_{nullptr};
+        bool allow_growth_{true};
     };
 
     TaskPool<BatchWriteTask> batch_write_pool_;
@@ -92,5 +97,7 @@ private:
     TaskPool<ScanTask> scan_pool_;
     TaskPool<ListObjectTask> list_object_pool_;
     size_t num_active_{0};
+    size_t num_active_write_{0};
+    size_t max_write_concurrency_{std::numeric_limits<size_t>::max()};
 };
 }  // namespace eloqstore

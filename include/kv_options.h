@@ -117,6 +117,12 @@ struct KvOptions
      */
     uint32_t max_cloud_concurrency = 20;
     /**
+     * @brief Maximum number of concurrent write tasks per shard.
+     * 0 means unlimited (legacy behavior). In cloud mode, 0 is rewritten to
+     * max_cloud_concurrency during option validation.
+     */
+    uint32_t max_write_concurrency = 0;
+    /**
      * @brief Number of dedicated threads that process cloud HTTP requests.
      * Each thread runs curl's multi loop and handles a subset of shards.
      */
