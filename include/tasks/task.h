@@ -133,18 +133,20 @@ public:
     }
     void Step(int step)
     {
-        step_ = step;
-        YieldToLowPQ();
+        Step(step, step);
     }
     void Step(int step1, int step2)
     {
-        step_ = step1;
-        auto ts = butil::cpuwide_time_us() - yield_ts_;
-        if (ts > threshold_)
+        if (record_)
         {
-            LOG(WARNING) << "YieldToLowPQ cost " << ts << " us, step " << step_;
+            step_ = step1;
+            auto ts = butil::cpuwide_time_us() - yield_ts_;
+            if (ts > threshold_)
+            {
+                LOG(WARNING) << "YieldToLowPQ cost " << ts << " us, step " << step_;
+            }
+            step_ = step2;
         }
-        step_ = step2;
     }
     bool record_{false};
     int step_{0};

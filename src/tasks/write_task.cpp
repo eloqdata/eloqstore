@@ -399,7 +399,6 @@ KvError WriteTask::FlushManifest()
     file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
                                         IoMgr()->ProcessTerm());
     SerializeFileIdTermMapping(*file_term_mapping, term_buf);
-    Step(31);
     YieldToLowPQ();
 
     if (need_empty_snapshot)
@@ -430,12 +429,9 @@ KvError WriteTask::FlushManifest()
     if (!dict_dirty && manifest_size > 0 &&
         manifest_size + log_physical_size <= opts->manifest_limit)
     {
-        Step(32);
         wal_builder_.AppendFileIdTermMapping(term_buf);
-        Step(36);
         std::string_view blob =
             wal_builder_.Finalize(cow_meta_.root_id_, cow_meta_.ttl_root_id_);
-        Step(37);
         err = IoMgr()->AppendManifest(tbl_ident_, blob, manifest_size);
         Step(38, 39);
         CHECK_KV_ERR(err);
