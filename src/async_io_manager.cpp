@@ -55,6 +55,26 @@ namespace eloqstore
 {
 namespace fs = std::filesystem;
 
+namespace
+{
+WriteTask *CurrentWriteTask()
+{
+    KvTask *task = ThdTask();
+    if (task == nullptr)
+    {
+        return nullptr;
+    }
+    switch (task->Type())
+    {
+    case TaskType::BatchWrite:
+    case TaskType::BackgroundWrite:
+        return static_cast<WriteTask *>(task);
+    default:
+        return nullptr;
+    }
+}
+}  // namespace
+
 char *VarPagePtr(const VarPage &page)
 {
     char *ptr = nullptr;
@@ -171,7 +191,7 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
     }
 
     io_uring_params params = {};
-    params.flags |= (IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_COOP_TASKRUN);
+    params.flags |= (IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN | IORING_SETUP_TASKRUN_FLAG);
     const uint32_t sq_size = options_->io_queue_size;
     int ret = io_uring_queue_init_params(sq_size, &ring_, &params);
     if (ret < 0)
@@ -1220,16 +1240,39 @@ std::pair<FileId, uint32_t> IouringMgr::ConvFilePageId(
 
 void IouringMgr::Submit()
 {
-    if (prepared_sqe_ == 0)
+    const uint32_t prepared_before = prepared_sqe_;
+    const uint32_t sq_flags =
+        ring_.sq.kflags == nullptr ? 0 : *ring_.sq.kflags;
+    const bool need_taskrun = (sq_flags & IORING_SQ_TASKRUN) != 0;
+
+    if (prepared_before == 0 && !need_taskrun)
     {
         return;
     }
-    int ret = io_uring_submit(&ring_);
-    if (__builtin_expect(ret < 0, 0))
+
+    int ret = 0;
+    if (prepared_before == 0)
     {
-        LOG(ERROR) << "iouring submit failed " << ret;
+        // No new SQE, but taskrun is pending. Enter kernel to drive task_work.
+        ret = io_uring_enter(ring_.ring_fd, 0, 0, IORING_ENTER_GETEVENTS, nullptr);
     }
     else
+    {
+        ret = io_uring_submit(&ring_);
+    }
+
+    if (__builtin_expect(ret < 0, 0))
+    {
+        if (prepared_before == 0)
+        {
+            LOG(ERROR) << "io_uring_enter(GETEVENTS) failed " << ret;
+        }
+        else
+        {
+            LOG(ERROR) << "iouring submit failed " << ret;
+        }
+    }
+    else if (prepared_before != 0)
     {
         prepared_sqe_ -= ret;
     }
@@ -2563,7 +2606,7 @@ void CloudStoreMgr::OnFileRangeWritePrepared(const TableIdent &tbl_id,
     {
         return;
     }
-    auto *owner = reinterpret_cast<WriteTask *>(ThdTask());
+    auto *owner = CurrentWriteTask();
     if (owner == nullptr)
     {
         return;
@@ -2647,7 +2690,7 @@ KvError CloudStoreMgr::OnDataFileSealed(const TableIdent &tbl_id,
     uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
     return UploadFile(tbl_id,
                       ToFilename(file_id, term),
-                      reinterpret_cast<WriteTask *>(ThdTask()));
+                      CurrentWriteTask());
 }
 
 KvError CloudStoreMgr::ReadFilePrefix(const TableIdent &tbl_id,
@@ -3807,7 +3850,7 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
         uint64_t term = fd.Get()->term_;
         err = UploadFile(tbl_id,
                          ToFilename(file_id, term),
-                         reinterpret_cast<WriteTask *>(ThdTask()));
+                         CurrentWriteTask());
         if (file_id == LruFD::kManifest)
         {
             // For manifest files, retry until success or error that
@@ -3820,7 +3863,7 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
                              << ErrorString(err) << ", retrying.";
                 err = UploadFile(tbl_id,
                                  ToFilename(file_id, term),
-                                 reinterpret_cast<WriteTask *>(ThdTask()));
+                                 CurrentWriteTask());
             }
         }
     }
@@ -3836,8 +3879,7 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
 KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
                                  std::span<LruFD::Ref> fds)
 {
-    if (options_->data_append_mode &&
-        reinterpret_cast<WriteTask *>(ThdTask()) != nullptr)
+    if (options_->data_append_mode && CurrentWriteTask() != nullptr)
     {
         size_t dirty_data_files = 0;
         for (LruFD::Ref fd : fds)
@@ -4384,7 +4426,7 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
 KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
                                    std::vector<std::string> filenames)
 {
-    WriteTask *owner = reinterpret_cast<WriteTask *>(ThdTask());
+    WriteTask *owner = CurrentWriteTask();
     for (std::string &filename : filenames)
     {
         KvError err = UploadFile(tbl_id, std::move(filename), owner);
