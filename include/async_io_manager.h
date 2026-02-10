@@ -784,12 +784,12 @@ public:
     // Cloud mode does not need fsync.
     int Fdatasync(FdIdx fd) override
     {
-        return 0;
+        return IouringMgr::Fdatasync(fd);
     }
     KvError FdatasyncFiles(const TableIdent &tbl_id,
                            std::span<LruFD::Ref> fds) override
     {
-        return KvError::NoError;
+        return IouringMgr::FdatasyncFiles(tbl_id, fds);
     }
     void RegisterPrewarmActive();
     void UnregisterPrewarmActive();
