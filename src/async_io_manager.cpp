@@ -1401,7 +1401,12 @@ int IouringMgr::OpenAt(FdIdx dir_fd,
                        bool fixed_target)
 {
     EvictFD();
-    open_how how = {.flags = flags, .mode = mode, .resolve = 0};
+    uint64_t open_flags = flags;
+    if ((open_flags & O_DIRECTORY) == 0)
+    {
+        open_flags |= O_NOATIME;
+    }
+    open_how how = {.flags = open_flags, .mode = mode, .resolve = 0};
     if (fixed_target)
     {
         uint32_t idx = AllocRegisterIndex();
@@ -2558,7 +2563,7 @@ void CloudStoreMgr::OnFileRangeWritePrepared(const TableIdent &tbl_id,
     {
         return;
     }
-    auto *owner = dynamic_cast<WriteTask *>(ThdTask());
+    auto *owner = reinterpret_cast<WriteTask *>(ThdTask());
     if (owner == nullptr)
     {
         return;
@@ -2640,8 +2645,9 @@ KvError CloudStoreMgr::OnDataFileSealed(const TableIdent &tbl_id,
     // File is already closed, upload it directly
     // This handles the case where file was closed before sealing callback
     uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
-    return UploadFile(
-        tbl_id, ToFilename(file_id, term), dynamic_cast<WriteTask *>(ThdTask()));
+    return UploadFile(tbl_id,
+                      ToFilename(file_id, term),
+                      reinterpret_cast<WriteTask *>(ThdTask()));
 }
 
 KvError CloudStoreMgr::ReadFilePrefix(const TableIdent &tbl_id,
@@ -2669,7 +2675,7 @@ KvError CloudStoreMgr::ReadFilePrefix(const TableIdent &tbl_id,
 
     // Open file for reading using io_uring
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
-    open_how how = {.flags = O_RDONLY, .mode = 0, .resolve = 0};
+    open_how how = {.flags = O_RDONLY | O_NOATIME, .mode = 0, .resolve = 0};
     io_uring_prep_openat2(sqe, AT_FDCWD, abs_path.c_str(), &how);
     int fd = ThdTask()->WaitIoResult();
     if (fd < 0)
@@ -3799,8 +3805,9 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
     {
         const TableIdent &tbl_id = *fd.Get()->tbl_->tbl_id_;
         uint64_t term = fd.Get()->term_;
-        err = UploadFile(
-            tbl_id, ToFilename(file_id, term), dynamic_cast<WriteTask *>(ThdTask()));
+        err = UploadFile(tbl_id,
+                         ToFilename(file_id, term),
+                         reinterpret_cast<WriteTask *>(ThdTask()));
         if (file_id == LruFD::kManifest)
         {
             // For manifest files, retry until success or error that
@@ -3813,7 +3820,7 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
                              << ErrorString(err) << ", retrying.";
                 err = UploadFile(tbl_id,
                                  ToFilename(file_id, term),
-                                 dynamic_cast<WriteTask *>(ThdTask()));
+                                 reinterpret_cast<WriteTask *>(ThdTask()));
             }
         }
         if (err == KvError::NoError)
@@ -3829,7 +3836,7 @@ KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
                                  std::span<LruFD::Ref> fds)
 {
     if (options_->data_append_mode &&
-        dynamic_cast<WriteTask *>(ThdTask()) != nullptr)
+        reinterpret_cast<WriteTask *>(ThdTask()) != nullptr)
     {
         size_t dirty_data_files = 0;
         for (LruFD::Ref fd : fds)
@@ -4112,7 +4119,9 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
     abs_path /= filename;
 
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
-    open_how how = {.flags = O_RDONLY | O_DIRECT, .mode = 0, .resolve = 0};
+    open_how how = {.flags = O_RDONLY | O_DIRECT | O_NOATIME,
+                    .mode = 0,
+                    .resolve = 0};
     io_uring_prep_openat2(sqe, AT_FDCWD, abs_path.c_str(), &how);
     int fd = ThdTask()->WaitIoResult();
     if (fd < 0)
@@ -4374,7 +4383,7 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
 KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
                                    std::vector<std::string> filenames)
 {
-    WriteTask *owner = dynamic_cast<WriteTask *>(ThdTask());
+    WriteTask *owner = reinterpret_cast<WriteTask *>(ThdTask());
     for (std::string &filename : filenames)
     {
         KvError err = UploadFile(tbl_id, std::move(filename), owner);
@@ -4686,7 +4695,8 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
 
     std::string path_str = path.string();
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
-    open_how how = {.flags = O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT,
+    open_how how = {.flags = O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT |
+                                 O_NOATIME,
                     .mode = 0644,
                     .resolve = 0};
     io_uring_prep_openat2(sqe, AT_FDCWD, path_str.c_str(), &how);
