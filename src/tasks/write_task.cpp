@@ -221,6 +221,7 @@ void WriteTask::FlushAppendWrites()
         return;
     }
     WriteBufferBatch batch = append_aggregator_.TakeBatch();
+    Step(5, 6);
     if (batch.bytes == 0)
     {
         if (batch.buffer != nullptr)
@@ -229,7 +230,7 @@ void WriteTask::FlushAppendWrites()
         }
         return;
     }
-    Step(5, 6);
+    Step(6, 7);
     KvError err = IoMgr()->SubmitMergedWrite(tbl_ident_,
                                              batch.file_id,
                                              batch.start_offset,
@@ -240,7 +241,7 @@ void WriteTask::FlushAppendWrites()
                                              batch.release_ptrs,
                                              batch.release_indices,
                                              batch.use_fixed);
-    Step(6, 7);
+    Step(7, 8);
     if (err != KvError::NoError)
     {
         for (VarPage &page : batch.pages)
@@ -258,7 +259,7 @@ void WriteTask::FlushAppendWrites()
         }
         write_err_ = err;
     }
-    Step(7, 8);
+    Step(8, 9);
 }
 
 void WriteTask::WritePageCallback(VarPage page, KvError err)
