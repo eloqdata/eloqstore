@@ -229,7 +229,6 @@ void WriteTask::FlushAppendWrites()
         }
         return;
     }
-
     Step(5, 6);
     KvError err = IoMgr()->SubmitMergedWrite(tbl_ident_,
                                              batch.file_id,
