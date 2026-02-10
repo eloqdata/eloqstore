@@ -1516,7 +1516,6 @@ int IouringMgr::Write(FdIdx fd, const char *src, size_t n, uint64_t offset)
 
 KvError IouringMgr::SyncFile(LruFD::Ref fd)
 {
-    CHECK(false);
     int res = Fdatasync(fd.FdPair());
     if (res == 0)
     {
