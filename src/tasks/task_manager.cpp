@@ -2,7 +2,9 @@
 
 #include <boost/context/continuation.hpp>
 #include <cassert>
+#include <limits>
 
+#include "kv_options.h"
 #include "tasks/list_object_task.h"
 #include "tasks/read_task.h"
 #include "tasks/task.h"
@@ -20,13 +22,29 @@ uint32_t scan_pool_size_default = 2048;
 uint32_t list_object_pool_size_default = 512;
 }  // namespace
 
-TaskManager::TaskManager()
-    : batch_write_pool_(batch_write_pool_size_default),
-      bg_write_pool_(background_write_pool_size_default),
+TaskManager::TaskManager(const KvOptions *opts)
+    : batch_write_pool_(
+          opts != nullptr && opts->max_write_concurrency > 0
+              ? opts->max_write_concurrency
+              : batch_write_pool_size_default,
+          !(opts != nullptr && opts->max_write_concurrency > 0)),
+      bg_write_pool_(
+          opts != nullptr && opts->max_write_concurrency > 0
+              ? opts->max_write_concurrency
+              : background_write_pool_size_default,
+          !(opts != nullptr && opts->max_write_concurrency > 0)),
       read_pool_(read_pool_size_default),
       scan_pool_(scan_pool_size_default),
       list_object_pool_(list_object_pool_size_default)
 {
+    if (opts != nullptr && opts->max_write_concurrency > 0)
+    {
+        max_write_concurrency_ = opts->max_write_concurrency;
+    }
+    else
+    {
+        max_write_concurrency_ = std::numeric_limits<size_t>::max();
+    }
 }
 
 void TaskManager::SetPoolSizesForTest(uint32_t batch_write_pool_size,
@@ -44,16 +62,34 @@ void TaskManager::SetPoolSizesForTest(uint32_t batch_write_pool_size,
 
 BatchWriteTask *TaskManager::GetBatchWriteTask(const TableIdent &tbl_id)
 {
-    num_active_++;
+    if (num_active_write_ >= max_write_concurrency_)
+    {
+        return nullptr;
+    }
     BatchWriteTask *task = batch_write_pool_.GetTask();
+    if (task == nullptr)
+    {
+        return nullptr;
+    }
+    num_active_++;
+    num_active_write_++;
     task->Reset(tbl_id);
     return task;
 }
 
 BackgroundWrite *TaskManager::GetBackgroundWrite(const TableIdent &tbl_id)
 {
-    num_active_++;
+    if (num_active_write_ >= max_write_concurrency_)
+    {
+        return nullptr;
+    }
     BackgroundWrite *task = bg_write_pool_.GetTask();
+    if (task == nullptr)
+    {
+        return nullptr;
+    }
+    num_active_++;
+    num_active_write_++;
     task->Reset(tbl_id);
     return task;
 }
@@ -90,9 +126,13 @@ void TaskManager::FreeTask(KvTask *task)
         scan_pool_.FreeTask(static_cast<ScanTask *>(task));
         break;
     case TaskType::BatchWrite:
+        assert(num_active_write_ > 0);
+        num_active_write_--;
         batch_write_pool_.FreeTask(static_cast<BatchWriteTask *>(task));
         break;
     case TaskType::BackgroundWrite:
+        assert(num_active_write_ > 0);
+        num_active_write_--;
         bg_write_pool_.FreeTask(static_cast<BackgroundWrite *>(task));
         break;
     case TaskType::ListObject:

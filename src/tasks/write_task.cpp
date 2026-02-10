@@ -58,6 +58,7 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     write_err_ = KvError::NoError;
     wal_builder_.Reset();
     file_id_term_mapping_dirty_ = false;
+    last_append_file_id_.reset();
     cow_meta_ = CowRootMeta();
     size_t buf_size = Options()->write_buffer_size;
     if (buf_size == 0)
@@ -66,6 +67,11 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     }
     append_aggregator_ = WriteBufferAggregator(buf_size);
     append_aggregator_.Reset();
+    upload_state_.ResetMetadata();
+    if (!Options()->cloud_store_path.empty())
+    {
+        upload_state_.buffer.EnsureDefaultReserve();
+    }
 }
 
 void WriteTask::Abort()
@@ -86,6 +92,8 @@ void WriteTask::Abort()
         cow_meta_.old_mapping_->ClearFreeFilePage();
     }
     cow_meta_ = CowRootMeta();
+    last_append_file_id_.reset();
+    upload_state_.ResetMetadata();
 }
 
 KvError WriteTask::WritePage(DataPage &&page)
@@ -157,17 +165,16 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
     if (!append_aggregator_.HasBuffer() ||
         !append_aggregator_.CanAppend(file_id, offset, page_size))
     {
-        // Check if we're switching to a new file (file_id changed)
-        // This indicates the previous file is now sealed
         const bool file_switched =
-            append_aggregator_.HasData() &&
-            append_aggregator_.CurrentFileId() != file_id;
-        const FileId sealed_file_id = append_aggregator_.CurrentFileId();
+            cloud_append_mode && last_append_file_id_.has_value() &&
+            last_append_file_id_.value() != file_id;
+        const FileId sealed_file_id =
+            file_switched ? last_append_file_id_.value() : file_id;
         // Flush any pending writes in the aggregator
         FlushAppendWrites();
         // In cloud append mode, trigger immediate upload of sealed file
         // This ensures sealed data files are uploaded promptly
-        if (file_switched && cloud_append_mode)
+        if (file_switched)
         {
             // Wait for flush to complete before uploading
             KvError err = WaitWrite();
@@ -195,6 +202,7 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
     std::memcpy(dst, page_ptr, page_size);
 
     append_aggregator_.AddPage(std::move(page), nullptr, 0);
+    last_append_file_id_ = file_id;
 
     if (append_aggregator_.ShouldFlush(page_size))
     {

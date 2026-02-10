@@ -2519,6 +2519,8 @@ CloudStoreMgr::CloudStoreMgr(const KvOptions *opts,
     {
         prewarmers_.emplace_back(std::make_unique<Prewarmer>(this));
     }
+    DirectIoBuffer::UpdateDefaultReserve(
+        std::max(options_->DataFileSize(), static_cast<size_t>(8 * MB)));
 }
 
 KvError CloudStoreMgr::Init(Shard *shard)
@@ -2556,7 +2558,72 @@ void CloudStoreMgr::OnFileRangeWritePrepared(const TableIdent &tbl_id,
     {
         return;
     }
-    RecordUploadBufferRange(tbl_id, ToFilename(file_id, term), offset, data);
+    auto *owner = dynamic_cast<WriteTask *>(ThdTask());
+    if (owner == nullptr)
+    {
+        return;
+    }
+
+    const std::string filename = ToFilename(file_id, term);
+    WriteTask::UploadState &state = owner->MutableUploadState();
+    if (state.invalid)
+    {
+        LOG(ERROR) << "WriteTask upload state already invalid, table=" << tbl_id
+                   << " filename=" << state.filename << " offset=" << offset
+                   << " bytes=" << data.size();
+        return;
+    }
+
+    if (state.initialized)
+    {
+        if (state.filename != filename)
+        {
+            state.invalid = true;
+            LOG(ERROR) << "WriteTask upload state switched file before upload, "
+                       << "table=" << tbl_id << " previous=" << state.filename
+                       << " current=" << filename;
+            return;
+        }
+        if (offset != state.end_offset)
+        {
+            state.invalid = true;
+            LOG(ERROR) << "WriteTask upload buffer must append continuously, "
+                       << "table=" << tbl_id << " filename=" << filename
+                       << " expected_offset=" << state.end_offset
+                       << " actual_offset=" << offset;
+            return;
+        }
+    }
+    else
+    {
+        state.filename = filename;
+        state.start_offset = offset;
+        state.end_offset = offset;
+        state.initialized = true;
+    }
+
+    const uint64_t bytes = data.size();
+    if (offset > std::numeric_limits<uint64_t>::max() - bytes)
+    {
+        state.invalid = true;
+        LOG(ERROR) << "WriteTask upload state offset overflow, table=" << tbl_id
+                   << " filename=" << filename << " offset=" << offset
+                   << " bytes=" << bytes;
+        return;
+    }
+    uint64_t new_end = offset + bytes;
+    if (new_end > std::numeric_limits<size_t>::max())
+    {
+        state.invalid = true;
+        LOG(ERROR) << "WriteTask upload state size overflow, table=" << tbl_id
+                   << " filename=" << filename << " end_offset=" << new_end;
+        return;
+    }
+    state.buffer.resize(static_cast<size_t>(new_end));
+    std::memcpy(state.buffer.data() + static_cast<size_t>(offset),
+                data.data(),
+                data.size());
+    state.end_offset = new_end;
 }
 
 KvError CloudStoreMgr::OnDataFileSealed(const TableIdent &tbl_id,
@@ -2573,123 +2640,8 @@ KvError CloudStoreMgr::OnDataFileSealed(const TableIdent &tbl_id,
     // File is already closed, upload it directly
     // This handles the case where file was closed before sealing callback
     uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
-    return UploadFiles(tbl_id, {ToFilename(file_id, term)});
-}
-
-void CloudStoreMgr::RecordUploadBufferRange(const TableIdent &tbl_id,
-                                            const std::string &filename,
-                                            uint64_t offset,
-                                            std::string_view data)
-{
-    if (data.empty())
-    {
-        return;
-    }
-    FileKey key{tbl_id, filename};
-    auto [it, inserted] = upload_buffers_.try_emplace(std::move(key));
-    UploadBufferState &state = it->second;
-    if (inserted)
-    {
-        state.buffer = direct_io_buffer_pool_.Acquire();
-    }
-    if (state.invalid)
-    {
-        LOG(ERROR) << "Upload buffer already marked invalid, table=" << tbl_id
-                   << " filename=" << filename << " offset=" << offset
-                   << " bytes=" << data.size() << " start_offset="
-                   << state.start_offset << " end_offset=" << state.end_offset;
-        return;
-    }
-
-    const uint64_t bytes = data.size();
-    if (offset > std::numeric_limits<uint64_t>::max() - bytes)
-    {
-        state.invalid = true;
-        LOG(ERROR) << "Upload buffer offset overflow, table=" << tbl_id
-                   << " filename=" << filename << " offset=" << offset
-                   << " bytes=" << data.size();
-        return;
-    }
-    const uint64_t new_end = offset + bytes;
-
-    if (!state.initialized)
-    {
-        state.start_offset = offset;
-        state.end_offset = offset;
-        state.initialized = true;
-    }
-    else if (offset != state.end_offset)
-    {
-        state.invalid = true;
-        LOG(ERROR) << "Upload buffer must append continuously, table=" << tbl_id
-                   << " filename=" << filename
-                   << " expected_offset=" << state.end_offset
-                   << " actual_offset=" << offset
-                   << " start_offset=" << state.start_offset;
-        return;
-    }
-
-    // Keep buffer in file-absolute layout: data for file offset X is stored at
-    // buffer[X]. This allows UploadFiles to directly use this buffer for cURL.
-    uint64_t required_u64 = new_end;
-    if (required_u64 > std::numeric_limits<size_t>::max())
-    {
-        state.invalid = true;
-        LOG(ERROR) << "Upload buffer size overflow, table=" << tbl_id
-                   << " filename=" << filename
-                   << " required_bytes=" << required_u64;
-        return;
-    }
-    size_t required = static_cast<size_t>(required_u64);
-    size_t write_offset = static_cast<size_t>(offset);
-    state.buffer.resize(required);
-    std::memcpy(state.buffer.data() + write_offset, data.data(), data.size());
-    state.end_offset = new_end;
-}
-
-bool CloudStoreMgr::TakeUploadBufferState(const TableIdent &tbl_id,
-                                          std::string_view filename,
-                                          UploadBufferState &state_out)
-{
-    FileKey key{tbl_id, std::string(filename)};
-    auto it = upload_buffers_.find(key);
-    if (it == upload_buffers_.end())
-    {
-        return false;
-    }
-    state_out = std::move(it->second);
-    upload_buffers_.erase(it);
-    return true;
-}
-
-void CloudStoreMgr::ClearUploadBufferForFile(const TableIdent &tbl_id,
-                                             std::string_view filename)
-{
-    FileKey key{tbl_id, std::string(filename)};
-    auto it = upload_buffers_.find(key);
-    if (it == upload_buffers_.end())
-    {
-        return;
-    }
-    RecycleBuffer(std::move(it->second.buffer));
-    upload_buffers_.erase(it);
-}
-
-void CloudStoreMgr::ClearUploadBuffersForTable(const TableIdent &tbl_id)
-{
-    auto it = upload_buffers_.begin();
-    while (it != upload_buffers_.end())
-    {
-        if (it->first.tbl_id_ != tbl_id)
-        {
-            ++it;
-            continue;
-        }
-        RecycleBuffer(std::move(it->second.buffer));
-        auto erase_it = it;
-        ++it;
-        upload_buffers_.erase(erase_it);
-    }
+    return UploadFile(
+        tbl_id, ToFilename(file_id, term), dynamic_cast<WriteTask *>(ThdTask()));
 }
 
 KvError CloudStoreMgr::ReadFilePrefix(const TableIdent &tbl_id,
@@ -3457,7 +3409,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
         // of this manifest is same to the one on cloud and can be used on this
         // read operation (without changing manifest content). The manifest with
         // process_term will be uploaded on next write operation.)
-        KvError up_err = UploadFiles(tbl_id, {promoted_name});
+        KvError up_err = UploadFile(tbl_id, promoted_name, nullptr);
         if (up_err != KvError::NoError)
         {
             LOG(ERROR) << "CloudStoreMgr::GetManifest: failed to upload "
@@ -3725,9 +3677,7 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
         // This is a new cached file.
         used_local_space_ += options_->manifest_limit;
     }
-    // Record manifest snapshot bytes for upload (entire file at offset 0).
-    RecordUploadBufferRange(tbl_id, manifest_name, 0, snapshot);
-    err = UploadFiles(tbl_id, {manifest_name});
+    err = UploadFile(tbl_id, manifest_name, nullptr, snapshot);
     if (err != KvError::NoError)
     {
         LOG(FATAL) << "can not upload manifest: " << ErrorString(err);
@@ -3760,9 +3710,7 @@ KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
     {
         return ToKvError(res);
     }
-    // Record archive bytes for upload (entire file at offset 0).
-    RecordUploadBufferRange(tbl_id, name, 0, snapshot);
-    err = UploadFiles(tbl_id, {name});
+    err = UploadFile(tbl_id, name, nullptr, snapshot);
     IouringMgr::CloseDirect(res);
     used_local_space_ += options_->manifest_limit;
     EnqueClosedFile(FileKey(tbl_id, name));
@@ -3774,8 +3722,6 @@ KvError CloudStoreMgr::AbortWrite(const TableIdent &tbl_id)
     // First abort the base I/O manager state (reset dirty flags, etc.)
     KvError err = IouringMgr::AbortWrite(tbl_id);
     CHECK_KV_ERR(err);
-    // Clear any pending upload buffer state for this table.
-    ClearUploadBuffersForTable(tbl_id);
     return KvError::NoError;
 }
 
@@ -3853,8 +3799,8 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
     {
         const TableIdent &tbl_id = *fd.Get()->tbl_->tbl_id_;
         uint64_t term = fd.Get()->term_;
-        // Upload file using segment-based approach (may use in-memory segments)
-        err = UploadFiles(tbl_id, {ToFilename(file_id, term)});
+        err = UploadFile(
+            tbl_id, ToFilename(file_id, term), dynamic_cast<WriteTask *>(ThdTask()));
         if (file_id == LruFD::kManifest)
         {
             // For manifest files, retry until success or error that
@@ -3865,7 +3811,9 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
             {
                 LOG(WARNING) << "Manifest upload failed with "
                              << ErrorString(err) << ", retrying.";
-                err = UploadFiles(tbl_id, {ToFilename(file_id, term)});
+                err = UploadFile(tbl_id,
+                                 ToFilename(file_id, term),
+                                 dynamic_cast<WriteTask *>(ThdTask()));
             }
         }
         if (err == KvError::NoError)
@@ -3880,6 +3828,27 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
 KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
                                  std::span<LruFD::Ref> fds)
 {
+    if (options_->data_append_mode &&
+        dynamic_cast<WriteTask *>(ThdTask()) != nullptr)
+    {
+        size_t dirty_data_files = 0;
+        for (LruFD::Ref fd : fds)
+        {
+            FileId file_id = fd.Get()->file_id_;
+            if (file_id <= LruFD::kMaxDataFile)
+            {
+                ++dirty_data_files;
+            }
+        }
+        if (dirty_data_files > 1)
+        {
+            LOG(ERROR) << "SyncFiles found more than one dirty data file in a "
+                          "single write task, table="
+                       << tbl_id << " dirty_data_files=" << dirty_data_files;
+            return KvError::Corrupted;
+        }
+    }
+
     std::vector<std::string> filenames;
     for (LruFD::Ref fd : fds)
     {
@@ -4056,7 +4025,7 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
 
     // Set KvTask pointer and initialize inflight_io_
     download_task.SetKvTask(current_task);
-    download_task.response_data_ = std::move(direct_io_buffer_pool_.Acquire());
+    download_task.response_data_ = AcquireCloudBuffer(current_task);
 
     AcquireCloudSlot(current_task);
     obj_store_.SubmitTask(&download_task, shard);
@@ -4064,14 +4033,37 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
 
     if (download_task.error_ != KvError::NoError)
     {
-        RecycleBuffer(std::move(download_task.response_data_));
+        ReleaseCloudBuffer(std::move(download_task.response_data_));
         return download_task.error_;
     }
 
     KvError err = WriteFile(tbl_id, filename, download_task.response_data_);
-    RecycleBuffer(std::move(download_task.response_data_));
+    ReleaseCloudBuffer(std::move(download_task.response_data_));
     CHECK_KV_ERR(err);
     return KvError::NoError;
+}
+
+DirectIoBuffer CloudStoreMgr::AcquireCloudBuffer(KvTask *task)
+{
+    CHECK(task != nullptr);
+    while (options_->direct_io_buffer_pool_size != 0 &&
+           inflight_cloud_buffers_ >= options_->direct_io_buffer_pool_size)
+    {
+        cloud_buffer_waiting_.Wait(task);
+    }
+    ++inflight_cloud_buffers_;
+    return direct_io_buffer_pool_.Acquire();
+}
+
+void CloudStoreMgr::ReleaseCloudBuffer(DirectIoBuffer buffer)
+{
+    if (buffer.capacity() != 0)
+    {
+        direct_io_buffer_pool_.Release(std::move(buffer));
+    }
+    CHECK_GT(inflight_cloud_buffers_, 0);
+    --inflight_cloud_buffers_;
+    cloud_buffer_waiting_.WakeOne();
 }
 
 void CloudStoreMgr::RecycleBuffers(std::vector<DirectIoBuffer> &buffers)
@@ -4216,258 +4208,182 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
-                                   std::vector<std::string> filenames)
+KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
+                                  std::string filename,
+                                  WriteTask *owner,
+                                  std::string_view payload)
 {
-    if (filenames.empty())
+    KvTask *current_task = ThdTask();
+    ObjectStore::UploadTask upload_task(&tbl_id, std::move(filename));
+    upload_task.SetKvTask(current_task);
+
+    auto [prefix, suffix] = ParseFileName(upload_task.filename_);
+    const bool is_data_file = (prefix == FileNameData);
+    if (is_data_file)
     {
-        return KvError::NoError;
+        FileId file_id = 0;
+        uint64_t term = 0;
+        if (!ParseDataFileSuffix(suffix, file_id, term))
+        {
+            LOG(ERROR) << "Invalid data filename for upload: "
+                       << upload_task.filename_;
+            return KvError::InvalidArgs;
+        }
+    }
+    else if (prefix != FileNameManifest)
+    {
+        LOG(ERROR) << "Unsupported upload filename: " << upload_task.filename_;
+        return KvError::InvalidArgs;
     }
 
-    KvTask *current_task = ThdTask();
-    std::vector<std::unique_ptr<ObjectStore::UploadTask>> tasks;
-    tasks.reserve(filenames.size());
-    std::vector<ObjectStore::UploadTask *> pending;
-    pending.reserve(filenames.size());
-    auto cleanup_task_buffers = [this, &tasks]()
+    DirectIoBuffer temp_buffer;
+    DirectIoBuffer *upload_buffer = nullptr;
+    uint64_t start_offset = 0;
+    uint64_t end_offset = 0;
+    bool has_buffered_range = false;
+
+    if (owner != nullptr)
     {
-        for (auto &task : tasks)
+        WriteTask::UploadState &state = owner->MutableUploadState();
+        if (state.invalid)
         {
-            RecycleBuffer(std::move(task->data_buffer_));
+            LOG(ERROR) << "WriteTask upload state is invalid, table=" << tbl_id
+                       << " filename=" << state.filename;
+            state.ResetMetadata();
+            return KvError::InvalidArgs;
         }
-    };
-    auto resolve_file_size = [this, &tbl_id](std::string_view filename,
-                                             bool is_data_file,
-                                             bool has_upload_state,
-                                             const UploadBufferState &state,
-                                             size_t &file_size) -> KvError
+        if (state.initialized && state.filename != upload_task.filename_)
+        {
+            LOG(ERROR) << "WriteTask upload state filename mismatch, table="
+                       << tbl_id << " state=" << state.filename
+                       << " upload=" << upload_task.filename_;
+            state.ResetMetadata();
+            return KvError::Corrupted;
+        }
+        upload_buffer = &state.buffer;
+        has_buffered_range = state.initialized;
+        start_offset = state.start_offset;
+        end_offset = state.end_offset;
+    }
+    else
     {
-        if (filename.empty())
-        {
-            return KvError::InvalidArgs;
-        }
+        temp_buffer = AcquireCloudBuffer(current_task);
+        upload_buffer = &temp_buffer;
+    }
 
-        auto [prefix, suffix] = ParseFileName(filename);
-        if (is_data_file)
-        {
-            FileId file_id = 0;
-            uint64_t term = 0;
-            if (!ParseDataFileSuffix(suffix, file_id, term))
-            {
-                LOG(ERROR) << "Invalid data filename for upload: " << filename;
-                return KvError::InvalidArgs;
-            }
-            file_size = options_->DataFileSize();
-            return KvError::NoError;
-        }
-        if (prefix != FileNameManifest)
-        {
-            LOG(ERROR) << "Unsupported upload filename: " << filename;
-            return KvError::InvalidArgs;
-        }
-        if (has_upload_state && state.initialized)
-        {
-            if (state.end_offset > std::numeric_limits<size_t>::max())
-            {
-                LOG(ERROR) << "Manifest upload size overflow from state, table="
-                           << tbl_id << " filename=" << filename
-                           << " end_offset=" << state.end_offset;
-                return KvError::InvalidArgs;
-            }
-            file_size = static_cast<size_t>(state.end_offset);
-            return KvError::NoError;
-        }
-
-        auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
-        CHECK_KV_ERR(err);
-        struct statx stx
-        {
-        };
-        std::string name(filename);
-        int stat_res = StatxAt(dir_fd.FdPair(), name.c_str(), &stx);
-        if (stat_res < 0)
-        {
-            LOG(ERROR) << "Failed to stat upload file, table=" << tbl_id
-                       << " filename=" << filename
-                       << " error=" << strerror(-stat_res);
-            return ToKvError(stat_res);
-        }
-        file_size = static_cast<size_t>(stx.stx_size);
-        return KvError::NoError;
-    };
-
-    // Process each file and prepare full-buffer upload.
-    for (auto &name : filenames)
+    auto cleanup = [&]()
     {
-        auto task =
-            std::make_unique<ObjectStore::UploadTask>(&tbl_id, std::move(name));
-        task->SetKvTask(current_task);
-        auto parsed_name = ParseFileName(task->filename_);
-        const bool is_data_file = (parsed_name.first == FileNameData);
-        if (!is_data_file && parsed_name.first != FileNameManifest)
+        if (owner != nullptr)
         {
-            cleanup_task_buffers();
-            LOG(ERROR) << "Unsupported upload filename: " << task->filename_;
-            return KvError::InvalidArgs;
-        }
-        UploadBufferState upload_state;
-        bool has_upload_state =
-            TakeUploadBufferState(tbl_id, task->filename_, upload_state);
-        auto recycle_upload_state = [this, &upload_state]()
-        {
-            RecycleBuffer(std::move(upload_state.buffer));
-        };
-        if (has_upload_state && upload_state.invalid)
-        {
-            cleanup_task_buffers();
-            recycle_upload_state();
-            LOG(ERROR) << "Upload buffer state invalid, table=" << tbl_id
-                       << " filename=" << task->filename_;
-            return KvError::InvalidArgs;
-        }
-
-        // Determine total file size (data files have fixed size, manifests
-        // vary)
-        size_t file_size = 0;
-        KvError err = resolve_file_size(task->filename_,
-                                        is_data_file,
-                                        has_upload_state,
-                                        upload_state,
-                                        file_size);
-        if (err != KvError::NoError)
-        {
-            cleanup_task_buffers();
-            recycle_upload_state();
-            return err;
-        }
-        task->file_size_ = file_size;
-
-        const uint64_t file_size_u64 = task->file_size_;
-        uint64_t buffered_start = file_size_u64;
-        uint64_t covered_end = file_size_u64;
-        if (has_upload_state && upload_state.initialized)
-        {
-            buffered_start = upload_state.start_offset;
-            covered_end = upload_state.end_offset;
-        }
-
-        if (buffered_start > covered_end || covered_end > file_size_u64)
-        {
-            cleanup_task_buffers();
-            recycle_upload_state();
-            LOG(ERROR) << "Invalid upload coverage range, table=" << tbl_id
-                       << " filename=" << task->filename_ << " start_offset="
-                       << buffered_start << " end_offset=" << covered_end
-                       << " file_size=" << file_size_u64;
-            return KvError::InvalidArgs;
-        }
-
-        if (has_upload_state && upload_state.initialized &&
-            upload_state.buffer.size() != static_cast<size_t>(covered_end))
-        {
-            cleanup_task_buffers();
-            recycle_upload_state();
-            LOG(ERROR) << "Upload buffer size mismatch, table=" << tbl_id
-                       << " filename=" << task->filename_
-                       << " expected_bytes=" << covered_end
-                       << " actual_bytes=" << upload_state.buffer.size()
-                       << " start_offset=" << buffered_start
-                       << " end_offset=" << covered_end;
-            return KvError::InvalidArgs;
-        }
-
-        if (has_upload_state && upload_state.initialized)
-        {
-            task->data_buffer_ = std::move(upload_state.buffer);
+            owner->MutableUploadState().ResetMetadata();
         }
         else
         {
-            task->data_buffer_ = direct_io_buffer_pool_.Acquire();
+            ReleaseCloudBuffer(std::move(temp_buffer));
         }
-        task->data_buffer_.resize(file_size);
-        if (buffered_start > 0)
+    };
+
+    size_t file_size = 0;
+    if (has_buffered_range)
+    {
+        if (end_offset > std::numeric_limits<size_t>::max())
         {
-            err = ReadFilePrefix(tbl_id,
-                                 task->filename_,
-                                 static_cast<size_t>(buffered_start),
-                                 task->data_buffer_,
-                                 0);
+            LOG(ERROR) << "Buffered upload end offset overflow, table=" << tbl_id
+                       << " filename=" << upload_task.filename_
+                       << " end_offset=" << end_offset;
+            cleanup();
+            return KvError::InvalidArgs;
+        }
+        file_size =
+            is_data_file ? options_->DataFileSize() : static_cast<size_t>(end_offset);
+    }
+    else if (!payload.empty())
+    {
+        if (owner != nullptr)
+        {
+            LOG(ERROR) << "Payload upload should not bind a write-task owner, "
+                       << "table=" << tbl_id
+                       << " filename=" << upload_task.filename_;
+            cleanup();
+            return KvError::InvalidArgs;
+        }
+        upload_buffer->assign(payload);
+        file_size = upload_buffer->size();
+    }
+    else
+    {
+        KvError read_err = ReadFile(tbl_id, upload_task.filename_, *upload_buffer);
+        if (read_err != KvError::NoError)
+        {
+            cleanup();
+            return read_err;
+        }
+        file_size = upload_buffer->size();
+    }
+
+    if (has_buffered_range)
+    {
+        if (start_offset > end_offset || end_offset > file_size)
+        {
+            LOG(ERROR) << "Invalid buffered upload range, table=" << tbl_id
+                       << " filename=" << upload_task.filename_
+                       << " start_offset=" << start_offset
+                       << " end_offset=" << end_offset
+                       << " file_size=" << file_size;
+            cleanup();
+            return KvError::InvalidArgs;
+        }
+        if (upload_buffer->size() != static_cast<size_t>(end_offset))
+        {
+            LOG(ERROR) << "Buffered upload size mismatch, table=" << tbl_id
+                       << " filename=" << upload_task.filename_
+                       << " buffered_size=" << upload_buffer->size()
+                       << " end_offset=" << end_offset;
+            cleanup();
+            return KvError::InvalidArgs;
+        }
+        upload_buffer->resize(file_size);
+        if (start_offset > 0)
+        {
+            KvError err = ReadFilePrefix(tbl_id,
+                                         upload_task.filename_,
+                                         static_cast<size_t>(start_offset),
+                                         *upload_buffer,
+                                         0);
             if (err != KvError::NoError)
             {
-                cleanup_task_buffers();
-                RecycleBuffer(std::move(task->data_buffer_));
-                recycle_upload_state();
+                cleanup();
                 return err;
             }
         }
-        recycle_upload_state();
-
-        if (covered_end < file_size_u64 && !is_data_file)
-        {
-            cleanup_task_buffers();
-            RecycleBuffer(std::move(task->data_buffer_));
-            LOG(ERROR) << "Upload bytes do not cover full manifest/archive, "
-                          "table="
-                       << tbl_id << " filename=" << task->filename_
-                       << " covered_end=" << covered_end
-                       << " file_size=" << file_size_u64;
-            return KvError::InvalidArgs;
-        }
-
-        pending.emplace_back(task.get());
-        tasks.emplace_back(std::move(task));
     }
 
-    // Upload files in batches, respecting max_upload_batch limit
-    size_t processed = 0;
-    const size_t max_upload_batch = options_->max_upload_batch;
-    while (processed < pending.size())
-    {
-        // Wait if we've reached the batch limit
-        while (inflight_upload_files_ >= max_upload_batch)
-        {
-            upload_slots_waiting_.Wait(current_task);
-        }
+    upload_task.file_size_ = file_size;
+    upload_task.data_buffer_ = std::move(*upload_buffer);
 
-        // Calculate batch size for this iteration
-        size_t batch = std::min(max_upload_batch, pending.size() - processed);
-        // Determine how many we can submit now (respecting current inflight
-        // count)
-        size_t span_size =
-            std::min(max_upload_batch - inflight_upload_files_, batch);
-        auto span = std::span<ObjectStore::UploadTask *>(
-            pending.data() + processed, span_size);
-        inflight_upload_files_ += span_size;
-        // Submit all tasks in this span
-        for (ObjectStore::UploadTask *task : span)
-        {
-            AcquireCloudSlot(current_task);
-            obj_store_.SubmitTask(task, shard);
-        }
+    AcquireCloudSlot(current_task);
+    obj_store_.SubmitTask(&upload_task, shard);
+    current_task->WaitIo();
 
-        // Wait for this batch to complete before proceeding
-        if (!span.empty())
-        {
-            current_task->WaitIo();
-            inflight_upload_files_ -= span_size;
-            upload_slots_waiting_.WakeAll();  // Wake any waiters
-        }
-
-        processed += span_size;
-    }
-
-    // Check for errors and release upload buffers
-    KvError upload_err = KvError::NoError;
-    for (auto &task : tasks)
-    {
-        RecycleBuffer(std::move(task->data_buffer_));
-        if (task->error_ != KvError::NoError && upload_err == KvError::NoError)
-        {
-            upload_err = task->error_;
-        }
-    }
-
+    *upload_buffer = std::move(upload_task.data_buffer_);
+    KvError upload_err = upload_task.error_;
+    cleanup();
     return upload_err;
+}
+
+KvError CloudStoreMgr::UploadFiles(const TableIdent &tbl_id,
+                                   std::vector<std::string> filenames)
+{
+    WriteTask *owner = dynamic_cast<WriteTask *>(ThdTask());
+    for (std::string &filename : filenames)
+    {
+        KvError err = UploadFile(tbl_id, std::move(filename), owner);
+        if (err != KvError::NoError)
+        {
+            return err;
+        }
+    }
+    return KvError::NoError;
 }
 
 KvError CloudStoreMgr::ReadArchiveFileAndDelete(const TableIdent &tbl_id,

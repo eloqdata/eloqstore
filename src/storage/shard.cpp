@@ -9,6 +9,7 @@
 #include <mutex>
 #include <string>
 #include <utility>
+#include <vector>
 
 #if defined(__x86_64__) || defined(_M_X64)
 #include <x86intrin.h>  // For __rdtsc()
@@ -46,6 +47,7 @@ Shard::Shard(const EloqStore *store, size_t shard_id, uint32_t fd_limit)
       page_pool_(&store->options_),
       io_mgr_(AsyncIoManager::Instance(store, fd_limit)),
       index_mgr_(io_mgr_.get()),
+      task_mgr_(&store->options_),
       stack_allocator_(store->options_.coroutine_stack_size)
 {
     const auto &opts = store_->options_;
@@ -309,27 +311,63 @@ void Shard::OnReceivedReq(KvRequest *req)
 {
     if (!req->ReadOnly())
     {
-        auto wreq = reinterpret_cast<WriteRequest *>(req);
-        auto it = pending_queues_.find(req->tbl_id_);
-        if (it != pending_queues_.end())
+        auto *wreq = reinterpret_cast<WriteRequest *>(req);
+        auto [it, inserted] = pending_queues_.try_emplace(req->tbl_id_);
+        if (inserted)
         {
-            // Wait on pending write queue because of other write task.
-            it->second.PushBack(wreq);
-            return;
+            ++running_writing_tasks_;
         }
-
-        // Try acquire lock to ensure write operation is executed
-        // sequentially on each table partition.
-        auto [inserted_it, ok] = pending_queues_.try_emplace(req->tbl_id_);
-        (void) inserted_it;
-        assert(ok);
-        ++running_writing_tasks_;
+        it->second.PushBack(wreq);
+        TryStartPendingWrite(req->tbl_id_);
+        return;
     }
 
-    ProcessReq(req);
+    (void) ProcessReq(req);
 }
 
-void Shard::ProcessReq(KvRequest *req)
+void Shard::TryStartPendingWrite(const TableIdent &tbl_id)
+{
+    auto it = pending_queues_.find(tbl_id);
+    if (it == pending_queues_.end())
+    {
+        return;
+    }
+    PendingWriteQueue &pending_q = it->second;
+    if (pending_q.running_ || pending_q.Empty())
+    {
+        return;
+    }
+
+    WriteRequest *req = pending_q.PopFront();
+    assert(req != nullptr);
+    pending_q.running_ = true;
+    if (!ProcessReq(req))
+    {
+        pending_q.running_ = false;
+        pending_q.PushFront(req);
+    }
+}
+
+void Shard::TryDispatchPendingWrites()
+{
+    if (pending_queues_.empty())
+    {
+        return;
+    }
+
+    std::vector<TableIdent> table_ids;
+    table_ids.reserve(pending_queues_.size());
+    for (const auto &[tbl_id, _] : pending_queues_)
+    {
+        table_ids.push_back(tbl_id);
+    }
+    for (const TableIdent &tbl_id : table_ids)
+    {
+        TryStartPendingWrite(tbl_id);
+    }
+}
+
+bool Shard::ProcessReq(KvRequest *req)
 {
     switch (req->Type())
     {
@@ -347,7 +385,7 @@ void Shard::ProcessReq(KvRequest *req)
             return err;
         };
         StartTask(task, req, lbd);
-        break;
+        return true;
     }
     case RequestType::Floor:
     {
@@ -364,14 +402,14 @@ void Shard::ProcessReq(KvRequest *req)
             return err;
         };
         StartTask(task, req, lbd);
-        break;
+        return true;
     }
     case RequestType::Scan:
     {
         ScanTask *task = task_mgr_.GetScanTask();
         auto lbd = [task]() -> KvError { return task->Scan(); };
         StartTask(task, req, lbd);
-        break;
+        return true;
     }
     case RequestType::ListObject:
     {
@@ -416,11 +454,15 @@ void Shard::ProcessReq(KvRequest *req)
             return KvError::NoError;
         };
         StartTask(task, req, lbd);
-        break;
+        return true;
     }
     case RequestType::BatchWrite:
     {
         BatchWriteTask *task = task_mgr_.GetBatchWriteTask(req->TableId());
+        if (task == nullptr)
+        {
+            return false;
+        }
         auto lbd = [task, req]() -> KvError
         {
             auto write_req = static_cast<BatchWriteRequest *>(req);
@@ -435,56 +477,73 @@ void Shard::ProcessReq(KvRequest *req)
             return task->Apply();
         };
         StartTask(task, req, lbd);
-        break;
+        return true;
     }
     case RequestType::Truncate:
     {
         BatchWriteTask *task = task_mgr_.GetBatchWriteTask(req->TableId());
+        if (task == nullptr)
+        {
+            return false;
+        }
         auto lbd = [task, req]() -> KvError
         {
             auto trunc_req = static_cast<TruncateRequest *>(req);
             return task->Truncate(trunc_req->position_);
         };
         StartTask(task, req, lbd);
-        break;
+        return true;
     }
     case RequestType::DropTable:
     {
         LOG(ERROR) << "DropTable request routed to shard unexpectedly";
         req->SetDone(KvError::InvalidArgs);
-        break;
+        return true;
     }
     case RequestType::Archive:
     {
         auto *archive_req = static_cast<ArchiveRequest *>(req);
         BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());
+        if (task == nullptr)
+        {
+            return false;
+        }
         uint64_t snapshot_ts = archive_req->GetSnapshotTimestamp();
         auto lbd = [task, snapshot_ts]() -> KvError
         { return task->CreateArchive(snapshot_ts); };
         StartTask(task, req, lbd);
-        break;
+        return true;
     }
     case RequestType::GlobalArchive:
     {
         LOG(ERROR) << "GlobalArchive request routed to shard unexpectedly";
         req->SetDone(KvError::InvalidArgs);
-        break;
+        return true;
     }
     case RequestType::Compact:
     {
         BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());
+        if (task == nullptr)
+        {
+            return false;
+        }
         auto lbd = [task]() -> KvError { return task->CompactDataFile(); };
         StartTask(task, req, lbd);
-        break;
+        return true;
     }
     case RequestType::CleanExpired:
     {
         BatchWriteTask *task = task_mgr_.GetBatchWriteTask(req->TableId());
+        if (task == nullptr)
+        {
+            return false;
+        }
         auto lbd = [task]() -> KvError { return task->CleanExpiredKeys(); };
         StartTask(task, req, lbd);
-        break;
+        return true;
     }
     }
+    return true;
 }
 
 bool Shard::ExecuteReadyTasks()
@@ -542,20 +601,16 @@ void Shard::OnTaskFinished(KvTask *task)
         auto wtask = reinterpret_cast<WriteTask *>(task);
         auto it = pending_queues_.find(wtask->TableId());
         assert(it != pending_queues_.end());
-        task_mgr_.FreeTask(task);
         PendingWriteQueue &pending_q = it->second;
+        pending_q.running_ = false;
+        task_mgr_.FreeTask(task);
         if (pending_q.Empty())
         {
             // No more write requests, remove the pending queue.
             pending_queues_.erase(it);
             --running_writing_tasks_;
         }
-        else
-        {
-            WriteRequest *req = pending_q.PopFront();
-            // Continue execute the next pending write request.
-            ProcessReq(req);
-        }
+        TryDispatchPendingWrites();
     }
     else
     {
@@ -661,6 +716,7 @@ void Shard::WorkOneRound()
 
 void Shard::PendingWriteQueue::PushBack(WriteRequest *req)
 {
+    req->next_ = nullptr;
     if (tail_ == nullptr)
     {
         assert(head_ == nullptr);
@@ -673,6 +729,23 @@ void Shard::PendingWriteQueue::PushBack(WriteRequest *req)
         tail_->next_ = req;
         tail_ = req;
     }
+}
+
+void Shard::PendingWriteQueue::PushFront(WriteRequest *req)
+{
+    if (head_ == nullptr)
+    {
+        req->next_ = nullptr;
+        head_ = tail_ = req;
+        return;
+    }
+    req->next_ = head_;
+    head_ = req;
+}
+
+WriteRequest *Shard::PendingWriteQueue::Front()
+{
+    return head_;
 }
 
 WriteRequest *Shard::PendingWriteQueue::PopFront()
