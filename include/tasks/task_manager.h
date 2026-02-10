@@ -9,8 +9,8 @@
 #include "tasks/background_write.h"
 #include "tasks/batch_write_task.h"
 #include "tasks/list_object_task.h"
-#include "tasks/reopen_task.h"
 #include "tasks/read_task.h"
+#include "tasks/reopen_task.h"
 #include "tasks/scan_task.h"
 #include "types.h"
 

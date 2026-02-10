@@ -1069,14 +1069,10 @@ TEST_CASE("cloud reopen refreshes manifest via archive swap", "[cloud][reopen]")
     std::string backup_manifest = eloqstore::ArchiveName(term, backup_ts);
 
     // Move current manifest aside, then promote archive manifest.
-    REQUIRE(MoveCloudFile(options,
-                          partition_remote,
-                          current_manifest,
-                          backup_manifest));
-    REQUIRE(MoveCloudFile(options,
-                          partition_remote,
-                          archive_manifest,
-                          current_manifest));
+    REQUIRE(MoveCloudFile(
+        options, partition_remote, current_manifest, backup_manifest));
+    REQUIRE(MoveCloudFile(
+        options, partition_remote, archive_manifest, current_manifest));
 
     // Reopen to pull refreshed manifest and verify version rollback.
     eloqstore::ReopenRequest reopen_req;

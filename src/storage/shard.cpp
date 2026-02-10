@@ -462,9 +462,7 @@ bool Shard::ProcessReq(KvRequest *req)
     {
         ReopenTask *task = task_mgr_.GetReopenTask();
         auto lbd = [task, req]() -> KvError
-        {
-            return task->Reopen(req->TableId());
-        };
+        { return task->Reopen(req->TableId()); };
         StartTask(task, req, lbd);
         break;
     }
