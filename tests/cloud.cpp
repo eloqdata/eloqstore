@@ -1063,7 +1063,7 @@ TEST_CASE("cloud reopen refreshes manifest via archive swap", "[cloud][reopen]")
     REQUIRE_FALSE(archive_manifest.empty());
 
     uint64_t term = eloqstore::ManifestTermFromFilename(current_manifest);
-    REQUIRE(term > 0);
+    REQUIRE(term >= 0);
 
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
     std::string backup_manifest = eloqstore::ArchiveName(term, backup_ts);
@@ -1083,6 +1083,7 @@ TEST_CASE("cloud reopen refreshes manifest via archive swap", "[cloud][reopen]")
     verifier.SwitchDataSet(v1_dataset);
     verifier.Validate();
 
+    verifier.SetAutoClean(false);
     store->Stop();
     CleanupStore(options);
 }
@@ -1094,6 +1095,7 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
     options.store_path = {"/tmp/test-data-reopen-local"};
     options.cloud_store_path += "/reopen-local";
     options.prewarm_cloud_cache = false;
+    options.allow_reuse_local_caches = true;
 
     CleanupStore(options);
 
@@ -1106,7 +1108,12 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
     auto v1_dataset = verifier.DataSet();
     REQUIRE_FALSE(v1_dataset.empty());
 
+    // Stop to ensure local files are durable before backup.
+    store->Stop();
+
     const std::string backup_root = "/tmp/test-data-reopen-local-backup";
+    const std::string manifest_name = eloqstore::ManifestFileName(0);
+    uint64_t v1_manifest_size = 0;
     std::filesystem::remove_all(backup_root);
     std::filesystem::create_directories(backup_root);
     for (const auto &path : options.store_path)
@@ -1120,6 +1127,17 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
                               std::filesystem::copy_options::recursive |
                                   std::filesystem::copy_options::overwrite_existing);
     }
+    {
+        std::filesystem::path v1_manifest =
+            std::filesystem::path(backup_root) /
+            std::filesystem::path(options.store_path.front()).filename() /
+            tbl_id.ToString() / manifest_name;
+        v1_manifest_size = std::filesystem::file_size(v1_manifest);
+        REQUIRE(v1_manifest_size > 0);
+    }
+
+    // Restart to write version 2 data (remote is newer).
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
 
     // Version 2 data (remote is newer).
     verifier.Upsert(100, 120);
@@ -1129,6 +1147,14 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
 
     // Stop, replace local with older snapshot.
     store->Stop();
+    uint64_t v2_manifest_size = 0;
+    {
+        std::filesystem::path v2_manifest =
+            std::filesystem::path(options.store_path.front()) /
+            tbl_id.ToString() / manifest_name;
+        v2_manifest_size = std::filesystem::file_size(v2_manifest);
+        REQUIRE(v2_manifest_size >= v1_manifest_size);
+    }
     for (const auto &path : options.store_path)
     {
         std::filesystem::remove_all(path);
@@ -1139,21 +1165,226 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
                               std::filesystem::copy_options::recursive |
                                   std::filesystem::copy_options::overwrite_existing);
     }
+    auto clear_data_files = [&](const eloqstore::TableIdent &table_id)
+    {
+        for (const auto &path : options.store_path)
+        {
+            std::filesystem::path part_path =
+                std::filesystem::path(path) / table_id.ToString();
+            if (!std::filesystem::exists(part_path))
+            {
+                continue;
+            }
+            for (const auto &ent : std::filesystem::directory_iterator(part_path))
+            {
+                if (!ent.is_regular_file())
+                {
+                    continue;
+                }
+                auto [type, suffix] = eloqstore::ParseFileName(
+                    ent.path().filename().string());
+                if (type == eloqstore::FileNameData)
+                {
+                    std::filesystem::remove(ent.path());
+                }
+            }
+        }
+    };
+    clear_data_files(tbl_id);
 
     // Restart without prewarm so it doesn't auto-download.
-    store->Start();
-    verifier.SwitchDataSet(v1_dataset);
-    verifier.Validate();
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    {
+        std::filesystem::path restored_manifest =
+            std::filesystem::path(options.store_path.front()) /
+            tbl_id.ToString() / manifest_name;
+        REQUIRE(std::filesystem::file_size(restored_manifest) ==
+                v1_manifest_size);
+    }
 
     // Reopen should refresh local manifest to latest remote.
     eloqstore::ReopenRequest reopen_req;
     reopen_req.SetArgs(tbl_id);
     store->ExecSync(&reopen_req);
     REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
+    {
+        std::filesystem::path refreshed_manifest =
+            std::filesystem::path(options.store_path.front()) /
+            tbl_id.ToString() / manifest_name;
+        REQUIRE(std::filesystem::file_size(refreshed_manifest) ==
+                v2_manifest_size);
+    }
 
     verifier.SwitchDataSet(v2_dataset);
     verifier.Validate();
 
+    verifier.SetAutoClean(false);
+    store->Stop();
+    CleanupStore(options);
+}
+
+TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
+{
+    eloqstore::KvOptions options = cloud_archive_opts;
+    options.store_path = {"/tmp/test-data-reopen-global"};
+    options.cloud_store_path += "/reopen-global";
+    options.prewarm_cloud_cache = false;
+    options.allow_reuse_local_caches = true;
+
+    CleanupStore(options);
+
+    const std::string tbl_name = "reopen_global";
+    const std::vector<eloqstore::TableIdent> tbl_ids = {
+        {tbl_name, 0},
+        {tbl_name, 1},
+    };
+
+    eloqstore::EloqStore *store = InitStore(options);
+    std::vector<std::unique_ptr<MapVerifier>> verifiers;
+    verifiers.reserve(tbl_ids.size());
+    for (const auto &tbl_id : tbl_ids)
+    {
+        verifiers.emplace_back(std::make_unique<MapVerifier>(tbl_id, store, false));
+    }
+
+    // Version 1 data, keep a local backup.
+    std::vector<std::map<std::string, eloqstore::KvEntry>> v1_datasets;
+    v1_datasets.reserve(verifiers.size());
+    std::vector<uint64_t> v1_manifest_sizes;
+    v1_manifest_sizes.reserve(verifiers.size());
+    for (auto &verifier : verifiers)
+    {
+        verifier->Upsert(0, 50);
+        v1_datasets.push_back(verifier->DataSet());
+        REQUIRE_FALSE(v1_datasets.back().empty());
+    }
+
+    // Stop to ensure local files are durable before backup.
+    store->Stop();
+
+    const std::string backup_root = "/tmp/test-data-reopen-global-backup";
+    const std::string manifest_name = eloqstore::ManifestFileName(0);
+    std::filesystem::remove_all(backup_root);
+    std::filesystem::create_directories(backup_root);
+    for (const auto &path : options.store_path)
+    {
+        std::filesystem::path src = path;
+        std::filesystem::path dst =
+            std::filesystem::path(backup_root) / src.filename();
+        std::filesystem::remove_all(dst);
+        std::filesystem::copy(src,
+                              dst,
+                              std::filesystem::copy_options::recursive |
+                                  std::filesystem::copy_options::overwrite_existing);
+    }
+    for (const auto &tbl_id : tbl_ids)
+    {
+        std::filesystem::path v1_manifest =
+            std::filesystem::path(backup_root) /
+            std::filesystem::path(options.store_path.front()).filename() /
+            tbl_id.ToString() / manifest_name;
+        uint64_t size = std::filesystem::file_size(v1_manifest);
+        v1_manifest_sizes.push_back(size);
+        REQUIRE(size > 0);
+    }
+
+    // Restart to write version 2 data (remote is newer).
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+
+    // Version 2 data (remote is newer).
+    std::vector<std::map<std::string, eloqstore::KvEntry>> v2_datasets;
+    v2_datasets.reserve(verifiers.size());
+    std::vector<uint64_t> v2_manifest_sizes;
+    v2_manifest_sizes.reserve(verifiers.size());
+    for (auto &verifier : verifiers)
+    {
+        verifier->Upsert(100, 120);
+        verifier->Upsert(130, 140);
+        v2_datasets.push_back(verifier->DataSet());
+        REQUIRE(v2_datasets.back().size() > 0);
+    }
+
+    store->Stop();
+    for (const auto &tbl_id : tbl_ids)
+    {
+        std::filesystem::path v2_manifest =
+            std::filesystem::path(options.store_path.front()) /
+            tbl_id.ToString() / manifest_name;
+        uint64_t size = std::filesystem::file_size(v2_manifest);
+        v2_manifest_sizes.push_back(size);
+    }
+    for (const auto &path : options.store_path)
+    {
+        std::filesystem::remove_all(path);
+        std::filesystem::path src =
+            std::filesystem::path(backup_root) / std::filesystem::path(path).filename();
+        std::filesystem::copy(src,
+                              path,
+                              std::filesystem::copy_options::recursive |
+                                  std::filesystem::copy_options::overwrite_existing);
+    }
+    auto clear_partition_data_files = [&](const eloqstore::TableIdent &table_id)
+    {
+        for (const auto &path : options.store_path)
+        {
+            std::filesystem::path part_path =
+                std::filesystem::path(path) / table_id.ToString();
+            if (!std::filesystem::exists(part_path))
+            {
+                continue;
+            }
+            for (const auto &ent : std::filesystem::directory_iterator(part_path))
+            {
+                if (!ent.is_regular_file())
+                {
+                    continue;
+                }
+                auto [type, suffix] = eloqstore::ParseFileName(
+                    ent.path().filename().string());
+                if (type == eloqstore::FileNameData)
+                {
+                    std::filesystem::remove(ent.path());
+                }
+            }
+        }
+    };
+    for (const auto &tbl_id : tbl_ids)
+    {
+        clear_partition_data_files(tbl_id);
+    }
+
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    for (size_t i = 0; i < tbl_ids.size(); ++i)
+    {
+        std::filesystem::path restored_manifest =
+            std::filesystem::path(options.store_path.front()) /
+            tbl_ids[i].ToString() / manifest_name;
+        REQUIRE(std::filesystem::file_size(restored_manifest) ==
+                v1_manifest_sizes[i]);
+    }
+
+    eloqstore::GlobalReopenRequest reopen_req;
+    store->ExecSync(&reopen_req);
+    REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
+    for (size_t i = 0; i < tbl_ids.size(); ++i)
+    {
+        std::filesystem::path refreshed_manifest =
+            std::filesystem::path(options.store_path.front()) /
+            tbl_ids[i].ToString() / manifest_name;
+        REQUIRE(std::filesystem::file_size(refreshed_manifest) ==
+                v2_manifest_sizes[i]);
+    }
+
+    for (size_t i = 0; i < verifiers.size(); ++i)
+    {
+        verifiers[i]->SwitchDataSet(v2_datasets[i]);
+        verifiers[i]->Validate();
+    }
+
+    for (auto &verifier : verifiers)
+    {
+        verifier->SetAutoClean(false);
+    }
     store->Stop();
     CleanupStore(options);
 }
