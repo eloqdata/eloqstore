@@ -759,6 +759,108 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
     }
 }
 
+void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
+{
+    req->first_error_.store(static_cast<uint8_t>(KvError::NoError),
+                            std::memory_order_relaxed);
+    req->pending_.store(0, std::memory_order_relaxed);
+    req->reopen_reqs_.clear();
+
+    std::vector<TableIdent> partitions;
+    std::error_code ec;
+    for (const fs::path root : options_.store_path)
+    {
+        const fs::path db_path(root);
+        fs::directory_iterator dir_it(db_path, ec);
+        if (ec)
+        {
+            req->SetDone(ToKvError(-ec.value()));
+            return;
+        }
+        fs::directory_iterator end;
+        for (; dir_it != end; dir_it.increment(ec))
+        {
+            if (ec)
+            {
+                req->SetDone(ToKvError(-ec.value()));
+                return;
+            }
+            const fs::directory_entry &ent = *dir_it;
+            const fs::path ent_path = ent.path();
+            bool is_dir = fs::is_directory(ent_path, ec);
+            if (ec)
+            {
+                req->SetDone(ToKvError(-ec.value()));
+                return;
+            }
+            if (!is_dir)
+            {
+                continue;
+            }
+
+            TableIdent tbl_id = TableIdent::FromString(ent_path.filename());
+            if (tbl_id.tbl_name_.empty())
+            {
+                LOG(WARNING) << "unexpected partition " << ent.path();
+                continue;
+            }
+
+            if (options_.partition_filter &&
+                !options_.partition_filter(tbl_id))
+            {
+                continue;
+            }
+
+            partitions.emplace_back(std::move(tbl_id));
+        }
+    }
+
+    if (partitions.empty())
+    {
+        req->SetDone(KvError::NoError);
+        return;
+    }
+
+    req->reopen_reqs_.reserve(partitions.size());
+    req->pending_.store(static_cast<uint32_t>(partitions.size()),
+                        std::memory_order_relaxed);
+
+    auto on_reopen_done = [req](KvRequest *sub_req)
+    {
+        KvError sub_err = sub_req->Error();
+        if (sub_err != KvError::NoError)
+        {
+            uint8_t expected = static_cast<uint8_t>(KvError::NoError);
+            uint8_t desired = static_cast<uint8_t>(sub_err);
+            req->first_error_.compare_exchange_strong(
+                expected,
+                desired,
+                std::memory_order_relaxed,
+                std::memory_order_relaxed);
+        }
+        if (req->pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        {
+            KvError final_err = static_cast<KvError>(
+                req->first_error_.load(std::memory_order_relaxed));
+            req->SetDone(final_err);
+        }
+    };
+
+    for (const TableIdent &partition : partitions)
+    {
+        auto reopen_req = std::make_unique<ReopenRequest>();
+        reopen_req->SetArgs(partition);
+        ReopenRequest *ptr = reopen_req.get();
+        req->reopen_reqs_.push_back(std::move(reopen_req));
+        if (!ExecAsyn(ptr, 0, on_reopen_done))
+        {
+            LOG(ERROR)
+                << "Handle global reopen request, enqueue reopen request fail";
+            ptr->SetDone(KvError::NotRunning);
+        }
+    }
+}
+
 bool EloqStore::SendRequest(KvRequest *req)
 {
     if (stopped_.load(std::memory_order_relaxed))
@@ -785,6 +887,11 @@ bool EloqStore::SendRequest(KvRequest *req)
     if (req->Type() == RequestType::GlobalArchive)
     {
         HandleGlobalArchiveRequest(static_cast<GlobalArchiveRequest *>(req));
+        return true;
+    }
+    if (req->Type() == RequestType::GlobalReopen)
+    {
+        HandleGlobalReopenRequest(static_cast<GlobalReopenRequest *>(req));
         return true;
     }
 

@@ -46,7 +46,8 @@ enum class RequestType : uint8_t
     Archive,
     Compact,
     CleanExpired,
-    GlobalArchive
+    GlobalArchive,
+    GlobalReopen
 };
 
 inline const char *RequestTypeToString(RequestType type)
@@ -77,6 +78,8 @@ inline const char *RequestTypeToString(RequestType type)
         return "clean_expired";
     case RequestType::GlobalArchive:
         return "global_archive";
+    case RequestType::GlobalReopen:
+        return "global_reopen";
     default:
         return "unknown";
     }
@@ -447,6 +450,22 @@ private:
     friend class EloqStore;
 };
 
+class GlobalReopenRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::GlobalReopen;
+    }
+
+private:
+    std::vector<std::unique_ptr<ReopenRequest>> reopen_reqs_;
+    std::atomic<uint32_t> pending_{0};
+    std::atomic<uint8_t> first_error_{static_cast<uint8_t>(KvError::NoError)};
+
+    friend class EloqStore;
+};
+
 class CompactRequest : public WriteRequest
 {
 public:
@@ -542,6 +561,7 @@ private:
     bool SendRequest(KvRequest *req);
     void HandleDropTableRequest(DropTableRequest *req);
     void HandleGlobalArchiveRequest(GlobalArchiveRequest *req);
+    void HandleGlobalReopenRequest(GlobalReopenRequest *req);
     KvError CollectTablePartitions(const std::string &table_name,
                                    std::vector<TableIdent> &partitions) const;
     KvError InitStoreSpace();
