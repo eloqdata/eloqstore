@@ -192,14 +192,14 @@ private:
     moodycamel::BlockingConcurrentQueue<KvRequest *> requests_;
     std::thread thd_;
     PagesPool page_pool_;
-    std::unique_ptr<AsyncIoManager> io_mgr_;
-    IndexPageManager index_mgr_;
     TaskManager task_mgr_;
 #ifndef NDEBUG
     boost::context::protected_fixedsize_stack stack_allocator_;
 #else
     boost::context::pooled_fixedsize_stack stack_allocator_;
 #endif
+    std::unique_ptr<AsyncIoManager> io_mgr_;
+    IndexPageManager index_mgr_;
 
     class PendingWriteQueue
     {

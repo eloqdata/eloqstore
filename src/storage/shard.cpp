@@ -45,10 +45,10 @@ Shard::Shard(const EloqStore *store, size_t shard_id, uint32_t fd_limit)
     : store_(store),
       shard_id_(shard_id),
       page_pool_(&store->options_),
-      io_mgr_(AsyncIoManager::Instance(store, fd_limit)),
-      index_mgr_(io_mgr_.get()),
       task_mgr_(&store->options_),
-      stack_allocator_(store->options_.coroutine_stack_size)
+      stack_allocator_(store->options_.coroutine_stack_size),
+      io_mgr_(AsyncIoManager::Instance(store, fd_limit)),
+      index_mgr_(io_mgr_.get())
 {
     const auto &opts = store_->options_;
     oss_enabled_ = !opts.store_path.empty() && !opts.cloud_store_path.empty();
