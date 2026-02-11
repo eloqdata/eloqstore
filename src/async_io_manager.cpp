@@ -192,7 +192,7 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
 
     io_uring_params params = {};
     params.flags |= (IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN |
-                     IORING_SETUP_TASKRUN_FLAG);
+                     IORING_SETUP_TASKRUN_FLAG | IORING_SETUP_SUBMIT_ALL);
     const uint32_t sq_size = options_->io_queue_size;
     int ret = io_uring_queue_init_params(sq_size, &ring_, &params);
     if (ret < 0)
