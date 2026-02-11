@@ -107,17 +107,6 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
             LOG(ERROR) << "cloud_request_threads must be greater than 0";
             return false;
         }
-        if (opts.max_upload_batch == 0)
-        {
-            LOG(ERROR) << "max_upload_batch must be greater than 0";
-            return false;
-        }
-        if (opts.max_upload_batch >= opts.max_cloud_concurrency)
-        {
-            LOG(ERROR) << "max_upload_batch must be smaller than "
-                       << "max_cloud_concurrency";
-            return false;
-        }
         if (opts.local_space_limit == 0)
         {
             opts.local_space_limit = size_t(1) * TB;

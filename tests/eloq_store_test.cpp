@@ -81,12 +81,6 @@ TEST_CASE("EloqStore ValidateOptions validates all parameters", "[eloq_store]")
     REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
     options = CreateValidOptions(test_dir);  // restore valid value
 
-    // Test invalid max_upload_batch (cloud mode)
-    options.cloud_store_path = "test";
-    options.max_upload_batch = 0;
-    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
-    options = CreateValidOptions(test_dir);  // restore valid value
-
     // Cloud storage configuration: auto fix local space limit and append mode
     options.cloud_store_path = "test";
     options.local_space_limit = 0;

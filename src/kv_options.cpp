@@ -189,11 +189,6 @@ int KvOptions::LoadFromIni(const char *path)
         reserve_space_ratio =
             reader.GetUnsigned(sec_run, "reserve_space_ratio", 100);
     }
-    if (reader.HasValue(sec_run, "max_upload_batch"))
-    {
-        max_upload_batch =
-            reader.GetUnsigned(sec_run, "max_upload_batch", max_upload_batch);
-    }
     if (reader.HasValue(sec_run, "max_cloud_concurrency"))
     {
         max_cloud_concurrency = reader.GetUnsigned(
@@ -364,7 +359,6 @@ bool KvOptions::operator==(const KvOptions &other) const
            file_amplify_factor == other.file_amplify_factor &&
            local_space_limit == other.local_space_limit &&
            reserve_space_ratio == other.reserve_space_ratio &&
-           max_upload_batch == other.max_upload_batch &&
            max_cloud_concurrency == other.max_cloud_concurrency &&
            max_write_concurrency == other.max_write_concurrency &&
            cloud_request_threads == other.cloud_request_threads &&

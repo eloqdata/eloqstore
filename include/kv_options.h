@@ -111,10 +111,6 @@ struct KvOptions
     /**
      * @brief Max number of files uploaded concurrently in a batch.
      */
-    uint32_t max_upload_batch = 5;
-    /**
-     * @brief Maximum number of concurrent cloud HTTP requests per shard.
-     */
     uint32_t max_cloud_concurrency = 20;
     /**
      * @brief Maximum number of concurrent write tasks per shard.

@@ -45,7 +45,6 @@ fn main() -> Result<(), eloqstore::KvError> {
     // - cloud_request_threads: 2
     // - prewarm_cloud_cache: true
     // - local_space_limit: 10 * 1024 * 1024 * 1024 (10GB)
-    // - max_upload_batch: 5
 
     // Validate options
     if !opts.validate() {
