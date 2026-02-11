@@ -191,7 +191,8 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
     }
 
     io_uring_params params = {};
-    params.flags |= (IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN | IORING_SETUP_TASKRUN_FLAG);
+    params.flags |= (IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN |
+                     IORING_SETUP_TASKRUN_FLAG);
     const uint32_t sq_size = options_->io_queue_size;
     int ret = io_uring_queue_init_params(sq_size, &ring_, &params);
     if (ret < 0)
@@ -1241,8 +1242,7 @@ std::pair<FileId, uint32_t> IouringMgr::ConvFilePageId(
 void IouringMgr::Submit()
 {
     const uint32_t prepared_before = prepared_sqe_;
-    const uint32_t sq_flags =
-        ring_.sq.kflags == nullptr ? 0 : *ring_.sq.kflags;
+    const uint32_t sq_flags = ring_.sq.kflags == nullptr ? 0 : *ring_.sq.kflags;
     const bool need_taskrun = (sq_flags & IORING_SQ_TASKRUN) != 0;
 
     if (prepared_before == 0 && !need_taskrun)
@@ -1254,7 +1254,8 @@ void IouringMgr::Submit()
     if (prepared_before == 0)
     {
         // No new SQE, but taskrun is pending. Enter kernel to drive task_work.
-        ret = io_uring_enter(ring_.ring_fd, 0, 0, IORING_ENTER_GETEVENTS, nullptr);
+        ret = io_uring_enter(
+            ring_.ring_fd, 0, 0, IORING_ENTER_GETEVENTS, nullptr);
     }
     else
     {
@@ -1961,7 +1962,8 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
     }
     // Record manifest write payload for cloud upload before submit
     // (manifest segments are tracked too).
-    OnFileRangeWritePrepared(tbl_id, LruFD::kManifest, manifest_term, offset, log);
+    OnFileRangeWritePrepared(
+        tbl_id, LruFD::kManifest, manifest_term, offset, log);
 #ifndef NDEBUG
     const PageId root =
         DecodeFixed32(log.data() + ManifestBuilder::offset_root);
@@ -2688,9 +2690,7 @@ KvError CloudStoreMgr::OnDataFileSealed(const TableIdent &tbl_id,
     // File is already closed, upload it directly
     // This handles the case where file was closed before sealing callback
     uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
-    return UploadFile(tbl_id,
-                      ToFilename(file_id, term),
-                      CurrentWriteTask());
+    return UploadFile(tbl_id, ToFilename(file_id, term), CurrentWriteTask());
 }
 
 KvError CloudStoreMgr::ReadFilePrefix(const TableIdent &tbl_id,
@@ -3848,9 +3848,7 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
     {
         const TableIdent &tbl_id = *fd.Get()->tbl_->tbl_id_;
         uint64_t term = fd.Get()->term_;
-        err = UploadFile(tbl_id,
-                         ToFilename(file_id, term),
-                         CurrentWriteTask());
+        err = UploadFile(tbl_id, ToFilename(file_id, term), CurrentWriteTask());
         if (file_id == LruFD::kManifest)
         {
             // For manifest files, retry until success or error that
@@ -3861,9 +3859,8 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
             {
                 LOG(WARNING) << "Manifest upload failed with "
                              << ErrorString(err) << ", retrying.";
-                err = UploadFile(tbl_id,
-                                 ToFilename(file_id, term),
-                                 CurrentWriteTask());
+                err = UploadFile(
+                    tbl_id, ToFilename(file_id, term), CurrentWriteTask());
             }
         }
         if (err == KvError::NoError)
@@ -4161,9 +4158,8 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
     abs_path /= filename;
 
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
-    open_how how = {.flags = O_RDONLY | O_DIRECT | O_NOATIME,
-                    .mode = 0,
-                    .resolve = 0};
+    open_how how = {
+        .flags = O_RDONLY | O_DIRECT | O_NOATIME, .mode = 0, .resolve = 0};
     io_uring_prep_openat2(sqe, AT_FDCWD, abs_path.c_str(), &how);
     int fd = ThdTask()->WaitIoResult();
     if (fd < 0)
@@ -4339,14 +4335,14 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
     {
         if (end_offset > std::numeric_limits<size_t>::max())
         {
-            LOG(ERROR) << "Buffered upload end offset overflow, table=" << tbl_id
-                       << " filename=" << upload_task.filename_
+            LOG(ERROR) << "Buffered upload end offset overflow, table="
+                       << tbl_id << " filename=" << upload_task.filename_
                        << " end_offset=" << end_offset;
             cleanup();
             return KvError::InvalidArgs;
         }
-        file_size =
-            is_data_file ? options_->DataFileSize() : static_cast<size_t>(end_offset);
+        file_size = is_data_file ? options_->DataFileSize()
+                                 : static_cast<size_t>(end_offset);
     }
     else if (!payload.empty())
     {
@@ -4363,7 +4359,8 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
     }
     else
     {
-        KvError read_err = ReadFile(tbl_id, upload_task.filename_, *upload_buffer);
+        KvError read_err =
+            ReadFile(tbl_id, upload_task.filename_, *upload_buffer);
         if (read_err != KvError::NoError)
         {
             cleanup();
@@ -4737,10 +4734,10 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
 
     std::string path_str = path.string();
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
-    open_how how = {.flags = O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT |
-                                 O_NOATIME,
-                    .mode = 0644,
-                    .resolve = 0};
+    open_how how = {
+        .flags = O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT | O_NOATIME,
+        .mode = 0644,
+        .resolve = 0};
     io_uring_prep_openat2(sqe, AT_FDCWD, path_str.c_str(), &how);
     int fd = ThdTask()->WaitIoResult();
     if (fd < 0)

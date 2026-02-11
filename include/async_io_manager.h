@@ -829,10 +829,10 @@ public:
         return process_term_;
     }
     void OnFileRangeWritePrepared(const TableIdent &tbl_id,
-                            FileId file_id,
-                            uint64_t term,
-                            uint64_t offset,
-                            std::string_view data) override;
+                                  FileId file_id,
+                                  uint64_t term,
+                                  uint64_t offset,
+                                  std::string_view data) override;
     // Called when append-mode writing switches away from a data file.
     // Upload success marks that file clean; failure aborts the write task.
     KvError OnDataFileSealed(const TableIdent &tbl_id, FileId file_id) override;

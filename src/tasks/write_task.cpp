@@ -165,9 +165,9 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
     if (!append_aggregator_.HasBuffer() ||
         !append_aggregator_.CanAppend(file_id, offset, page_size))
     {
-        const bool file_switched =
-            cloud_append_mode && last_append_file_id_.has_value() &&
-            last_append_file_id_.value() != file_id;
+        const bool file_switched = cloud_append_mode &&
+                                   last_append_file_id_.has_value() &&
+                                   last_append_file_id_.value() != file_id;
         const FileId sealed_file_id =
             file_switched ? last_append_file_id_.value() : file_id;
         // Flush any pending writes in the aggregator

@@ -23,16 +23,14 @@ uint32_t list_object_pool_size_default = 512;
 }  // namespace
 
 TaskManager::TaskManager(const KvOptions *opts)
-    : batch_write_pool_(
-          opts != nullptr && opts->max_write_concurrency > 0
-              ? opts->max_write_concurrency
-              : batch_write_pool_size_default,
-          !(opts != nullptr && opts->max_write_concurrency > 0)),
-      bg_write_pool_(
-          opts != nullptr && opts->max_write_concurrency > 0
-              ? opts->max_write_concurrency
-              : background_write_pool_size_default,
-          !(opts != nullptr && opts->max_write_concurrency > 0)),
+    : batch_write_pool_(opts != nullptr && opts->max_write_concurrency > 0
+                            ? opts->max_write_concurrency
+                            : batch_write_pool_size_default,
+                        !(opts != nullptr && opts->max_write_concurrency > 0)),
+      bg_write_pool_(opts != nullptr && opts->max_write_concurrency > 0
+                         ? opts->max_write_concurrency
+                         : background_write_pool_size_default,
+                     !(opts != nullptr && opts->max_write_concurrency > 0)),
       read_pool_(read_pool_size_default),
       scan_pool_(scan_pool_size_default),
       list_object_pool_(list_object_pool_size_default)

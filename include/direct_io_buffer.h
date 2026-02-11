@@ -95,8 +95,7 @@ public:
 
     void EnsureDefaultReserve()
     {
-        size_t reserve =
-            default_reserve_bytes_.load(std::memory_order_relaxed);
+        size_t reserve = default_reserve_bytes_.load(std::memory_order_relaxed);
         if (reserve == 0 || capacity_ >= reserve)
         {
             return;
