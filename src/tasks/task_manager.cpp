@@ -124,10 +124,12 @@ ListObjectTask *TaskManager::GetListObjectTask()
     return list_object_pool_.GetTask();
 }
 
-ReopenTask *TaskManager::GetReopenTask()
+ReopenTask *TaskManager::GetReopenTask(const TableIdent &tbl_id)
 {
     num_active_++;
-    return reopen_pool_.GetTask();
+    ReopenTask *task = reopen_pool_.GetTask();
+    task->Reset(tbl_id);
+    return task;
 }
 
 void TaskManager::FreeTask(KvTask *task)

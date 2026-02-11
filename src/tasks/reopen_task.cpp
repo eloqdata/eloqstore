@@ -8,7 +8,7 @@ namespace eloqstore
 
 KvError ReopenTask::Reopen(const TableIdent &tbl_id)
 {
-    return shard->IndexManager()->InstallExternalSnapshot(tbl_id);
+    return shard->IndexManager()->InstallExternalSnapshot(tbl_id, cow_meta_);
 }
 
 }  // namespace eloqstore

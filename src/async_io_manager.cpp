@@ -33,6 +33,7 @@
 #include <vector>
 
 #include "error.h"
+#include "utils.h"
 #include "replayer.h"
 
 #ifdef ELOQ_MODULE_ENABLED
@@ -3522,12 +3523,6 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
     }
 
     uint64_t process_term = ProcessTerm();
-    KvError term_err = UpsertTermFile(tbl_id, process_term);
-    if (term_err != KvError::NoError)
-    {
-        return {nullptr, term_err};
-    }
-
     uint64_t selected_term = process_term;
     DirectIoBuffer buffer;
     auto download_to_buffer = [&](uint64_t term) -> KvError
@@ -3634,14 +3629,6 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
         {
             return {nullptr, KvError::NotFound};
         }
-        if (best_term > process_term)
-        {
-            LOG(ERROR) << "CloudStoreMgr::RefreshManifest: found manifest term "
-                       << best_term << " greater than process_term "
-                       << process_term << " for table " << tbl_id;
-            return {nullptr, KvError::ExpiredTerm};
-        }
-
         selected_term = best_term;
         dl_err = download_to_buffer(selected_term);
     }
@@ -3700,17 +3687,82 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
         {
             return {nullptr, ToKvError(res)};
         }
-        KvError up_err = UploadFiles(tbl_id, {promoted_name});
-        if (up_err != KvError::NoError)
-        {
-            LOG(ERROR) << "CloudStoreMgr::RefreshManifest: failed to upload "
-                       << "promoted manifest file " << promoted_name
-                       << " for table " << tbl_id << " : "
-                       << ErrorString(up_err);
-        }
     }
 
     return IouringMgr::GetManifest(tbl_id);
+}
+
+KvError CloudStoreMgr::SyncDataFileFromRemoteIfNeeded(
+    const TableIdent &tbl_id,
+    FileId file_id,
+    uint64_t term)
+{
+    if (file_id > LruFD::kMaxDataFile)
+    {
+        return KvError::InvalidArgs;
+    }
+
+    const std::string filename = ToFilename(file_id, term);
+    fs::path local_path = tbl_id.StorePath(options_->store_path);
+    local_path /= filename;
+
+    uint64_t local_size = 0;
+    std::error_code ec;
+    if (fs::exists(local_path, ec))
+    {
+        local_size = fs::file_size(local_path, ec);
+        if (ec)
+        {
+            return ToKvError(-ec.value());
+        }
+    }
+
+    uint64_t remote_size = 0;
+    bool found = false;
+    std::string remote_path = tbl_id.ToString() + "/" + filename;
+    KvTask *current_task = ThdTask();
+    ObjectStore::ListTask list_task(remote_path, false);
+    list_task.SetKvTask(current_task);
+    AcquireCloudSlot(current_task);
+    obj_store_.SubmitTask(&list_task, shard);
+    current_task->WaitIo();
+    if (list_task.error_ != KvError::NoError)
+    {
+        return list_task.error_;
+    }
+
+    std::vector<std::string> batch_files;
+    std::vector<utils::CloudObjectInfo> infos;
+    std::string next_token;
+    if (!obj_store_.ParseListObjectsResponse(list_task.response_data_.view(),
+                                             "",
+                                             &batch_files,
+                                             &infos,
+                                             &next_token))
+    {
+        return KvError::Corrupted;
+    }
+
+    for (const auto &info : infos)
+    {
+        if (info.name == filename)
+        {
+            remote_size = info.size;
+            found = true;
+            break;
+        }
+    }
+
+    if (!found)
+    {
+        return KvError::NotFound;
+    }
+
+    if (local_size < remote_size)
+    {
+        return DownloadFile(tbl_id, file_id, term);
+    }
+    return KvError::NoError;
 }
 
 std::tuple<uint64_t, std::string, KvError> CloudStoreMgr::ReadTermFile(

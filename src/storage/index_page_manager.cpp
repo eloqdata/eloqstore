@@ -213,10 +213,9 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
             }
             meta->locked_ = false;
         }
-        else if (meta->locked_ && meta->mapper_ == nullptr)
+        else if (meta->locked_)
         {
-            // Blocked by other loading/evicting operation and no usable
-            // snapshot yet.
+            // Blocked by other loading/evicting operation.
             meta->waiting_.Wait(ThdTask());
             continue;
         }
@@ -323,13 +322,43 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
     root_meta_mgr_.EvictIfNeeded();
 }
 
-KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident)
+KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
+                                                  CowRootMeta &cow_meta)
 {
-    auto *cloud_mgr = dynamic_cast<CloudStoreMgr *>(IoMgr());
-    if (cloud_mgr == nullptr)
+    if (Options()->cloud_store_path.empty())
     {
         return KvError::InvalidArgs;
     }
+    auto *cloud_mgr = static_cast<CloudStoreMgr *>(IoMgr());
+
+    auto [root_handle, root_err] = FindRoot(tbl_ident);
+    if (root_err == KvError::NoError)
+    {
+        RootMeta *old_meta = root_handle.Get();
+        if (old_meta != nullptr && old_meta->mapper_ != nullptr)
+        {
+            FilePageId max_fp_id =
+                old_meta->mapper_->FilePgAllocator()->MaxFilePageId();
+            FileId max_file_id = static_cast<FileId>(
+                max_fp_id >> Options()->pages_per_file_shift);
+            if (max_file_id <= IouringMgr::LruFD::kMaxDataFile)
+            {
+                uint64_t term =
+                    IoMgr()->GetFileIdTerm(tbl_ident, max_file_id)
+                        .value_or(IoMgr()->ProcessTerm());
+                KvError sync_err =
+                    cloud_mgr->SyncDataFileFromRemoteIfNeeded(tbl_ident,
+                                                              max_file_id,
+                                                              term);
+                if (sync_err != KvError::NoError &&
+                    sync_err != KvError::NotFound)
+                {
+                    return sync_err;
+                }
+            }
+        }
+    }
+
     auto [manifest, err] = cloud_mgr->RefreshManifest(tbl_ident);
     if (err != KvError::NoError)
     {
@@ -366,25 +395,25 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident)
         }
     }
 
-    CowRootMeta new_meta;
-    new_meta.root_id_ = replayer.root_;
-    new_meta.ttl_root_id_ = replayer.ttl_root_;
-    new_meta.mapper_ = std::move(mapper);
-    new_meta.manifest_size_ = replayer.file_size_;
-    new_meta.next_expire_ts_ = replayer.ttl_root_ != MaxPageId ? 1 : 0;
+    cow_meta = CowRootMeta();
+    cow_meta.root_id_ = replayer.root_;
+    cow_meta.ttl_root_id_ = replayer.ttl_root_;
+    cow_meta.mapper_ = std::move(mapper);
+    cow_meta.manifest_size_ = replayer.file_size_;
+    cow_meta.next_expire_ts_ = replayer.ttl_root_ != MaxPageId ? 1 : 0;
     if (!replayer.dict_bytes_.empty())
     {
-        new_meta.compression_ =
+        cow_meta.compression_ =
             std::make_shared<compression::DictCompression>();
-        new_meta.compression_->LoadDictionary(std::move(replayer.dict_bytes_));
+        cow_meta.compression_->LoadDictionary(std::move(replayer.dict_bytes_));
     }
     else
     {
-        new_meta.compression_ =
+        cow_meta.compression_ =
             std::make_shared<compression::DictCompression>();
     }
 
-    UpdateRoot(tbl_ident, std::move(new_meta));
+    UpdateRoot(tbl_ident, std::move(cow_meta));
 
     replayer.file_id_term_mapping_->insert_or_assign(
         IouringMgr::LruFD::kManifest, IoMgr()->ProcessTerm());

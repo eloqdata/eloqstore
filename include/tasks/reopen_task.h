@@ -1,10 +1,10 @@
 #pragma once
 
-#include "tasks/task.h"
+#include "tasks/write_task.h"
 
 namespace eloqstore
 {
-class ReopenTask : public KvTask
+class ReopenTask : public WriteTask
 {
 public:
     TaskType Type() const override

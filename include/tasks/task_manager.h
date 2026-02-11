@@ -35,7 +35,7 @@ public:
     ReadTask *GetReadTask();
     ScanTask *GetScanTask();
     ListObjectTask *GetListObjectTask();
-    ReopenTask *GetReopenTask();
+    ReopenTask *GetReopenTask(const TableIdent &tbl_id);
     void FreeTask(KvTask *task);
 
     void AddExternalTask();

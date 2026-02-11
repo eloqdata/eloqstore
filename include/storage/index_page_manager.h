@@ -58,7 +58,8 @@ public:
                                                       PageId page_id);
     // Install an externally built snapshot (e.g. pulled from remote manifest)
     // into the RootMeta version chain without performing local COW writes.
-    KvError InstallExternalSnapshot(const TableIdent &tbl_ident);
+    KvError InstallExternalSnapshot(const TableIdent &tbl_ident,
+                                    CowRootMeta &cow_meta);
 
 
     void FreeMappingSnapshot(MappingSnapshot *mapping);

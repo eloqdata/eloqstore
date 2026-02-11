@@ -1087,6 +1087,77 @@ TEST_CASE("cloud reopen refreshes manifest via archive swap", "[cloud][reopen]")
     CleanupStore(options);
 }
 
+TEST_CASE("cloud reopen refreshes local manifest from remote",
+          "[cloud][reopen]")
+{
+    eloqstore::KvOptions options = cloud_archive_opts;
+    options.store_path = {"/tmp/test-data-reopen-local"};
+    options.cloud_store_path += "/reopen-local";
+    options.prewarm_cloud_cache = false;
+
+    CleanupStore(options);
+
+    eloqstore::TableIdent tbl_id{"reopen_local", 0};
+    eloqstore::EloqStore *store = InitStore(options);
+    MapVerifier verifier(tbl_id, store, false);
+
+    // Version 1 data, keep a local backup.
+    verifier.Upsert(0, 50);
+    auto v1_dataset = verifier.DataSet();
+    REQUIRE_FALSE(v1_dataset.empty());
+
+    const std::string backup_root = "/tmp/test-data-reopen-local-backup";
+    std::filesystem::remove_all(backup_root);
+    std::filesystem::create_directories(backup_root);
+    for (const auto &path : options.store_path)
+    {
+        std::filesystem::path src = path;
+        std::filesystem::path dst =
+            std::filesystem::path(backup_root) / src.filename();
+        std::filesystem::remove_all(dst);
+        std::filesystem::copy(src,
+                              dst,
+                              std::filesystem::copy_options::recursive |
+                                  std::filesystem::copy_options::overwrite_existing);
+    }
+
+    // Version 2 data (remote is newer).
+    verifier.Upsert(100, 120);
+    verifier.Upsert(130, 140);
+    auto v2_dataset = verifier.DataSet();
+    REQUIRE(v2_dataset.size() > v1_dataset.size());
+
+    // Stop, replace local with older snapshot.
+    store->Stop();
+    for (const auto &path : options.store_path)
+    {
+        std::filesystem::remove_all(path);
+        std::filesystem::path src =
+            std::filesystem::path(backup_root) / std::filesystem::path(path).filename();
+        std::filesystem::copy(src,
+                              path,
+                              std::filesystem::copy_options::recursive |
+                                  std::filesystem::copy_options::overwrite_existing);
+    }
+
+    // Restart without prewarm so it doesn't auto-download.
+    store->Start();
+    verifier.SwitchDataSet(v1_dataset);
+    verifier.Validate();
+
+    // Reopen should refresh local manifest to latest remote.
+    eloqstore::ReopenRequest reopen_req;
+    reopen_req.SetArgs(tbl_id);
+    store->ExecSync(&reopen_req);
+    REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
+
+    verifier.SwitchDataSet(v2_dataset);
+    verifier.Validate();
+
+    store->Stop();
+    CleanupStore(options);
+}
+
 TEST_CASE("cloud store cached file LRU", "[cloud]")
 {
     eloqstore::KvOptions options = cloud_options;

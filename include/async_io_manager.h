@@ -843,6 +843,9 @@ public:
         const TableIdent &tbl_id) override;
     std::pair<ManifestFilePtr, KvError> RefreshManifest(
         const TableIdent &tbl_id);
+    KvError SyncDataFileFromRemoteIfNeeded(const TableIdent &tbl_id,
+                                           FileId file_id,
+                                           uint64_t term);
 
     // Read term file from cloud, returns {term_value, etag, error}
     // If file doesn't exist (404), returns {0, "", NotFound}
