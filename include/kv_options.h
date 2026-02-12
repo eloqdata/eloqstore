@@ -79,14 +79,14 @@ struct KvOptions
      * @brief Limit number of retained archives.
      * Only take effect when data_append_mode is enabled.
      */
-    uint32_t num_retained_archives = 0;
+    uint32_t num_retained_archives = 100;
     /**
      * @brief Set the (minimum) archive time interval in seconds.
      * 0 means do not generate archives automatically.
      * Only take effect when data_append_mode is enabled and
      * num_retained_archives is not 0.
      */
-    uint32_t archive_interval_secs = 86400;  // 1 day
+    uint32_t archive_interval_secs = 0;
     /**
      * @brief The maximum number of running archive tasks at the same time.
      */
