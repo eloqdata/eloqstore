@@ -126,7 +126,7 @@ struct KvOptions
     /**
      * @brief Max cached DirectIO buffers per shard.
      */
-    uint32_t direct_io_buffer_pool_size = 128;
+    uint32_t direct_io_buffer_pool_size = 16;
     /**
      * @brief Size of each write buffer used for append-mode aggregation.
      * Only take effect when data_append_mode is enabled.
