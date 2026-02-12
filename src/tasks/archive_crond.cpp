@@ -49,6 +49,11 @@ bool ArchiveCrond::IsStopped()
 void ArchiveCrond::Crond()
 {
     const uint64_t interval_secs = store_->Options().archive_interval_secs;
+    if (interval_secs == 0)
+    {
+        LOG(INFO) << "Archive crond disabled";
+        return;
+    }
     last_archive_ts_ = utils::UnixTs<chrono::seconds>();
     while (!IsStopped())
     {

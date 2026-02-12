@@ -43,7 +43,7 @@ const eloqstore::KvOptions append_opts = {
 };
 const eloqstore::KvOptions archive_opts = {
     .num_retained_archives = 1,
-    .archive_interval_secs = 0,  // send archive request immediately
+    .archive_interval_secs = 0,  // disable automatic archive scheduling
     .file_amplify_factor = 2,
     .store_path = {test_path},
     .pages_per_file_shift = 8,
@@ -63,7 +63,7 @@ const eloqstore::KvOptions cloud_archive_opts = {
     .manifest_limit = 1 << 20,
     .fd_limit = 30 + eloqstore::num_reserved_fd,
     .num_retained_archives = 1,
-    .archive_interval_secs = 0,  // send archive request immediately
+    .archive_interval_secs = 0,  // disable automatic archive scheduling
     .file_amplify_factor = 2,
     .local_space_limit = 200 << 20,  // 200MB
     .store_path = {"/tmp/test-data"},
