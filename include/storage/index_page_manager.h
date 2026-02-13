@@ -53,8 +53,8 @@ public:
 
     void UpdateRoot(const TableIdent &tbl_ident, CowRootMeta new_meta);
 
-    std::pair<MemIndexPage::Handle, KvError> FindPage(
-        MappingSnapshot *mapping, PageId page_id);
+    std::pair<MemIndexPage::Handle, KvError> FindPage(MappingSnapshot *mapping,
+                                                      PageId page_id);
 
     void FreeMappingSnapshot(MappingSnapshot *mapping);
 

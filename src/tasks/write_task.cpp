@@ -119,7 +119,8 @@ KvError WriteTask::WritePage(MemIndexPage::Handle &page)
     return WritePage(page, file_page_id);
 }
 
-KvError WriteTask::WritePage(MemIndexPage::Handle &page, FilePageId file_page_id)
+KvError WriteTask::WritePage(MemIndexPage::Handle &page,
+                             FilePageId file_page_id)
 {
     SetChecksum({page->PagePtr(), Options()->data_page_size});
     // Create a temporary handle for VarPage to keep pinning during IO.

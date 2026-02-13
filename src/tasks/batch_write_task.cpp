@@ -301,8 +301,8 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
     }
     else
     {
-        stack_.emplace_back(
-            std::make_unique<IndexStackEntry>(MemIndexPage::Handle(), Options()));
+        stack_.emplace_back(std::make_unique<IndexStackEntry>(
+            MemIndexPage::Handle(), Options()));
     }
 
     KvError err;
@@ -987,8 +987,8 @@ KvError BatchWriteTask::FlushIndexPage(MemIndexPage::Handle &idx_page,
         if (stack_.size() == 1)
         {
             stack_.emplace(stack_.begin(),
-                           std::make_unique<IndexStackEntry>(MemIndexPage::Handle(),
-                                                             Options()));
+                           std::make_unique<IndexStackEntry>(
+                               MemIndexPage::Handle(), Options()));
         }
 
         IndexStackEntry *parent_entry = stack_[stack_.size() - 2].get();
