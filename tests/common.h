@@ -72,6 +72,7 @@ const eloqstore::KvOptions cloud_archive_opts = {
     .data_append_mode = true,
 };
 eloqstore::EloqStore *InitStore(const eloqstore::KvOptions &opts);
+void ShutdownStore();
 
 bool ValidateFileSizes(const eloqstore::KvOptions &opts);
 
