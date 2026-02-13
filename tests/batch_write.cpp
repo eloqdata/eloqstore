@@ -205,7 +205,6 @@ TEST_CASE("batch write task pool handles many partitions concurrently",
     };
 
     eloqstore::EloqStore *store = InitStore(opts);
-
     constexpr uint32_t partitions = 3000;
     std::vector<eloqstore::BatchWriteRequest> wave1(partitions);
     std::vector<eloqstore::BatchWriteRequest> wave2(partitions);
