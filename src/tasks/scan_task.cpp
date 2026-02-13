@@ -99,13 +99,14 @@ KvError ScanIterator::BuildIndexStack(std::string_view key)
         IndexPageIter idx_it{handle, Options()};
         idx_it.Seek(key);
         index_stack_.emplace_back(std::move(handle), std::move(idx_it));
-        if (idx_it.GetPageId() == MaxPageId)
+        auto &back = index_stack_.back();
+        if (back.iter.GetPageId() == MaxPageId)
         {
             ClearIndexStack();
             return KvError::EndOfFile;
         }
-        PageId child_id = idx_it.GetPageId();
-        if (index_stack_.back().handle->IsPointingToLeaf())
+        PageId child_id = back.iter.GetPageId();
+        if (back.handle->IsPointingToLeaf())
         {
             return KvError::NoError;
         }
