@@ -110,7 +110,7 @@ KvError WriteTask::WritePage(OverflowPage &&page)
     return WritePage(std::move(page), fp_id);
 }
 
-KvError WriteTask::WritePage(IndexPageHandle &page)
+KvError WriteTask::WritePage(MemIndexPage::Handle &page)
 {
     SetChecksum({page->PagePtr(), Options()->data_page_size});
     auto [page_id, file_page_id] = AllocatePage(page->GetPageId());
@@ -119,11 +119,12 @@ KvError WriteTask::WritePage(IndexPageHandle &page)
     return WritePage(page, file_page_id);
 }
 
-KvError WriteTask::WritePage(IndexPageHandle &page, FilePageId file_page_id)
+KvError WriteTask::WritePage(MemIndexPage::Handle &page,
+                             FilePageId file_page_id)
 {
     SetChecksum({page->PagePtr(), Options()->data_page_size});
     // Create a temporary handle for VarPage to keep pinning during IO.
-    IndexPageHandle io_handle(page.Get());
+    MemIndexPage::Handle io_handle(page.Get());
     return WritePage(VarPage(std::move(io_handle)), file_page_id);
 }
 
@@ -277,7 +278,7 @@ void WriteTask::WritePageCallback(VarPage page, KvError err)
     {
     case VarPageType::MemIndexPage:
     {
-        IndexPageHandle &handle = std::get<IndexPageHandle>(page);
+        MemIndexPage::Handle &handle = std::get<MemIndexPage::Handle>(page);
         MemIndexPage *idx_page = handle.Get();
         if (err == KvError::NoError)
         {

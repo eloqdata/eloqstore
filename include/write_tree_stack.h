@@ -17,7 +17,7 @@ struct IndexOp
 class IndexStackEntry
 {
 public:
-    IndexStackEntry(IndexPageHandle handle, const KvOptions *opts)
+    IndexStackEntry(MemIndexPage::Handle handle, const KvOptions *opts)
         : idx_page_iter_(handle, opts), handle_(std::move(handle))
     {
     }
@@ -26,7 +26,7 @@ public:
     IndexStackEntry(IndexStackEntry &&rhs) = delete;
 
     IndexPageIter idx_page_iter_;
-    IndexPageHandle handle_{};
+    MemIndexPage::Handle handle_{};
     std::vector<IndexOp> changes_{};
     bool is_leaf_index_{false};
 };

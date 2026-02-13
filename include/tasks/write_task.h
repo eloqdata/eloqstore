@@ -95,8 +95,8 @@ protected:
 
     KvError WritePage(DataPage &&page);
     KvError WritePage(OverflowPage &&page);
-    KvError WritePage(IndexPageHandle &page);
-    KvError WritePage(IndexPageHandle &page, FilePageId file_page_id);
+    KvError WritePage(MemIndexPage::Handle &page);
+    KvError WritePage(MemIndexPage::Handle &page, FilePageId file_page_id);
     KvError WritePage(VarPage page, FilePageId file_page_id);
     KvError AppendWritePage(VarPage page, FilePageId file_page_id);
     void FlushAppendWrites();

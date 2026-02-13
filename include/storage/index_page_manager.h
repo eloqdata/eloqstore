@@ -2,6 +2,7 @@
 
 #include <memory>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include "async_io_manager.h"
@@ -53,8 +54,8 @@ public:
 
     void UpdateRoot(const TableIdent &tbl_ident, CowRootMeta new_meta);
 
-    std::pair<IndexPageHandle, KvError> FindPage(MappingSnapshot *mapping,
-                                                 PageId page_id);
+    std::pair<MemIndexPage::Handle, KvError> FindPage(MappingSnapshot *mapping,
+                                                      PageId page_id);
 
     void FreeMappingSnapshot(MappingSnapshot *mapping);
 

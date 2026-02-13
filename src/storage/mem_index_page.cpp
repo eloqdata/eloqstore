@@ -90,7 +90,7 @@ std::string MemIndexPage::String(const KvOptions *opts) const
     }
     str.append(std::to_string(GetPageId()));
     str.push_back('|');
-    IndexPageHandle handle(const_cast<MemIndexPage *>(this));
+    MemIndexPage::Handle handle(const_cast<MemIndexPage *>(this));
     IndexPageIter iter(handle, opts);
     while (iter.HasNext())
     {
@@ -105,7 +105,7 @@ std::string MemIndexPage::String(const KvOptions *opts) const
     return str;
 }
 
-IndexPageIter::IndexPageIter(const IndexPageHandle &handle,
+IndexPageIter::IndexPageIter(const MemIndexPage::Handle &handle,
                              const KvOptions *opts)
     : comparator_(opts->comparator_),
       page_(
