@@ -25,7 +25,7 @@ public:
             entry.handle->SetFilePageId(entry.src_fp_id);
         }
     }
-    void Add(IndexPageHandle handle, FilePageId src_fp_id)
+    void Add(MemIndexPage::Handle handle, FilePageId src_fp_id)
     {
         pages_.push_back({std::move(handle), src_fp_id});
     }
@@ -42,7 +42,7 @@ public:
 private:
     struct Entry
     {
-        IndexPageHandle handle;
+        MemIndexPage::Handle handle;
         FilePageId src_fp_id;
     };
     std::vector<Entry> pages_;
@@ -231,7 +231,7 @@ KvError BackgroundWrite::CompactDataFile()
             move_batch_fp_ids.clear();
             for (auto [fp_id, page_id] : batch_ids)
             {
-                IndexPageHandle handle =
+                MemIndexPage::Handle handle =
                     cow_meta_.old_mapping_->GetSwizzlingHandle(page_id);
                 if (handle)
                 {

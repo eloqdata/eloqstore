@@ -302,7 +302,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
     else
     {
         stack_.emplace_back(
-            std::make_unique<IndexStackEntry>(IndexPageHandle(), Options()));
+            std::make_unique<IndexStackEntry>(MemIndexPage::Handle(), Options()));
     }
 
     KvError err;
@@ -336,7 +336,7 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
     CHECK_KV_ERR(err);
 
     assert(!stack_.empty());
-    IndexPageHandle new_root;
+    MemIndexPage::Handle new_root;
     while (!stack_.empty())
     {
         auto [new_handle, err] = Pop();
@@ -726,18 +726,18 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     return KvError::NoError;
 }
 
-std::pair<IndexPageHandle, KvError> BatchWriteTask::Pop()
+std::pair<MemIndexPage::Handle, KvError> BatchWriteTask::Pop()
 {
     if (stack_.empty())
     {
-        return {IndexPageHandle(), KvError::NoError};
+        return {MemIndexPage::Handle(), KvError::NoError};
     }
 
     IndexStackEntry *stack_entry = stack_.back().get();
     // There is no change at this level.
     if (stack_entry->changes_.empty())
     {
-        IndexPageHandle handle = std::move(stack_entry->handle_);
+        MemIndexPage::Handle handle = std::move(stack_entry->handle_);
         stack_.pop_back();
         return {std::move(handle), KvError::NoError};
     }
@@ -762,7 +762,7 @@ std::pair<IndexPageHandle, KvError> BatchWriteTask::Pop()
     // We keep the previous built page in the pipeline before flushing it to
     // storage. This is to redistribute between last two pages in case the last
     // page is sparse.
-    IndexPageHandle prev_handle;
+    MemIndexPage::Handle prev_handle;
     std::string prev_key;
     PageId prev_page_id = MaxPageId;
     std::string_view page_key =
@@ -847,7 +847,7 @@ std::pair<IndexPageHandle, KvError> BatchWriteTask::Pop()
             KvError err = add_to_page(new_key, new_page_id);
             if (err != KvError::NoError)
             {
-                return {IndexPageHandle(), err};
+                return {MemIndexPage::Handle(), err};
             }
         }
 
@@ -873,7 +873,7 @@ std::pair<IndexPageHandle, KvError> BatchWriteTask::Pop()
         KvError err = add_to_page(new_key, new_page_id);
         if (err != KvError::NoError)
         {
-            return {IndexPageHandle(), err};
+            return {MemIndexPage::Handle(), err};
         }
         AdvanceIndexPageIter(base_page_iter, is_base_iter_valid);
     }
@@ -887,13 +887,13 @@ std::pair<IndexPageHandle, KvError> BatchWriteTask::Pop()
             KvError err = add_to_page(new_key, new_page);
             if (err != KvError::NoError)
             {
-                return {IndexPageHandle(), err};
+                return {MemIndexPage::Handle(), err};
             }
         }
         ++cit;
     }
 
-    IndexPageHandle new_root;
+    MemIndexPage::Handle new_root;
     if (idx_page_builder_.IsEmpty())
     {
         FreePage(stack_.back()->handle_->GetPageId());
@@ -912,13 +912,13 @@ std::pair<IndexPageHandle, KvError> BatchWriteTask::Pop()
             prev_handle, prev_key, prev_page_id, std::move(curr_page_key));
         if (err != KvError::NoError)
         {
-            return {IndexPageHandle(), err};
+            return {MemIndexPage::Handle(), err};
         }
         err = FlushIndexPage(
             prev_handle, std::move(prev_key), prev_page_id, splited);
         if (err != KvError::NoError)
         {
-            return {IndexPageHandle(), err};
+            return {MemIndexPage::Handle(), err};
         }
         if (!splited)
         {
@@ -930,7 +930,7 @@ std::pair<IndexPageHandle, KvError> BatchWriteTask::Pop()
     return {std::move(new_root), KvError::NoError};
 }
 
-KvError BatchWriteTask::FinishIndexPage(IndexPageHandle &prev_handle,
+KvError BatchWriteTask::FinishIndexPage(MemIndexPage::Handle &prev_handle,
                                         std::string &prev_key,
                                         PageId &prev_page_id,
                                         std::string cur_page_key)
@@ -955,7 +955,7 @@ KvError BatchWriteTask::FinishIndexPage(IndexPageHandle &prev_handle,
         KvError err = FlushIndexPage(
             prev_handle, std::move(prev_key), prev_page_id, true);
         CHECK_KV_ERR(err);
-        prev_handle = IndexPageHandle();
+        prev_handle = MemIndexPage::Handle();
         prev_page_id = MaxPageId;
     }
     MemIndexPage *cur_page = shard->IndexManager()->AllocIndexPage();
@@ -964,12 +964,12 @@ KvError BatchWriteTask::FinishIndexPage(IndexPageHandle &prev_handle,
         return KvError::OutOfMem;
     }
     memcpy(cur_page->PagePtr(), page_view.data(), page_view.size());
-    prev_handle = IndexPageHandle(cur_page);
+    prev_handle = MemIndexPage::Handle(cur_page);
     prev_key = std::move(cur_page_key);
     return KvError::NoError;
 }
 
-KvError BatchWriteTask::FlushIndexPage(IndexPageHandle &idx_page,
+KvError BatchWriteTask::FlushIndexPage(MemIndexPage::Handle &idx_page,
                                        std::string idx_page_key,
                                        PageId page_id,
                                        bool split)
@@ -987,7 +987,7 @@ KvError BatchWriteTask::FlushIndexPage(IndexPageHandle &idx_page,
         if (stack_.size() == 1)
         {
             stack_.emplace(stack_.begin(),
-                           std::make_unique<IndexStackEntry>(IndexPageHandle(),
+                           std::make_unique<IndexStackEntry>(MemIndexPage::Handle(),
                                                              Options()));
         }
 
@@ -1123,7 +1123,7 @@ Page BatchWriteTask::Redistribute(DataPage &prev_page,
     return new_page;
 }
 
-std::string_view BatchWriteTask::Redistribute(IndexPageHandle &prev_handle,
+std::string_view BatchWriteTask::Redistribute(MemIndexPage::Handle &prev_handle,
                                               std::string_view cur_page,
                                               std::string &cur_page_key)
 {
@@ -1410,14 +1410,14 @@ void BatchWriteTask::AdvanceIndexPageIter(IndexPageIter &iter, bool &is_valid)
     is_valid = iter.HasNext() ? iter.Next() : false;
 }
 
-std::pair<IndexPageHandle, KvError> BatchWriteTask::TruncateIndexPage(
+std::pair<MemIndexPage::Handle, KvError> BatchWriteTask::TruncateIndexPage(
     PageId page_id, std::string_view trunc_pos)
 {
     auto [handle, err] = shard->IndexManager()->FindPage(
         cow_meta_.mapper_->GetMapping(), page_id);
     if (err != KvError::NoError)
     {
-        return {IndexPageHandle(), err};
+        return {MemIndexPage::Handle(), err};
     }
 
     const bool is_leaf_idx = handle->IsPointingToLeaf();
@@ -1485,7 +1485,7 @@ std::pair<IndexPageHandle, KvError> BatchWriteTask::TruncateIndexPage(
             err = delete_sub_node(sub_node_key, sub_node_id, false);
             if (err != KvError::NoError)
             {
-                return {IndexPageHandle(), err};
+                return {MemIndexPage::Handle(), err};
             }
         }
         else if (Comp()->Compare(trunc_pos, next_node_key) >= 0)
@@ -1510,7 +1510,7 @@ std::pair<IndexPageHandle, KvError> BatchWriteTask::TruncateIndexPage(
             }
             if (err != KvError::NoError)
             {
-                return {IndexPageHandle(), err};
+                return {MemIndexPage::Handle(), err};
             }
         }
 
@@ -1531,22 +1531,22 @@ std::pair<IndexPageHandle, KvError> BatchWriteTask::TruncateIndexPage(
     }
     if (err != KvError::NoError)
     {
-        return {IndexPageHandle(), err};
+        return {MemIndexPage::Handle(), err};
     }
 
     if (builder.IsEmpty())
     {
         // This index page is wholly deleted
         FreePage(page_id);
-        return {IndexPageHandle(), KvError::NoError};
+        return {MemIndexPage::Handle(), KvError::NoError};
     }
     // This index page is partially truncated
     MemIndexPage *new_page = shard->IndexManager()->AllocIndexPage();
     if (new_page == nullptr)
     {
-        return {IndexPageHandle(), KvError::OutOfMem};
+        return {MemIndexPage::Handle(), KvError::OutOfMem};
     }
-    IndexPageHandle new_handle(new_page);
+    MemIndexPage::Handle new_handle(new_page);
     std::string_view page_view = builder.Finish();
     memcpy(new_handle->PagePtr(), page_view.data(), page_view.size());
     new_handle->SetPageId(page_id);
@@ -1558,7 +1558,7 @@ std::pair<IndexPageHandle, KvError> BatchWriteTask::TruncateIndexPage(
         CHECK(page->IsDetached());
         CHECK(!page->IsPinned());
         shard->IndexManager()->FreeIndexPage(page);
-        return {IndexPageHandle(), err};
+        return {MemIndexPage::Handle(), err};
     }
     return {std::move(new_handle), KvError::NoError};
 }

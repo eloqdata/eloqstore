@@ -322,20 +322,20 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
     root_meta_mgr_.EvictIfNeeded();
 }
 
-std::pair<IndexPageHandle, KvError> IndexPageManager::FindPage(
+std::pair<MemIndexPage::Handle, KvError> IndexPageManager::FindPage(
     MappingSnapshot *mapping, PageId page_id)
 {
     while (true)
     {
         // First checks swizzling pointers.
-        IndexPageHandle handle = mapping->GetSwizzlingHandle(page_id);
+        MemIndexPage::Handle handle = mapping->GetSwizzlingHandle(page_id);
         if (!handle)
         {
             // This is the first request to load the page.
             MemIndexPage *new_page = AllocIndexPage();
             if (new_page == nullptr)
             {
-                return {IndexPageHandle(), KvError::OutOfMem};
+                return {MemIndexPage::Handle(), KvError::OutOfMem};
             }
             FilePageId file_page_id = mapping->ToFilePage(page_id);
             new_page->SetPageId(page_id);
@@ -351,11 +351,11 @@ std::pair<IndexPageHandle, KvError> IndexPageManager::FindPage(
                 new_page->waiting_.WakeAll();
                 mapping->Unswizzling(new_page);
                 FreeIndexPage(new_page);
-                return {IndexPageHandle(), err};
+                return {MemIndexPage::Handle(), err};
             }
             FinishIo(mapping, new_page);
             new_page->waiting_.WakeAll();
-            return {IndexPageHandle(new_page), KvError::NoError};
+            return {MemIndexPage::Handle(new_page), KvError::NoError};
         }
         if (handle->IsDetached())
         {
