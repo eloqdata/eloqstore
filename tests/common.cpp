@@ -2,24 +2,39 @@
 
 #include <cassert>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/reporters/catch_reporter_event_listener.hpp>
+#include <catch2/reporters/catch_reporter_registrars.hpp>
 #include <cstdlib>
 #include <filesystem>
 #include <string>
 
+namespace
+{
+std::unique_ptr<eloqstore::EloqStore> g_store;
+}
+
+void ShutdownStore()
+{
+    if (g_store == nullptr)
+    {
+        return;
+    }
+    if (!g_store->IsStopped())
+    {
+        g_store->Stop();
+    }
+    g_store.reset();
+}
+
 eloqstore::EloqStore *InitStore(const eloqstore::KvOptions &opts)
 {
-    static std::unique_ptr<eloqstore::EloqStore> eloq_store = nullptr;
-
-    if (eloq_store && !eloq_store->IsStopped())
-    {
-        eloq_store->Stop();
-    }
+    ShutdownStore();
     CleanupStore(opts);
     // Recreate to ensure latest options are applied
-    eloq_store = std::make_unique<eloqstore::EloqStore>(opts);
-    eloqstore::KvError err = eloq_store->Start();
+    g_store = std::make_unique<eloqstore::EloqStore>(opts);
+    eloqstore::KvError err = g_store->Start();
     CHECK(err == eloqstore::KvError::NoError);
-    return eloq_store.get();
+    return g_store.get();
 }
 
 bool ValidateFileSizes(const eloqstore::KvOptions &opts)
@@ -115,3 +130,24 @@ bool ValidateFileSizes(const eloqstore::KvOptions &opts)
 
     return all_valid;
 }
+
+namespace
+{
+class StoreLifecycleListener : public Catch::EventListenerBase
+{
+public:
+    using Catch::EventListenerBase::EventListenerBase;
+
+    void testCaseEnded(const Catch::TestCaseStats &) override
+    {
+        ShutdownStore();
+    }
+
+    void testRunEnded(const Catch::TestRunStats &) override
+    {
+        ShutdownStore();
+    }
+};
+}  // namespace
+
+CATCH_REGISTER_LISTENER(StoreLifecycleListener)

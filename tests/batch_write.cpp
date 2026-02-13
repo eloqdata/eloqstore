@@ -19,7 +19,8 @@ TEST_CASE("batch entry with smaller timestamp", "[batch_write]")
 
 TEST_CASE("mixed batch write with read", "[batch_write]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    test_util::ScopedStore store_guard(mem_store_opts);
+    eloqstore::EloqStore *store = store_guard.get();
     MapVerifier verify(test_tbl_id, store, false);
     verify.SetValueSize(200);
     constexpr uint64_t max_val = 10000;
@@ -38,7 +39,8 @@ TEST_CASE("mixed batch write with read", "[batch_write]")
 
 TEST_CASE("truncate from the first key", "[batch_write]")
 {
-    eloqstore::EloqStore *store = InitStore(append_opts);
+    test_util::ScopedStore store_guard(append_opts);
+    eloqstore::EloqStore *store = store_guard.get();
     MapVerifier verify(test_tbl_id, store, false);
     verify.SetValueSize(200);
     eloqstore::TableIdent tbl_id("t1", 1);
@@ -66,7 +68,8 @@ TEST_CASE("truncate from the first key", "[batch_write]")
 
 TEST_CASE("truncate twice overflow values", "[batch_write]")
 {
-    eloqstore::EloqStore *store = InitStore(append_opts);
+    test_util::ScopedStore store_guard(append_opts);
+    eloqstore::EloqStore *store = store_guard.get();
     MapVerifier verify(test_tbl_id, store, false);
     eloqstore::TableIdent tbl_id("t1", 1);
     std::string s(5000, 'x');
@@ -102,7 +105,8 @@ TEST_CASE("truncate twice overflow values", "[batch_write]")
 
 TEST_CASE("batch write with big key", "[batch_write]")
 {
-    eloqstore::EloqStore *store = InitStore(mem_store_opts);
+    test_util::ScopedStore store_guard(mem_store_opts);
+    eloqstore::EloqStore *store = store_guard.get();
     MapVerifier verify(test_tbl_id, store, false, 200);
     verify.SetValueSize(300);
     constexpr uint64_t max_val = 10000;
@@ -153,7 +157,8 @@ TEST_CASE("batch write abort releases pinned index pages",
         return entries;
     };
 
-    eloqstore::EloqStore *store = InitStore(opts);
+    test_util::ScopedStore store_guard(opts);
+    eloqstore::EloqStore *store = store_guard.get();
 
     const size_t key_len = 96;
     const size_t large_value_len = 3500;
@@ -204,7 +209,8 @@ TEST_CASE("batch write task pool handles many partitions concurrently",
         return entries;
     };
 
-    eloqstore::EloqStore *store = InitStore(opts);
+    test_util::ScopedStore store_guard(opts);
+    eloqstore::EloqStore *store = store_guard.get();
 
     constexpr uint32_t partitions = 3000;
     std::vector<eloqstore::BatchWriteRequest> wave1(partitions);
@@ -315,7 +321,8 @@ TEST_CASE("batch write task pool cleaned after abort", "[batch_write]")
     opts.num_threads = 1;  // route all partitions to the same shard
     opts.buffer_pool_size = opts.data_page_size;  // only one index page buffer
 
-    eloqstore::EloqStore *store = InitStore(opts);
+    test_util::ScopedStore store_guard(opts);
+    eloqstore::EloqStore *store = store_guard.get();
     const std::vector<eloqstore::TableIdent> partitions = {
         {"stress", 0}, {"stress", 1}, {"stress", 2}, {"stress", 3}};
 

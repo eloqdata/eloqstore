@@ -72,6 +72,40 @@ const eloqstore::KvOptions cloud_archive_opts = {
     .data_append_mode = true,
 };
 eloqstore::EloqStore *InitStore(const eloqstore::KvOptions &opts);
+void ShutdownStore();
+
+class ScopedStore
+{
+public:
+    explicit ScopedStore(const eloqstore::KvOptions &opts)
+    {
+        store_ = InitStore(opts);
+    }
+    ScopedStore(const ScopedStore &) = delete;
+    ScopedStore &operator=(const ScopedStore &) = delete;
+    ScopedStore(ScopedStore &&) = delete;
+    ScopedStore &operator=(ScopedStore &&) = delete;
+    ~ScopedStore()
+    {
+        ShutdownStore();
+    }
+
+    eloqstore::EloqStore *get() const
+    {
+        return store_;
+    }
+    eloqstore::EloqStore *operator->() const
+    {
+        return store_;
+    }
+    operator eloqstore::EloqStore *() const
+    {
+        return store_;
+    }
+
+private:
+    eloqstore::EloqStore *store_{nullptr};
+};
 
 bool ValidateFileSizes(const eloqstore::KvOptions &opts);
 
