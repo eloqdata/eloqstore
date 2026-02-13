@@ -536,16 +536,16 @@ void MappingSnapshot::Unswizzling(MemIndexPage *page)
     }
 }
 
-IndexPageHandle MappingSnapshot::GetSwizzlingHandle(PageId page_id) const
+MemIndexPage::Handle MappingSnapshot::GetSwizzlingHandle(PageId page_id) const
 {
     assert(page_id < mapping_tbl_.size());
     uint64_t val = mapping_tbl_.Get(page_id);
     if (IsSwizzlingPointer(val))
     {
         MemIndexPage *idx_page = reinterpret_cast<MemIndexPage *>(val);
-        return IndexPageHandle(idx_page);
+        return MemIndexPage::Handle(idx_page);
     }
-    return IndexPageHandle();
+    return MemIndexPage::Handle();
 }
 
 void MappingSnapshot::AddSwizzling(PageId page_id, MemIndexPage *idx_page)
