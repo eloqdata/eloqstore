@@ -40,6 +40,8 @@ public:
 
     size_t NumActive() const;
 
+    void Shutdown();
+
 private:
     template <typename T>
     class TaskPool
@@ -82,6 +84,13 @@ private:
             task->status_ = TaskStatus::Idle;
             task->next_ = free_head_;
             free_head_ = task;
+        }
+
+        void Clear()
+        {
+            free_head_ = nullptr;
+            ext_pool_.clear();
+            init_pool_.reset();
         }
 
     private:

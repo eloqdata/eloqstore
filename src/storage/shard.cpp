@@ -205,6 +205,7 @@ void Shard::Stop()
 #ifndef ELOQ_MODULE_ENABLED
     thd_.join();
 #endif
+    task_mgr_.Shutdown();
 }
 
 bool Shard::AddKvRequest(KvRequest *req)

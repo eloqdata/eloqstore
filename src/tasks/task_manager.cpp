@@ -45,6 +45,15 @@ TaskManager::TaskManager(const KvOptions *opts)
     }
 }
 
+void TaskManager::Shutdown()
+{
+    batch_write_pool_.Clear();
+    bg_write_pool_.Clear();
+    read_pool_.Clear();
+    scan_pool_.Clear();
+    list_object_pool_.Clear();
+}
+
 void TaskManager::SetPoolSizesForTest(uint32_t batch_write_pool_size,
                                       uint32_t background_write_pool_size,
                                       uint32_t read_pool_size,
