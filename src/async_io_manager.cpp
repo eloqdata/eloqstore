@@ -994,8 +994,8 @@ IouringMgr::FdIdx IouringMgr::GetRootFD(const TableIdent &tbl_id)
 {
     assert(!eloq_store->root_fds_.empty());
     const size_t num_roots = eloq_store->root_fds_.size();
-    size_t disk_idx = tbl_id.StorePathIndex(
-        num_roots, eloq_store->options_.store_path_lut);
+    size_t disk_idx =
+        tbl_id.StorePathIndex(num_roots, eloq_store->options_.store_path_lut);
     int root_fd = eloq_store->root_fds_[disk_idx];
     return {root_fd, false};
 }
@@ -2728,7 +2728,7 @@ KvError CloudStoreMgr::ReadFilePrefix(const TableIdent &tbl_id,
     }
 
     // Construct absolute path to file
-fs::path abs_path =
+    fs::path abs_path =
         tbl_id.StorePath(options_->store_path, options_->store_path_lut);
     abs_path /= filename;
 

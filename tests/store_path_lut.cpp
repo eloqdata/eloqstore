@@ -1,7 +1,6 @@
 #include <algorithm>
-#include <vector>
-
 #include <catch2/catch_test_macros.hpp>
+#include <vector>
 
 #include "kv_options.h"
 

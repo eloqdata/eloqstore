@@ -6,9 +6,9 @@
 #include <sys/statvfs.h>
 
 #include <algorithm>
-#include <cerrno>
 #include <atomic>
 #include <cassert>
+#include <cerrno>
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
@@ -18,8 +18,8 @@
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <unordered_set>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -46,7 +46,7 @@ namespace
 {
 constexpr uint64_t kStorePathWeightGranularity = 1ULL << 20;  // 1 MiB
 constexpr size_t kMaxStorePathLutEntries = kDefaultStorePathLutEntries;
-}
+}  // namespace
 
 bool EloqStore::ValidateOptions(KvOptions &opts)
 {
@@ -397,7 +397,8 @@ KvError EloqStore::BuildStorePathLut()
             total_bytes = 1;
         }
         uint64_t dev_key = static_cast<uint64_t>(stat_buf.st_dev);
-        auto [it, inserted] = device_lookup.emplace(dev_key, device_sizes.size());
+        auto [it, inserted] =
+            device_lookup.emplace(dev_key, device_sizes.size());
         size_t dev_idx = it->second;
         if (inserted)
         {
@@ -407,7 +408,8 @@ KvError EloqStore::BuildStorePathLut()
         else
         {
             device_counts[dev_idx] += 1;
-            device_sizes[dev_idx] = std::min(device_sizes[dev_idx], total_bytes);
+            device_sizes[dev_idx] =
+                std::min(device_sizes[dev_idx], total_bytes);
         }
         path_device_index[i] = dev_idx;
     }
@@ -432,8 +434,8 @@ KvError EloqStore::BuildStorePathLut()
 
     for (size_t i = 0; i < weights.size(); ++i)
     {
-        DLOG(INFO) << "Store path " << options_.store_path[i] << " weight slots: "
-                   << weights[i];
+        DLOG(INFO) << "Store path " << options_.store_path[i]
+                   << " weight slots: " << weights[i];
     }
     auto lut = ComputeStorePathLut(weights, kMaxStorePathLutEntries);
     if (lut.empty())

@@ -8,9 +8,9 @@
 #include <cctype>
 #include <charconv>
 #include <limits>
+#include <numeric>
 #include <string>
 #include <string_view>
-#include <numeric>
 #include <vector>
 
 #include "inih/cpp/INIReader.h"
