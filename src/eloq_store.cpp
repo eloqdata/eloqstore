@@ -805,8 +805,7 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
                 continue;
             }
 
-            if (options_.partition_filter &&
-                !options_.partition_filter(tbl_id))
+            if (options_.partition_filter && !options_.partition_filter(tbl_id))
             {
                 continue;
             }
