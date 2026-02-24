@@ -339,8 +339,7 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
         {
             FilePageId max_fp_id =
                 old_meta->mapper_->FilePgAllocator()->MaxFilePageId();
-            FileId max_file_id = static_cast<FileId>(
-                max_fp_id >> Options()->pages_per_file_shift);
+            FileId max_file_id = max_fp_id >> Options()->pages_per_file_shift;
             if (max_file_id <= IouringMgr::LruFD::kMaxDataFile)
             {
                 uint64_t term =
@@ -360,17 +359,11 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
     }
 
     auto [manifest, err] = cloud_mgr->RefreshManifest(tbl_ident);
-    if (err != KvError::NoError)
-    {
-        return err;
-    }
+    CHECK_KV_ERR(err);
 
     Replayer replayer(Options());
     err = replayer.Replay(manifest.get());
-    if (err != KvError::NoError)
-    {
-        return err;
-    }
+    CHECK_KV_ERR(err);
 
     auto [entry, inserted] = root_meta_mgr_.GetOrCreate(tbl_ident);
     RootMeta &meta = entry->meta_;
@@ -401,16 +394,11 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
     cow_meta.mapper_ = std::move(mapper);
     cow_meta.manifest_size_ = replayer.file_size_;
     cow_meta.next_expire_ts_ = replayer.ttl_root_ != MaxPageId ? 1 : 0;
+    cow_meta.compression_ =
+        std::make_shared<compression::DictCompression>();
     if (!replayer.dict_bytes_.empty())
     {
-        cow_meta.compression_ =
-            std::make_shared<compression::DictCompression>();
         cow_meta.compression_->LoadDictionary(std::move(replayer.dict_bytes_));
-    }
-    else
-    {
-        cow_meta.compression_ =
-            std::make_shared<compression::DictCompression>();
     }
 
     UpdateRoot(tbl_ident, std::move(cow_meta));
