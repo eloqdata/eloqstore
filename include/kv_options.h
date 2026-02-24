@@ -10,6 +10,7 @@
 
 #include "comparator.h"
 #include "types.h"
+#include "utils.h"
 namespace eloqstore
 {
 constexpr int KB = 1 << 10;
@@ -19,8 +20,6 @@ constexpr int64_t TB = 1LL << 40;
 
 constexpr uint8_t max_overflow_pointers = 128;
 constexpr uint16_t max_read_pages_batch = max_overflow_pointers;
-constexpr size_t kDefaultStorePathLutEntries = 1 << 20;
-
 struct KvOptions
 {
     int LoadFromIni(const char *path);
@@ -268,7 +267,4 @@ struct KvOptions
     std::function<bool(const TableIdent &)> partition_filter;
 };
 
-std::vector<uint32_t> ComputeStorePathLut(
-    const std::vector<uint64_t> &weights,
-    size_t max_entries = kDefaultStorePathLutEntries);
 }  // namespace eloqstore
