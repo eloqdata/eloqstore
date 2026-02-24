@@ -45,6 +45,7 @@ enum class RequestType : uint8_t
     DropTable,
     Archive,
     Compact,
+    LocalGc,
     CleanExpired,
     GlobalArchive,
     GlobalReopen
@@ -74,6 +75,8 @@ inline const char *RequestTypeToString(RequestType type)
         return "archive";
     case RequestType::Compact:
         return "compact";
+    case RequestType::LocalGc:
+        return "local_gc";
     case RequestType::CleanExpired:
         return "clean_expired";
     case RequestType::GlobalArchive:
@@ -472,6 +475,15 @@ public:
     RequestType Type() const override
     {
         return RequestType::Compact;
+    }
+};
+
+class LocalGcRequest : public WriteRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::LocalGc;
     }
 };
 

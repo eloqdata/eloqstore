@@ -22,6 +22,8 @@ public:
 
     KvError CreateArchive(uint64_t provided_ts = 0);
 
+    KvError RunLocalFileGc();
+
 private:
     void HeapSortFpIdsWithYield(
         std::vector<std::pair<FilePageId, PageId>> &fp_ids);

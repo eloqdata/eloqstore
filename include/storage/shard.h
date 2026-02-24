@@ -42,6 +42,8 @@ public:
     bool HasPendingCompact(const TableIdent &tbl_id);
     void AddPendingTTL(const TableIdent &tbl_id);
     bool HasPendingTTL(const TableIdent &tbl_id);
+    void AddPendingLocalGc(const TableIdent &tbl_id);
+    bool HasPendingLocalGc(const TableIdent &tbl_id);
 
     bool HasPendingRequests() const;
 
@@ -185,6 +187,8 @@ private:
             return "archive";
         case RequestType::Compact:
             return "compact";
+        case RequestType::LocalGc:
+            return "local_gc";
         case RequestType::CleanExpired:
             return "clean_expired";
         default:
@@ -215,6 +219,7 @@ private:
 
         // Requests from internal
         CompactRequest compact_req_;
+        LocalGcRequest local_gc_req_;
         CleanExpiredRequest expire_req_;
         bool running_{false};
 

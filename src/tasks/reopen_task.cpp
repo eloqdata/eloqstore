@@ -8,7 +8,16 @@ namespace eloqstore
 
 KvError ReopenTask::Reopen(const TableIdent &tbl_id)
 {
-    return shard->IndexManager()->InstallExternalSnapshot(tbl_id, cow_meta_);
+    KvError err =
+        shard->IndexManager()->InstallExternalSnapshot(tbl_id, cow_meta_);
+    if (err == KvError::NoError && !Options()->cloud_store_path.empty())
+    {
+        if (!shard->HasPendingLocalGc(tbl_id))
+        {
+            shard->AddPendingLocalGc(tbl_id);
+        }
+    }
+    return err;
 }
 
 }  // namespace eloqstore
