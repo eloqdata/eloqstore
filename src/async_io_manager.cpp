@@ -2577,6 +2577,14 @@ CloudStoreMgr::CloudStoreMgr(const KvOptions *opts,
         std::max(options_->DataFileSize(), static_cast<size_t>(8 * MB)));
 }
 
+CloudStoreMgr::~CloudStoreMgr()
+{
+    if (cloud_service_)
+    {
+        cloud_service_->UnregisterObjectStore(shard_id_);
+    }
+}
+
 KvError CloudStoreMgr::Init(Shard *shard)
 {
     shard_id_ = shard->shard_id_;  // Store for NotifyWorker calls
@@ -3038,7 +3046,7 @@ void CloudStoreMgr::Stop()
     }
     if (cloud_service_)
     {
-        cloud_service_->UnregisterObjectStore(shard_id_);
+        WaitForCloudTasksToDrain();
     }
 }
 
@@ -3132,6 +3140,25 @@ void CloudStoreMgr::StopAllPrewarmTasks()
     for (auto &prewarmer : prewarmers_)
     {
         prewarmer->stop_.store(true, std::memory_order_release);
+    }
+}
+
+void CloudStoreMgr::WaitForCloudTasksToDrain()
+{
+    using namespace std::chrono_literals;
+    constexpr auto kPollInterval = 5ms;
+    constexpr auto kDrainTimeout = std::chrono::seconds(30);
+    const auto deadline = std::chrono::steady_clock::now() + kDrainTimeout;
+
+    while (obj_store_.HasPendingWork())
+    {
+        if (std::chrono::steady_clock::now() >= deadline)
+        {
+            LOG(WARNING) << "Shard " << shard_id_
+                         << " still has pending cloud tasks during stop";
+            break;
+        }
+        std::this_thread::sleep_for(kPollInterval);
     }
 }
 

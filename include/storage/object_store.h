@@ -60,6 +60,7 @@ public:
     void StartHttpRequest(Task *task);
     void RunHttpWork();
     bool HttpWorkIdle() const;
+    bool HasPendingWork() const;
 
     class Task
     {
@@ -280,6 +281,10 @@ public:
     bool IsIdle() const
     {
         return active_requests_.empty();
+    }
+    bool HasPendingWork() const
+    {
+        return !active_requests_.empty() || !pending_retries_.empty();
     }
     size_t NumActiveRequests() const
     {

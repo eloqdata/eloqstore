@@ -735,6 +735,7 @@ public:
     CloudStoreMgr(const KvOptions *opts,
                   uint32_t fd_limit,
                   CloudStorageService *service);
+    ~CloudStoreMgr() override;
     static constexpr FileId ManifestFileId()
     {
         return LruFD::kManifest;
@@ -867,6 +868,7 @@ private:
         const TableIdent &tbl_id,
         uint64_t process_term,
         const std::string &etag);
+    void WaitForCloudTasksToDrain();
 
 private:
     int CreateFile(LruFD::Ref dir_fd,

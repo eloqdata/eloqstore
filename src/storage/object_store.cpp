@@ -947,6 +947,11 @@ bool ObjectStore::HttpWorkIdle() const
     return async_http_mgr_->IsIdle();
 }
 
+bool ObjectStore::HasPendingWork() const
+{
+    return async_http_mgr_ && async_http_mgr_->HasPendingWork();
+}
+
 AsyncHttpManager::AsyncHttpManager(const KvOptions *option,
                                    CloudStorageService *service)
     : cloud_service_(service)
