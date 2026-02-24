@@ -153,10 +153,10 @@ private:
     std::atomic<bool> stop_requested_{false};
 
     // Standby node do prewarm when received ckpt signal from master node.
-    std::atomic<bool> do_prewarm_{false};
+    bool do_prewarm_{false};
     // Caller might trigger PrewarmService to prewarm all or prewarm specified
     // partitions.
-    bool prewarm_all_partitions_{false};
+    bool prewarm_all_partitions_{true};
     std::vector<TableIdent> prewarm_tables_;
 };
 }  // namespace eloqstore

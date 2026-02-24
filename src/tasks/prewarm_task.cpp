@@ -242,12 +242,18 @@ PrewarmService::~PrewarmService()
 
 void PrewarmService::Start()
 {
+    {
+        std::unique_lock<std::mutex> lk(mux_);
+        stop_requested_.store(false, std::memory_order_relaxed);
+        do_prewarm_ = false;
+        prewarm_all_partitions_ = true;
+        prewarm_tables_.clear();
+    }
     thread_ = std::thread([this] { PrewarmLoop(); });
 }
 
 void PrewarmService::PrewarmLoop()
 {
-    assert(stop_requested_.load(std::memory_order_relaxed) == false);
     while (!stop_requested_.load(std::memory_order_acquire))
     {
         std::vector<std::string> remote_paths;
@@ -267,7 +273,7 @@ void PrewarmService::PrewarmLoop()
             }
 
             // Reset before prewarm.
-            do_prewarm_.store(false, std::memory_order_relaxed);
+            do_prewarm_ = false;
             prewarm_all_partitions_ = false;
             prewarm_tables_.clear();
         }
@@ -300,7 +306,7 @@ void PrewarmService::Stop()
 void PrewarmService::PrewarmAll()
 {
     std::unique_lock<std::mutex> lk(mux_);
-    do_prewarm_.store(true, std::memory_order_release);
+    do_prewarm_ = true;
     prewarm_all_partitions_ = true;
     cv_.notify_one();
 }
@@ -308,7 +314,7 @@ void PrewarmService::PrewarmAll()
 void PrewarmService::Prewarm(const std::vector<TableIdent> &tables)
 {
     std::unique_lock<std::mutex> lk(mux_);
-    do_prewarm_.store(true, std::memory_order_release);
+    do_prewarm_ = true;
     prewarm_tables_.insert(prewarm_tables_.end(), tables.begin(), tables.end());
     cv_.notify_one();
 }
