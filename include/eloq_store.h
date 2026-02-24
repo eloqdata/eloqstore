@@ -580,14 +580,15 @@ private:
 
     KvOptions options_;
     std::vector<int> root_fds_;
+    // Cloud service must outlive shards because shard teardown triggers
+    // async HTTP cleanup that uses CloudStorageService callbacks.
+    std::unique_ptr<CloudStorageService> cloud_service_;
     std::vector<std::unique_ptr<Shard>> shards_;
 #ifdef ELOQSTORE_WITH_TXSERVICE
     std::vector<std::unique_ptr<metrics::Meter>> metrics_meters_;
 #endif
     std::atomic<bool> stopped_{true};
     uint64_t term_{0};
-
-    std::unique_ptr<CloudStorageService> cloud_service_;
     std::unique_ptr<ArchiveCrond> archive_crond_{nullptr};
     std::unique_ptr<PrewarmService> prewarm_service_{nullptr};
 #ifdef ELOQ_MODULE_ENABLED
