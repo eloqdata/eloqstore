@@ -10,6 +10,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <numeric>
 #include <vector>
 
 #include "inih/cpp/INIReader.h"
@@ -381,5 +382,72 @@ bool KvOptions::operator==(const KvOptions &other) const
            pages_per_file_shift == other.pages_per_file_shift &&
            overflow_pointers == other.overflow_pointers &&
            data_append_mode == other.data_append_mode;
+}
+
+std::vector<uint32_t> ComputeStorePathLut(const std::vector<uint64_t> &weights,
+                                          size_t max_entries)
+{
+    std::vector<uint32_t> lut;
+    if (weights.empty() || max_entries == 0)
+    {
+        return lut;
+    }
+
+    std::vector<uint64_t> normalized(weights.begin(), weights.end());
+    for (uint64_t &weight : normalized)
+    {
+        if (weight == 0)
+        {
+            weight = 1;
+        }
+    }
+
+    uint64_t gcd_value = normalized.front();
+    for (size_t i = 1; i < normalized.size(); ++i)
+    {
+        gcd_value = std::gcd(gcd_value, normalized[i]);
+    }
+    if (gcd_value > 1)
+    {
+        for (uint64_t &weight : normalized)
+        {
+            weight /= gcd_value;
+        }
+    }
+
+    size_t total_slots = 0;
+    for (uint64_t weight : normalized)
+    {
+        total_slots += weight;
+    }
+    if (total_slots == 0)
+    {
+        total_slots = normalized.size();
+        for (uint64_t &weight : normalized)
+        {
+            weight = 1;
+        }
+    }
+
+    if (total_slots > max_entries)
+    {
+        size_t scale = (total_slots + max_entries - 1) / max_entries;
+        total_slots = 0;
+        for (uint64_t &weight : normalized)
+        {
+            weight = std::max<uint64_t>(1, weight / scale);
+            total_slots += weight;
+        }
+    }
+
+    lut.reserve(total_slots);
+    for (size_t idx = 0; idx < normalized.size(); ++idx)
+    {
+        for (uint64_t slot = 0; slot < normalized[idx]; ++slot)
+        {
+            lut.push_back(static_cast<uint32_t>(idx));
+        }
+    }
+    return lut;
 }
 }  // namespace eloqstore

@@ -121,7 +121,8 @@ KvError ListLocalFiles(const TableIdent &tbl_id,
 {
     namespace fs = std::filesystem;
 
-    fs::path dir_path = tbl_id.StorePath(io_mgr->options_->store_path);
+    fs::path dir_path = tbl_id.StorePath(io_mgr->options_->store_path,
+                                         io_mgr->options_->store_path_lut);
 
     for (auto &ent : fs::directory_iterator{dir_path})
     {
@@ -271,7 +272,9 @@ KvError DownloadArchiveFile(const TableIdent &tbl_id,
         return download_task.error_;
     }
 
-    fs::path local_path = tbl_id.StorePath(options->store_path) / archive_file;
+    fs::path local_path =
+        tbl_id.StorePath(options->store_path, options->store_path_lut) /
+        archive_file;
 
     KvError write_err = cloud_mgr->WriteFile(
         tbl_id, archive_file, download_task.response_data_);
@@ -407,7 +410,8 @@ KvError GetOrUpdateArchivedMaxFileId(
         read_err = io_mgr->ReadFile(tbl_id, latest_archive, archive_content);
         if (read_err != KvError::NoError)
         {
-            fs::path dir_path = tbl_id.StorePath(io_mgr->options_->store_path);
+            fs::path dir_path = tbl_id.StorePath(
+                io_mgr->options_->store_path, io_mgr->options_->store_path_lut);
             fs::path archive_path = dir_path / latest_archive;
             LOG(ERROR) << "Failed to read archive file: " << archive_path;
         }
@@ -540,7 +544,8 @@ KvError DeleteUnreferencedLocalFiles(
     IouringMgr *io_mgr)
 {
     namespace fs = std::filesystem;
-    fs::path dir_path = tbl_id.StorePath(io_mgr->options_->store_path);
+    fs::path dir_path = tbl_id.StorePath(io_mgr->options_->store_path,
+                                         io_mgr->options_->store_path_lut);
 
     std::vector<std::string> files_to_delete;
     std::vector<FileId> file_ids_to_close;

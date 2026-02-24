@@ -577,6 +577,7 @@ private:
     KvError CollectTablePartitions(const std::string &table_name,
                                    std::vector<TableIdent> &partitions) const;
     KvError InitStoreSpace();
+    KvError BuildStorePathLut();
 
     KvOptions options_;
     std::vector<int> root_fds_;

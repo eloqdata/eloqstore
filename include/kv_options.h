@@ -19,6 +19,7 @@ constexpr int64_t TB = 1LL << 40;
 
 constexpr uint8_t max_overflow_pointers = 128;
 constexpr uint16_t max_read_pages_batch = max_overflow_pointers;
+constexpr size_t kDefaultStorePathLutEntries = 1 << 20;
 
 struct KvOptions
 {
@@ -161,6 +162,11 @@ struct KvOptions
      */
     std::vector<std::string> store_path;
     /**
+     * @brief Lookup table that maps partition ids to store_path indexes.
+     * Built during initialization to honor disk-capacity based weights.
+     */
+    std::vector<uint32_t> store_path_lut;
+    /**
      * @brief Storage path on cloud service.
      * Store all data locally if this is empty.
      * Example: mybucket/eloqstore
@@ -261,4 +267,8 @@ struct KvOptions
      */
     std::function<bool(const TableIdent &)> partition_filter;
 };
+
+std::vector<uint32_t> ComputeStorePathLut(
+    const std::vector<uint64_t> &weights,
+    size_t max_entries = kDefaultStorePathLutEntries);
 }  // namespace eloqstore

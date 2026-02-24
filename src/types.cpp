@@ -32,15 +32,26 @@ TableIdent TableIdent::FromString(const std::string &str)
     }
 }
 
-uint8_t TableIdent::DiskIndex(uint8_t num_disks) const
+size_t TableIdent::StorePathIndex(
+    size_t num_paths, tcb::span<const uint32_t> store_path_lut) const
 {
-    assert(num_disks > 0);
-    return partition_id_ % num_disks;
+    assert(num_paths > 0);
+    if (store_path_lut.empty())
+    {
+        return partition_id_ % num_paths;
+    }
+    assert(!store_path_lut.empty());
+    size_t slot = partition_id_ % store_path_lut.size();
+    size_t store_path_idx = store_path_lut[slot];
+    assert(store_path_idx < num_paths);
+    return store_path_idx;
 }
 
-fs::path TableIdent::StorePath(tcb::span<const std::string> disks) const
+fs::path TableIdent::StorePath(tcb::span<const std::string> store_paths,
+                               tcb::span<const uint32_t> store_path_lut) const
 {
-    fs::path partition_path = disks[DiskIndex(disks.size())];
+    fs::path partition_path =
+        store_paths[StorePathIndex(store_paths.size(), store_path_lut)];
     partition_path.append(ToString());
     return partition_path;
 }

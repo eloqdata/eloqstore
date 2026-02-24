@@ -47,8 +47,10 @@ struct TableIdent
         : tbl_name_(std::move(tbl_name)), partition_id_(id) {};
     std::string ToString() const;
     static TableIdent FromString(const std::string &str);
-    uint8_t DiskIndex(uint8_t num_disks) const;
-    fs::path StorePath(tcb::span<const std::string> disks) const;
+    size_t StorePathIndex(size_t num_paths,
+                          tcb::span<const uint32_t> store_path_lut = {}) const;
+    fs::path StorePath(tcb::span<const std::string> store_paths,
+                       tcb::span<const uint32_t> store_path_lut = {}) const;
     uint16_t ShardIndex(uint16_t num_shards) const;
     bool IsValid() const;
 

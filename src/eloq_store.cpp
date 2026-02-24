@@ -2,10 +2,15 @@
 
 #include <glog/logging.h>
 #include <sys/resource.h>
+#include <sys/stat.h>
+#include <sys/statvfs.h>
 
+#include <algorithm>
+#include <cerrno>
 #include <atomic>
 #include <cassert>
 #include <cstddef>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <memory>
@@ -14,6 +19,7 @@
 #include <string_view>
 #include <system_error>
 #include <unordered_set>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -36,6 +42,11 @@
 
 namespace eloqstore
 {
+namespace
+{
+constexpr uint64_t kStorePathWeightGranularity = 1ULL << 20;  // 1 MiB
+constexpr size_t kMaxStorePathLutEntries = kDefaultStorePathLutEntries;
+}
 
 bool EloqStore::ValidateOptions(KvOptions &opts)
 {
@@ -319,6 +330,12 @@ KvError EloqStore::InitStoreSpace()
         }
     }
 
+    KvError weight_err = BuildStorePathLut();
+    if (weight_err != KvError::NoError)
+    {
+        return weight_err;
+    }
+
     assert(root_fds_.empty());
     for (const fs::path store_path : options_.store_path)
     {
@@ -335,6 +352,98 @@ KvError EloqStore::InitStoreSpace()
         }
         root_fds_.push_back(res);
     }
+    return KvError::NoError;
+}
+
+KvError EloqStore::BuildStorePathLut()
+{
+    options_.store_path_lut.clear();
+    if (options_.store_path.empty())
+    {
+        return KvError::NoError;
+    }
+
+    const size_t path_count = options_.store_path.size();
+    std::vector<uint64_t> device_sizes;
+    std::vector<size_t> device_counts;
+    std::vector<size_t> path_device_index(path_count, 0);
+    std::unordered_map<uint64_t, size_t> device_lookup;
+
+    for (size_t i = 0; i < path_count; ++i)
+    {
+        const fs::path &path = options_.store_path[i];
+        struct stat stat_buf
+        {
+        };
+        if (stat(path.c_str(), &stat_buf) != 0)
+        {
+            int err = errno;
+            LOG(ERROR) << "stat(" << path << ") failed: " << strerror(err);
+            return ToKvError(-err);
+        }
+        struct statvfs vfs_buf
+        {
+        };
+        if (statvfs(path.c_str(), &vfs_buf) != 0)
+        {
+            int err = errno;
+            LOG(ERROR) << "statvfs(" << path << ") failed: " << strerror(err);
+            return ToKvError(-err);
+        }
+        uint64_t total_bytes =
+            static_cast<uint64_t>(vfs_buf.f_blocks) * vfs_buf.f_frsize;
+        if (total_bytes == 0)
+        {
+            total_bytes = 1;
+        }
+        uint64_t dev_key = static_cast<uint64_t>(stat_buf.st_dev);
+        auto [it, inserted] = device_lookup.emplace(dev_key, device_sizes.size());
+        size_t dev_idx = it->second;
+        if (inserted)
+        {
+            device_sizes.push_back(total_bytes);
+            device_counts.push_back(1);
+        }
+        else
+        {
+            device_counts[dev_idx] += 1;
+            device_sizes[dev_idx] = std::min(device_sizes[dev_idx], total_bytes);
+        }
+        path_device_index[i] = dev_idx;
+    }
+
+    std::vector<uint64_t> weights(path_count, 1);
+    for (size_t i = 0; i < path_count; ++i)
+    {
+        size_t dev_idx = path_device_index[i];
+        size_t dev_paths = std::max<size_t>(1, device_counts[dev_idx]);
+        uint64_t per_path_bytes = device_sizes[dev_idx] / dev_paths;
+        if (per_path_bytes == 0)
+        {
+            per_path_bytes = 1;
+        }
+        uint64_t weight = per_path_bytes / kStorePathWeightGranularity;
+        if (weight == 0)
+        {
+            weight = 1;
+        }
+        weights[i] = weight;
+    }
+
+    for (size_t i = 0; i < weights.size(); ++i)
+    {
+        DLOG(INFO) << "Store path " << options_.store_path[i] << " weight slots: "
+                   << weights[i];
+    }
+    auto lut = ComputeStorePathLut(weights, kMaxStorePathLutEntries);
+    if (lut.empty())
+    {
+        LOG(ERROR) << "Failed to compute store path LUT";
+        return KvError::InvalidArgs;
+    }
+    options_.store_path_lut = std::move(lut);
+    DLOG(INFO) << "Constructed store_path LUT with "
+               << options_.store_path_lut.size() << " entries";
     return KvError::NoError;
 }
 

@@ -23,6 +23,7 @@ set(UTEST_SOURCES
     fileid_term_mapping.cpp
     manifest_payload.cpp
     replayer_term.cpp
+    store_path_lut.cpp
 )
 
 string( REPLACE ".cpp" "" BASENAMES_UTEST "${UTEST_SOURCES}" )
