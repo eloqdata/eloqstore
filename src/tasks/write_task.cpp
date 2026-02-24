@@ -26,15 +26,12 @@ namespace eloqstore
 {
 namespace
 {
-bool BuildRetainedFiles(const TableIdent &tbl_id,
-                        absl::flat_hash_set<FileId> &retained_files,
-                        std::vector<MappingSnapshot::Ref> &snapshot_array)
+KvError BuildRetainedFiles(const TableIdent &tbl_id,
+                           absl::flat_hash_set<FileId> &retained_files,
+                           std::vector<MappingSnapshot::Ref> &snapshot_array)
 {
     auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_id);
-    if (err != KvError::NoError)
-    {
-        return false;
-    }
+    CHECK_KV_ERR(err);
     RootMeta *meta = root_handle.Get();
     const uint8_t shift = Options()->pages_per_file_shift;
     size_t approx_file_cnt = 0;
@@ -57,7 +54,7 @@ bool BuildRetainedFiles(const TableIdent &tbl_id,
         GetRetainedFiles(retained_files, mapping->mapping_tbl_, shift);
         ThdTask()->YieldToLowPQ();
     }
-    return true;
+    return KvError::NoError;
 }
 }  // namespace
 std::string_view WriteTask::TaskTypeName() const
@@ -585,8 +582,13 @@ void WriteTask::TriggerFileGC() const
 
     absl::flat_hash_set<FileId> retained_files;
     std::vector<MappingSnapshot::Ref> snapshot_array;
-    if (!BuildRetainedFiles(tbl_ident_, retained_files, snapshot_array))
+    KvError build_err =
+        BuildRetainedFiles(tbl_ident_, retained_files, snapshot_array);
+    if (build_err != KvError::NoError)
     {
+        LOG(ERROR) << "BuildRetainedFiles failed for table "
+                   << tbl_ident_.ToString() << " err="
+                   << static_cast<int>(build_err);
         return;
     }
 
@@ -625,15 +627,14 @@ void WriteTask::TriggerFileGC() const
     }
 }
 
-void WriteTask::TriggerLocalFileGC() const
+KvError WriteTask::TriggerLocalFileGC() const
 {
     assert(Options()->data_append_mode);
     absl::flat_hash_set<FileId> retained_files;
     std::vector<MappingSnapshot::Ref> snapshot_array;
-    if (!BuildRetainedFiles(tbl_ident_, retained_files, snapshot_array))
-    {
-        return;
-    }
+    KvError build_err =
+        BuildRetainedFiles(tbl_ident_, retained_files, snapshot_array);
+    CHECK_KV_ERR(build_err);
     IouringMgr *io_mgr = static_cast<IouringMgr *>(shard->IoManager());
     KvError gc_err = FileGarbageCollector::ExecuteLocalGC(
         tbl_ident_, retained_files, io_mgr);
@@ -641,6 +642,7 @@ void WriteTask::TriggerLocalFileGC() const
     {
         LOG(ERROR) << "Local GC failed for table " << tbl_ident_.ToString();
     }
+    return gc_err;
 }
 
 std::pair<DataPage, KvError> WriteTask::LoadDataPage(PageId page_id)

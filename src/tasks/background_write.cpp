@@ -349,8 +349,7 @@ KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
 
 KvError BackgroundWrite::RunLocalFileGc()
 {
-    TriggerLocalFileGC();
-    return KvError::NoError;
+    return TriggerLocalFileGC();
 }
 
 }  // namespace eloqstore
