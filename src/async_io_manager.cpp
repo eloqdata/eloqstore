@@ -33,8 +33,8 @@
 #include <vector>
 
 #include "error.h"
-#include "utils.h"
 #include "replayer.h"
+#include "utils.h"
 
 #ifdef ELOQ_MODULE_ENABLED
 #include <bthread/eloq_module.h>
@@ -3692,10 +3692,9 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
     return IouringMgr::GetManifest(tbl_id);
 }
 
-KvError CloudStoreMgr::SyncDataFileFromRemoteIfNeeded(
-    const TableIdent &tbl_id,
-    FileId file_id,
-    uint64_t term)
+KvError CloudStoreMgr::SyncDataFileFromRemoteIfNeeded(const TableIdent &tbl_id,
+                                                      FileId file_id,
+                                                      uint64_t term)
 {
     if (file_id > LruFD::kMaxDataFile)
     {

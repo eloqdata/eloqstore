@@ -24,6 +24,39 @@
 
 namespace eloqstore
 {
+namespace
+{
+KvError BuildRetainedFiles(const TableIdent &tbl_id,
+                           absl::flat_hash_set<FileId> &retained_files,
+                           std::vector<MappingSnapshot::Ref> &snapshot_array)
+{
+    auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_id);
+    CHECK_KV_ERR(err);
+    RootMeta *meta = root_handle.Get();
+    const uint8_t shift = Options()->pages_per_file_shift;
+    size_t approx_file_cnt = 0;
+    snapshot_array.clear();
+    snapshot_array.reserve(meta->mapping_snapshots_.size());
+    for (MappingSnapshot *mapping : meta->mapping_snapshots_)
+    {
+        const size_t page_cnt = mapping->mapping_tbl_.size();
+        const size_t file_cnt = (page_cnt >> shift) + 1;
+        if (file_cnt > approx_file_cnt)
+        {
+            approx_file_cnt = file_cnt;
+        }
+        snapshot_array.emplace_back(MappingSnapshot::Ref(mapping));
+    }
+    retained_files.clear();
+    retained_files.reserve(approx_file_cnt);
+    for (const MappingSnapshot::Ref &mapping : snapshot_array)
+    {
+        GetRetainedFiles(retained_files, mapping->mapping_tbl_, shift);
+        ThdTask()->YieldToLowPQ();
+    }
+    return KvError::NoError;
+}
+}  // namespace
 std::string_view WriteTask::TaskTypeName() const
 {
     switch (Type())
@@ -547,33 +580,16 @@ void WriteTask::TriggerFileGC() const
 {
     assert(Options()->data_append_mode);
 
-    auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_ident_);
-    if (err != KvError::NoError)
-    {
-        return;
-    }
-    RootMeta *meta = root_handle.Get();
-
     absl::flat_hash_set<FileId> retained_files;
-    const uint8_t shift = Options()->pages_per_file_shift;
-    size_t approx_file_cnt = 0;
     std::vector<MappingSnapshot::Ref> snapshot_array;
-    snapshot_array.reserve(meta->mapping_snapshots_.size());
-    for (MappingSnapshot *mapping : meta->mapping_snapshots_)
+    KvError build_err =
+        BuildRetainedFiles(tbl_ident_, retained_files, snapshot_array);
+    if (build_err != KvError::NoError)
     {
-        const size_t page_cnt = mapping->mapping_tbl_.size();
-        const size_t file_cnt = (page_cnt >> shift) + 1;
-        if (file_cnt > approx_file_cnt)
-        {
-            approx_file_cnt = file_cnt;
-        }
-        snapshot_array.emplace_back(MappingSnapshot::Ref(mapping));
-    }
-    retained_files.reserve(approx_file_cnt);
-    for (const MappingSnapshot::Ref &mapping : snapshot_array)
-    {
-        GetRetainedFiles(retained_files, mapping->mapping_tbl_, shift);
-        ThdTask()->YieldToLowPQ();
+        LOG(ERROR) << "BuildRetainedFiles failed for table "
+                   << tbl_ident_.ToString()
+                   << " err=" << static_cast<int>(build_err);
+        return;
     }
 
     // Check if we're in cloud mode or local mode
@@ -609,6 +625,24 @@ void WriteTask::TriggerFileGC() const
             LOG(ERROR) << "Local GC failed for table " << tbl_ident_.ToString();
         }
     }
+}
+
+KvError WriteTask::TriggerLocalFileGC() const
+{
+    assert(Options()->data_append_mode);
+    absl::flat_hash_set<FileId> retained_files;
+    std::vector<MappingSnapshot::Ref> snapshot_array;
+    KvError build_err =
+        BuildRetainedFiles(tbl_ident_, retained_files, snapshot_array);
+    CHECK_KV_ERR(build_err);
+    IouringMgr *io_mgr = static_cast<IouringMgr *>(shard->IoManager());
+    KvError gc_err = FileGarbageCollector::ExecuteLocalGC(
+        tbl_ident_, retained_files, io_mgr);
+    if (gc_err != KvError::NoError)
+    {
+        LOG(ERROR) << "Local GC failed for table " << tbl_ident_.ToString();
+    }
+    return gc_err;
 }
 
 std::pair<DataPage, KvError> WriteTask::LoadDataPage(PageId page_id)

@@ -61,7 +61,6 @@ public:
     KvError InstallExternalSnapshot(const TableIdent &tbl_ident,
                                     CowRootMeta &cow_meta);
 
-
     void FreeMappingSnapshot(MappingSnapshot *mapping);
 
     void FinishIo(MappingSnapshot *mapping, MemIndexPage *idx_page);

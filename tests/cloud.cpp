@@ -1122,10 +1122,11 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
         std::filesystem::path dst =
             std::filesystem::path(backup_root) / src.filename();
         std::filesystem::remove_all(dst);
-        std::filesystem::copy(src,
-                              dst,
-                              std::filesystem::copy_options::recursive |
-                                  std::filesystem::copy_options::overwrite_existing);
+        std::filesystem::copy(
+            src,
+            dst,
+            std::filesystem::copy_options::recursive |
+                std::filesystem::copy_options::overwrite_existing);
     }
     {
         std::filesystem::path v1_manifest =
@@ -1158,12 +1159,13 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
     for (const auto &path : options.store_path)
     {
         std::filesystem::remove_all(path);
-        std::filesystem::path src =
-            std::filesystem::path(backup_root) / std::filesystem::path(path).filename();
-        std::filesystem::copy(src,
-                              path,
-                              std::filesystem::copy_options::recursive |
-                                  std::filesystem::copy_options::overwrite_existing);
+        std::filesystem::path src = std::filesystem::path(backup_root) /
+                                    std::filesystem::path(path).filename();
+        std::filesystem::copy(
+            src,
+            path,
+            std::filesystem::copy_options::recursive |
+                std::filesystem::copy_options::overwrite_existing);
     }
     auto clear_data_files = [&](const eloqstore::TableIdent &table_id)
     {
@@ -1175,14 +1177,15 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
             {
                 continue;
             }
-            for (const auto &ent : std::filesystem::directory_iterator(part_path))
+            for (const auto &ent :
+                 std::filesystem::directory_iterator(part_path))
             {
                 if (!ent.is_regular_file())
                 {
                     continue;
                 }
-                auto [type, suffix] = eloqstore::ParseFileName(
-                    ent.path().filename().string());
+                auto [type, suffix] =
+                    eloqstore::ParseFileName(ent.path().filename().string());
                 if (type == eloqstore::FileNameData)
                 {
                     std::filesystem::remove(ent.path());
@@ -1244,7 +1247,8 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
     verifiers.reserve(tbl_ids.size());
     for (const auto &tbl_id : tbl_ids)
     {
-        verifiers.emplace_back(std::make_unique<MapVerifier>(tbl_id, store, false));
+        verifiers.emplace_back(
+            std::make_unique<MapVerifier>(tbl_id, store, false));
     }
 
     // Version 1 data, keep a local backup.
@@ -1272,10 +1276,11 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
         std::filesystem::path dst =
             std::filesystem::path(backup_root) / src.filename();
         std::filesystem::remove_all(dst);
-        std::filesystem::copy(src,
-                              dst,
-                              std::filesystem::copy_options::recursive |
-                                  std::filesystem::copy_options::overwrite_existing);
+        std::filesystem::copy(
+            src,
+            dst,
+            std::filesystem::copy_options::recursive |
+                std::filesystem::copy_options::overwrite_existing);
     }
     for (const auto &tbl_id : tbl_ids)
     {
@@ -1316,12 +1321,13 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
     for (const auto &path : options.store_path)
     {
         std::filesystem::remove_all(path);
-        std::filesystem::path src =
-            std::filesystem::path(backup_root) / std::filesystem::path(path).filename();
-        std::filesystem::copy(src,
-                              path,
-                              std::filesystem::copy_options::recursive |
-                                  std::filesystem::copy_options::overwrite_existing);
+        std::filesystem::path src = std::filesystem::path(backup_root) /
+                                    std::filesystem::path(path).filename();
+        std::filesystem::copy(
+            src,
+            path,
+            std::filesystem::copy_options::recursive |
+                std::filesystem::copy_options::overwrite_existing);
     }
     auto clear_partition_data_files = [&](const eloqstore::TableIdent &table_id)
     {
@@ -1333,14 +1339,15 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
             {
                 continue;
             }
-            for (const auto &ent : std::filesystem::directory_iterator(part_path))
+            for (const auto &ent :
+                 std::filesystem::directory_iterator(part_path))
             {
                 if (!ent.is_regular_file())
                 {
                     continue;
                 }
-                auto [type, suffix] = eloqstore::ParseFileName(
-                    ent.path().filename().string());
+                auto [type, suffix] =
+                    eloqstore::ParseFileName(ent.path().filename().string());
                 if (type == eloqstore::FileNameData)
                 {
                     std::filesystem::remove(ent.path());
