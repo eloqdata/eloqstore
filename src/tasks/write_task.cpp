@@ -587,8 +587,8 @@ void WriteTask::TriggerFileGC() const
     if (build_err != KvError::NoError)
     {
         LOG(ERROR) << "BuildRetainedFiles failed for table "
-                   << tbl_ident_.ToString() << " err="
-                   << static_cast<int>(build_err);
+                   << tbl_ident_.ToString()
+                   << " err=" << static_cast<int>(build_err);
         return;
     }
 
