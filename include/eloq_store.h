@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef ELOQSTORE_WITH_TXSERVICE
+#ifdef ELOQ_MODULE_ENABLED
 #include <bthread/condition_variable.h>
 #include <bthread/mutex.h>
 #endif
@@ -104,7 +104,7 @@ protected:
     TableIdent tbl_id_;
     uint64_t user_data_{0};
     std::function<void(KvRequest *)> callback_{nullptr};
-#ifdef ELOQSTORE_WITH_TXSERVICE
+#ifdef ELOQ_MODULE_ENABLED
     mutable bthread::ConditionVariable cv_;
     mutable bthread::Mutex mutex_;
     bool done_{true};
