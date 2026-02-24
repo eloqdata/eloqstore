@@ -36,10 +36,6 @@ size_t TableIdent::StorePathIndex(
     size_t num_paths, tcb::span<const uint32_t> store_path_lut) const
 {
     assert(num_paths > 0);
-    if (store_path_lut.empty())
-    {
-        return partition_id_ % num_paths;
-    }
     assert(!store_path_lut.empty());
     size_t slot = partition_id_ % store_path_lut.size();
     size_t store_path_idx = store_path_lut[slot];
