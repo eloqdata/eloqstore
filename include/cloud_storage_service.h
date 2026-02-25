@@ -28,6 +28,11 @@ public:
     void Submit(ObjectStore *store, ObjectStore::Task *task);
     void NotifyTaskFinished(ObjectStore::Task *task);
 
+    bool HasPendingJobs() const
+    {
+        return pending_jobs_.load(std::memory_order_acquire) > 0;
+    }
+
 private:
     struct PendingJob
     {

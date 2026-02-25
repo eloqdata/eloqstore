@@ -3146,8 +3146,7 @@ void CloudStoreMgr::StopAllPrewarmTasks()
 
 void CloudStoreMgr::WaitForCloudTasksToDrain()
 {
-    using namespace std::chrono_literals;
-    constexpr auto kPollInterval = 5ms;
+    constexpr auto kPollInterval = std::chrono::milliseconds(5);
 
     while (obj_store_.HasPendingWork())
     {

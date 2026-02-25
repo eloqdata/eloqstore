@@ -949,7 +949,9 @@ bool ObjectStore::HttpWorkIdle() const
 
 bool ObjectStore::HasPendingWork() const
 {
-    return async_http_mgr_ && async_http_mgr_->HasPendingWork();
+    bool http_pending = async_http_mgr_ && async_http_mgr_->HasPendingWork();
+    bool service_pending = cloud_service_ && cloud_service_->HasPendingJobs();
+    return http_pending || service_pending;
 }
 
 void ObjectStore::Shutdown()
