@@ -3135,6 +3135,33 @@ void CloudStoreMgr::StopAllPrewarmTasks()
     }
 }
 
+void CloudStoreMgr::EnqueuePrewarmFiles(std::vector<PrewarmFile> files)
+{
+    if (files.empty())
+    {
+        return;
+    }
+
+    const size_t num_files = files.size();
+    prewarm_queue_.enqueue_bulk(std::make_move_iterator(files.begin()),
+                                num_files);
+    const size_t prev_size =
+        prewarm_queue_size_.fetch_add(num_files, std::memory_order_release);
+
+    // Wake prewarm workers for this shard.
+    for (auto &prewarmer : prewarmers_)
+    {
+        prewarmer->stop_.store(false, std::memory_order_release);
+    }
+
+#ifdef ELOQ_MODULE_ENABLED
+    eloq::EloqModule::NotifyWorker(shard_id_);
+#endif
+
+    DLOG(INFO) << "Enqueued " << num_files << " reopen prewarm files on shard "
+               << shard_id_ << ", queue size: " << (prev_size + num_files);
+}
+
 void CloudStoreMgr::AcquireCloudSlot(KvTask *task)
 {
     if (task == nullptr)
