@@ -277,9 +277,16 @@ data_10_feature_5             → Branch data, file_id=10, branch=feature, term=
            file_name = "data_" + file_id + "_" + branch_name + "_" + term
            referenced_files.insert(file_name)
 
-3. For each data file (file_name):
+3. Build branch max_file_id map:
+   For each manifest (branch_name, term):
+       max_file_id = max file_id in manifest for this (branch_name, term)
+       branch_max_map[(branch_name, term)] = max_file_id
+
+4. For each data file (file_name = data_<file_id>_<branch_name>_<term>):
        if file_name in referenced_files:
-           KEEP (at least one branch references it)
+           KEEP (manifest references it)
+       else if (branch_name, term) in branch_max_map and file_id > branch_max_map[(branch_name, term)]:
+           KEEP (newly created file not yet in manifest)
        else:
            DELETE (orphaned)
 ```
