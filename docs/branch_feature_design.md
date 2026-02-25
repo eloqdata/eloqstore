@@ -278,8 +278,7 @@ data_10_feature_5             → Branch data, file_id=10, branch=feature, term=
                file_name = "data_" + file_id + "_" + branch_name + "_" + term
                referenced_files.insert(file_name)
 
-3. For each data file (file_id, branch_name, term):
-       file_name = "data_" + file_id + "_" + branch_name + "_" + term
+3. For each data file (file_name):
        if file_name in referenced_files:
            KEEP (at least one branch references it)
        else:
