@@ -271,14 +271,16 @@ data_10_feature_5             → Branch data, file_id=10, branch=feature, term=
 
 ```
 1. Collect all active manifests (development + all branches)
-2. Build reference map using branch_file_ranges:
+2. Build reference set using branch_file_ranges:
    For each manifest:
        For each (branch_name → BranchFileRange) in branch_file_ranges:
            For file_id in range [0, max_file_id]:
-               referenced_files[file_id].insert(branch_name)
+               file_name = "data_" + file_id + "_" + branch_name + "_" + term
+               referenced_files.insert(file_name)
 
 3. For each data file (file_id, branch_name, term):
-       if file_id in referenced_files and branch_name in referenced_files[file_id]:
+       file_name = "data_" + file_id + "_" + branch_name + "_" + term
+       if file_name in referenced_files:
            KEEP (at least one branch references it)
        else:
            DELETE (orphaned)
