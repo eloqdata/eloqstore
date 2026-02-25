@@ -10,17 +10,17 @@ The Branch feature provides lightweight data isolation by creating independent m
 
 ### Branch Name Rules
 - **Validation**: Only `[a-zA-Z0-9_-]+` (alphanumeric, underscore, hyphen)
-- **Reserved**: `"development"` (primary branch)
+- **Reserved**: `"main"` (primary branch)
 - **Uniqueness**: Branch name must be unique within the table
 
 ### Manifest Files
 
 | Type | Format | Example | Notes |
 |------|--------|---------|-------|
-| Development manifest | `manifest_development_<term>` | `manifest_development_5` | |
+| Development manifest | `manifest_main_<term>` | `manifest_main_5` | |
 | Development manifest (legacy) | `manifest_<term>` | `manifest_5` | Backward compatible |
 | Branch manifest | `manifest_<branch_name>_<term>` | `manifest_feature_5` | |
-| Development archive | `manifest_development_<term>_<ts>` | `manifest_development_5_1234567890` | |
+| Development archive | `manifest_main_<term>_<ts>` | `manifest_main_5_1234567890` | |
 | Development archive (legacy) | `manifest_<term>_<ts>` | `manifest_5_1234567890` | Backward compatible |
 | Branch archive | `manifest_<branch_name>_<term>_<ts>` | `manifest_feature_5_1234567890` | |
 
@@ -28,7 +28,7 @@ The Branch feature provides lightweight data isolation by creating independent m
 
 | Type | Format | Example | Notes |
 |------|--------|---------|-------|
-| Development data | `data_<file_id>_development_<term>` | `data_10_development_5` | |
+| Development data | `data_<file_id>_main_<term>` | `data_10_main_5` | |
 | Development data (legacy) | `data_<file_id>_<term>` | `data_10_5` | Backward compatible |
 | Branch data | `data_<file_id>_<branch_name>_<term>` | `data_10_feature_5` | |
 
@@ -36,7 +36,7 @@ The Branch feature provides lightweight data isolation by creating independent m
 
 | Type | Format | Example | Notes |
 |------|--------|---------|-------|
-| Development | `CURRENT_TERM.development` | `CURRENT_TERM.development` | |
+| Development | `CURRENT_TERM.main` | `CURRENT_TERM.main` | |
 | Development (legacy) | `CURRENT_TERM` | `CURRENT_TERM` | Backward compatible |
 | Branch | `CURRENT_TERM.<branch_name>` | `CURRENT_TERM.feature` | |
 
@@ -47,27 +47,27 @@ The Branch feature provides lightweight data isolation by creating independent m
 ### Manifest Parsing
 
 ```
-manifest_5                → {branch_name: "development", term: 5, timestamp: null}    (legacy)
-manifest_development_5   → {branch_name: "development", term: 5, timestamp: null} (development)
+manifest_5                → {branch_name: "main", term: 5, timestamp: null}    (legacy)
+manifest_main_5   → {branch_name: "main", term: 5, timestamp: null} (main)
 manifest_feature_5       → {branch_name: "feature", term: 5, timestamp: null}      (branch)
-manifest_5_123           → {branch_name: "development", term: 5, timestamp: 123}    (legacy archive)
-manifest_development_5_123 → {branch_name: "development", term: 5, timestamp: 123} (archive)
+manifest_5_123           → {branch_name: "main", term: 5, timestamp: 123}    (legacy archive)
+manifest_main_5_123 → {branch_name: "main", term: 5, timestamp: 123} (archive)
 manifest_feature_5_123  → {branch_name: "feature", term: 5, timestamp: 123}        (branch archive)
 ```
 
 ### Data File Parsing
 
 ```
-data_10_5                → {file_id: 10, branch_name: "development", term: 5}  (legacy)
-data_10_development_5    → {file_id: 10, branch_name: "development", term: 5}
+data_10_5                → {file_id: 10, branch_name: "main", term: 5}  (legacy)
+data_10_main_5    → {file_id: 10, branch_name: "main", term: 5}
 data_10_feature_5       → {file_id: 10, branch_name: "feature", term: 5}
 ```
 
 ### CURRENT_TERM Parsing
 
 ```
-CURRENT_TERM             → branch_name: "development" (legacy)
-CURRENT_TERM.development → branch_name: "development"
+CURRENT_TERM             → branch_name: "main" (legacy)
+CURRENT_TERM.main → branch_name: "main"
 CURRENT_TERM.feature    → branch_name: "feature"
 ```
 
@@ -78,8 +78,8 @@ CURRENT_TERM.feature    → branch_name: "feature"
 | Malformed manifest filename | Ignore file, log warning |
 | Malformed data filename | Ignore file, log warning |
 | Invalid branch_name (contains invalid chars) | Return error |
-| Reserved branch_name (except "development") | Return error |
-| Branch_name="development" conflicts | Prefer explicit `manifest_development_<term>` over legacy formats |
+| Reserved branch_name (except "main") | Return error |
+| Branch_name="main" conflicts | Prefer explicit `manifest_main_<term>` over legacy formats |
 
 ---
 
@@ -168,7 +168,7 @@ using BranchFileMapping = std::vector<BranchFileRange>;  // sorted by max_file_i
 
 ```cpp
 struct ManifestMetadata {
-    std::string branch_name;              // unique identifier (e.g., "development", "feature")
+    std::string branch_name;              // unique identifier (e.g., "main", "feature")
     uint64_t term;                         // current term for this branch
     PageId root;                           // B+ tree root
     PageId ttl_root;                       // TTL index root
@@ -226,7 +226,7 @@ Output: written data
 ### Delete Branch
 
 ```
-Input: branch_name (cannot delete "development")
+Input: branch_name (cannot delete "main")
 
 Assumptions:
 - Branch being deleted is not actively being written to
@@ -259,21 +259,21 @@ Output: branch manifest
 ### Classification
 
 ```
-manifest_development_5          → Development manifest, branch=development, term=5
+manifest_main_5          → Development manifest, branch=main, term=5
 manifest_feature_5              → Branch manifest, branch=feature, term=5
-manifest_development_5_1234567890 → Development archive, ts=1234567890
+manifest_main_5_1234567890 → Development archive, ts=1234567890
 manifest_feature_5_1234567890  → Branch archive, branch=feature, ts=1234567890
-data_10_development_5          → Development data, file_id=10, term=5
+data_10_main_5          → Development data, file_id=10, term=5
 data_10_feature_5             → Branch data, file_id=10, branch=feature, term=5
 ```
 
 ### Deletion Algorithm
 
 ```
-1. Collect all active manifests (development + all branches)
+1. Collect all active manifests (main + all branches)
 2. Build reference set from manifest entries:
    For each manifest:
-       For each file entry (file_id, term) in manifest:
+       For each file entry (file_id) in manifest:
            file_name = "data_" + file_id + "_" + branch_name + "_" + term
            referenced_files.insert(file_name)
 
@@ -291,17 +291,17 @@ data_10_feature_5             → Branch data, file_id=10, branch=feature, term=
 ```
 bucket/prefix/table_name.partition_id/
 ├── CURRENT_TERM                  # Development (legacy)
-├── CURRENT_TERM.development     # Explicit development
+├── CURRENT_TERM.main     # Explicit main
 ├── CURRENT_TERM.feature         # Branch feature
 ├── CURRENT_TERM.hotfix          # Branch hotfix
-├── manifest_development_5        # Development manifest (term=5)
+├── manifest_main_5        # Development manifest (term=5)
 ├── manifest_feature_3            # Branch feature (term=3)
 ├── manifest_feature_5            # Branch feature (term=5)
 ├── manifest_hotfix_2             # Branch hotfix (term=2)
-├── manifest_development_5_1234567890  # Development archive
+├── manifest_main_5_1234567890  # Development archive
 ├── manifest_feature_5_1234567890      # Branch feature archive
-├── data_0_development_5          # Development data
-├── data_1_development_5          # Development data
+├── data_0_main_5          # Development data
+├── data_1_main_5          # Development data
 ├── data_0_feature_3              # Branch feature data
 ├── data_0_hotfix_2               # Branch hotfix data
 └── ...
@@ -313,7 +313,7 @@ bucket/prefix/table_name.partition_id/
 
 | Old Format | New Interpretation | Status |
 |------------|-------------------|--------|
-| `manifest_5` | Development manifest (branch=development, term=5) | Works |
+| `manifest_5` | Development manifest (branch=main, term=5) | Works |
 | `manifest_5_1234567890` | Development archive | Works |
 | `data_10_5` | Development data (file_id=10, term=5) | Works |
 | `CURRENT_TERM` | Development branch term | Works |
@@ -372,13 +372,13 @@ bucket/prefix/table_name.partition_id/
 - Upgrade path: legacy table → add first branch
 
 **Parsing**
-- Valid manifest names: `manifest_5`, `manifest_development_5`, `manifest_feature_5`
-- Valid data names: `data_10_5`, `data_10_development_5`, `data_10_feature_5`
+- Valid manifest names: `manifest_5`, `manifest_main_5`, `manifest_feature_5`
+- Valid data names: `data_10_5`, `data_10_main_5`, `data_10_feature_5`
 - Malformed names: `manifest_`, `data_abc_5`, etc. (should be ignored)
-- Edge cases: branch_name=development vs legacy (explicit wins)
+- Edge cases: branch_name=main vs legacy (explicit wins)
 
 **Branch Operations**
-- Create branch from development
+- Create branch from main
 - Create branch from another branch
 - Write to branch: file_id allocation is per-branch
 - Read from branch: inherited + own data visible
@@ -453,7 +453,7 @@ bucket/prefix/table_name.partition_id/
 
 | Aspect | Decision |
 |--------|----------|
-| Development files | Include branch_name=development (manifest_development_5, data_10_development_5) |
+| Development files | Include branch_name=main (manifest_main_5, data_10_main_5) |
 | Legacy fallback | Old format still works |
 | Branch identification | branch_name (user-provided, validated, unique) |
 | Branch term | Independent, starts at 0 |
