@@ -205,6 +205,11 @@ void Shard::Stop()
 {
 #ifndef ELOQ_MODULE_ENABLED
     thd_.join();
+#else
+    // In module mode the IO manager lives in the calling thread, so we must
+    // stop it explicitly to drain in-flight cloud tasks before tearing down
+    // task pools.
+    io_mgr_->Stop();
 #endif
     task_mgr_.Shutdown();
 }
