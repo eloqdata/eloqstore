@@ -345,8 +345,8 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
                 uint64_t term = IoMgr()
                                     ->GetFileIdTerm(tbl_ident, max_file_id)
                                     .value_or(IoMgr()->ProcessTerm());
-                KvError sync_err = cloud_mgr->SyncDataFileFromRemoteIfNeeded(
-                    tbl_ident, max_file_id, term);
+                KvError sync_err =
+                    cloud_mgr->DownloadFile(tbl_ident, max_file_id, term);
                 if (sync_err != KvError::NoError &&
                     sync_err != KvError::NotFound)
                 {
