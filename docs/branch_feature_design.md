@@ -158,6 +158,10 @@ using BranchFileMapping = std::vector<BranchFileRange>;  // sorted by max_file_i
 
 **Size Reduction**: 1 entry per branch instead of 1 entry per file (e.g., 10 branches vs millions of files).
 
+**Entry Removal**: During manifest snapshot, entries can be removed:
+1. Check all file_ids listed in the manifest
+2. For each entry in BranchFileMapping, if no file_id ≤ max_file_id exists in the manifest, that entry can be deleted
+
 **Note**: After branch creation, branches are fully independent and do not track parent branch changes.
 
 #### Manifest Metadata Format
