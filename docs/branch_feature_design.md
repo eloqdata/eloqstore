@@ -20,8 +20,8 @@ The Branch feature provides lightweight data isolation by creating independent m
 | Development manifest | `manifest_main_<term>` | `manifest_main_5` | |
 | Development manifest (legacy) | `manifest_<term>` | `manifest_5` | Backward compatible |
 | Branch manifest | `manifest_<branch_name>_<term>` | `manifest_feature_5` | |
-| Development archive | `manifest_main_<term>_<ts>` | `manifest_main_5_1234567890` | |
-| Development archive (legacy) | `manifest_<term>_<ts>` | `manifest_5_1234567890` | Backward compatible |
+| Main archive | `manifest_main_<term>_<ts>` | `manifest_main_5_1234567890` | |
+| Main archive (legacy) | `manifest_<term>_<ts>` | `manifest_5_1234567890` | Backward compatible |
 | Branch archive | `manifest_<branch_name>_<term>_<ts>` | `manifest_feature_5_1234567890` | |
 
 ### Data Files
@@ -158,7 +158,7 @@ using BranchFileMapping = std::vector<BranchFileRange>;  // sorted by max_file_i
 
 **Size Reduction**: 1 entry per branch instead of 1 entry per file (e.g., 10 branches vs millions of files).
 
-**Entry Removal**: During manifest snapshot, entries can be removed:
+**Entry Removal**(Optinal): During manifest snapshot, entries can be removed:
 1. Check all file_ids listed in the manifest
 2. For each entry in BranchFileMapping, if no file_id ≤ max_file_id exists in the manifest, that entry can be deleted
 
@@ -226,7 +226,7 @@ Output: written data
 ### Delete Branch
 
 ```
-Input: branch_name (cannot delete "main")
+Input: branch_name
 
 Assumptions:
 - Branch being deleted is not actively being written to
@@ -270,7 +270,7 @@ data_10_feature_5             → Branch data, file_id=10, branch=feature, term=
 ### Deletion Algorithm
 
 ```
-1. Collect all active manifests (main + all branches)
+1. Collect all active manifests (main + all branches + archives)
 2. Build reference set from manifest entries:
    For each manifest:
        For each file entry (file_id) in manifest:
@@ -294,11 +294,11 @@ bucket/prefix/table_name.partition_id/
 ├── CURRENT_TERM.main     # Explicit main
 ├── CURRENT_TERM.feature         # Branch feature
 ├── CURRENT_TERM.hotfix          # Branch hotfix
-├── manifest_main_5        # Development manifest (term=5)
+├── manifest_main_5        # main manifest (term=5)
 ├── manifest_feature_3            # Branch feature (term=3)
 ├── manifest_feature_5            # Branch feature (term=5)
 ├── manifest_hotfix_2             # Branch hotfix (term=2)
-├── manifest_main_5_1234567890  # Development archive
+├── manifest_main_5_1234567890  # main archive
 ├── manifest_feature_5_1234567890      # Branch feature archive
 ├── data_0_main_5          # Development data
 ├── data_1_main_5          # Development data
