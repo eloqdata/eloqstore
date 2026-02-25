@@ -952,6 +952,14 @@ bool ObjectStore::HasPendingWork() const
     return async_http_mgr_ && async_http_mgr_->HasPendingWork();
 }
 
+void ObjectStore::Shutdown()
+{
+    if (async_http_mgr_)
+    {
+        async_http_mgr_->Shutdown();
+    }
+}
+
 AsyncHttpManager::AsyncHttpManager(const KvOptions *option,
                                    CloudStorageService *service)
     : cloud_service_(service)
@@ -1541,6 +1549,33 @@ void AsyncHttpManager::ProcessCompletedRequests()
             OnTaskFinished(task);
         }
     }
+}
+
+void AsyncHttpManager::Shutdown()
+{
+    if (!pending_retries_.empty())
+    {
+        std::vector<ObjectStore::Task *> retries;
+        retries.reserve(pending_retries_.size());
+        for (auto &entry : pending_retries_)
+        {
+            retries.push_back(entry.second);
+        }
+        pending_retries_.clear();
+
+        for (auto *task : retries)
+        {
+            if (task == nullptr)
+            {
+                continue;
+            }
+            CleanupTaskResources(task);
+            task->error_ = KvError::CloudErr;
+            OnTaskFinished(task);
+        }
+    }
+
+    Cleanup();
 }
 
 void AsyncHttpManager::CleanupTaskResources(ObjectStore::Task *task)

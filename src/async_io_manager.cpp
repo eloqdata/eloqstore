@@ -2579,6 +2579,7 @@ CloudStoreMgr::CloudStoreMgr(const KvOptions *opts,
 
 CloudStoreMgr::~CloudStoreMgr()
 {
+    obj_store_.Shutdown();
     if (cloud_service_)
     {
         cloud_service_->UnregisterObjectStore(shard_id_);
@@ -3048,6 +3049,7 @@ void CloudStoreMgr::Stop()
     {
         WaitForCloudTasksToDrain();
     }
+    obj_store_.Shutdown();
 }
 
 void CloudStoreMgr::Submit()

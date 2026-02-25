@@ -61,6 +61,7 @@ public:
     void RunHttpWork();
     bool HttpWorkIdle() const;
     bool HasPendingWork() const;
+    void Shutdown();
 
     class Task
     {
@@ -274,6 +275,7 @@ public:
     void SubmitRequest(ObjectStore::Task *task);
     void PerformRequests();
     void ProcessCompletedRequests();
+    void Shutdown();
 
     KvError EnsureBucketExists();
 
