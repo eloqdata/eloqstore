@@ -1273,10 +1273,10 @@ TEST_CASE("cloud reopen triggers prewarm to download newer remote data files",
     const std::string backup_root = "/tmp/test-data-reopen-prewarm-backup";
     fs::remove_all(backup_root);
     fs::create_directories(backup_root);
-    fs::copy(options.store_path.front(),
-             fs::path(backup_root) / fs::path(options.store_path.front()).filename(),
-             fs::copy_options::recursive |
-                 fs::copy_options::overwrite_existing);
+    fs::copy(
+        options.store_path.front(),
+        fs::path(backup_root) / fs::path(options.store_path.front()).filename(),
+        fs::copy_options::recursive | fs::copy_options::overwrite_existing);
 
     REQUIRE(store->Start() == eloqstore::KvError::NoError);
     writer.SetStore(store);
@@ -1299,10 +1299,10 @@ TEST_CASE("cloud reopen triggers prewarm to download newer remote data files",
     REQUIRE_FALSE(target_new_data_file.empty());
 
     fs::remove_all(options.store_path.front());
-    fs::copy(fs::path(backup_root) / fs::path(options.store_path.front()).filename(),
-             options.store_path.front(),
-             fs::copy_options::recursive |
-                 fs::copy_options::overwrite_existing);
+    fs::copy(
+        fs::path(backup_root) / fs::path(options.store_path.front()).filename(),
+        options.store_path.front(),
+        fs::copy_options::recursive | fs::copy_options::overwrite_existing);
     for (const auto &path : options.store_path)
     {
         fs::path part_path = fs::path(path) / partition;
@@ -1337,9 +1337,8 @@ TEST_CASE("cloud reopen triggers prewarm to download newer remote data files",
     store->ExecSync(&reopen_req);
     REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
 
-    REQUIRE(WaitForCondition(20s,
-                             100ms,
-                             [&]() { return fs::exists(local_target); }));
+    REQUIRE(WaitForCondition(
+        20s, 100ms, [&]() { return fs::exists(local_target); }));
 
     store->Stop();
     CleanupStore(options);

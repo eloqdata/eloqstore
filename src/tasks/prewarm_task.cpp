@@ -459,8 +459,8 @@ void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
             {
                 tbl_id = scoped_tbl_id;
                 size_t slash = path.find_last_of('/');
-                filename = slash == std::string::npos ? path
-                                                      : path.substr(slash + 1);
+                filename =
+                    slash == std::string::npos ? path : path.substr(slash + 1);
                 if (filename.empty())
                 {
                     total_files_skipped++;
