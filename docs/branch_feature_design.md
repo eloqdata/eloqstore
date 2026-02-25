@@ -271,12 +271,11 @@ data_10_feature_5             → Branch data, file_id=10, branch=feature, term=
 
 ```
 1. Collect all active manifests (development + all branches)
-2. Build reference set using branch_file_ranges:
+2. Build reference set from manifest entries:
    For each manifest:
-       For each (branch_name → BranchFileRange) in branch_file_ranges:
-           For file_id in range [0, max_file_id]:
-               file_name = "data_" + file_id + "_" + branch_name + "_" + term
-               referenced_files.insert(file_name)
+       For each file entry (file_id, term) in manifest:
+           file_name = "data_" + file_id + "_" + branch_name + "_" + term
+           referenced_files.insert(file_name)
 
 3. For each data file (file_name):
        if file_name in referenced_files:
