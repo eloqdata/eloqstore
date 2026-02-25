@@ -242,60 +242,42 @@ PrewarmService::~PrewarmService()
 
 void PrewarmService::Start()
 {
-    {
-        std::unique_lock<std::mutex> lk(mux_);
-        stop_requested_.store(false, std::memory_order_relaxed);
-        do_prewarm_ = false;
-        prewarm_all_partitions_ = true;
-        prewarm_tables_.clear();
-    }
-    thread_ = std::thread([this] { PrewarmLoop(); });
+    stop_requested_.store(false, std::memory_order_relaxed);
+    thread_ = std::thread(
+        [this]
+        {
+            std::string prewarm_all("");
+            PrewarmCloudCache(prewarm_all);
+            PrewarmLoop();
+        });
 }
 
 void PrewarmService::PrewarmLoop()
 {
     while (!stop_requested_.load(std::memory_order_acquire))
     {
-        std::vector<std::string> remote_paths;
+        std::array<TableIdent, 100> prewarm_tables;
+        size_t sz;
+        do
         {
-            std::unique_lock<std::mutex> lk(mux_);
-            if (prewarm_all_partitions_)
+            sz = prewarm_tables_.wait_dequeue_bulk_timed(
+                prewarm_tables.data(),
+                prewarm_tables.size(),
+                std::chrono::seconds(1));
+            for (size_t i = 0; i < sz; ++i)
             {
-                remote_paths.emplace_back("");
+                const TableIdent &table = prewarm_tables[i];
+                std::string remote_path = table.ToString();
+                PrewarmCloudCache(remote_path);
             }
-            else
-            {
-                remote_paths.reserve(prewarm_tables_.size());
-                for (const TableIdent &table : prewarm_tables_)
-                {
-                    remote_paths.push_back(table.ToString());
-                }
-            }
-
-            // Reset before prewarm.
-            do_prewarm_ = false;
-            prewarm_all_partitions_ = false;
-            prewarm_tables_.clear();
-        }
-
-        for (const std::string &remote_path : remote_paths)
-        {
-            PrewarmCloudCache(remote_path);
-        }
-
-        std::unique_lock<std::mutex> lk(mux_);
-        cv_.wait(lk, [this] { return stop_requested_ || do_prewarm_; });
+        } while (sz == prewarm_tables.size());
     }
 }
 
 void PrewarmService::Stop()
 {
-    {
-        std::unique_lock<std::mutex> lk(mux_);
-        stop_requested_.store(true, std::memory_order_release);
-        AbortPrewarmWorkers();
-        cv_.notify_one();
-    }
+    stop_requested_.store(true, std::memory_order_release);
+    AbortPrewarmWorkers();
 
     if (thread_.joinable())
     {
@@ -303,20 +285,9 @@ void PrewarmService::Stop()
     }
 }
 
-void PrewarmService::PrewarmAll()
-{
-    std::unique_lock<std::mutex> lk(mux_);
-    do_prewarm_ = true;
-    prewarm_all_partitions_ = true;
-    cv_.notify_one();
-}
-
 void PrewarmService::Prewarm(const std::vector<TableIdent> &tables)
 {
-    std::unique_lock<std::mutex> lk(mux_);
-    do_prewarm_ = true;
-    prewarm_tables_.insert(prewarm_tables_.end(), tables.begin(), tables.end());
-    cv_.notify_one();
+    prewarm_tables_.enqueue_bulk(tables.data(), tables.size());
 }
 
 bool PrewarmService::ListCloudObjects(
