@@ -142,18 +142,23 @@ using FileIdTermMapping = absl::flat_hash_map<FileId, uint64_t>;  // file_id →
 
 ### Proposed New Manifest Metadata Format
 
-#### FileIdBranchTermMapping
+#### BranchFileMapping
 
 ```cpp
-struct FileBranchTerm {
-    std::string branch_name;  // "development", "feature", etc.
-    uint64_t term;
+struct BranchFileRange {
+    std::string branch_name;  // branch identifier
+    uint64_t term;            // term when this file_id range was allocated
+    FileId max_file_id;       // highest file_id allocated in this branch
 };
 
-using FileIdBranchTermMapping = absl::flat_hash_map<FileId, FileBranchTerm>;
+using BranchFileMapping = std::vector<BranchFileRange>;  // sorted by max_file_id
 ```
 
-**Note**: Large `FileIdBranchTermMapping` can be optimized during manifest snapshot operations to reduce memory footprint.
+**Algorithm to find branch given file_id**: Use `std::lower_bound` to find the first entry where `max_file_id >= file_id`.
+
+**Size Reduction**: 1 entry per branch instead of 1 entry per file (e.g., 10 branches vs millions of files).
+
+**Note**: After branch creation, branches are fully independent and do not track parent branch changes.
 
 #### Manifest Metadata Format
 
@@ -163,7 +168,7 @@ struct ManifestMetadata {
     uint64_t term;                         // current term for this branch
     PageId root;                           // B+ tree root
     PageId ttl_root;                       // TTL index root
-    FileIdBranchTermMapping file_refs;     // files accessible by this branch
+    BranchFileMapping branch_file_ranges;  // per-branch file ranges (sorted by max_file_id)
 };
 ```
 
@@ -175,7 +180,7 @@ struct ManifestMetadata {
 |--------|---------------|-----------------|
 | Branch Identification | Not supported | `branch_name` field |
 | Branch Term | Global term | Per-branch term |
-| File Mapping | `FileId → term` | `FileId → {branch_name, term}` |
+| File Mapping | `FileId → term` | `branch_name → {max_file_id, term}` (per-branch ranges) |
 
 ---
 
@@ -189,33 +194,29 @@ Output: branch_name
 
 Assumptions:
 - Parent branch is not being written during branch creation
-- Branch name is validated and unique
+- Branch name validation and uniqueness are guaranteed by caller
 
 1. Read parent's current manifest
-2. Validate branch_name (alphanumeric, underscore, hyphen only)
-3. Check branch_name uniqueness (must not exist)
-4. Create branch manifest:
+2. Create branch manifest:
    - branch_name = input_name
    - term = 0 (new branch starts at term 0)
    - root = parent's root
-   - file_refs = COPY of parent's file_refs (inherits all references)
-5. Write manifest_<branch_name>_<term>
-6. Create CURRENT_TERM.<branch_name> with content "0"
-7. Return branch_name
+   - branch_file_ranges = COPY of parent's branch_file_ranges
+3. Write manifest_<branch_name>_<term>
+4. Create CURRENT_TERM.<branch_name> with content "0"
+5. Return branch_name
 ```
 
-### Write to Branch
+### Add File to Branch
 
 ```
 Input: branch_name, data
 Output: written data
 
-1. Allocate new file_id
+1. Allocate new file_id (per-branch counter)
 2. Write data to: data_<file_id>_<branch_name>_<term>
-3. Update file_refs: file_id → term
+3. Update branch_file_ranges: set max_file_id = file_id (term unchanged)
 4. Append to manifest_<branch_name>_<term>
-5. Increment branch's term
-6. Update CURRENT_TERM.<branch_name>
 ```
 
 ### Delete Branch
@@ -235,13 +236,16 @@ Assumptions:
 ### Open Branch
 
 ```
-Input: branch_name
+Input: branch_name, term
 Output: branch manifest
 
-1. Find manifest_<branch_name>_<term> (latest by term)
-2. Parse manifest metadata (branch_name, file_refs)
-3. Load mapping snapshot from root
-4. Return branch context
+1. Find manifest_<branch_name>_<term>
+2. If manifest not found:
+   - Create new manifest with term
+   - branch_file_ranges = inherited from latest existing branch manifest
+3. Parse manifest metadata (branch_name, term, branch_file_ranges)
+4. Load mapping snapshot from root
+5. Return branch context
 ```
 
 ---
@@ -263,10 +267,11 @@ data_10_feature_5             → Branch data, file_id=10, branch=feature, term=
 
 ```
 1. Collect all active manifests (development + all branches)
-2. Build reference map:
+2. Build reference map using branch_file_ranges:
    For each manifest:
-       For each (file_id → term) in file_refs:
-           referenced_files[file_id].insert(manifest.branch_name)
+       For each (branch_name → BranchFileRange) in branch_file_ranges:
+           For file_id in range [0, max_file_id]:
+               referenced_files[file_id].insert(branch_name)
 
 3. For each data file (file_id, branch_name, term):
        if file_id in referenced_files and branch_name in referenced_files[file_id]:
@@ -318,12 +323,12 @@ bucket/prefix/table_name.partition_id/
 - Add file naming functions: BranchManifestFileName, BranchDataFileName, BranchCurrentTermFileName
 - Add parsing functions: ParseManifestFilename, ParseDataFilename, ParseCurrentTermFilename
 - Add helper functions: IsBranchManifest, IsBranchArchive, IsBranchDataFile
-- Implement branch_name validation (alphanumeric, underscore, hyphen)
 
 ### Phase 2: Manifest Updates
 - Add branch_name to manifest structure
 - Update serialization/deserialization
-- Update to FileIdBranchTermMapping (file_id → {branch_name, term})
+- Add BranchFileMapping (vector of BranchFileRange sorted by max_file_id)
+- Implement binary search lookup with std::lower_bound
 
 ### Phase 3: Branch Operations
 - BackgroundWrite::CreateBranch()
@@ -425,16 +430,16 @@ bucket/prefix/table_name.partition_id/
 | Resource | Limit | Notes |
 |----------|-------|-------|
 | Max branches | Effectively unlimited | Limited by filename length and uniqueness |
-| Max file_refs per manifest | Memory-dependent | Optimize via manifest snapshot |
+| Branch file ranges per manifest | O(M branches) | Constant per branch, not per file |
 | Storage overhead per branch | ~1 manifest file + CURRENT_TERM file | Plus per-branch data files |
-| Manifest loading time | O(n) where n = number of branches | GC loads all branch manifests |
+| Manifest loading time | O(M) where M = number of branches | GC loads all branch manifests |
 
 ### Performance Considerations
 
 | Aspect | Impact | Mitigation |
 |--------|--------|-----------|
-| GC with many branches | O(n*m) complexity (n=files, m=branches) | Parallel manifest loading, indexed reference map |
-| FileIdBranchTermMapping size | Memory grows with inherited + own files | Manifest snapshot can compress/deduplicate |
+| GC with many branches | O(N files + M branches) | Range-based reference checking is efficient |
+| BranchFileMapping size | O(M branches) - significantly smaller | Millions of entries → tens of entries |
 | Branch creation latency | O(1) - copy parent manifest metadata | Minimal impact |
 | Archive retention with active branches | Global quota may be consumed unevenly | Monitor per-branch archive count |
 
