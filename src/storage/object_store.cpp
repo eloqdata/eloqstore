@@ -1175,6 +1175,7 @@ void AsyncHttpManager::SubmitRequest(ObjectStore::Task *task)
     }
 
     active_requests_[easy] = task;
+    active_request_count_.fetch_add(1, std::memory_order_release);
 }
 
 std::string AsyncHttpManager::ComposeKey(const TableIdent *tbl_id,
@@ -1530,6 +1531,7 @@ void AsyncHttpManager::ProcessCompletedRequests()
             curl_multi_remove_handle(multi_handle_, easy);
             curl_easy_cleanup(easy);
             active_requests_.erase(easy);
+            active_request_count_.fetch_sub(1, std::memory_order_acq_rel);
             CleanupTaskResources(task);
 
             if (schedule_retry)
@@ -1603,6 +1605,10 @@ void AsyncHttpManager::Cleanup()
         }
     }
     active_requests_.clear();
+    active_request_count_.store(0, std::memory_order_release);
+
+    pending_retries_.clear();
+    pending_retry_count_.store(0, std::memory_order_release);
 }
 
 void AsyncHttpManager::OnTaskFinished(ObjectStore::Task *task)
@@ -1622,6 +1628,7 @@ void AsyncHttpManager::ProcessPendingRetries()
     {
         ObjectStore::Task *task = it->second;
         it = pending_retries_.erase(it);
+        pending_retry_count_.fetch_sub(1, std::memory_order_acq_rel);
         LOG(INFO) << "Retrying task after backoff (attempt "
                   << unsigned(task->retry_count_) << "/"
                   << unsigned(task->max_retries_) << "): " << task->Info();
@@ -1642,6 +1649,7 @@ void AsyncHttpManager::ScheduleRetry(ObjectStore::Task *task,
         if (it->second == task)
         {
             it = pending_retries_.erase(it);
+            pending_retry_count_.fetch_sub(1, std::memory_order_acq_rel);
         }
         else
         {
@@ -1651,6 +1659,7 @@ void AsyncHttpManager::ScheduleRetry(ObjectStore::Task *task,
 
     auto deadline = std::chrono::steady_clock::now() + delay;
     pending_retries_.emplace(deadline, task);
+    pending_retry_count_.fetch_add(1, std::memory_order_release);
 }
 
 uint32_t AsyncHttpManager::ComputeBackoffMs(uint8_t attempt)

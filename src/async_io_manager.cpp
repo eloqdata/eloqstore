@@ -3149,17 +3149,9 @@ void CloudStoreMgr::WaitForCloudTasksToDrain()
 {
     using namespace std::chrono_literals;
     constexpr auto kPollInterval = 5ms;
-    constexpr auto kDrainTimeout = std::chrono::seconds(30);
-    const auto deadline = std::chrono::steady_clock::now() + kDrainTimeout;
 
     while (obj_store_.HasPendingWork())
     {
-        if (std::chrono::steady_clock::now() >= deadline)
-        {
-            LOG(WARNING) << "Shard " << shard_id_
-                         << " still has pending cloud tasks during stop";
-            break;
-        }
         std::this_thread::sleep_for(kPollInterval);
     }
 }

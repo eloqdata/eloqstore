@@ -3,6 +3,7 @@
 #include <curl/curl.h>
 #include <jsoncpp/json/json.h>
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <map>
@@ -282,15 +283,16 @@ public:
     void Cleanup();
     bool IsIdle() const
     {
-        return active_requests_.empty();
+        return active_request_count_.load(std::memory_order_acquire) == 0;
     }
     bool HasPendingWork() const
     {
-        return !active_requests_.empty() || !pending_retries_.empty();
+        return active_request_count_.load(std::memory_order_acquire) > 0 ||
+               pending_retry_count_.load(std::memory_order_acquire) > 0;
     }
     size_t NumActiveRequests() const
     {
-        return active_requests_.size();
+        return active_request_count_.load(std::memory_order_acquire);
     }
 
     bool ParseListObjectsResponse(
@@ -332,6 +334,8 @@ private:
     std::unordered_map<CURL *, ObjectStore::Task *> active_requests_;
     std::multimap<std::chrono::steady_clock::time_point, ObjectStore::Task *>
         pending_retries_;
+    std::atomic<size_t> active_request_count_{0};
+    std::atomic<size_t> pending_retry_count_{0};
     int running_handles_{0};
 
     CloudPathInfo cloud_path_;
