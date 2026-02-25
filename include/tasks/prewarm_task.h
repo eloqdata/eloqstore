@@ -109,9 +109,9 @@ public:
 
     /**
      * @brief Signal prewarm service to do a new round of prewarm for those
-     * specified tables.
+     * specified table partition.
      */
-    void Prewarm(const std::vector<TableIdent> &tables);
+    void Prewarm(const TableIdent &table);
 
     /**
      * @brief Wait for prewarm operation to complete

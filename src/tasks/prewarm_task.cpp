@@ -285,9 +285,9 @@ void PrewarmService::Stop()
     }
 }
 
-void PrewarmService::Prewarm(const std::vector<TableIdent> &tables)
+void PrewarmService::Prewarm(const TableIdent &table)
 {
-    prewarm_tables_.enqueue_bulk(tables.data(), tables.size());
+    prewarm_tables_.enqueue(table);
 }
 
 bool PrewarmService::ListCloudObjects(
@@ -457,6 +457,9 @@ void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
             std::string filename;
             if (scoped_to_single_partition)
             {
+                // Listing with a specific partition prefix may return relative
+                // object names (for example "data_7_0"), so we should reuse
+                // the scoped table id and only parse the trailing filename.
                 tbl_id = scoped_tbl_id;
                 size_t slash = path.find_last_of('/');
                 filename =

@@ -20,7 +20,7 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
             PrewarmService *prewarm_service =
                 shard->store_->GetPrewarmService();
             CHECK(prewarm_service != nullptr);
-            prewarm_service->Prewarm({tbl_id});
+            prewarm_service->Prewarm(tbl_id);
         }
 
         if (!shard->HasPendingLocalGc(tbl_id))
