@@ -61,7 +61,7 @@ const eloqstore::KvOptions cloud_options = {
 
 const eloqstore::KvOptions cloud_archive_opts = {
     .manifest_limit = 1 << 20,
-    .fd_limit = 30 + eloqstore::num_reserved_fd,
+    .fd_limit = 100 + eloqstore::num_reserved_fd,
     .num_retained_archives = 1,
     .archive_interval_secs = 0,  // disable automatic archive scheduling
     .file_amplify_factor = 2,

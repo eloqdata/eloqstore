@@ -801,8 +801,6 @@ public:
     bool PopPrewarmFile(PrewarmFile &file);
     void ClearPrewarmFiles();
     void StopAllPrewarmTasks();
-    // Enqueue prewarm files directly (for reopen-driven prewarm).
-    void EnqueuePrewarmFiles(std::vector<PrewarmFile> files);
     void AcquireCloudSlot(KvTask *task);
     void ReleaseCloudSlot(size_t count = 1);
     void EnqueueCloudReadyTask(KvTask *task);

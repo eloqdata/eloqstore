@@ -223,7 +223,6 @@ void RootMetaMgr::Erase(const TableIdent &tbl_id)
     CHECK(entry->meta_.ref_cnt_ == 0);
     Dequeue(entry);
     used_bytes_ -= entry->bytes_;
-    CHECK(used_bytes_ >= 0);
     entries_.erase(it);
 }
 

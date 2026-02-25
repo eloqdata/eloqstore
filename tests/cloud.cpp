@@ -1226,6 +1226,126 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
     CleanupStore(options);
 }
 
+TEST_CASE("cloud reopen triggers prewarm to download newer remote data files",
+          "[cloud][reopen][prewarm]")
+{
+    using namespace std::chrono_literals;
+    namespace fs = std::filesystem;
+
+    std::atomic<bool> enable_partition_filter{false};
+    eloqstore::KvOptions options = cloud_archive_opts;
+    options.store_path = {"/tmp/test-data-reopen-prewarm"};
+    options.cloud_store_path += "/reopen-prewarm-download";
+    options.prewarm_cloud_cache = true;
+    options.prewarm_task_count = 1;
+    options.allow_reuse_local_caches = true;
+    options.partition_filter = [&enable_partition_filter](const auto &)
+    { return enable_partition_filter.load(std::memory_order_relaxed); };
+
+    CleanupStore(options);
+
+    const eloqstore::TableIdent tbl_id{"reopen_prewarm", 0};
+    const std::string partition = tbl_id.ToString();
+    auto list_cloud_data_files = [&]()
+    {
+        std::unordered_set<std::string> files;
+        for (const auto &filename :
+             ListCloudFiles(options, options.cloud_store_path, partition))
+        {
+            auto [type, suffix] = eloqstore::ParseFileName(filename);
+            if (type == eloqstore::FileNameData)
+            {
+                files.insert(filename);
+            }
+        }
+        return files;
+    };
+
+    eloqstore::EloqStore *store = InitStore(options);
+    MapVerifier writer(tbl_id, store, false);
+    writer.SetAutoClean(false);
+    writer.SetValueSize(2048);
+    writer.Upsert(0, 120);
+    store->Stop();
+    const auto cloud_before = list_cloud_data_files();
+    REQUIRE_FALSE(cloud_before.empty());
+
+    const std::string backup_root = "/tmp/test-data-reopen-prewarm-backup";
+    fs::remove_all(backup_root);
+    fs::create_directories(backup_root);
+    fs::copy(options.store_path.front(),
+             fs::path(backup_root) / fs::path(options.store_path.front()).filename(),
+             fs::copy_options::recursive |
+                 fs::copy_options::overwrite_existing);
+
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    writer.SetStore(store);
+    writer.SetValueSize(8 << 10);
+    writer.Upsert(2000, 2600);
+    store->Stop();
+
+    const auto cloud_after = list_cloud_data_files();
+    REQUIRE(cloud_after.size() > cloud_before.size());
+
+    std::string target_new_data_file;
+    for (const auto &filename : cloud_after)
+    {
+        if (!cloud_before.contains(filename))
+        {
+            target_new_data_file = filename;
+            break;
+        }
+    }
+    REQUIRE_FALSE(target_new_data_file.empty());
+
+    fs::remove_all(options.store_path.front());
+    fs::copy(fs::path(backup_root) / fs::path(options.store_path.front()).filename(),
+             options.store_path.front(),
+             fs::copy_options::recursive |
+                 fs::copy_options::overwrite_existing);
+    for (const auto &path : options.store_path)
+    {
+        fs::path part_path = fs::path(path) / partition;
+        if (!fs::exists(part_path))
+        {
+            continue;
+        }
+        for (const auto &ent : fs::directory_iterator(part_path))
+        {
+            if (!ent.is_regular_file())
+            {
+                continue;
+            }
+            auto [type, suffix] =
+                eloqstore::ParseFileName(ent.path().filename().string());
+            if (type == eloqstore::FileNameData)
+            {
+                fs::remove(ent.path());
+            }
+        }
+    }
+
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    writer.SetStore(store);
+    const fs::path local_target =
+        fs::path(options.store_path.front()) / partition / target_new_data_file;
+    REQUIRE_FALSE(fs::exists(local_target));
+
+    enable_partition_filter.store(true, std::memory_order_relaxed);
+    eloqstore::ReopenRequest reopen_req;
+    reopen_req.SetArgs(tbl_id);
+    store->ExecSync(&reopen_req);
+    REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
+
+    REQUIRE(WaitForCondition(20s,
+                             100ms,
+                             [&]() { return fs::exists(local_target); }));
+
+    store->Stop();
+    CleanupStore(options);
+    fs::remove_all(backup_root);
+}
+
 TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
 {
     eloqstore::KvOptions options = cloud_archive_opts;

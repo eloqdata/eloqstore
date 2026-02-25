@@ -562,6 +562,12 @@ bool Shard::ProcessReq(KvRequest *req)
         req->SetDone(KvError::InvalidArgs);
         return true;
     }
+    case RequestType::GlobalReopen:
+    {
+        LOG(ERROR) << "GlobalReopen request routed to shard unexpectedly";
+        req->SetDone(KvError::InvalidArgs);
+        return true;
+    }
     case RequestType::Compact:
     {
         BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());
