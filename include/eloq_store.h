@@ -91,6 +91,9 @@ inline const char *RequestTypeToString(RequestType type)
 class KvRequest
 {
 public:
+    using WaitFunction = void (*)(const KvRequest *);
+    using NotifyFunction = void (*)(const KvRequest *);
+
     virtual ~KvRequest() = default;
     virtual RequestType Type() const = 0;
     bool ReadOnly() const;
@@ -106,6 +109,7 @@ public:
      */
     bool IsDone() const;
     void Wait() const;
+    void SetWaitNotify(WaitFunction wait_fn, NotifyFunction notify_fn);
 
 protected:
     void SetDone(KvError err);
@@ -118,9 +122,16 @@ protected:
     mutable bthread::Mutex mutex_;
     bool done_{true};
 #else
-    std::atomic<bool> done_{true};
+    mutable std::atomic<bool> done_{true};
 #endif
     KvError err_{KvError::NoError};
+
+private:
+    static void DefaultWait(const KvRequest *req);
+    static void DefaultNotify(const KvRequest *req);
+
+    WaitFunction wait_fn_{&KvRequest::DefaultWait};
+    NotifyFunction notify_fn_{&KvRequest::DefaultNotify};
 
     friend class Shard;
     friend class EloqStore;

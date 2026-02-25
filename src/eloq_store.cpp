@@ -48,6 +48,7 @@ constexpr uint64_t kStorePathWeightGranularity = 1ULL << 20;  // 1 MiB
 constexpr size_t kMaxStorePathLutEntries = kDefaultStorePathLutEntries;
 }  // namespace
 
+
 bool EloqStore::ValidateOptions(KvOptions &opts)
 {
     if (opts.max_inflight_write == 0)
@@ -1197,15 +1198,14 @@ uint64_t KvRequest::UserData() const
 void KvRequest::Wait() const
 {
     CHECK(callback_ == nullptr);
-#ifdef ELOQ_MODULE_ENABLED
-    std::unique_lock<bthread::Mutex> lk(mutex_);
-    while (!done_)
-    {
-        cv_.wait(lk);
-    }
-#else
-    done_.wait(false, std::memory_order_acquire);
-#endif
+    assert(wait_fn_ != nullptr);
+    wait_fn_(this);
+}
+
+void KvRequest::SetWaitNotify(WaitFunction wait_fn, NotifyFunction notify_fn)
+{
+    wait_fn_ = wait_fn ? wait_fn : &KvRequest::DefaultWait;
+    notify_fn_ = notify_fn ? notify_fn : &KvRequest::DefaultNotify;
 }
 
 void ReadRequest::SetArgs(TableIdent tbl_id, const char *key)
@@ -1443,12 +1443,34 @@ void KvRequest::SetDone(KvError err)
     else
     {
         // Synchronous request
-#ifdef ELOQ_MODULE_ENABLED
-        cv_.notify_one();
-#else
-        done_.notify_one();
-#endif
+        if (notify_fn_ != nullptr)
+        {
+            notify_fn_(static_cast<const KvRequest *>(this));
+        }
     }
+}
+
+void KvRequest::DefaultWait(const KvRequest *req)
+{
+#ifdef ELOQ_MODULE_ENABLED
+    std::unique_lock<bthread::Mutex> lk(req->mutex_);
+    while (!req->done_)
+    {
+        req->cv_.wait(lk);
+    }
+#else
+    req->done_.wait(false, std::memory_order_acquire);
+#endif
+}
+
+void KvRequest::DefaultNotify(const KvRequest *req)
+{
+#ifdef ELOQ_MODULE_ENABLED
+    std::lock_guard<bthread::Mutex> lk(req->mutex_);
+    req->cv_.notify_one();
+#else
+    req->done_.notify_one();
+#endif
 }
 
 }  // namespace eloqstore

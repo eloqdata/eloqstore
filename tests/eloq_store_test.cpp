@@ -1,11 +1,13 @@
 #include "eloq_store.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <thread>
 
 #include "circular_queue.h"
@@ -40,6 +42,135 @@ void CleanupTestDir(const fs::path &test_dir)
     {
         fs::remove_all(test_dir);
     }
+}
+
+namespace
+{
+
+class HookableRequest : public eloqstore::KvRequest
+{
+public:
+    eloqstore::RequestType Type() const override
+    {
+        return eloqstore::RequestType::Read;
+    }
+
+    void Reset()
+    {
+#ifdef ELOQ_MODULE_ENABLED
+        done_ = false;
+#else
+        done_.store(false, std::memory_order_relaxed);
+#endif
+        std::lock_guard<std::mutex> lk(sync_mutex_);
+        custom_ready_ = false;
+    }
+
+    void Complete(eloqstore::KvError err = eloqstore::KvError::NoError)
+    {
+        SetDone(err);
+    }
+
+    static void WaitHook(const eloqstore::KvRequest *base)
+    {
+        auto *req = static_cast<const HookableRequest *>(base);
+        req->wait_invocations_.fetch_add(1, std::memory_order_relaxed);
+        std::unique_lock<std::mutex> lk(req->sync_mutex_);
+        req->sync_cv_.wait(lk, [req] { return req->custom_ready_; });
+    }
+
+    static void NotifyHook(const eloqstore::KvRequest *base)
+    {
+        auto *req = static_cast<const HookableRequest *>(base);
+        req->notify_invocations_.fetch_add(1, std::memory_order_relaxed);
+        {
+            std::lock_guard<std::mutex> lk(req->sync_mutex_);
+            req->custom_ready_ = true;
+        }
+        req->sync_cv_.notify_all();
+    }
+
+    int WaitCount() const
+    {
+        return wait_invocations_.load(std::memory_order_relaxed);
+    }
+
+    int NotifyCount() const
+    {
+        return notify_invocations_.load(std::memory_order_relaxed);
+    }
+
+private:
+    mutable std::mutex sync_mutex_;
+    mutable std::condition_variable sync_cv_;
+    mutable bool custom_ready_{false};
+    mutable std::atomic<int> wait_invocations_{0};
+    mutable std::atomic<int> notify_invocations_{0};
+};
+
+}  // namespace
+
+TEST_CASE("KvRequest supports custom wait/notify hooks", "[kvrequest]")
+{
+    HookableRequest req;
+    req.Reset();
+    req.SetWaitNotify(&HookableRequest::WaitHook, &HookableRequest::NotifyHook);
+
+    std::thread finisher([&req] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        req.Complete();
+    });
+
+    req.Wait();
+    finisher.join();
+
+    REQUIRE(req.WaitCount() == 1);
+    REQUIRE(req.NotifyCount() == 1);
+    REQUIRE(req.Error() == eloqstore::KvError::NoError);
+}
+
+TEST_CASE("Custom wait/notify hooks are per request", "[kvrequest]")
+{
+    HookableRequest first;
+    HookableRequest second;
+    first.Reset();
+    second.Reset();
+    first.SetWaitNotify(&HookableRequest::WaitHook, &HookableRequest::NotifyHook);
+    second.SetWaitNotify(&HookableRequest::WaitHook, &HookableRequest::NotifyHook);
+
+    std::thread t1([&first] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        first.Complete();
+    });
+    std::thread t2([&second] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        second.Complete();
+    });
+
+    first.Wait();
+    second.Wait();
+    t1.join();
+    t2.join();
+
+    REQUIRE(first.WaitCount() == 1);
+    REQUIRE(second.WaitCount() == 1);
+    REQUIRE(first.NotifyCount() == 1);
+    REQUIRE(second.NotifyCount() == 1);
+
+    // Switching back to the default wait/notify should stop invoking hooks.
+    first.Reset();
+    first.SetWaitNotify(nullptr, nullptr);
+
+    std::thread t3([&first] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        first.Complete();
+    });
+
+    first.Wait();
+    t3.join();
+
+    REQUIRE(first.WaitCount() == 1);
+    REQUIRE(first.NotifyCount() == 1);
 }
 TEST_CASE("EloqStore ValidateOptions validates all parameters", "[eloq_store]")
 {
