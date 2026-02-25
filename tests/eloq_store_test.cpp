@@ -1,9 +1,9 @@
 #include "eloq_store.h"
 
 #include <atomic>
-#include <condition_variable>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -116,10 +116,12 @@ TEST_CASE("KvRequest supports custom wait/notify hooks", "[kvrequest]")
     req.Reset();
     req.SetWaitNotify(&HookableRequest::WaitHook, &HookableRequest::NotifyHook);
 
-    std::thread finisher([&req] {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        req.Complete();
-    });
+    std::thread finisher(
+        [&req]
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            req.Complete();
+        });
 
     req.Wait();
     finisher.join();
@@ -135,17 +137,23 @@ TEST_CASE("Custom wait/notify hooks are per request", "[kvrequest]")
     HookableRequest second;
     first.Reset();
     second.Reset();
-    first.SetWaitNotify(&HookableRequest::WaitHook, &HookableRequest::NotifyHook);
-    second.SetWaitNotify(&HookableRequest::WaitHook, &HookableRequest::NotifyHook);
+    first.SetWaitNotify(&HookableRequest::WaitHook,
+                        &HookableRequest::NotifyHook);
+    second.SetWaitNotify(&HookableRequest::WaitHook,
+                         &HookableRequest::NotifyHook);
 
-    std::thread t1([&first] {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        first.Complete();
-    });
-    std::thread t2([&second] {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        second.Complete();
-    });
+    std::thread t1(
+        [&first]
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            first.Complete();
+        });
+    std::thread t2(
+        [&second]
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            second.Complete();
+        });
 
     first.Wait();
     second.Wait();
@@ -161,10 +169,12 @@ TEST_CASE("Custom wait/notify hooks are per request", "[kvrequest]")
     first.Reset();
     first.SetWaitNotify(nullptr, nullptr);
 
-    std::thread t3([&first] {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-        first.Complete();
-    });
+    std::thread t3(
+        [&first]
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            first.Complete();
+        });
 
     first.Wait();
     t3.join();

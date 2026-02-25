@@ -48,7 +48,6 @@ constexpr uint64_t kStorePathWeightGranularity = 1ULL << 20;  // 1 MiB
 constexpr size_t kMaxStorePathLutEntries = kDefaultStorePathLutEntries;
 }  // namespace
 
-
 bool EloqStore::ValidateOptions(KvOptions &opts)
 {
     if (opts.max_inflight_write == 0)
