@@ -30,6 +30,9 @@ static constexpr char CurrentTermFileName[] = "CURRENT_TERM";
 static constexpr char TmpSuffix[] = ".tmp";
 constexpr size_t kDefaultScanPrefetchPageCount = 6;
 
+// Branch name constants
+static constexpr char MainBranchName[] = "main";
+
 namespace fs = std::filesystem;
 
 struct TableIdent
