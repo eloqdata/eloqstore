@@ -17,40 +17,46 @@ The Branch feature provides lightweight data isolation by creating independent m
 
 | Type | Format | Example | Notes |
 |------|--------|---------|-------|
-| Development manifest | `manifest_main_<term>` | `manifest_main_5` | |
-| Development manifest (legacy) | `manifest_<term>` | `manifest_5` | Backward compatible |
+| Main manifest | `manifest_main_<term>` | `manifest_main_5` | |
 | Branch manifest | `manifest_<branch_name>_<term>` | `manifest_feature_5` | |
 | Main archive | `manifest_main_<term>_<ts>` | `manifest_main_5_1234567890` | |
-| Main archive (legacy) | `manifest_<term>_<ts>` | `manifest_5_1234567890` | Backward compatible |
 | Branch archive | `manifest_<branch_name>_<term>_<ts>` | `manifest_feature_5_1234567890` | |
 
 ### Data Files
 
 | Type | Format | Example | Notes |
 |------|--------|---------|-------|
-| Development data | `data_<file_id>_main_<term>` | `data_10_main_5` | |
-| Development data (legacy) | `data_<file_id>_<term>` | `data_10_5` | Backward compatible |
+| Main data | `data_<file_id>_main_<term>` | `data_10_main_5` | |
 | Branch data | `data_<file_id>_<branch_name>_<term>` | `data_10_feature_5` | |
 
 ### CURRENT_TERM Files
 
 | Type | Format | Example | Notes |
 |------|--------|---------|-------|
-| Development | `CURRENT_TERM.main` | `CURRENT_TERM.main` | |
-| Development (legacy) | `CURRENT_TERM` | `CURRENT_TERM` | Backward compatible |
+| Main | `CURRENT_TERM.main` | `CURRENT_TERM.main` | |
 | Branch | `CURRENT_TERM.<branch_name>` | `CURRENT_TERM.feature` | |
+
+### Version Information
+
+All files include a version number in their header for future compatibility:
+
+```
+Manifest Header: [ Checksum(8B) | Version(4B) | Root(4B) | TTL Root(4B) | Payload Len(4B) ]
+Data Header:     [ Checksum(8B) | Version(4B) | ... ]
+```
+
+- Current version: 1
+- Version enables future format migrations and data export/import
 
 ---
 
-## 2. Parsing Functions (Backward Compatible)
+## 2. Parsing Functions
 
 ### Manifest Parsing
 
 ```
-manifest_5                → {branch_name: "main", term: 5, timestamp: null}    (legacy)
 manifest_main_5   → {branch_name: "main", term: 5, timestamp: null} (main)
 manifest_feature_5       → {branch_name: "feature", term: 5, timestamp: null}      (branch)
-manifest_5_123           → {branch_name: "main", term: 5, timestamp: 123}    (legacy archive)
 manifest_main_5_123 → {branch_name: "main", term: 5, timestamp: 123} (archive)
 manifest_feature_5_123  → {branch_name: "feature", term: 5, timestamp: 123}        (branch archive)
 ```
@@ -58,7 +64,6 @@ manifest_feature_5_123  → {branch_name: "feature", term: 5, timestamp: 123}   
 ### Data File Parsing
 
 ```
-data_10_5                → {file_id: 10, branch_name: "main", term: 5}  (legacy)
 data_10_main_5    → {file_id: 10, branch_name: "main", term: 5}
 data_10_feature_5       → {file_id: 10, branch_name: "feature", term: 5}
 ```
@@ -66,7 +71,6 @@ data_10_feature_5       → {file_id: 10, branch_name: "feature", term: 5}
 ### CURRENT_TERM Parsing
 
 ```
-CURRENT_TERM             → branch_name: "main" (legacy)
 CURRENT_TERM.main → branch_name: "main"
 CURRENT_TERM.feature    → branch_name: "feature"
 ```
@@ -79,7 +83,6 @@ CURRENT_TERM.feature    → branch_name: "feature"
 | Malformed data filename | Ignore file, log warning |
 | Invalid branch_name (contains invalid chars) | Return error |
 | Reserved branch_name (except "main") | Return error |
-| Branch_name="main" conflicts | Prefer explicit `manifest_main_<term>` over legacy formats |
 
 ---
 
@@ -297,8 +300,7 @@ data_10_feature_5             → Branch data, file_id=10, branch=feature, term=
 
 ```
 bucket/prefix/table_name.partition_id/
-├── CURRENT_TERM                  # Development (legacy)
-├── CURRENT_TERM.main     # Explicit main
+├── CURRENT_TERM.main     # Main branch
 ├── CURRENT_TERM.feature         # Branch feature
 ├── CURRENT_TERM.hotfix          # Branch hotfix
 ├── manifest_main_5        # main manifest (term=5)
@@ -307,8 +309,8 @@ bucket/prefix/table_name.partition_id/
 ├── manifest_hotfix_2             # Branch hotfix (term=2)
 ├── manifest_main_5_1234567890  # main archive
 ├── manifest_feature_5_1234567890      # Branch feature archive
-├── data_0_main_5          # Development data
-├── data_1_main_5          # Development data
+├── data_0_main_5          # main data
+├── data_1_main_5          # main data
 ├── data_0_feature_3              # Branch feature data
 ├── data_0_hotfix_2               # Branch hotfix data
 └── ...
@@ -365,24 +367,18 @@ bucket/prefix/table_name.partition_id/
 - Safe deletion with cross-branch check
 
 ### Phase 7: Testing
-- Unit tests for parsing (legacy + branch formats)
+- Unit tests for parsing (branch formats)
 - Integration: create/read/write/delete branches
 - GC: verify cross-branch protection
 - Cloud mode tests
-- Backward compatibility tests
+- Version header tests
 
 #### Specific Test Cases
 
-**Backward Compatibility**
-- Legacy table with `manifest_5`, `data_10_5`, `CURRENT_TERM` opens correctly
-- Mixed legacy and new formats in same table
-- Upgrade path: legacy table → add first branch
-
 **Parsing**
-- Valid manifest names: `manifest_5`, `manifest_main_5`, `manifest_feature_5`
-- Valid data names: `data_10_5`, `data_10_main_5`, `data_10_feature_5`
+- Valid manifest names: `manifest_main_5`, `manifest_feature_5`
+- Valid data names: `data_10_main_5`, `data_10_feature_5`
 - Malformed names: `manifest_`, `data_abc_5`, etc. (should be ignored)
-- Edge cases: branch_name=main vs legacy (explicit wins)
 
 **Branch Operations**
 - Create branch from main
@@ -460,10 +456,16 @@ bucket/prefix/table_name.partition_id/
 
 | Aspect | Decision |
 |--------|----------|
-| Development files | Include branch_name=main (manifest_main_5, data_10_main_5) |
-| Legacy fallback | Old format still works |
+| Main branch files | Include branch_name=main (manifest_main_5, data_10_main_5) |
 | Branch identification | branch_name (user-provided, validated, unique) |
 | Branch term | Independent, starts at 0 |
 | Archive | Per-branch, same retention |
 | Branch limit | None |
 | GC | Cross-branch reference tracking |
+| Version header | All files include version for future migration support |
+
+---
+
+## Appendix: Legacy Support Removal
+
+**Rationale**: Legacy file format support is removed. Existing cloud customers will migrate data using export/import tools instead of in-place upgrades. This simplifies the design and removes backward compatibility overhead.
