@@ -3044,6 +3044,11 @@ bool CloudStoreMgr::IsIdle()
 
 void CloudStoreMgr::Stop()
 {
+    file_cleaner_.Shutdown();
+    for (auto &prewarmer : prewarmers_)
+    {
+        prewarmer->Shutdown();
+    }
     if (cloud_service_)
     {
         WaitForCloudTasksToDrain();
