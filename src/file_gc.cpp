@@ -219,9 +219,10 @@ void ClassifyFiles(const std::vector<std::string> &files,
             // Only support term-aware archive format:
             // manifest_<term>_<ts> Legacy format manifest_<ts> is no longer
             // supported.
+            std::string branch_name;
             uint64_t term = 0;
             std::optional<uint64_t> timestamp;
-            if (!ParseManifestFileSuffix(ret.second, term, timestamp))
+            if (!ParseManifestFileSuffix(ret.second, branch_name, term, timestamp))
             {
                 continue;
             }
@@ -448,8 +449,9 @@ KvError DeleteUnreferencedCloudFiles(
         }
 
         FileId file_id = 0;
+        std::string branch_name;
         [[maybe_unused]] uint64_t term = 0;
-        if (!ParseDataFileSuffix(ret.second, file_id, term))
+        if (!ParseDataFileSuffix(ret.second, file_id, branch_name, term))
         {
             LOG(ERROR) << "Failed to parse data file suffix: " << file_name
                        << ", skipping";
@@ -558,8 +560,9 @@ KvError DeleteUnreferencedLocalFiles(
         }
 
         FileId file_id = 0;
+        std::string branch_name;
         [[maybe_unused]] uint64_t term = 0;
-        if (!ParseDataFileSuffix(ret.second, file_id, term))
+        if (!ParseDataFileSuffix(ret.second, file_id, branch_name, term))
         {
             continue;
         }
