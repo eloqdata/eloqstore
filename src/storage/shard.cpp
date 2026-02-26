@@ -205,12 +205,6 @@ void Shard::Stop()
 {
 #ifndef ELOQ_MODULE_ENABLED
     thd_.join();
-#else
-    // In module mode the IO manager lives in the calling thread, so we must
-    // stop it explicitly to drain in-flight cloud tasks before tearing down
-    // task pools. This is safe since eloqstore module is unregistered hence
-    // no WorkOneRound is called.
-    io_mgr_->Stop();
 #endif
     task_mgr_.Shutdown();
 }
@@ -686,6 +680,12 @@ void Shard::OnTaskFinished(KvTask *task)
 #ifdef ELOQ_MODULE_ENABLED
 void Shard::WorkOneRound()
 {
+    if (__builtin_expect(store_->is_stopping_, false))
+    {
+        io_mgr_->Stop();
+        store_->num_not_stopped_.fetch_sub(1, std::memory_order_release);
+        return;
+    }
     ts_ = ReadTimeMicroseconds();
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: start timing the round

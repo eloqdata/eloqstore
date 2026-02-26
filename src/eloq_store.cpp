@@ -1011,18 +1011,24 @@ bool EloqStore::SendRequest(KvRequest *req)
 
 void EloqStore::Stop()
 {
-#ifdef ELOQ_MODULE_ENABLED
-    eloq::unregister_module(module_.get());
-#endif
-    if (archive_crond_ != nullptr)
+    num_not_stopped_.store(shards_.size(), std::memory_order_relaxed);
+    is_stopping_.store(true, std::memory_order_release);
+    while (is_stopping_.load(std::memory_order_acquire) > 0)
     {
-        archive_crond_->Stop();
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
-
+    is_stopping_.store(false, std::memory_order_release);
     if (prewarm_service_ != nullptr)
     {
         prewarm_service_->Stop();
     }
+    if (archive_crond_ != nullptr)
+    {
+        archive_crond_->Stop();
+    }
+#ifdef ELOQ_MODULE_ENABLED
+    eloq::unregister_module(module_.get());
+#endif
 
     stopped_.store(true, std::memory_order_relaxed);
     for (auto &shard : shards_)
