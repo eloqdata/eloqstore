@@ -597,9 +597,6 @@ private:
 #endif
 
     bool enable_eloqstore_metrics_{false};
-public:
-    std::atomic<bool> is_stopping_{false};
-    mutable std::atomic<size_t> num_not_stopped_{0};
 
     friend class Shard;
     friend class AsyncIoManager;

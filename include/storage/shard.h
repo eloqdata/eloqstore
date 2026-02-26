@@ -44,6 +44,9 @@ public:
     bool HasPendingTTL(const TableIdent &tbl_id);
     void AddPendingLocalGc(const TableIdent &tbl_id);
     bool HasPendingLocalGc(const TableIdent &tbl_id);
+#ifdef ELOQ_MODULE_ENABLED
+    bool NeedStop() const;
+#endif
 
     bool HasPendingRequests() const;
 
@@ -52,6 +55,13 @@ public:
     TaskManager *TaskMgr();
     PagesPool *PagePool();
 
+    bool oss_enabled_{false};
+    bool io_mgr_and_page_pool_inited_{false};
+
+#ifdef ELOQ_MODULE_ENABLED
+    // 0 for running, 1 for to stop, 2 for stopped
+    std::atomic<int8_t> running_status_{false};
+#endif
     const EloqStore *store_;
     const size_t shard_id_{0};
     boost::context::continuation main_;
@@ -60,8 +70,6 @@ public:
     CircularQueue<KvTask *> ready_tasks_;
     CircularQueue<KvTask *> low_priority_ready_tasks_;
     size_t running_writing_tasks_{};
-    bool oss_enabled_{false};
-    bool io_mgr_and_page_pool_inited_{false};
 
 private:
     void WorkLoop();

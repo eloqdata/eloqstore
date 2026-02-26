@@ -321,6 +321,13 @@ bool Shard::HasPendingLocalGc(const TableIdent &tbl_id)
 #endif
 }
 
+#ifdef ELOQ_MODULE_ENABLED
+bool Shard::NeedStop() const
+{
+    return running_status_.load(std::memory_order_relaxed) == 1;
+}
+#endif
+
 IndexPageManager *Shard::IndexManager()
 {
     return &index_mgr_;
@@ -680,10 +687,14 @@ void Shard::OnTaskFinished(KvTask *task)
 #ifdef ELOQ_MODULE_ENABLED
 void Shard::WorkOneRound()
 {
-    if (__builtin_expect(store_->is_stopping_, false))
+    if (int8_t running_status = running_status_.load(std::memory_order_relaxed);
+        __builtin_expect(running_status_ != 0, 0))
     {
-        io_mgr_->Stop();
-        store_->num_not_stopped_.fetch_sub(1, std::memory_order_release);
+        if (running_status == 1)
+        {
+            io_mgr_->Stop();
+            running_status_.store(2, std::memory_order_release);
+        }
         return;
     }
     ts_ = ReadTimeMicroseconds();

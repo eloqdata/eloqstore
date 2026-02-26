@@ -26,7 +26,7 @@ void EloqStoreModule::Process(int thd_id)
 bool EloqStoreModule::HasTask(int thd_id) const
 {
     assert(static_cast<size_t>(thd_id) < shards_->size());
-    return !shards_->at(thd_id)->IsIdle();
+    return !shards_->at(thd_id)->IsIdle() || shards_->at(thd_id)->NeedStop();
 }
 #endif
 
