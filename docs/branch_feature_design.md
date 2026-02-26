@@ -4,6 +4,8 @@
 
 The Branch feature provides lightweight data isolation by creating independent metadata (manifest) that references parent table's data files. Similar to git branches.
 
+> **Important**: Legacy file format support is removed. Existing cloud customers will migrate data using export/import tools instead of in-place upgrades. This simplifies the design and removes backward compatibility overhead.
+
 ---
 
 ## 1. File Naming Conventions
@@ -193,6 +195,9 @@ struct ManifestMetadata {
 
 ## 7. Operations
 
+**Note**: All read and write operations must explicitly specify `branch_name`.
+Branch name "main" is reserved for the primary branch.
+
 ### Create Branch
 
 ```
@@ -272,6 +277,13 @@ data_10_feature_5             → Branch data, file_id=10, branch=feature, term=
 
 ### Deletion Algorithm
 
+**Note**: Branch reference model follows git semantics:
+- When branch B is created from branch A, B's manifest initially copies A's manifest
+- A's data files become immutable references in B's manifest
+- Both branches can independently add new files
+- A data file can be referenced by multiple branch manifests
+- GC must check references from ALL branch manifests before deletion
+
 ```
 1. Collect all active manifests (main + all branches + archives)
 2. Build reference set from manifest entries:
@@ -315,17 +327,6 @@ bucket/prefix/table_name.partition_id/
 ├── data_0_hotfix_2               # Branch hotfix data
 └── ...
 ```
-
----
-
-## 10. Backward Compatibility
-
-| Old Format | New Interpretation | Status |
-|------------|-------------------|--------|
-| `manifest_5` | Development manifest (branch=main, term=5) | Works |
-| `manifest_5_1234567890` | Development archive | Works |
-| `data_10_5` | Development data (file_id=10, term=5) | Works |
-| `CURRENT_TERM` | Development branch term | Works |
 
 ---
 
@@ -465,7 +466,3 @@ bucket/prefix/table_name.partition_id/
 | Version header | All files include version for future migration support |
 
 ---
-
-## Appendix: Legacy Support Removal
-
-**Rationale**: Legacy file format support is removed. Existing cloud customers will migrate data using export/import tools instead of in-place upgrades. This simplifies the design and removes backward compatibility overhead.
