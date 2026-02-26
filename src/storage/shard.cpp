@@ -208,7 +208,8 @@ void Shard::Stop()
 #else
     // In module mode the IO manager lives in the calling thread, so we must
     // stop it explicitly to drain in-flight cloud tasks before tearing down
-    // task pools.
+    // task pools. This is safe since eloqstore module is unregistered hence
+    // no WorkOneRound is called.
     io_mgr_->Stop();
 #endif
     task_mgr_.Shutdown();

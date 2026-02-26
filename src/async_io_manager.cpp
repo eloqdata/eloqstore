@@ -3053,6 +3053,9 @@ void CloudStoreMgr::Stop()
     {
         WaitForCloudTasksToDrain();
     }
+    // AsyncHttpManager containers can be touched by cloud worker threads via
+    // ObjectStore::RunHttpWork(). Drain all cloud tasks first so Shutdown()
+    // runs after workers finish in-flight work on this object store.
     obj_store_.Shutdown();
 }
 
