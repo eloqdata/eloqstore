@@ -110,6 +110,7 @@ public:
     bool IsDone() const;
     void Wait() const;
     void SetWaitNotify(WaitFunction wait_fn, NotifyFunction notify_fn);
+    void ResetWaitNotify();
 
 protected:
     void SetDone(KvError err);

@@ -167,7 +167,7 @@ TEST_CASE("Custom wait/notify hooks are per request", "[kvrequest]")
 
     // Switching back to the default wait/notify should stop invoking hooks.
     first.Reset();
-    first.SetWaitNotify(nullptr, nullptr);
+    first.ResetWaitNotify();
 
     std::thread t3(
         [&first]

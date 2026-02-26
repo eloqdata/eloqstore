@@ -1203,8 +1203,16 @@ void KvRequest::Wait() const
 
 void KvRequest::SetWaitNotify(WaitFunction wait_fn, NotifyFunction notify_fn)
 {
-    wait_fn_ = wait_fn ? wait_fn : &KvRequest::DefaultWait;
-    notify_fn_ = notify_fn ? notify_fn : &KvRequest::DefaultNotify;
+    CHECK(wait_fn != nullptr);
+    CHECK(notify_fn != nullptr);
+    wait_fn_ = wait_fn;
+    notify_fn_ = notify_fn;
+}
+
+void KvRequest::ResetWaitNotify()
+{
+    wait_fn_ = &KvRequest::DefaultWait;
+    notify_fn_ = &KvRequest::DefaultNotify;
 }
 
 void ReadRequest::SetArgs(TableIdent tbl_id, const char *key)
