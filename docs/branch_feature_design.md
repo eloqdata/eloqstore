@@ -46,7 +46,7 @@ Data Header:     [ Checksum(8B) | Version(4B) | ... ]
 ```
 
 - Current version: 1
-- Version enables future format migrations and data export/import
+- Version enables future format migrations
 
 ---
 
