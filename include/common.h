@@ -232,12 +232,11 @@ inline bool ParseDataFileSuffix(std::string_view suffix,
         return false;
     }
 
-    // Validate and normalize branch_name
+    // Validate branch_name - files contain already-normalized names
     if (!IsValidBranchName(branch_str))
     {
         return false;  // Invalid branch name
     }
-    std::string normalized_branch = NormalizeBranchName(branch_str);
 
     // Validate and parse term
     uint64_t parsed_term = 0;
@@ -248,7 +247,7 @@ inline bool ParseDataFileSuffix(std::string_view suffix,
 
     // Success
     file_id = static_cast<FileId>(parsed_id);
-    branch_name = std::move(normalized_branch);
+    branch_name = std::string(branch_str);
     term = parsed_term;
     return true;
 }
@@ -286,11 +285,11 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
 
     // Extract and validate branch_name
     std::string_view branch_str = suffix.substr(0, first_sep);
+    // Validate branch_name - files contain already-normalized names
     if (!IsValidBranchName(branch_str))
     {
         return false;  // Invalid branch name
     }
-    std::string normalized_branch = NormalizeBranchName(branch_str);
     
     // Reject old format: If branch_str is purely numeric, it's old format
     uint64_t dummy = 0;
@@ -312,7 +311,7 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
         {
             return false;
         }
-        branch_name = std::move(normalized_branch);
+        branch_name = std::string(branch_str);
         term = parsed_term;
         return true;
     }
@@ -328,7 +327,7 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
         return false;
     }
 
-    branch_name = std::move(normalized_branch);
+    branch_name = std::string(branch_str);
     term = parsed_term;
     timestamp = parsed_ts;
     return true;
@@ -455,13 +454,19 @@ inline std::string BranchDataFileName(FileId file_id,
                                       std::string_view branch_name,
                                       uint64_t term)
 {
+    std::string normalized_branch = NormalizeBranchName(branch_name);
+    if (normalized_branch.empty())
+    {
+        return "";  // Invalid branch name
+    }
+    
     std::string name;
-    name.reserve(std::size(FileNameData) + branch_name.size() + 32);
+    name.reserve(std::size(FileNameData) + normalized_branch.size() + 32);
     name.append(FileNameData);
     name.push_back(FileNameSeparator);
     name.append(std::to_string(file_id));
     name.push_back(FileNameSeparator);
-    name.append(branch_name);
+    name.append(normalized_branch);
     name.push_back(FileNameSeparator);
     name.append(std::to_string(term));
     return name;
@@ -471,11 +476,17 @@ inline std::string BranchDataFileName(FileId file_id,
 inline std::string BranchManifestFileName(std::string_view branch_name,
                                           uint64_t term)
 {
+    std::string normalized_branch = NormalizeBranchName(branch_name);
+    if (normalized_branch.empty())
+    {
+        return "";  // Invalid branch name
+    }
+    
     std::string name;
-    name.reserve(std::size(FileNameManifest) + branch_name.size() + 16);
+    name.reserve(std::size(FileNameManifest) + normalized_branch.size() + 16);
     name.append(FileNameManifest);
     name.push_back(FileNameSeparator);
-    name.append(branch_name);
+    name.append(normalized_branch);
     name.push_back(FileNameSeparator);
     name.append(std::to_string(term));
     return name;
@@ -486,11 +497,17 @@ inline std::string BranchArchiveName(std::string_view branch_name,
                                      uint64_t term,
                                      uint64_t ts)
 {
+    std::string normalized_branch = NormalizeBranchName(branch_name);
+    if (normalized_branch.empty())
+    {
+        return "";  // Invalid branch name
+    }
+    
     std::string name;
-    name.reserve(std::size(FileNameManifest) + branch_name.size() + 32);
+    name.reserve(std::size(FileNameManifest) + normalized_branch.size() + 32);
     name.append(FileNameManifest);
     name.push_back(FileNameSeparator);
-    name.append(branch_name);
+    name.append(normalized_branch);
     name.push_back(FileNameSeparator);
     name.append(std::to_string(term));
     name.push_back(FileNameSeparator);
@@ -501,11 +518,17 @@ inline std::string BranchArchiveName(std::string_view branch_name,
 // Branch-aware CURRENT_TERM file naming: CURRENT_TERM.<branch_name>
 inline std::string BranchCurrentTermFileName(std::string_view branch_name)
 {
+    std::string normalized_branch = NormalizeBranchName(branch_name);
+    if (normalized_branch.empty())
+    {
+        return "";  // Invalid branch name
+    }
+    
     std::string name;
-    name.reserve(std::size(CurrentTermFileName) + branch_name.size() + 1);
+    name.reserve(std::size(CurrentTermFileName) + normalized_branch.size() + 1);
     name.append(CurrentTermFileName);
     name.push_back(CurrentTermFileNameSeparator);
-    name.append(branch_name);
+    name.append(normalized_branch);
     return name;
 }
 

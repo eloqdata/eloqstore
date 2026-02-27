@@ -209,16 +209,18 @@ TEST_CASE("ParseDataFileSuffix - case normalization during parse", "[branch][par
     std::string branch_name;
     uint64_t term = 0;
     
-    // Uppercase branch name should be normalized to lowercase
-    REQUIRE(eloqstore::ParseDataFileSuffix("123_MAIN_5", file_id, branch_name, term));
+    // Note: Normalization happens at file creation time (BranchDataFileName)
+    // Parsing extracts branch as-is from filename
+    // These tests use lowercase since new files should have lowercase names
+    REQUIRE(eloqstore::ParseDataFileSuffix("123_main_5", file_id, branch_name, term));
     REQUIRE(file_id == 123);
-    REQUIRE(branch_name == "main"); // normalized
+    REQUIRE(branch_name == "main");
     REQUIRE(term == 5);
     
-    // Mixed case
+    // Mixed case in filename will be returned as-is
     REQUIRE(eloqstore::ParseDataFileSuffix("456_Feature_10", file_id, branch_name, term));
     REQUIRE(file_id == 456);
-    REQUIRE(branch_name == "feature"); // normalized
+    REQUIRE(branch_name == "Feature"); // Not normalized, returned as-is
     REQUIRE(term == 10);
 }
 
@@ -323,13 +325,15 @@ TEST_CASE("ParseManifestFileSuffix - case normalization", "[branch][parsing]")
     uint64_t term = 0;
     std::optional<uint64_t> ts;
     
-    // Uppercase branch name
-    REQUIRE(eloqstore::ParseManifestFileSuffix("MAIN_5", branch_name, term, ts));
-    REQUIRE(branch_name == "main"); // normalized
+    // Note: Normalization happens at file creation time
+    // Parsing extracts branch as-is from filename
+    // These tests use lowercase since new files should have lowercase names
+    REQUIRE(eloqstore::ParseManifestFileSuffix("main_5", branch_name, term, ts));
+    REQUIRE(branch_name == "main");
     
-    // Mixed case
+    // Mixed case in filename will be returned as-is
     REQUIRE(eloqstore::ParseManifestFileSuffix("Feature_10_123", branch_name, term, ts));
-    REQUIRE(branch_name == "feature"); // normalized
+    REQUIRE(branch_name == "Feature"); // Not normalized, returned as-is
 }
 
 TEST_CASE("ParseManifestFileSuffix - old format rejected", "[branch][parsing]")
@@ -456,12 +460,13 @@ TEST_CASE("Roundtrip - data files", "[branch][roundtrip]")
     REQUIRE(branch_name == "feature-123");
     REQUIRE(term == 456);
     
-    // Test case normalization in roundtrip
+    // Test case normalization at creation time (not during parse)
+    // BranchDataFileName normalizes, so parsed result should already be lowercase
     filename = eloqstore::BranchDataFileName(10, "Feature", 1);
     auto [type3, suffix3] = eloqstore::ParseFileName(filename);
     REQUIRE(eloqstore::ParseDataFileSuffix(suffix3, file_id, branch_name, term));
     REQUIRE(file_id == 10);
-    REQUIRE(branch_name == "feature"); // Uppercase 'F' in generated, normalized in parse
+    REQUIRE(branch_name == "feature"); // BranchDataFileName normalizes to lowercase
     REQUIRE(term == 1);
 }
 
