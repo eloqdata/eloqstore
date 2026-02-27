@@ -199,10 +199,8 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
             // ensuring the next write operation will trigger a TTL check.
             meta->next_expire_ts_ = 1;
         }
-        replayer.file_id_term_mapping_->insert_or_assign(
-            IouringMgr::LruFD::kManifest, IoMgr()->ProcessTerm());
-        IoMgr()->SetFileIdTermMapping(entry_tbl,
-                                      replayer.file_id_term_mapping_);
+        // Set branch metadata term from manifest
+        replayer.branch_metadata_.term = IoMgr()->ProcessTerm();
         return KvError::NoError;
     };
 

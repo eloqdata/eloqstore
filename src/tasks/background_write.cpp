@@ -321,15 +321,15 @@ KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
     {
         dict_bytes = meta->compression_->DictionaryBytes();
     }
-    // Archive snapshot should also carry FileIdTermMapping for this table
-    std::string term_buf;
-    std::shared_ptr<FileIdTermMapping> file_term_mapping =
-        shard->IoManager()->GetOrCreateFileIdTermMapping(tbl_ident_);
-    file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
-                                        IoMgr()->ProcessTerm());
-    SerializeFileIdTermMapping(*file_term_mapping, term_buf);
+    // Archive snapshot should also carry BranchManifestMetadata for this table
+    BranchManifestMetadata branch_metadata;
+    branch_metadata.branch_name = MainBranchName;  // Use main branch for archives
+    branch_metadata.term = IoMgr()->ProcessTerm();
+    // file_ranges will be populated when branch operations are implemented (Phase 3+)
+    // For now, use empty mapping - this will be updated when we implement branch support
+    
     std::string_view snapshot = wal_builder_.Snapshot(
-        root, ttl_root, mapping, max_fp_id, dict_bytes, term_buf);
+        root, ttl_root, mapping, max_fp_id, dict_bytes, branch_metadata);
 
     uint64_t current_ts =
         provided_ts != 0 ? provided_ts : utils::UnixTs<chrono::microseconds>();

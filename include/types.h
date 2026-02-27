@@ -59,6 +59,15 @@ struct BranchFileRange
 // Use std::lower_bound to find branch given file_id
 using BranchFileMapping = std::vector<BranchFileRange>;
 
+// BranchManifestMetadata: branch-specific manifest metadata
+// Stored in manifest to identify branch and track file ranges
+struct BranchManifestMetadata
+{
+    std::string branch_name;     // unique branch identifier (e.g., "main", "feature")
+    uint64_t term;              // current term for this branch
+    BranchFileMapping file_ranges;  // per-branch file ranges (sorted by max_file_id)
+};
+
 namespace fs = std::filesystem;
 
 struct TableIdent
