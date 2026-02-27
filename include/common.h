@@ -213,11 +213,29 @@ inline bool ParseDataFileSuffix(std::string_view suffix,
         return false;
     }
 
-    // Validate branch_name
-    std::string normalized_branch = NormalizeBranchName(branch_str);
-    if (normalized_branch.empty())
+    // Extract branch_name (files should contain lowercase, but allow uppercase for backward compat)
+    // No need to call full NormalizeBranchName() - just validate and lowercase inline
+    // Validate: only allow a-z, 0-9, - (reject dots, spaces, underscores, special chars)
+    if (branch_str.empty())
     {
-        return false;
+        return false;  // Empty branch name
+    }
+    std::string branch;
+    branch.reserve(branch_str.size());
+    for (char c : branch_str)
+    {
+        if (c >= 'A' && c <= 'Z')
+        {
+            branch.push_back(c + ('a' - 'A'));  // Lowercase
+        }
+        else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')
+        {
+            branch.push_back(c);  // Already lowercase or digit or hyphen
+        }
+        else
+        {
+            return false;  // Invalid character (dot, space, underscore, etc.)
+        }
     }
 
     // Validate and parse term
@@ -229,7 +247,7 @@ inline bool ParseDataFileSuffix(std::string_view suffix,
 
     // Success
     file_id = static_cast<FileId>(parsed_id);
-    branch_name = std::move(normalized_branch);
+    branch_name = std::move(branch);
     term = parsed_term;
     return true;
 }
@@ -265,12 +283,30 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
         return false;
     }
 
-    // Extract branch_name and validate
+    // Extract branch_name (files should contain lowercase, but allow uppercase for backward compat)
+    // No need to call full NormalizeBranchName() - just validate and lowercase inline
+    // Validate: only allow a-z, 0-9, - (reject dots, spaces, underscores, special chars)
     std::string_view branch_str = suffix.substr(0, first_sep);
-    std::string normalized_branch = NormalizeBranchName(branch_str);
-    if (normalized_branch.empty())
+    if (branch_str.empty())
     {
-        return false;
+        return false;  // Empty branch name
+    }
+    std::string branch;
+    branch.reserve(branch_str.size());
+    for (char c : branch_str)
+    {
+        if (c >= 'A' && c <= 'Z')
+        {
+            branch.push_back(c + ('a' - 'A'));  // Lowercase
+        }
+        else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')
+        {
+            branch.push_back(c);  // Already lowercase or digit or hyphen
+        }
+        else
+        {
+            return false;  // Invalid character (dot, space, underscore, etc.)
+        }
     }
     
     // Reject old format: If branch_str is purely numeric, it's old format
@@ -293,7 +329,7 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
         {
             return false;
         }
-        branch_name = std::move(normalized_branch);
+        branch_name = std::move(branch);
         term = parsed_term;
         return true;
     }
@@ -309,7 +345,7 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
         return false;
     }
 
-    branch_name = std::move(normalized_branch);
+    branch_name = std::move(branch);
     term = parsed_term;
     timestamp = parsed_ts;
     return true;
