@@ -298,6 +298,7 @@ pub use self::ffi::CEloqStore_Options_Create;
 pub use self::ffi::CEloqStore_Options_Destroy;
 pub use self::ffi::CEloqStore_Options_SetBufferPoolSize;
 pub use self::ffi::CEloqStore_Options_SetCloudCredentials;
+pub use self::ffi::CEloqStore_Options_SetCloudAutoCredentials;
 pub use self::ffi::CEloqStore_Options_SetCloudProvider;
 pub use self::ffi::CEloqStore_Options_SetCloudRegion;
 pub use self::ffi::CEloqStore_Options_SetCloudStorePath;
