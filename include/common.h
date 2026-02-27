@@ -130,10 +130,10 @@ inline std::string NormalizeBranchName(std::string_view branch_name)
         LOG(WARNING) << "Branch name is empty";
         return "";
     }
-    
+
     std::string normalized;
     normalized.reserve(branch_name.size());
-    
+
     for (char c : branch_name)
     {
         if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')
@@ -148,53 +148,39 @@ inline std::string NormalizeBranchName(std::string_view branch_name)
         else
         {
             // Invalid character (including underscore which is reserved as separator)
-            LOG(WARNING) << "Invalid character in branch name: '" << branch_name 
+            LOG(WARNING) << "Invalid character in branch name: '" << branch_name
                          << "' (contains '" << c << "')";
             return "";
         }
     }
-    
+
     return normalized;
 }
 
-// Validates and normalizes branch name in one pass
-// Returns normalized string if valid, empty string if invalid
-// Validates: only a-z, 0-9, - (rejects dots, spaces, underscores, etc.)
-// Normalizes: converts uppercase to lowercase inline
-inline std::string ValidateAndNormalizeBranchName(std::string_view branch_name)
+// Validates branch name (case-insensitive)
+// Returns true if valid, false otherwise
+// Valid pattern: [a-zA-Z0-9-]+ (alphanumeric and hyphen, case-insensitive)
+inline bool IsValidBranchName(std::string_view branch_name)
 {
     if (branch_name.empty())
     {
-        return "";
+        return false;
     }
-    
-    std::string normalized;
-    normalized.reserve(branch_name.size());
-    
+
     for (char c : branch_name)
     {
-        if (c >= 'A' && c <= 'Z')
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '-')
         {
-            normalized.push_back(c + ('a' - 'A'));  // Lowercase
-        }
-        else if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')
-        {
-            normalized.push_back(c);  // Already lowercase or digit or hyphen
+            continue;  // Valid character
         }
         else
         {
-            return "";  // Invalid character (dot, space, underscore, etc.)
+            return false;  // Invalid character (dot, space, underscore, etc.)
         }
     }
-    
-    return normalized;
-}
 
-// Validates branch name without normalization
-// Returns true if valid, false otherwise
-inline bool IsValidBranchName(std::string_view branch_name)
-{
-    return !ValidateAndNormalizeBranchName(branch_name).empty();
+    return true;  // All characters valid and not empty
 }
 
 // ParseDataFileSuffix: parses suffix from data file name
@@ -219,7 +205,7 @@ inline bool ParseDataFileSuffix(std::string_view suffix,
     // Format: <file_id>_<branch_name>_<term>
     // Since underscore is reserved as separator, branch_name cannot contain underscores
     // Simple left-to-right parsing: find first two separators
-    
+
     // Find first separator (after file_id)
     size_t first_sep = suffix.find(FileNameSeparator);
     if (first_sep == std::string::npos)
@@ -246,12 +232,12 @@ inline bool ParseDataFileSuffix(std::string_view suffix,
         return false;
     }
 
-    // Validate and normalize branch_name using shared helper
-    std::string branch = ValidateAndNormalizeBranchName(branch_str);
-    if (branch.empty())
+    // Validate and normalize branch_name
+    if (!IsValidBranchName(branch_str))
     {
         return false;  // Invalid branch name
     }
+    std::string normalized_branch = NormalizeBranchName(branch_str);
 
     // Validate and parse term
     uint64_t parsed_term = 0;
@@ -262,7 +248,7 @@ inline bool ParseDataFileSuffix(std::string_view suffix,
 
     // Success
     file_id = static_cast<FileId>(parsed_id);
-    branch_name = std::move(branch);
+    branch_name = std::move(normalized_branch);
     term = parsed_term;
     return true;
 }
@@ -290,7 +276,7 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
     // Format: <branch_name>_<term> or <branch_name>_<term>_<timestamp>
     // Since underscore is reserved as separator, branch_name cannot contain underscores
     // Simple left-to-right parsing
-    
+
     // Find first separator (after branch_name)
     size_t first_sep = suffix.find(FileNameSeparator);
     if (first_sep == std::string::npos)
@@ -298,13 +284,13 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
         return false;
     }
 
-    // Extract branch_name and validate using shared helper
+    // Extract and validate branch_name
     std::string_view branch_str = suffix.substr(0, first_sep);
-    std::string branch = ValidateAndNormalizeBranchName(branch_str);
-    if (branch.empty())
+    if (!IsValidBranchName(branch_str))
     {
         return false;  // Invalid branch name
     }
+    std::string normalized_branch = NormalizeBranchName(branch_str);
     
     // Reject old format: If branch_str is purely numeric, it's old format
     uint64_t dummy = 0;
@@ -326,7 +312,7 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
         {
             return false;
         }
-        branch_name = std::move(branch);
+        branch_name = std::move(normalized_branch);
         term = parsed_term;
         return true;
     }
@@ -342,7 +328,7 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
         return false;
     }
 
-    branch_name = std::move(branch);
+    branch_name = std::move(normalized_branch);
     term = parsed_term;
     timestamp = parsed_ts;
     return true;
