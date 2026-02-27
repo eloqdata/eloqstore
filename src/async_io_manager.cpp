@@ -1904,7 +1904,7 @@ bool IouringMgr::HasOtherFile(const TableIdent &tbl_id) const
         auto [type, suffix] = ParseFileName(name);
         if (type == FileNameManifest)
         {
-            std::string branch_name;
+            std::string_view branch_name;
             uint64_t term = 0;
             std::optional<uint64_t> ts;
             if (ParseManifestFileSuffix(suffix, branch_name, term, ts) && !ts.has_value())
@@ -3486,7 +3486,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     for (const std::string &name : cloud_files)
     {
         // "name" does not contain the prefix("manifest_").
-        std::string branch_name;
+        std::string_view branch_name;
         uint64_t term = 0;
         std::optional<uint64_t> ts;
         if (!ParseManifestFileSuffix(name, branch_name, term, ts))
@@ -4511,7 +4511,7 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
     if (is_data_file)
     {
         FileId file_id = 0;
-        std::string branch_name;
+        std::string_view branch_name;
         uint64_t term = 0;
         if (!ParseDataFileSuffix(id_term_view, file_id, branch_name, term))
         {
@@ -4636,7 +4636,7 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
     if (is_data_file)
     {
         FileId file_id = 0;
-        std::string branch_name;
+        std::string_view branch_name;
         uint64_t term = 0;
         if (!ParseDataFileSuffix(suffix, file_id, branch_name, term))
         {
