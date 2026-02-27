@@ -373,15 +373,16 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name,
     
     LOG(INFO) << "Creating branch " << normalized_branch << " from parent " << parent;
 
-    // TODO(Phase3): Implement actual CreateBranch logic:
-    // 1. Read parent's current manifest
-    // 2. Create branch manifest with:
+    // TODO(Phase3-Full): Implement full CreateBranch:
+    // 1. Read parent's manifest using GetManifest
+    // 2. Parse parent's BranchFileMapping
+    // 3. Create new BranchManifestMetadata with:
     //    - branch_name = normalized_branch
     //    - term = 0
     //    - root = parent's root
-    //    - branch_file_ranges = COPY of parent's branch_file_ranges
-    // 3. Write manifest_<branch_name>_0
-    // 4. Create CURRENT_TERM.<branch_name> with content "0"
+    //    - branch_file_ranges = COPY of parent's
+    // 4. Write manifest_<branch_name>_0 using ManifestBuilder
+    // 5. Write CURRENT_TERM.<branch_name> file with "0"
     
     return KvError::NoError;
 }
