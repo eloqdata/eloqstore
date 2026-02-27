@@ -33,6 +33,7 @@ struct SignedRequestInfo
     std::string url;
     std::vector<std::string> headers;
     std::string body;
+    std::string method;
 };
 
 class CloudBackend

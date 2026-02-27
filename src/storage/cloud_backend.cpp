@@ -1069,6 +1069,7 @@ public:
         request->url.clear();
         request->headers.clear();
         request->body.clear();
+        request->method = "PUT";
         if (bucket_url_.empty() || !signer_)
         {
             return false;
@@ -1395,16 +1396,63 @@ public:
         }
         request->headers.clear();
         request->body.clear();
-        request->url = bucket_url_;
+        request->method = "POST";
+
+        const std::string &project_id = token_provider_->ProjectId();
+        if (project_id.empty())
+        {
+            LOG(ERROR)
+                << "GCS auto credentials missing project id for bucket creation";
+            return false;
+        }
+
+        std::string endpoint = options_->cloud_endpoint.empty()
+                                   ? std::string(kDefaultGcsEndpoint)
+                                   : options_->cloud_endpoint;
+        while (!endpoint.empty() && endpoint.back() == '/')
+        {
+            endpoint.pop_back();
+        }
+        if (endpoint.empty())
+        {
+            LOG(ERROR) << "Invalid GCS endpoint for bucket creation";
+            return false;
+        }
+
+        request->url = endpoint;
+        request->url.append("/storage/v1/b?project=");
+        request->url.append(UrlEncode(project_id));
         if (request->url.empty())
         {
             return false;
         }
+
+        Json::Value body_json;
+        body_json["name"] = cloud_path_.bucket;
+        std::string region = options_->cloud_region.empty()
+                                 ? std::string(kDefaultGcsRegion)
+                                 : options_->cloud_region;
+        std::string lowered;
+        lowered.reserve(region.size());
+        for (char c : region)
+        {
+            lowered.push_back(
+                static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
+        }
+        if (!region.empty() && lowered != "auto")
+        {
+            body_json["location"] = region;
+        }
+
+        Json::StreamWriterBuilder builder;
+        builder["indentation"] = "";
+        request->body = Json::writeString(builder, body_json);
+
+        request->headers.emplace_back("Content-Type: application/json");
         if (!AppendAuthHeader(request))
         {
             return false;
         }
-        AppendProjectHeader(request);
         return true;
     }
 
