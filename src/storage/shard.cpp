@@ -688,7 +688,7 @@ void Shard::OnTaskFinished(KvTask *task)
 void Shard::WorkOneRound()
 {
     if (int8_t running_status = running_status_.load(std::memory_order_relaxed);
-        __builtin_expect(running_status_ != 0, 0))
+        __builtin_expect(running_status != 0, 0))
     {
         if (running_status == 1)
         {
