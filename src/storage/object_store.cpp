@@ -274,8 +274,8 @@ KvError AsyncHttpManager::EnsureBucketExists()
     curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, AppendToString);
     curl_easy_setopt(easy, CURLOPT_WRITEDATA, &response_body);
     curl_easy_setopt(easy, CURLOPT_TIMEOUT, 60L);
-    const char *method = request_info.method.empty() ? "PUT"
-                                                     : request_info.method.c_str();
+    const char *method =
+        request_info.method.empty() ? "PUT" : request_info.method.c_str();
     curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, method);
     curl_easy_setopt(easy, CURLOPT_URL, request_info.url.c_str());
     const char *body_ptr =

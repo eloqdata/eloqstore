@@ -355,13 +355,8 @@ bool ParseS3XmlListResponse(std::string_view payload,
         }
         std::string mod_time =
             DecodeXmlEntities(ExtractTagValue(block, "LastModified"));
-        AppendParsedEntry(decoded_key,
-                          strip_prefix,
-                          false,
-                          size,
-                          mod_time,
-                          objects,
-                          infos);
+        AppendParsedEntry(
+            decoded_key, strip_prefix, false, size, mod_time, objects, infos);
     }
 
     pos = 0;
@@ -469,7 +464,8 @@ std::optional<GcsServiceAccountCredentials> ParseServiceAccountJson(
     creds.project_id = root.get("project_id", "").asString();
     if (creds.client_email.empty() || creds.private_key.empty())
     {
-        LOG(ERROR) << "Service account credentials missing client_email or private_key";
+        LOG(ERROR) << "Service account credentials missing client_email or "
+                      "private_key";
         return std::nullopt;
     }
     if (creds.token_uri.empty())
@@ -584,8 +580,8 @@ std::optional<GcsMetadataCredentials> LoadMetadataCredentials()
     auto project_id = FetchMetadataValue(kMetadataProjectIdPath);
     if (!project_id)
     {
-        LOG(INFO)
-            << "Metadata server unavailable or project id not accessible for GCS auto credentials";
+        LOG(INFO) << "Metadata server unavailable or project id not accessible "
+                     "for GCS auto credentials";
         return std::nullopt;
     }
     GcsMetadataCredentials creds;
@@ -659,7 +655,8 @@ public:
             return std::unique_ptr<GcsAccessTokenProvider>(
                 new GcsAccessTokenProvider(std::move(*metadata)));
         }
-        LOG(ERROR) << "Failed to initialize GCS auto credentials from environment or metadata";
+        LOG(ERROR) << "Failed to initialize GCS auto credentials from "
+                      "environment or metadata";
         return nullptr;
     }
 
@@ -695,14 +692,12 @@ private:
     };
 
     explicit GcsAccessTokenProvider(GcsServiceAccountCredentials creds)
-        : mode_(CredentialMode::kServiceAccount),
-          credentials_(std::move(creds))
+        : mode_(CredentialMode::kServiceAccount), credentials_(std::move(creds))
     {
     }
 
     explicit GcsAccessTokenProvider(GcsMetadataCredentials metadata)
-        : mode_(CredentialMode::kMetadata),
-          metadata_creds_(std::move(metadata))
+        : mode_(CredentialMode::kMetadata), metadata_creds_(std::move(metadata))
     {
     }
 
@@ -743,7 +738,8 @@ private:
             return false;
         }
         std::string post_fields =
-            "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=" +
+            "grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&"
+            "assertion=" +
             UrlEncode(assertion);
 
         CURL *easy = curl_easy_init();
@@ -781,8 +777,8 @@ private:
         }
         if (http_code < 200 || http_code >= 300)
         {
-            LOG(ERROR) << "Token endpoint returned HTTP " << http_code
-                       << ": " << response;
+            LOG(ERROR) << "Token endpoint returned HTTP " << http_code << ": "
+                       << response;
             return false;
         }
 
@@ -829,7 +825,8 @@ private:
         int expires_in = resp_json.get("expires_in", 0).asInt();
         if (token_value.empty() || expires_in <= 0)
         {
-            LOG(ERROR) << "Metadata token response missing access_token or expires_in";
+            LOG(ERROR)
+                << "Metadata token response missing access_token or expires_in";
             return false;
         }
 
@@ -841,14 +838,16 @@ private:
 
     bool SignAssertion(const std::string &input, std::string *signature) const
     {
-        BIO *bio = BIO_new_mem_buf(credentials_.private_key.data(),
-                                   static_cast<int>(credentials_.private_key.size()));
+        BIO *bio =
+            BIO_new_mem_buf(credentials_.private_key.data(),
+                            static_cast<int>(credentials_.private_key.size()));
         if (!bio)
         {
             LOG(ERROR) << "Failed to load GCS private key";
             return false;
         }
-        EVP_PKEY *pkey = PEM_read_bio_PrivateKey(bio, nullptr, nullptr, nullptr);
+        EVP_PKEY *pkey =
+            PEM_read_bio_PrivateKey(bio, nullptr, nullptr, nullptr);
         BIO_free(bio);
         if (!pkey)
         {
@@ -909,10 +908,9 @@ private:
 
     std::string CreateJwtAssertion(std::chrono::system_clock::time_point now)
     {
-        const int64_t iat =
-            std::chrono::duration_cast<std::chrono::seconds>(
-                now.time_since_epoch())
-                .count();
+        const int64_t iat = std::chrono::duration_cast<std::chrono::seconds>(
+                                now.time_since_epoch())
+                                .count();
         const int64_t exp = iat + 3600;
         Json::Value payload;
         payload["iss"] = credentials_.client_email;
@@ -921,10 +919,10 @@ private:
         payload["iat"] = static_cast<Json::Value::Int64>(iat);
         payload["exp"] = static_cast<Json::Value::Int64>(exp);
 
-        const std::string header =
-            R"({"alg":"RS256","typ":"JWT"})";
+        const std::string header = R"({"alg":"RS256","typ":"JWT"})";
         const std::string header_b64 = Base64UrlEncode(header);
-        const std::string payload_b64 = Base64UrlEncode(JsonCompactString(payload));
+        const std::string payload_b64 =
+            Base64UrlEncode(JsonCompactString(payload));
         if (header_b64.empty() || payload_b64.empty())
         {
             return {};
@@ -1185,8 +1183,7 @@ protected:
         if (options_ && options_->cloud_auto_credentials)
         {
             return Aws::MakeShared<
-                Aws::Auth::DefaultAWSCredentialsProviderChain>(
-                "eloqstore");
+                Aws::Auth::DefaultAWSCredentialsProviderChain>("eloqstore");
         }
         return Aws::MakeShared<Aws::Auth::SimpleAWSCredentialsProvider>(
             "eloqstore",
@@ -1333,7 +1330,8 @@ public:
             token_provider_ = GcsAccessTokenProvider::Create();
             if (!token_provider_)
             {
-                LOG(FATAL) << "Failed to initialize GCS auto credentials from environment";
+                LOG(FATAL) << "Failed to initialize GCS auto credentials from "
+                              "environment";
             }
         }
     }
@@ -1401,8 +1399,8 @@ public:
         const std::string &project_id = token_provider_->ProjectId();
         if (project_id.empty())
         {
-            LOG(ERROR)
-                << "GCS auto credentials missing project id for bucket creation";
+            LOG(ERROR) << "GCS auto credentials missing project id for bucket "
+                          "creation";
             return false;
         }
 

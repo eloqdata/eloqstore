@@ -229,8 +229,9 @@ public:
         config.verifySSL = verify_ssl;
         if (opts.cloud_auto_credentials)
         {
-            credentials_provider_ = Aws::MakeShared<
-                Aws::Auth::DefaultAWSCredentialsProviderChain>("eloqstore");
+            credentials_provider_ =
+                Aws::MakeShared<Aws::Auth::DefaultAWSCredentialsProviderChain>(
+                    "eloqstore");
             client_ = std::make_unique<Aws::S3::S3Client>(
                 credentials_provider_,
                 config,
