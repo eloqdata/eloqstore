@@ -24,6 +24,7 @@ using FileId = uint64_t;
 static constexpr FileId MaxFileId = UINT64_MAX;
 
 constexpr char FileNameSeparator = '_';
+constexpr char CurrentTermFileNameSeparator = '.';
 static constexpr char FileNameData[] = "data";
 static constexpr char FileNameManifest[] = "manifest";
 static constexpr char CurrentTermFileName[] = "CURRENT_TERM";
