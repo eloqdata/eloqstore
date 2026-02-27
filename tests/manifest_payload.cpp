@@ -1,13 +1,15 @@
 #include <catch2/catch_test_macros.hpp>
+#include <cstdint>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
-#include "../include/async_io_manager.h"
-#include "../include/coding.h"
-#include "../include/kv_options.h"
+#include "../include/common.h"
 #include "../include/storage/index_page_manager.h"
+#include "../include/storage/root_meta.h"
+#include "../include/types.h"
 #include "../include/storage/page_mapper.h"
 #include "../include/storage/root_meta.h"
 
@@ -47,12 +49,15 @@ TEST_CASE(
     std::string file_term_mapping_str;
     eloqstore::SerializeFileIdTermMapping(file_id_term, file_term_mapping_str);
     eloqstore::ManifestBuilder builder;
+    eloqstore::BranchManifestMetadata branch_metadata;
+    branch_metadata.branch_name = eloqstore::MainBranchName;
+    branch_metadata.term = 0;
     std::string_view manifest = builder.Snapshot(/*root_id=*/1,
                                                  /*ttl_root=*/2,
                                                  &mapping_snapshot,
                                                  max_fp_id,
                                                  dict_bytes,
-                                                 file_term_mapping_str);
+                                                 branch_metadata);
     REQUIRE(manifest.size() > eloqstore::ManifestBuilder::header_bytes);
 
     // Strip manifest header; inspect the payload layout:
@@ -131,12 +136,15 @@ TEST_CASE(
     eloqstore::FileIdTermMapping empty_mapping;
     std::string file_term_mapping_str;
     eloqstore::SerializeFileIdTermMapping(empty_mapping, file_term_mapping_str);
+    eloqstore::BranchManifestMetadata branch_metadata;
+    branch_metadata.branch_name = eloqstore::MainBranchName;
+    branch_metadata.term = 0;
     std::string_view manifest = builder.Snapshot(/*root_id=*/3,
                                                  /*ttl_root=*/4,
                                                  &mapping_snapshot,
                                                  max_fp_id,
                                                  dict_bytes,
-                                                 file_term_mapping_str);
+                                                 branch_metadata);
 
     REQUIRE(manifest.size() > eloqstore::ManifestBuilder::header_bytes);
     // Strip manifest header; inspect the payload layout:
