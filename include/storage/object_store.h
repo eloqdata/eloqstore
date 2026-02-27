@@ -18,6 +18,7 @@
 #include "error.h"
 #include "kv_options.h"
 #include "pool.h"
+#include "storage/cloud_backend.h"
 #include "tasks/task.h"
 #include "types.h"
 
@@ -225,46 +226,6 @@ public:
 private:
     std::unique_ptr<AsyncHttpManager> async_http_mgr_;
     CloudStorageService *cloud_service_{nullptr};
-};
-
-struct CloudPathInfo
-{
-    std::string bucket;
-    std::string prefix;
-};
-
-enum class CloudHttpMethod : uint8_t
-{
-    kGet = 0,
-    kPut,
-    kDelete
-};
-
-struct SignedRequestInfo
-{
-    std::string url;
-    std::vector<std::string> headers;
-    std::string body;
-};
-
-class CloudBackend
-{
-public:
-    virtual ~CloudBackend() = default;
-
-    virtual std::string CreateSignedUrl(CloudHttpMethod method,
-                                        const std::string &key) = 0;
-    virtual bool BuildListRequest(const std::string &prefix,
-                                  bool recursive,
-                                  const std::string &continuation,
-                                  SignedRequestInfo *request) const = 0;
-    virtual bool BuildCreateBucketRequest(SignedRequestInfo *request) const = 0;
-    virtual bool ParseListObjectsResponse(
-        std::string_view payload,
-        const std::string &strip_prefix,
-        std::vector<std::string> *objects,
-        std::vector<utils::CloudObjectInfo> *infos,
-        std::string *next_continuation_token = nullptr) const = 0;
 };
 
 class AsyncHttpManager

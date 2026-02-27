@@ -1,19 +1,9 @@
 #include "storage/object_store.h"
 
 #include <aws/core/Aws.h>
-#include <aws/core/auth/AWSCredentialsProvider.h>
-#include <aws/core/auth/AWSCredentialsProviderChain.h>
-#include <aws/core/auth/signer/AWSAuthV4Signer.h>
-#include <aws/core/client/ClientConfiguration.h>
-#include <aws/core/http/Scheme.h>
-#include <aws/core/http/standard/StandardHttpRequest.h>
-#include <aws/core/utils/memory/stl/AWSStringStream.h>
-#include <aws/s3/S3Client.h>
 #include <glog/logging.h>
 
 #include <algorithm>
-#include <cassert>
-#include <cctype>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
@@ -43,12 +33,6 @@ bool g_aws_initialized = false;
 Aws::SDKOptions g_sdk_options;
 bool g_aws_cleanup_registered = false;
 
-constexpr std::string_view kDefaultAwsEndpoint = "http://127.0.0.1:9900";
-constexpr std::string_view kDefaultAwsRegion = "us-east-1";
-constexpr std::string_view kDefaultGcsEndpoint =
-    "https://storage.googleapis.com";
-constexpr std::string_view kDefaultGcsRegion = "auto";
-
 size_t AppendToString(void *contents, size_t size, size_t nmemb, void *userp)
 {
     size_t total = size * nmemb;
@@ -59,817 +43,6 @@ size_t AppendToString(void *contents, size_t size, size_t nmemb, void *userp)
     auto *buffer = static_cast<std::string *>(userp);
     buffer->append(static_cast<char *>(contents), total);
     return total;
-}
-
-bool ParseJsonListResponse(std::string_view payload,
-                           std::vector<std::string> *objects,
-                           std::vector<utils::CloudObjectInfo> *infos)
-{
-    Json::Value response;
-    Json::Reader reader;
-    if (!reader.parse(
-            payload.data(), payload.data() + payload.size(), response, false))
-    {
-        return false;
-    }
-    if (!response.isMember("list") || !response["list"].isArray())
-    {
-        return false;
-    }
-    if (objects)
-    {
-        objects->clear();
-    }
-    if (infos)
-    {
-        infos->clear();
-    }
-    for (const auto &item : response["list"])
-    {
-        std::string name;
-        if (item.isMember("Name") && item["Name"].isString())
-        {
-            name = item["Name"].asString();
-        }
-        std::string path;
-        if (item.isMember("Path") && item["Path"].isString())
-        {
-            path = item["Path"].asString();
-        }
-        bool is_dir = item.isMember("IsDir") && item["IsDir"].isBool()
-                          ? item["IsDir"].asBool()
-                          : false;
-        uint64_t size = 0;
-        if (item.isMember("Size"))
-        {
-            const Json::Value &size_value = item["Size"];
-            if (size_value.isUInt64())
-            {
-                size = size_value.asUInt64();
-            }
-            else if (size_value.isString())
-            {
-                try
-                {
-                    size = std::stoull(size_value.asString());
-                }
-                catch (const std::exception &)
-                {
-                    size = 0;
-                }
-            }
-        }
-        std::string mod_time;
-        if (item.isMember("ModTime") && item["ModTime"].isString())
-        {
-            mod_time = item["ModTime"].asString();
-        }
-
-        if (objects && !name.empty())
-        {
-            objects->push_back(name);
-        }
-        if (infos)
-        {
-            utils::CloudObjectInfo info;
-            info.name = name;
-            info.path = path;
-            info.size = size;
-            info.is_dir = is_dir;
-            info.mod_time = mod_time;
-            infos->push_back(std::move(info));
-        }
-    }
-    return true;
-}
-
-std::string DecodeXmlEntities(std::string_view value)
-{
-    std::string result;
-    result.reserve(value.size());
-    for (size_t i = 0; i < value.size();)
-    {
-        if (value[i] != '&')
-        {
-            result.push_back(value[i]);
-            ++i;
-            continue;
-        }
-
-        if (value.substr(i, 5) == "&amp;")
-        {
-            result.push_back('&');
-            i += 5;
-        }
-        else if (value.substr(i, 4) == "&lt;")
-        {
-            result.push_back('<');
-            i += 4;
-        }
-        else if (value.substr(i, 4) == "&gt;")
-        {
-            result.push_back('>');
-            i += 4;
-        }
-        else if (value.substr(i, 6) == "&quot;")
-        {
-            result.push_back('"');
-            i += 6;
-        }
-        else if (value.substr(i, 6) == "&apos;")
-        {
-            result.push_back(static_cast<char>(39));
-            i += 6;
-        }
-        else
-        {
-            result.push_back(value[i]);
-            ++i;
-        }
-    }
-    return result;
-}
-
-std::string ExtractTagValue(std::string_view block, std::string_view tag)
-{
-    std::string open = "<" + std::string(tag) + ">";
-    std::string close = "</" + std::string(tag) + ">";
-    size_t start = block.find(open);
-    if (start == std::string::npos)
-    {
-        return {};
-    }
-    start += open.size();
-    size_t end = block.find(close, start);
-    if (end == std::string::npos)
-    {
-        return {};
-    }
-    return std::string(block.substr(start, end - start));
-}
-
-std::string UrlEncode(std::string_view value)
-{
-    static constexpr char kHexDigits[] = "0123456789ABCDEF";
-    std::string encoded;
-    encoded.reserve(value.size());
-    for (unsigned char c : value)
-    {
-        if (std::isalnum(c) || c == '-' || c == '_' || c == '.' || c == '~')
-        {
-            encoded.push_back(static_cast<char>(c));
-        }
-        else
-        {
-            encoded.push_back('%');
-            encoded.push_back(kHexDigits[(c >> 4) & 0xF]);
-            encoded.push_back(kHexDigits[c & 0xF]);
-        }
-    }
-    return encoded;
-}
-
-std::string StripPrefixFromKey(std::string key, const std::string &strip_prefix)
-{
-    if (!strip_prefix.empty() && key.rfind(strip_prefix, 0) == 0)
-    {
-        key.erase(0, strip_prefix.size());
-    }
-    else if (!strip_prefix.empty())
-    {
-        std::string without_slash = strip_prefix;
-        if (!without_slash.empty() && without_slash.back() == '/')
-        {
-            without_slash.pop_back();
-        }
-        if (!without_slash.empty() && key.rfind(without_slash, 0) == 0)
-        {
-            key.erase(0, without_slash.size());
-        }
-    }
-    while (!key.empty() && key.front() == '/')
-    {
-        key.erase(key.begin());
-    }
-    return key;
-}
-
-void AppendParsedEntry(const std::string &decoded_key,
-                       const std::string &strip_prefix,
-                       bool is_dir,
-                       uint64_t size,
-                       const std::string &mod_time,
-                       std::vector<std::string> *objects,
-                       std::vector<utils::CloudObjectInfo> *infos)
-{
-    std::string relative = StripPrefixFromKey(decoded_key, strip_prefix);
-    if (relative.empty())
-    {
-        return;
-    }
-    if (is_dir && !relative.empty() && relative.back() == '/')
-    {
-        relative.pop_back();
-    }
-
-    std::string name = relative;
-    size_t pos = name.find_last_of('/');
-    if (pos != std::string::npos)
-    {
-        name.erase(0, pos + 1);
-    }
-
-    if (objects && !name.empty())
-    {
-        objects->push_back(name);
-    }
-    if (infos)
-    {
-        utils::CloudObjectInfo info;
-        info.name = name;
-        info.path = relative;
-        info.size = size;
-        info.is_dir = is_dir;
-        info.mod_time = mod_time;
-        infos->push_back(std::move(info));
-    }
-}
-
-bool ParseS3XmlListResponse(std::string_view payload,
-                            const std::string &strip_prefix,
-                            std::vector<std::string> *objects,
-                            std::vector<utils::CloudObjectInfo> *infos,
-                            std::string *next_continuation_token)
-{
-    if (objects)
-    {
-        objects->clear();
-    }
-    if (infos)
-    {
-        infos->clear();
-    }
-
-    std::string normalized_strip = strip_prefix;
-    if (!normalized_strip.empty() && normalized_strip.back() != '/')
-    {
-        normalized_strip.push_back('/');
-    }
-
-    size_t pos = 0;
-    const std::string contents_start = "<Contents>";
-    const std::string contents_end = "</Contents>";
-    while (true)
-    {
-        size_t start = payload.find(contents_start, pos);
-        if (start == std::string::npos)
-        {
-            break;
-        }
-        size_t end = payload.find(contents_end, start);
-        if (end == std::string::npos)
-        {
-            return false;
-        }
-        size_t inner_begin = start + contents_start.size();
-        std::string block(payload.substr(inner_begin, end - inner_begin));
-        pos = end + contents_end.size();
-
-        std::string key = ExtractTagValue(block, "Key");
-        if (key.empty())
-        {
-            continue;
-        }
-        std::string decoded_key = DecodeXmlEntities(key);
-        std::string size_str = ExtractTagValue(block, "Size");
-        uint64_t size = 0;
-        if (!size_str.empty())
-        {
-            try
-            {
-                size = std::stoull(size_str);
-            }
-            catch (const std::exception &)
-            {
-                size = 0;
-            }
-        }
-        std::string mod_time =
-            DecodeXmlEntities(ExtractTagValue(block, "LastModified"));
-        AppendParsedEntry(decoded_key,
-                          normalized_strip,
-                          false,
-                          size,
-                          mod_time,
-                          objects,
-                          infos);
-    }
-
-    pos = 0;
-    const std::string prefix_start = "<CommonPrefixes>";
-    const std::string prefix_end = "</CommonPrefixes>";
-    while (true)
-    {
-        size_t start = payload.find(prefix_start, pos);
-        if (start == std::string::npos)
-        {
-            break;
-        }
-        size_t end = payload.find(prefix_end, start);
-        if (end == std::string::npos)
-        {
-            return false;
-        }
-        size_t inner_begin = start + prefix_start.size();
-        std::string block(payload.substr(inner_begin, end - inner_begin));
-        pos = end + prefix_end.size();
-        std::string prefix_value = ExtractTagValue(block, "Prefix");
-        if (prefix_value.empty())
-        {
-            continue;
-        }
-        std::string decoded_prefix = DecodeXmlEntities(prefix_value);
-        AppendParsedEntry(decoded_prefix,
-                          normalized_strip,
-                          true,
-                          0,
-                          std::string{},
-                          objects,
-                          infos);
-    }
-
-    // Extract pagination info
-    if (next_continuation_token)
-    {
-        std::string is_truncated = ExtractTagValue(payload, "IsTruncated");
-        if (is_truncated == "true")
-        {
-            *next_continuation_token =
-                ExtractTagValue(payload, "NextContinuationToken");
-        }
-        else
-        {
-            next_continuation_token->clear();
-        }
-    }
-
-    return true;
-}
-
-void CleanupAws()
-{
-    std::lock_guard lk(g_aws_mutex);
-    if (g_aws_initialized)
-    {
-        Aws::ShutdownAPI(g_sdk_options);
-        g_aws_initialized = false;
-    }
-}
-
-CloudPathInfo ParseCloudPath(const std::string &spec)
-{
-    CloudPathInfo info;
-    std::string_view path(spec);
-    auto colon = path.find(':');
-    if (colon != std::string::npos)
-    {
-        LOG(FATAL) << "cloud_store_path no longer supports prefixes like '"
-                   << spec << "'";
-    }
-    while (!path.empty() && path.front() == '/')
-    {
-        path.remove_prefix(1);
-    }
-    size_t slash = path.find('/');
-    if (slash == std::string::npos)
-    {
-        info.bucket.assign(path.data(), path.size());
-    }
-    else
-    {
-        info.bucket.assign(path.substr(0, slash).data(), slash);
-        std::string_view prefix = path.substr(slash + 1);
-        while (!prefix.empty() && prefix.front() == '/')
-        {
-            prefix.remove_prefix(1);
-        }
-        while (!prefix.empty() && prefix.back() == '/')
-        {
-            prefix.remove_suffix(1);
-        }
-        info.prefix.assign(prefix.data(), prefix.size());
-    }
-    if (info.bucket.empty())
-    {
-        LOG(FATAL) << "Invalid cloud_store_path: missing bucket name";
-    }
-    return info;
-}
-
-enum class BackendType
-{
-    kAws,
-    kGcs
-};
-
-BackendType DetermineBackendType(const KvOptions *options)
-{
-    std::string provider = options->cloud_provider;
-    std::string lowered;
-    lowered.reserve(provider.size());
-    for (char c : provider)
-    {
-        lowered.push_back(
-            static_cast<char>(std::tolower(static_cast<unsigned char>(c))));
-    }
-    if (lowered == "gcs" || lowered == "google" || lowered == "google-cloud")
-    {
-        return BackendType::kGcs;
-    }
-    return BackendType::kAws;
-}
-
-class AwsCloudBackend : public CloudBackend
-{
-public:
-    AwsCloudBackend(const KvOptions *options, CloudPathInfo path)
-        : options_(options), cloud_path_(std::move(path))
-    {
-        credentials_provider_ = AwsCloudBackend::BuildCredentialsProvider();
-        const auto &client_config = GetClientConfig();
-        s3_client_ = std::make_unique<Aws::S3::S3Client>(
-            credentials_provider_,
-            client_config,
-            Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-            AwsCloudBackend::UseVirtualAddressing());
-        signer_ = std::make_unique<Aws::Client::AWSAuthV4Signer>(
-            credentials_provider_,
-            "s3",
-            client_config.region,
-            Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-            false);
-        bucket_url_ = BuildBucketUrl();
-        if (bucket_url_.empty())
-        {
-            LOG(ERROR) << "Failed to build bucket URL for listing";
-        }
-    }
-
-    std::string CreateSignedUrl(CloudHttpMethod method,
-                                const std::string &key) override
-    {
-        Aws::Http::HttpMethod aws_method = ToAwsMethod(method);
-        Aws::String url = s3_client_->GeneratePresignedUrl(
-            cloud_path_.bucket, key, aws_method, 3600);
-        return {url};
-    }
-
-    bool ParseListObjectsResponse(
-        std::string_view payload,
-        const std::string &strip_prefix,
-        std::vector<std::string> *objects,
-        std::vector<utils::CloudObjectInfo> *infos,
-        std::string *next_continuation_token) const override
-    {
-        if (ParseJsonListResponse(payload, objects, infos))
-        {
-            if (next_continuation_token)
-            {
-                next_continuation_token->clear();  // JSON format not paginated
-            }
-            return true;
-        }
-        return ParseS3XmlListResponse(
-            payload, strip_prefix, objects, infos, next_continuation_token);
-    }
-
-protected:
-    virtual Aws::Client::ClientConfiguration BuildClientConfig() const
-    {
-        Aws::Client::ClientConfiguration config;
-        std::string endpoint = options_->cloud_endpoint.empty()
-                                   ? DefaultEndpoint()
-                                   : options_->cloud_endpoint;
-        if (!endpoint.empty())
-        {
-            config.endpointOverride =
-                Aws::String(endpoint.c_str(), endpoint.size());
-            if (endpoint.rfind("https://", 0) == 0)
-            {
-                config.scheme = Aws::Http::Scheme::HTTPS;
-            }
-            else
-            {
-                config.scheme = Aws::Http::Scheme::HTTP;
-            }
-        }
-        std::string region = options_->cloud_region.empty()
-                                 ? DefaultRegion()
-                                 : options_->cloud_region;
-        config.region = Aws::String(region.c_str(), region.size());
-        bool verify_ssl = options_->cloud_endpoint.empty()
-                              ? DefaultVerifySsl()
-                              : options_->cloud_verify_ssl;
-        config.verifySSL = verify_ssl;
-        return config;
-    }
-
-    virtual std::shared_ptr<Aws::Auth::AWSCredentialsProvider>
-    BuildCredentialsProvider() const
-    {
-        if (options_ && options_->cloud_auto_credentials)
-        {
-            // TODO: extend this to support GCP-native credential sources when
-            // the provider is gcs (e.g. metadata server, service accounts).
-            return Aws::MakeShared<
-                Aws::Auth::DefaultAWSCredentialsProviderChain>(
-                "eloqstore");
-        }
-        return Aws::MakeShared<Aws::Auth::SimpleAWSCredentialsProvider>(
-            "eloqstore",
-            options_->cloud_access_key.c_str(),
-            options_->cloud_secret_key.c_str());
-    }
-
-    virtual std::string DefaultEndpoint() const
-    {
-        return std::string(kDefaultAwsEndpoint);
-    }
-
-    virtual std::string DefaultRegion() const
-    {
-        return std::string(kDefaultAwsRegion);
-    }
-
-    virtual bool DefaultVerifySsl() const
-    {
-        return false;
-    }
-
-    virtual bool UseVirtualAddressing() const
-    {
-        return false;
-    }
-
-    bool BuildListRequest(const std::string &prefix,
-                          bool recursive,
-                          const std::string &continuation,
-                          SignedRequestInfo *request) const override
-    {
-        if (!request)
-        {
-            return false;
-        }
-        request->url.clear();
-        request->headers.clear();
-        request->body.clear();
-        if (bucket_url_.empty() || !signer_)
-        {
-            return false;
-        }
-
-        std::string target_url =
-            ComposeListUrl(prefix, recursive, continuation);
-        if (target_url.empty())
-        {
-            return false;
-        }
-
-        Aws::Http::URI uri(target_url.c_str());
-        auto list_request =
-            Aws::MakeShared<Aws::Http::Standard::StandardHttpRequest>(
-                "eloqstore", uri, Aws::Http::HttpMethod::HTTP_GET);
-        if (!list_request)
-        {
-            return false;
-        }
-        if (!signer_->SignRequest(*list_request))
-        {
-            return false;
-        }
-
-        request->url = list_request->GetUri().GetURIString().c_str();
-        for (const auto &header : list_request->GetHeaders())
-        {
-            request->headers.emplace_back(std::string(header.first.c_str()) +
-                                          ": " +
-                                          std::string(header.second.c_str()));
-        }
-        return true;
-    }
-
-    bool BuildCreateBucketRequest(SignedRequestInfo *request) const override
-    {
-        if (!request)
-        {
-            return false;
-        }
-        request->url.clear();
-        request->headers.clear();
-        request->body.clear();
-        if (bucket_url_.empty() || !signer_)
-        {
-            return false;
-        }
-
-        Aws::Http::URI uri(bucket_url_.c_str());
-        auto create_request =
-            Aws::MakeShared<Aws::Http::Standard::StandardHttpRequest>(
-                "eloqstore", uri, Aws::Http::HttpMethod::HTTP_PUT);
-        if (!create_request)
-        {
-            return false;
-        }
-
-        std::string default_region = DefaultRegion();
-        std::string region = options_->cloud_region.empty()
-                                 ? default_region
-                                 : options_->cloud_region;
-        if (!region.empty() && region != default_region)
-        {
-            std::string xml_body =
-                "<CreateBucketConfiguration "
-                "xmlns=\"http://s3.amazonaws.com/doc/2006-03-01/\">";
-            xml_body.append("<LocationConstraint>");
-            xml_body.append(region);
-            xml_body.append(
-                "</LocationConstraint></CreateBucketConfiguration>");
-
-            auto body_stream = Aws::MakeShared<Aws::StringStream>("eloqstore");
-            if (!body_stream)
-            {
-                return false;
-            }
-            *body_stream << xml_body;
-            body_stream->flush();
-            body_stream->seekg(0, std::ios_base::beg);
-            create_request->AddContentBody(body_stream);
-            create_request->SetHeaderValue(Aws::Http::CONTENT_TYPE_HEADER,
-                                           "application/xml");
-            std::string body_length = std::to_string(xml_body.size());
-            create_request->SetHeaderValue(Aws::Http::CONTENT_LENGTH_HEADER,
-                                           Aws::String(body_length.c_str()));
-            request->body = std::move(xml_body);
-        }
-        if (!signer_->SignRequest(*create_request))
-        {
-            return false;
-        }
-
-        request->url = create_request->GetUri().GetURIString().c_str();
-        for (const auto &header : create_request->GetHeaders())
-        {
-            request->headers.emplace_back(std::string(header.first.c_str()) +
-                                          ": " +
-                                          std::string(header.second.c_str()));
-        }
-        return true;
-    }
-
-    std::string BuildBucketUrl() const
-    {
-        std::string endpoint = options_->cloud_endpoint.empty()
-                                   ? DefaultEndpoint()
-                                   : options_->cloud_endpoint;
-        if (endpoint.empty())
-        {
-            return {};
-        }
-        while (!endpoint.empty() && endpoint.back() == '/')
-        {
-            endpoint.pop_back();
-        }
-        if (UseVirtualAddressing())
-        {
-            return endpoint;
-        }
-        endpoint.push_back('/');
-        endpoint.append(cloud_path_.bucket);
-        return endpoint;
-    }
-
-    std::string ComposeListUrl(const std::string &prefix,
-                               bool recursive,
-                               const std::string &continuation) const
-    {
-        if (bucket_url_.empty())
-        {
-            return {};
-        }
-        std::string query = "list-type=2";
-        if (!prefix.empty())
-        {
-            query.append("&prefix=");
-            query.append(UrlEncode(prefix));
-        }
-        if (!recursive)
-        {
-            query.append("&delimiter=%2F");
-        }
-        if (!continuation.empty())
-        {
-            query.append("&continuation-token=");
-            query.append(UrlEncode(continuation));
-        }
-        std::string url = bucket_url_;
-        url.push_back('?');
-        url.append(query);
-        return url;
-    }
-
-    static Aws::Http::HttpMethod ToAwsMethod(CloudHttpMethod method)
-    {
-        switch (method)
-        {
-        case CloudHttpMethod::kPut:
-            return Aws::Http::HttpMethod::HTTP_PUT;
-        case CloudHttpMethod::kDelete:
-            return Aws::Http::HttpMethod::HTTP_DELETE;
-        case CloudHttpMethod::kGet:
-        default:
-            return Aws::Http::HttpMethod::HTTP_GET;
-        }
-    }
-
-    const Aws::Client::ClientConfiguration &GetClientConfig() const
-    {
-        std::call_once(
-            client_config_once_,
-            [this]
-            {
-                client_config_ =
-                    std::make_unique<Aws::Client::ClientConfiguration>(
-                        BuildClientConfig());
-            });
-        return *client_config_;
-    }
-
-    const KvOptions *options_;
-    CloudPathInfo cloud_path_;
-    std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentials_provider_;
-    std::unique_ptr<Aws::S3::S3Client> s3_client_;
-    std::unique_ptr<Aws::Client::AWSAuthV4Signer> signer_;
-    std::string bucket_url_;
-
-    inline static std::once_flag client_config_once_;
-    inline static std::unique_ptr<Aws::Client::ClientConfiguration>
-        client_config_;
-};
-class GcsCloudBackend : public AwsCloudBackend
-{
-public:
-    GcsCloudBackend(const KvOptions *options, CloudPathInfo path)
-        : AwsCloudBackend(options, std::move(path))
-    {
-    }
-
-    bool ParseListObjectsResponse(
-        std::string_view payload,
-        const std::string &strip_prefix,
-        std::vector<std::string> *objects,
-        std::vector<utils::CloudObjectInfo> *infos,
-        std::string *next_continuation_token) const override
-    {
-        if (ParseJsonListResponse(payload, objects, infos))
-        {
-            if (next_continuation_token)
-            {
-                next_continuation_token->clear();
-            }
-            return true;
-        }
-        return ParseS3XmlListResponse(
-            payload, strip_prefix, objects, infos, next_continuation_token);
-    }
-
-protected:
-    std::string DefaultEndpoint() const override
-    {
-        return std::string(kDefaultGcsEndpoint);
-    }
-
-    std::string DefaultRegion() const override
-    {
-        return std::string(kDefaultGcsRegion);
-    }
-
-    bool DefaultVerifySsl() const override
-    {
-        return true;
-    }
-};
-
-std::unique_ptr<CloudBackend> CreateBackend(const KvOptions *options,
-                                            const CloudPathInfo &path)
-{
-    switch (DetermineBackendType(options))
-    {
-    case BackendType::kGcs:
-        return std::make_unique<GcsCloudBackend>(options, path);
-    case BackendType::kAws:
-    default:
-        return std::make_unique<AwsCloudBackend>(options, path);
-    }
 }
 
 }  // namespace
@@ -1259,16 +432,27 @@ bool AsyncHttpManager::SetupDownloadRequest(ObjectStore::DownloadTask *task,
                                             CURL *easy)
 {
     std::string key = ComposeKey(task->tbl_id_, task->filename_);
-    task->json_data_ = backend_->CreateSignedUrl(CloudHttpMethod::kGet, key);
-    if (task->json_data_.empty())
+    SignedRequestInfo request_info;
+    if (!backend_->BuildObjectRequest(
+            CloudHttpMethod::kGet, key, &request_info) ||
+        request_info.url.empty())
     {
         task->error_ = KvError::CloudErr;
         return false;
     }
 
-    curl_easy_setopt(easy, CURLOPT_URL, task->json_data_.c_str());
+    task->json_data_ = request_info.url;
+    curl_easy_setopt(easy, CURLOPT_URL, request_info.url.c_str());
     curl_easy_setopt(easy, CURLOPT_HTTPGET, 1L);
     task->headers_ = nullptr;
+    for (const auto &header_line : request_info.headers)
+    {
+        task->headers_ = curl_slist_append(task->headers_, header_line.c_str());
+    }
+    if (task->headers_)
+    {
+        curl_easy_setopt(easy, CURLOPT_HTTPHEADER, task->headers_);
+    }
     return true;
 }
 
@@ -1299,14 +483,17 @@ bool AsyncHttpManager::SetupUploadRequest(ObjectStore::UploadTask *task,
     }
 
     std::string key = ComposeKey(task->tbl_id_, filename);
-    task->json_data_ = backend_->CreateSignedUrl(CloudHttpMethod::kPut, key);
-    if (task->json_data_.empty())
+    SignedRequestInfo request_info;
+    if (!backend_->BuildObjectRequest(
+            CloudHttpMethod::kPut, key, &request_info) ||
+        request_info.url.empty())
     {
         task->error_ = KvError::CloudErr;
         return false;
     }
 
-    curl_easy_setopt(easy, CURLOPT_URL, task->json_data_.c_str());
+    task->json_data_ = request_info.url;
+    curl_easy_setopt(easy, CURLOPT_URL, request_info.url.c_str());
     curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, "PUT");
     curl_easy_setopt(easy, CURLOPT_UPLOAD, 0L);
     curl_easy_setopt(easy, CURLOPT_POSTFIELDS, task->data_buffer_.data());
@@ -1314,6 +501,10 @@ bool AsyncHttpManager::SetupUploadRequest(ObjectStore::UploadTask *task,
                      CURLOPT_POSTFIELDSIZE_LARGE,
                      static_cast<curl_off_t>(task->file_size_));
     task->headers_ = nullptr;
+    for (const auto &header_line : request_info.headers)
+    {
+        task->headers_ = curl_slist_append(task->headers_, header_line.c_str());
+    }
     task->headers_ = curl_slist_append(task->headers_, "Expect:");
 
     // Add conditional headers if provided
@@ -1344,16 +535,27 @@ bool AsyncHttpManager::SetupDeleteRequest(ObjectStore::DeleteTask *task,
         task->error_ = KvError::InvalidArgs;
         return false;
     }
-    task->json_data_ = backend_->CreateSignedUrl(CloudHttpMethod::kDelete, key);
-    if (task->json_data_.empty())
+    SignedRequestInfo request_info;
+    if (!backend_->BuildObjectRequest(
+            CloudHttpMethod::kDelete, key, &request_info) ||
+        request_info.url.empty())
     {
         task->error_ = KvError::CloudErr;
         return false;
     }
 
-    curl_easy_setopt(easy, CURLOPT_URL, task->json_data_.c_str());
+    task->json_data_ = request_info.url;
+    curl_easy_setopt(easy, CURLOPT_URL, request_info.url.c_str());
     curl_easy_setopt(easy, CURLOPT_CUSTOMREQUEST, "DELETE");
     task->headers_ = nullptr;
+    for (const auto &header_line : request_info.headers)
+    {
+        task->headers_ = curl_slist_append(task->headers_, header_line.c_str());
+    }
+    if (task->headers_)
+    {
+        curl_easy_setopt(easy, CURLOPT_HTTPHEADER, task->headers_);
+    }
     return true;
 }
 

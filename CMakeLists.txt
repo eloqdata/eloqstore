@@ -59,6 +59,7 @@ find_package(jsoncpp REQUIRED)
 find_package(CURL REQUIRED)
 find_library(ZSTD_LIBRARY zstd)
 find_package(AWSSDK REQUIRED COMPONENTS s3)
+find_package(OpenSSL REQUIRED)
 
 find_path(URING_INCLUDE_PATH NAMES liburing.h)
 find_library(URING_LIB NAMES uring)
@@ -114,6 +115,7 @@ set(ELOQ_STORE_SOURCES
         src/storage/index_page_builder.cpp
         src/storage/index_page_manager.cpp
         src/storage/mem_index_page.cpp
+        src/storage/cloud_backend.cpp
         src/storage/object_store.cpp
         src/storage/page.cpp
         src/storage/page_mapper.cpp
@@ -135,7 +137,7 @@ set(ELOQ_STORE_SOURCES
 add_library(eloqstore STATIC ${ELOQ_STORE_SOURCES} ${INI_SOURCES})
 
 target_include_directories(eloqstore PUBLIC ${ELOQ_STORE_INCLUDE})
-target_link_libraries(eloqstore PRIVATE ${URING_LIB} glog::glog absl::flat_hash_map ${BOOST_CONTEXT_TARGET} ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} ${AWSSDK_LINK_LIBRARIES})
+target_link_libraries(eloqstore PRIVATE ${URING_LIB} glog::glog absl::flat_hash_map ${BOOST_CONTEXT_TARGET} ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} ${AWSSDK_LINK_LIBRARIES} OpenSSL::Crypto)
 
 add_executable(page_checksum_tool tools/page_checksum_tool.cpp)
 target_include_directories(page_checksum_tool PUBLIC ${ELOQ_STORE_INCLUDE})
