@@ -119,7 +119,8 @@ inline bool ParseUint64(std::string_view str, uint64_t &out)
 }
 
 // Validates and normalizes branch name
-// Valid pattern: [a-zA-Z0-9_-]+
+// Valid pattern: [a-zA-Z0-9-]+ (alphanumeric and hyphen only, NO underscore)
+// Underscore is reserved as FileNameSeparator
 // Converts to lowercase
 // Returns normalized name if valid, empty string if invalid
 inline std::string NormalizeBranchName(std::string_view branch_name)
@@ -135,8 +136,7 @@ inline std::string NormalizeBranchName(std::string_view branch_name)
     
     for (char c : branch_name)
     {
-        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || 
-            c == '_' || c == '-')
+        if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-')
         {
             normalized.push_back(c);
         }
@@ -147,7 +147,7 @@ inline std::string NormalizeBranchName(std::string_view branch_name)
         }
         else
         {
-            // Invalid character
+            // Invalid character (including underscore which is reserved as separator)
             LOG(WARNING) << "Invalid character in branch name: '" << branch_name 
                          << "' (contains '" << c << "')";
             return "";
@@ -184,27 +184,27 @@ inline bool ParseDataFileSuffix(std::string_view suffix,
     }
 
     // Format: <file_id>_<branch_name>_<term>
-    // Parse from right to left since term is always last (numeric)
-    // and file_id is always first (numeric), everything between is branch
+    // Since underscore is reserved as separator, branch_name cannot contain underscores
+    // Simple left-to-right parsing: find first two separators
     
-    // Find last separator (before term)
-    size_t last_sep = suffix.rfind(FileNameSeparator);
-    if (last_sep == std::string::npos || last_sep == 0)
+    // Find first separator (after file_id)
+    size_t first_sep = suffix.find(FileNameSeparator);
+    if (first_sep == std::string::npos)
     {
         return false;
     }
 
-    // Find first separator (after file_id)
-    size_t first_sep = suffix.find(FileNameSeparator);
-    if (first_sep == std::string::npos || first_sep >= last_sep)
+    // Find second separator (after branch_name)
+    size_t second_sep = suffix.find(FileNameSeparator, first_sep + 1);
+    if (second_sep == std::string::npos)
     {
         return false;
     }
 
     // Extract components
     std::string_view file_id_str = suffix.substr(0, first_sep);
-    std::string_view branch_str = suffix.substr(first_sep + 1, last_sep - first_sep - 1);
-    std::string_view term_str = suffix.substr(last_sep + 1);
+    std::string_view branch_str = suffix.substr(first_sep + 1, second_sep - first_sep - 1);
+    std::string_view term_str = suffix.substr(second_sep + 1);
 
     // Validate and parse file_id
     uint64_t parsed_id = 0;
@@ -255,43 +255,25 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
     }
 
     // Format: <branch_name>_<term> or <branch_name>_<term>_<timestamp>
-    // Parse from right to left: term is always a number, branch may contain underscores
-    // Find the last separator
-    size_t last_sep = suffix.rfind(FileNameSeparator);
-    if (last_sep == std::string::npos)
+    // Since underscore is reserved as separator, branch_name cannot contain underscores
+    // Simple left-to-right parsing
+    
+    // Find first separator (after branch_name)
+    size_t first_sep = suffix.find(FileNameSeparator);
+    if (first_sep == std::string::npos)
     {
         return false;
     }
 
-    // Check if there's a timestamp (another separator before the last one)
-    size_t second_last_sep = suffix.rfind(FileNameSeparator, last_sep - 1);
-    
-    std::string_view branch_str;
-    std::string_view term_str;
-    std::string_view ts_str;
-    
-    if (second_last_sep == std::string::npos)
-    {
-        // Format: <branch_name>_<term>
-        branch_str = suffix.substr(0, last_sep);
-        term_str = suffix.substr(last_sep + 1);
-    }
-    else
-    {
-        // Format: <branch_name>_<term>_<timestamp>
-        branch_str = suffix.substr(0, second_last_sep);
-        term_str = suffix.substr(second_last_sep + 1, last_sep - second_last_sep - 1);
-        ts_str = suffix.substr(last_sep + 1);
-    }
-
-    // Validate branch_name
+    // Extract branch_name and validate
+    std::string_view branch_str = suffix.substr(0, first_sep);
     std::string normalized_branch = NormalizeBranchName(branch_str);
     if (normalized_branch.empty())
     {
         return false;
     }
     
-    // Reject old format: If branch_str is purely numeric, it's old format (term_timestamp or just term)
+    // Reject old format: If branch_str is purely numeric, it's old format
     uint64_t dummy = 0;
     if (ParseUint64(branch_str, dummy))
     {
@@ -299,26 +281,37 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
         return false;
     }
 
-    // Parse term (required)
+    // Find second separator (for timestamp, if present)
+    std::string_view remainder = suffix.substr(first_sep + 1);
+    size_t second_sep = remainder.find(FileNameSeparator);
+
+    if (second_sep == std::string::npos)
+    {
+        // Format: <branch_name>_<term>
+        uint64_t parsed_term = 0;
+        if (!ParseUint64(remainder, parsed_term))
+        {
+            return false;
+        }
+        branch_name = std::move(normalized_branch);
+        term = parsed_term;
+        return true;
+    }
+
+    // Format: <branch_name>_<term>_<timestamp>
+    std::string_view term_str = remainder.substr(0, second_sep);
+    std::string_view ts_str = remainder.substr(second_sep + 1);
+
     uint64_t parsed_term = 0;
-    if (!ParseUint64(term_str, parsed_term))
+    uint64_t parsed_ts = 0;
+    if (!ParseUint64(term_str, parsed_term) || !ParseUint64(ts_str, parsed_ts))
     {
         return false;
     }
 
-    // Parse timestamp if present
-    if (!ts_str.empty())
-    {
-        uint64_t parsed_ts = 0;
-        if (!ParseUint64(ts_str, parsed_ts))
-        {
-            return false;
-        }
-        timestamp = parsed_ts;
-    }
-
     branch_name = std::move(normalized_branch);
     term = parsed_term;
+    timestamp = parsed_ts;
     return true;
 }
 

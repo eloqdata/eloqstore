@@ -21,16 +21,12 @@ TEST_CASE("NormalizeBranchName - valid names", "[branch][validation]")
     REQUIRE(eloqstore::NormalizeBranchName("v2") == "v2");
     REQUIRE(eloqstore::NormalizeBranchName("123") == "123");
     
-    // With hyphens
+    // With hyphens (valid)
     REQUIRE(eloqstore::NormalizeBranchName("feature-branch") == "feature-branch");
     REQUIRE(eloqstore::NormalizeBranchName("my-feature-123") == "my-feature-123");
     
-    // With underscores
-    REQUIRE(eloqstore::NormalizeBranchName("feature_branch") == "feature_branch");
-    REQUIRE(eloqstore::NormalizeBranchName("my_feature_123") == "my_feature_123");
-    
     // Mixed valid characters
-    REQUIRE(eloqstore::NormalizeBranchName("feat_123-dev") == "feat_123-dev");
+    REQUIRE(eloqstore::NormalizeBranchName("feat-123-dev") == "feat-123-dev");
 }
 
 TEST_CASE("NormalizeBranchName - case normalization", "[branch][validation]")
@@ -45,7 +41,7 @@ TEST_CASE("NormalizeBranchName - case normalization", "[branch][validation]")
     REQUIRE(eloqstore::NormalizeBranchName("MyFeature") == "myfeature");
     REQUIRE(eloqstore::NormalizeBranchName("FeAtUrE") == "feature");
     REQUIRE(eloqstore::NormalizeBranchName("Feature-Branch") == "feature-branch");
-    REQUIRE(eloqstore::NormalizeBranchName("Feature_123") == "feature_123");
+    REQUIRE(eloqstore::NormalizeBranchName("Feature-123") == "feature-123");
 }
 
 TEST_CASE("NormalizeBranchName - invalid characters", "[branch][validation]")
@@ -62,6 +58,10 @@ TEST_CASE("NormalizeBranchName - invalid characters", "[branch][validation]")
     REQUIRE(eloqstore::NormalizeBranchName("feature/branch") == ""); // /
     REQUIRE(eloqstore::NormalizeBranchName("feature\\branch") == ""); // backslash
     REQUIRE(eloqstore::NormalizeBranchName("feature:branch") == ""); // colon
+    
+    // Underscore is INVALID (reserved as FileNameSeparator)
+    REQUIRE(eloqstore::NormalizeBranchName("feature_branch") == ""); // underscore
+    REQUIRE(eloqstore::NormalizeBranchName("my_feature") == ""); // underscore
 }
 
 TEST_CASE("NormalizeBranchName - edge cases", "[branch][validation]")
@@ -71,7 +71,8 @@ TEST_CASE("NormalizeBranchName - edge cases", "[branch][validation]")
     REQUIRE(eloqstore::NormalizeBranchName("A") == "a");
     REQUIRE(eloqstore::NormalizeBranchName("1") == "1");
     REQUIRE(eloqstore::NormalizeBranchName("-") == "-");
-    REQUIRE(eloqstore::NormalizeBranchName("_") == "_");
+    // Underscore is INVALID (reserved as separator)
+    REQUIRE(eloqstore::NormalizeBranchName("_") == "");
     
     // Long name
     std::string long_name(100, 'a');
@@ -90,13 +91,13 @@ TEST_CASE("IsValidBranchName - wrapper validation", "[branch][validation]")
     REQUIRE(eloqstore::IsValidBranchName("feature"));
     REQUIRE(eloqstore::IsValidBranchName("Feature123"));
     REQUIRE(eloqstore::IsValidBranchName("my-feature"));
-    REQUIRE(eloqstore::IsValidBranchName("my_feature"));
     
     // Invalid names
     REQUIRE_FALSE(eloqstore::IsValidBranchName(""));
     REQUIRE_FALSE(eloqstore::IsValidBranchName("feature branch"));
     REQUIRE_FALSE(eloqstore::IsValidBranchName("feature.branch"));
     REQUIRE_FALSE(eloqstore::IsValidBranchName("feature@123"));
+    REQUIRE_FALSE(eloqstore::IsValidBranchName("my_feature")); // underscore invalid
 }
 
 // ============================================================================
@@ -119,7 +120,7 @@ TEST_CASE("BranchDataFileName - format verification", "[branch][generation]")
     // Different branch names
     REQUIRE(eloqstore::BranchDataFileName(10, "dev", 1) == "data_10_dev_1");
     REQUIRE(eloqstore::BranchDataFileName(10, "feature-123", 1) == "data_10_feature-123_1");
-    REQUIRE(eloqstore::BranchDataFileName(10, "my_branch", 1) == "data_10_my_branch_1");
+    REQUIRE(eloqstore::BranchDataFileName(10, "hotfix-456", 1) == "data_10_hotfix-456_1");
 }
 
 TEST_CASE("BranchManifestFileName - format verification", "[branch][generation]")
@@ -199,12 +200,6 @@ TEST_CASE("ParseDataFileSuffix - branch format", "[branch][parsing]")
     REQUIRE(eloqstore::ParseDataFileSuffix("10_feature-123_5", file_id, branch_name, term));
     REQUIRE(file_id == 10);
     REQUIRE(branch_name == "feature-123");
-    REQUIRE(term == 5);
-    
-    // Branch with underscore
-    REQUIRE(eloqstore::ParseDataFileSuffix("10_my_branch_5", file_id, branch_name, term));
-    REQUIRE(file_id == 10);
-    REQUIRE(branch_name == "my_branch");
     REQUIRE(term == 5);
 }
 
@@ -392,12 +387,9 @@ TEST_CASE("ParseCurrentTermFilename - valid formats", "[branch][parsing]")
     REQUIRE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM.dev", branch_name));
     REQUIRE(branch_name == "dev");
     
-    // Branch with hyphen/underscore
+    // Branch with hyphen
     REQUIRE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM.feature-123", branch_name));
     REQUIRE(branch_name == "feature-123");
-    
-    REQUIRE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM.my_branch", branch_name));
-    REQUIRE(branch_name == "my_branch");
 }
 
 TEST_CASE("ParseCurrentTermFilename - case normalization", "[branch][parsing]")
@@ -428,6 +420,7 @@ TEST_CASE("ParseCurrentTermFilename - invalid formats", "[branch][parsing]")
     // Invalid branch name (contains invalid char)
     REQUIRE_FALSE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM.main.branch", branch_name));
     REQUIRE_FALSE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM.main branch", branch_name));
+    REQUIRE_FALSE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM.my_branch", branch_name)); // underscore invalid
     
     // Wrong prefix
     REQUIRE_FALSE(eloqstore::ParseCurrentTermFilename("TERM.main", branch_name));
