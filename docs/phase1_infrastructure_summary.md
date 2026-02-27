@@ -1,8 +1,8 @@
 # Phase 1: Infrastructure (File Naming & Parsing) - Summary
 
 **Status**: ✅ COMPLETED  
-**Date**: February 26, 2026  
-**Commits**: de67cb2, 74192ea
+**Date**: February 27, 2026  
+**Commits**: de67cb2, 74192ea, 160fe9c, 4c48d28
 
 ---
 
@@ -16,7 +16,8 @@ Phase 1 implements the foundational infrastructure for branch-aware file naming 
 2. ✅ Implement branch-aware file generation functions
 3. ✅ Update parsing functions to extract branch names from filenames
 4. ✅ Ensure backward incompatibility (reject old format without branch names)
-5. ✅ Create comprehensive test coverage (30 test cases, 242 assertions)
+5. ✅ Create comprehensive test coverage (30 test cases, 237 assertions)
+6. ✅ Fix critical bug: Remove underscore from valid branch name characters
 
 ---
 
@@ -31,7 +32,8 @@ Phase 1 implements the foundational infrastructure for branch-aware file naming 
 
 **New Functions:**
 - `NormalizeBranchName(std::string_view)` → `std::string`
-  - Validates pattern: `[a-zA-Z0-9_-]+`
+  - Validates pattern: `[a-zA-Z0-9-]+` (alphanumeric and hyphen only, NO underscore)
+  - **Critical:** Underscore is reserved as `FileNameSeparator`
   - Converts to lowercase (case-insensitive)
   - Logs warnings for invalid names via glog
   - Returns empty string on validation failure
@@ -75,13 +77,15 @@ ParseManifestFileSuffix(suffix, branch_name, term, timestamp)
 ```
 
 **Parsing Strategy:**
-- **Right-to-left parsing** to handle branch names containing underscores
-- Last component is always `term` (numeric)
-- For data files: First component is `file_id` (numeric), everything between is branch name
-- For manifest files: Rejects old format where first component is purely numeric
+- **Left-to-right parsing** since branch names cannot contain underscores (separator is reserved)
+- Simple sequential parsing: find separators from left to right
+- For data files: `file_id_branch_term` → find first separator (after file_id), second separator (after branch)
+- For manifest files: `branch_term[_timestamp]` → find first separator (after branch), optional second (before timestamp)
+- Rejects old format where first component is purely numeric
 
 **Example:**
-- `"10_my_branch_5"` → file_id=10, branch="my_branch", term=5 ✅
+- `"10_feature-123_5"` → file_id=10, branch="feature-123", term=5 ✅
+- `"10_my_branch_5"` → REJECTED (underscore invalid in branch name) ✅
 - `"5_123456"` (old format) → REJECTED ✅
 
 **New Function:**
@@ -127,15 +131,15 @@ Updated all existing code to use new parsing function signatures:
 
 **Test Statistics:**
 - **Total test cases:** 30
-- **Total assertions:** 242
+- **Total assertions:** 237
 - **Pass rate:** 100%
 
 **Test Categories:**
 
 1. **Branch Name Validation (6 test cases)**
-   - Valid names (lowercase, numbers, hyphens, underscores)
+   - Valid names (lowercase, numbers, hyphens - NO underscores)
    - Case normalization (uppercase → lowercase)
-   - Invalid characters (space, dot, special chars)
+   - Invalid characters (space, dot, special chars, **underscore**)
    - Edge cases (empty string, single char, long names)
 
 2. **File Generation (4 test cases)**
@@ -180,7 +184,8 @@ Updated all existing code to use new parsing function signatures:
 ## Key Design Decisions
 
 ### 1. Branch Name Validation
-- **Pattern:** `[a-zA-Z0-9_-]+` (alphanumeric, hyphens, underscores)
+- **Pattern:** `[a-zA-Z0-9-]+` (alphanumeric and hyphen only, NO underscore)
+- **Critical:** Underscore (`_`) is reserved as `FileNameSeparator` and cannot be used in branch names
 - **Case handling:** Case-insensitive (normalized to lowercase)
 - **Validation:** Logs warnings for invalid names (glog)
 - **Reserved name:** "main" (already lowercase)
@@ -191,38 +196,69 @@ Updated all existing code to use new parsing function signatures:
 - **Rationale:** Dot separator makes CURRENT_TERM files easily identifiable
 
 ### 3. Parsing Strategy
-- **Right-to-left parsing:** Handles branch names containing underscores
+- **Left-to-right parsing:** Simple sequential parsing since underscore is forbidden in branch names
 - **Backward incompatibility:** Actively rejects old format (no branch names)
 - **Validation:** Checks that branch names are not purely numeric (prevents old format confusion)
+- **No ambiguity:** Since underscore cannot appear in branch names, parsing is straightforward
 
-### 4. Underscore Handling
-**Challenge:** Underscore is both:
-- A valid branch name character (e.g., `my_branch`)
-- The file component separator
+### 4. Separator Constraints
+**Design Constraint:** Underscore is the `FileNameSeparator`
+- Used to separate file components: `data_{id}_{branch}_{term}`
+- **Cannot** be a valid character in branch names
+- This constraint simplifies parsing and eliminates ambiguity
 
-**Solution:** Parse right-to-left:
-- Last component = term (always numeric)
-- First component = file_id for data files (always numeric)
-- Everything between = branch name (may contain underscores)
+**Historical Context:** 
+- Initial implementation incorrectly allowed underscore in branch names
+- This created ambiguous parsing scenarios (e.g., `"10_my_branch_5"` - is branch "my" or "my_branch"?)
+- Fixed in commit 4c48d28 by removing underscore from valid characters
+- Parsing simplified from right-to-left back to left-to-right
 
-**Example:**
-- Input: `"10_my_feature_branch_25"`
-- Parse: file_id=10, branch="my_feature_branch", term=25
+**Result:**
+- Clear separation between file components
+- No parsing ambiguity
+- Simpler, more maintainable code
 
 ---
 
 ## Bugs Fixed
 
-### 1. Parsing Branch Names with Underscores
+### 1. Critical: Underscore in Branch Names (Fixed in 4c48d28)
+**Problem:** Initial implementation allowed underscore `_` in branch names, even though `_` is defined as `FileNameSeparator`
+- Created ambiguous parsing: `"10_my_branch_5"` - is branch "my" or "my_branch"?
+- Violated fundamental design constraint: separator character cannot be valid in component
+- Required complex right-to-left parsing logic
+
+**Impact:**
+- Parsing ambiguity for files with multiple underscores
+- Inconsistent with file naming conventions (separator should not appear in components)
+- Unnecessarily complex parsing code
+
+**Fix:** 
+- Removed underscore from valid branch name characters
+- Updated validation pattern from `[a-zA-Z0-9_-]+` to `[a-zA-Z0-9-]+`
+- Simplified parsing back to left-to-right (no ambiguity)
+- Updated all tests to remove underscore usage
+- Added explicit tests rejecting underscore in branch names
+
+**Result:**
+- Clear, unambiguous parsing
+- Simpler code (left-to-right parsing)
+- Consistent design: separator is truly reserved
+
+### 2. Parsing Branch Names with Underscores (Interim Fix in 74192ea, Superseded by 4c48d28)
 **Problem:** Left-to-right parsing failed for `"10_my_branch_5"`
 - Old logic: Found first `_` → file_id=10, second `_` → branch="my", failed to parse "branch_5" as term
 
-**Fix:** Changed to right-to-left parsing
+**Interim Fix:** Changed to right-to-left parsing
 - Find last `_` → term=5
 - Find first `_` → file_id=10
 - Everything between → branch="my_branch"
 
-### 2. Old Format Rejection
+**Final Fix:** Removed underscore from valid characters (commit 4c48d28)
+- Simplified back to left-to-right parsing
+- No longer need complex right-to-left logic
+
+### 3. Old Format Rejection
 **Problem:** `"5_123456"` incorrectly parsed as branch="5", term=123456
 
 **Fix:** Added validation to reject purely numeric branch names
@@ -245,7 +281,7 @@ cmake --build build --target branch_filename_parsing -j8
 ./build/tests/branch_filename_parsing
 ```
 - ✅ 30 test cases passed
-- ✅ 242 assertions passed
+- ✅ 237 assertions passed
 - ✅ 0 failures
 
 ---
@@ -292,6 +328,27 @@ test: add Phase 1 tests and fix parsing for branch names with underscores
 - All tests pass successfully
 ```
 
+### Commit 3: 160fe9c
+```
+docs: add Phase 1 implementation summary
+
+- Document all implementation details
+- Record test coverage and results
+- Document bugs fixed and design decisions
+```
+
+### Commit 4: 4c48d28 (CRITICAL BUG FIX)
+```
+fix: remove underscore from valid branch name characters
+
+- Underscore is reserved as FileNameSeparator
+- Update validation pattern to [a-zA-Z0-9-]+ (no underscore)
+- Simplify parsing back to left-to-right (no ambiguity)
+- Update all tests to remove underscore usage
+- Add tests explicitly rejecting underscore in branch names
+- All 237 assertions pass in 30 test cases
+```
+
 ---
 
 ## Next Steps (Phase 2)
@@ -315,13 +372,14 @@ Phase 2 will update the manifest structure to include branch-aware metadata:
 | Lines of code added | ~400 |
 | Lines of code modified | ~60 |
 | Test cases | 30 |
-| Test assertions | 242 |
+| Test assertions | 237 |
 | Functions added | 13 |
 | Functions modified | 4 |
 | Files modified | 6 |
 | Files created | 2 |
 | Build time | ~45s |
 | Test execution time | <1s |
+| Commits | 4 (1 feature, 1 test, 1 docs, 1 bugfix) |
 
 ---
 
