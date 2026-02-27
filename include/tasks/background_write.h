@@ -22,6 +22,10 @@ public:
 
     KvError CreateArchive(uint64_t provided_ts = 0);
 
+    KvError CreateBranch(std::string_view branch_name, std::string_view parent_branch);
+
+    KvError DeleteBranch(std::string_view branch_name);
+
 private:
     void HeapSortFpIdsWithYield(
         std::vector<std::pair<FilePageId, PageId>> &fp_ids);

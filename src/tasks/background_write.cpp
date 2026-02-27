@@ -347,4 +347,71 @@ KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
     return KvError::NoError;
 }
 
+KvError BackgroundWrite::CreateBranch(std::string_view branch_name,
+                                    std::string_view parent_branch)
+{
+    // Validate branch name
+    if (!IsValidBranchName(branch_name))
+    {
+        LOG(ERROR) << "Invalid branch name: " << branch_name;
+        return KvError::InvalidArgs;
+    }
+
+    std::string normalized_branch = NormalizeBranchName(branch_name);
+    if (normalized_branch.empty())
+    {
+        return KvError::InvalidArgs;
+    }
+
+    // Get parent branch (default to "main")
+    std::string parent = parent_branch.empty() ? MainBranchName : std::string(parent_branch);
+    
+    LOG(INFO) << "Creating branch " << normalized_branch << " from parent " << parent;
+
+    // TODO(Phase3): Implement actual CreateBranch logic:
+    // 1. Read parent's current manifest
+    // 2. Create branch manifest with:
+    //    - branch_name = normalized_branch
+    //    - term = 0
+    //    - root = parent's root
+    //    - branch_file_ranges = COPY of parent's branch_file_ranges
+    // 3. Write manifest_<branch_name>_0
+    // 4. Create CURRENT_TERM.<branch_name> with content "0"
+    
+    return KvError::NoError;
+}
+
+KvError BackgroundWrite::DeleteBranch(std::string_view branch_name)
+{
+    // Validate branch name
+    if (!IsValidBranchName(branch_name))
+    {
+        LOG(ERROR) << "Invalid branch name: " << branch_name;
+        return KvError::InvalidArgs;
+    }
+
+    std::string normalized_branch = NormalizeBranchName(branch_name);
+    if (normalized_branch.empty())
+    {
+        return KvError::InvalidArgs;
+    }
+
+    // Cannot delete "main" branch
+    if (normalized_branch == MainBranchName)
+    {
+        LOG(ERROR) << "Cannot delete main branch";
+        return KvError::InvalidArgs;
+    }
+
+    LOG(INFO) << "Deleting branch " << normalized_branch;
+
+    // TODO(Phase3): Implement actual DeleteBranch logic:
+    // 1. Delete manifest_<branch_name>_<term>
+    // 2. Delete CURRENT_TERM.<branch_name>
+    // 3. DO NOT delete data files (may be referenced elsewhere)
+    // 4. Orphaned data files will be cleaned by GC
+    
+    return KvError::NoError;
+}
+
 }  // namespace eloqstore
