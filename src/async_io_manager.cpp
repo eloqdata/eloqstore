@@ -4329,9 +4329,19 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
         return download_task.error_;
     }
 
-    KvError err = WriteFile(tbl_id, filename, download_task.response_data_);
+    std::string tmp_filename = filename + ".tmp";
+    KvError err = WriteFile(tbl_id, tmp_filename, download_task.response_data_);
     ReleaseCloudBuffer(std::move(download_task.response_data_));
     CHECK_KV_ERR(err);
+
+    auto [dir_fd, dir_err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
+    CHECK_KV_ERR(dir_err);
+
+    int res = Rename(dir_fd.FdPair(), tmp_filename.c_str(), filename.c_str());
+    if (res < 0)
+    {
+        return ToKvError(res);
+    }
     return KvError::NoError;
 }
 
