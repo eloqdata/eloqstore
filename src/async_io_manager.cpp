@@ -4308,7 +4308,8 @@ int CloudStoreMgr::ReserveCacheSpace(size_t size)
 
 KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
                                     FileId file_id,
-                                    uint64_t term)
+                                    uint64_t term,
+                                    bool download_to_exist)
 {
     KvTask *current_task = ThdTask();
     std::string filename = ToFilename(file_id, term);
@@ -4329,13 +4330,23 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
         return download_task.error_;
     }
 
+    auto [dir_fd, dir_err] =
+        OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, 0);
+    CHECK_KV_ERR(dir_err);
     std::string tmp_filename = filename + ".tmp";
+
+    if (download_to_exist)
+    {
+        int res = Rename(dir_fd.FdPair(), filename.c_str(), tmp_filename.c_str());
+        if (res != 0 && res != -ENOENT)
+        {
+            return ToKvError(res);
+        }
+    }
+
     KvError err = WriteFile(tbl_id, tmp_filename, download_task.response_data_);
     ReleaseCloudBuffer(std::move(download_task.response_data_));
     CHECK_KV_ERR(err);
-
-    auto [dir_fd, dir_err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
-    CHECK_KV_ERR(dir_err);
 
     int res = Rename(dir_fd.FdPair(), tmp_filename.c_str(), filename.c_str());
     if (res < 0)
@@ -4985,26 +4996,23 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
                                  std::string_view filename,
                                  const DirectIoBuffer &buffer)
 {
-    fs::path path =
-        tbl_id.StorePath(options_->store_path, options_->store_path_lut);
-    path /= filename;
-    std::error_code ec;
-    fs::create_directories(path.parent_path(), ec);
+    auto [dir_fd, dir_err] =
+        OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, 0);
+    if (dir_err != KvError::NoError)
+    {
+        return dir_err;
+    }
 
-    std::string path_str = path.string();
-    io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
-    open_how how = {
-        .flags = O_WRONLY | O_CREAT | O_TRUNC | O_DIRECT | O_NOATIME,
-        .mode = 0644,
-        .resolve = 0};
-    io_uring_prep_openat2(sqe, AT_FDCWD, path_str.c_str(), &how);
-    int fd = ThdTask()->WaitIoResult();
+    std::string filename_str(filename);
+    const uint64_t flags = O_WRONLY | O_CREAT | O_DIRECT | O_NOATIME;
+    int fd = OpenAt(dir_fd.FdPair(), filename_str.c_str(), flags, 0644, false);
     if (fd < 0)
     {
-        LOG(ERROR) << "failed to open file for write: " << path_str
-                   << ", error=" << strerror(-fd);
+        LOG(ERROR) << "failed to open file for write: " << tbl_id << '/'
+                   << filename_str << ": " << strerror(-fd);
         return ToKvError(fd);
     }
+    FdIdx file_fd{fd, false};
 
     KvError status = KvError::NoError;
     const size_t padded_size = buffer.padded_size();
@@ -5020,7 +5028,7 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
     while (off < padded_size)
     {
         size_t to_write = padded_size - off;
-        int wres = Write({fd, false}, write_ptr + off, to_write, off);
+        int wres = Write(file_fd, write_ptr + off, to_write, off);
         if (wres < 0)
         {
             status = ToKvError(wres);
@@ -5034,19 +5042,8 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
         off += static_cast<size_t>(wres);
     }
 
-    sqe = GetSQE(UserDataType::KvTask, ThdTask());
-    io_uring_prep_close(sqe, fd);
-    int close_res = ThdTask()->WaitIoResult();
-    if (close_res < 0)
-    {
-        LOG(ERROR) << "close file/directory " << fd
-                   << " failed: " << strerror(-close_res);
-        if (status == KvError::NoError)
-        {
-            status = ToKvError(close_res);
-        }
-    }
-    if (status == KvError::NoError && close_res < 0)
+    int close_res = Close(fd);
+    if (close_res < 0 && status == KvError::NoError)
     {
         status = ToKvError(close_res);
     }
