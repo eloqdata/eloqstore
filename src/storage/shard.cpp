@@ -608,6 +608,13 @@ bool Shard::ProcessReq(KvRequest *req)
         StartTask(task, req, lbd);
         return true;
     }
+    case RequestType::CreateBranch:
+    case RequestType::DeleteBranch:
+    {
+        // Branch operations are handled synchronously for now
+        // TODO: Implement async branch operations
+        return true;
+    }
     }
     return true;
 }

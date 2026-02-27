@@ -48,7 +48,10 @@ enum class RequestType : uint8_t
     LocalGc,
     CleanExpired,
     GlobalArchive,
-    GlobalReopen
+    GlobalReopen,
+    CreateBranch,
+    DeleteBranch,
+    GlobalCreateBranch
 };
 
 inline const char *RequestTypeToString(RequestType type)
@@ -83,6 +86,12 @@ inline const char *RequestTypeToString(RequestType type)
         return "global_archive";
     case RequestType::GlobalReopen:
         return "global_reopen";
+    case RequestType::CreateBranch:
+        return "create_branch";
+    case RequestType::DeleteBranch:
+        return "delete_branch";
+    case RequestType::GlobalCreateBranch:
+        return "global_create_branch";
     default:
         return "unknown";
     }
@@ -494,6 +503,59 @@ public:
     {
         return RequestType::CleanExpired;
     }
+};
+
+class BranchRequest : public KvRequest
+{
+public:
+    std::string branch_name;
+    std::string parent_branch;
+    std::string result_branch;
+};
+
+class CreateBranchRequest : public BranchRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::CreateBranch;
+    }
+};
+
+class DeleteBranchRequest : public BranchRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::DeleteBranch;
+    }
+};
+
+class GlobalCreateBranchRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::GlobalCreateBranch;
+    }
+
+    void SetArgs(std::string branch_name, std::string parent_branch)
+    {
+        branch_name_ = std::move(branch_name);
+        parent_branch_ = std::move(parent_branch);
+    }
+
+    const std::string& GetBranchName() const { return branch_name_; }
+    const std::string& GetParentBranch() const { return parent_branch_; }
+
+private:
+    std::string branch_name_;
+    std::string parent_branch_;
+    std::vector<std::unique_ptr<CreateBranchRequest>> branch_reqs_;
+    std::atomic<uint32_t> pending_{0};
+    std::atomic<uint8_t> first_error_{static_cast<uint8_t>(KvError::NoError)};
+
+    friend class EloqStore;
 };
 
 class ArchiveCrond;

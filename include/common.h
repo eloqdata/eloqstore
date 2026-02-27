@@ -533,6 +533,36 @@ inline std::string BranchCurrentTermFileName(std::string_view branch_name)
     return name;
 }
 
+// Parse branch term from CURRENT_TERM.<branch_name> file content
+// Returns term value, or 0 on error
+inline uint64_t ParseBranchTerm(std::string_view content)
+{
+    uint64_t term = 0;
+    if (content.empty())
+    {
+        return 0;
+    }
+    // Content should be numeric string (e.g., "0", "5", "10")
+    for (char c : content)
+    {
+        if (c >= '0' && c <= '9')
+        {
+            term = term * 10 + (c - '0');
+        }
+        else
+        {
+            return 0;  // Invalid content
+        }
+    }
+    return term;
+}
+
+// Convert term to string for CURRENT_TERM file content
+inline std::string TermToString(uint64_t term)
+{
+    return std::to_string(term);
+}
+
 // Check if filename is a branch manifest (not an archive)
 inline bool IsBranchManifest(std::string_view filename)
 {
