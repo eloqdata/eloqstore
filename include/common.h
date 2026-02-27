@@ -414,7 +414,7 @@ inline bool ParseCurrentTermFilename(std::string_view filename,
     }
 
     // Check for separator (dot)
-    if (filename[prefix.size()] != '.')
+    if (filename[prefix.size()] != CurrentTermFileNameSeparator)
     {
         return false;
     }
@@ -485,7 +485,7 @@ inline std::string BranchCurrentTermFileName(std::string_view branch_name)
     std::string name;
     name.reserve(std::size(CurrentTermFileName) + branch_name.size() + 1);
     name.append(CurrentTermFileName);
-    name.push_back('.');
+    name.push_back(CurrentTermFileNameSeparator);
     name.append(branch_name);
     return name;
 }
