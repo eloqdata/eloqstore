@@ -333,7 +333,7 @@ KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
 
     uint64_t current_ts =
         provided_ts != 0 ? provided_ts : utils::UnixTs<chrono::microseconds>();
-    err = IoMgr()->CreateArchive(tbl_ident_, snapshot, current_ts);
+    err = IoMgr()->CreateArchive(tbl_ident_, snapshot, current_ts, branch_metadata.branch_name);
     CHECK_KV_ERR(err);
 
     // Update the cached max file id.

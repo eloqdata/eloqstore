@@ -114,10 +114,11 @@ public:
                                    std::string_view log,
                                    uint64_t offset) = 0;
     virtual KvError SwitchManifest(const TableIdent &tbl_id,
-                                   std::string_view snapshot) = 0;
+                                    std::string_view snapshot) = 0;
     virtual KvError CreateArchive(const TableIdent &tbl_id,
-                                  std::string_view snapshot,
-                                  uint64_t ts) = 0;
+                                   std::string_view snapshot,
+                                   uint64_t ts,
+                                   std::string_view branch_name) = 0;
     virtual std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) = 0;
 
@@ -378,8 +379,9 @@ public:
     KvError SwitchManifest(const TableIdent &tbl_id,
                            std::string_view snapshot) override;
     KvError CreateArchive(const TableIdent &tbl_id,
-                          std::string_view snapshot,
-                          uint64_t ts) override;
+                           std::string_view snapshot,
+                           uint64_t ts,
+                           std::string_view branch_name) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
 
@@ -746,7 +748,8 @@ public:
                            std::string_view snapshot) override;
     KvError CreateArchive(const TableIdent &tbl_id,
                           std::string_view snapshot,
-                          uint64_t ts) override;
+                          uint64_t ts,
+                          std::string_view branch_name) override;
     KvError AbortWrite(const TableIdent &tbl_id) override;
     void CleanManifest(const TableIdent &tbl_id) override;
 
@@ -1042,10 +1045,11 @@ public:
                            std::string_view log,
                            uint64_t offset) override;
     KvError SwitchManifest(const TableIdent &tbl_id,
-                           std::string_view snapshot) override;
+                          std::string_view snapshot) override;
     KvError CreateArchive(const TableIdent &tbl_id,
                           std::string_view snapshot,
-                          uint64_t ts) override;
+                          uint64_t ts,
+                          std::string_view branch_name) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
 

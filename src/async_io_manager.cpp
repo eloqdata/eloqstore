@@ -2138,13 +2138,14 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
 }
 
 KvError IouringMgr::CreateArchive(const TableIdent &tbl_id,
-                                  std::string_view snapshot,
-                                  uint64_t ts)
+                                   std::string_view snapshot,
+                                   uint64_t ts,
+                                   std::string_view branch_name)
 {
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
     CHECK_KV_ERR(err);
     uint64_t term = ProcessTerm();
-    const std::string name = ArchiveName(term, ts);
+    const std::string name = BranchArchiveName(branch_name, term, ts);
     int res = WriteSnapshot(std::move(dir_fd), name, snapshot);
     if (res < 0)
     {
@@ -4079,7 +4080,8 @@ void CloudStoreMgr::CleanManifest(const TableIdent &tbl_id)
 
 KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
                                      std::string_view snapshot,
-                                     uint64_t ts)
+                                     uint64_t ts,
+                                     std::string_view branch_name)
 {
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
     CHECK_KV_ERR(err);
@@ -4089,7 +4091,7 @@ KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
         return ToKvError(res);
     }
     uint64_t term = ProcessTerm();
-    const std::string name = ArchiveName(term, ts);
+    const std::string name = BranchArchiveName(branch_name, term, ts);
     res = WriteSnapshot(std::move(dir_fd), name, snapshot);
     if (res < 0)
     {
@@ -5066,7 +5068,8 @@ KvError MemStoreMgr::SwitchManifest(const TableIdent &tbl_id,
 
 KvError MemStoreMgr::CreateArchive(const TableIdent &tbl_id,
                                    std::string_view snapshot,
-                                   uint64_t ts)
+                                   uint64_t ts,
+                                   std::string_view branch_name)
 {
     LOG(FATAL) << "not implemented";
     return KvError::InvalidArgs;
