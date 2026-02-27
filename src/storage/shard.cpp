@@ -82,7 +82,6 @@ void Shard::InitIoMgrAndPagePool()
 void Shard::WorkLoop()
 {
     shard = this;
-    io_mgr_->Start();
     InitIoMgrAndPagePool();
 
     // Get new requests from the queue, only blocked when there are no requests
@@ -170,7 +169,7 @@ void Shard::Start()
 {
 #ifdef ELOQ_MODULE_ENABLED
     shard = this;
-    io_mgr_->Start();
+    running_status_ = 0;
 #else
     thd_ = std::thread([this] { WorkLoop(); });
 #endif

@@ -81,9 +81,6 @@ public:
 
     /** These methods are provided for worker thread. */
     virtual KvError Init(Shard *shard) = 0;
-    virtual void Start()
-    {
-    }
     virtual bool IsIdle();
     virtual void Stop()
     {
