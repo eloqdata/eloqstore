@@ -979,7 +979,7 @@ private:
 
     private:
         CloudStoreMgr *io_mgr_;
-        bool killed_{false};
+        bool killed_{true};
     };
 
     FileCleaner file_cleaner_;

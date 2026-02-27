@@ -223,7 +223,7 @@ void Prewarmer::Run()
 
 void Prewarmer::Shutdown()
 {
-    if (!Options()->prewarm_cloud_cache)
+    if (!Options()->prewarm_cloud_cache || stop_)
         return;
     shutting_down_ = true;
     stop_ = true;

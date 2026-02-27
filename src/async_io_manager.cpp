@@ -4809,13 +4809,13 @@ void CloudStoreMgr::FileCleaner::Shutdown()
 {
     // Wake up file cleaner to stop it.
     assert(status_ == TaskStatus::Idle);
+    if (killed_)
+        return;
     killed_ = true;
     coro_ = coro_.resume();
 }
 
-MemStoreMgr::MemStoreMgr(const KvOptions *opts) : AsyncIoManager(opts)
-{
-}
+MemStoreMgr::MemStoreMgr(const KvOptions *opts) : AsyncIoManager(opts) {};
 
 KvError MemStoreMgr::Init(Shard *shard)
 {
