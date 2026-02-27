@@ -45,6 +45,56 @@ size_t AppendToString(void *contents, size_t size, size_t nmemb, void *userp)
     return total;
 }
 
+void CleanupAws()
+{
+    std::lock_guard lk(g_aws_mutex);
+    if (g_aws_initialized)
+    {
+        Aws::ShutdownAPI(g_sdk_options);
+        g_aws_initialized = false;
+    }
+}
+
+CloudPathInfo ParseCloudPath(const std::string &spec)
+{
+    CloudPathInfo info;
+    std::string_view path(spec);
+    auto colon = path.find(':');
+    if (colon != std::string::npos)
+    {
+        LOG(FATAL) << "cloud_store_path no longer supports prefixes like '"
+                   << spec << "'";
+    }
+    while (!path.empty() && path.front() == '/')
+    {
+        path.remove_prefix(1);
+    }
+    size_t slash = path.find('/');
+    if (slash == std::string::npos)
+    {
+        info.bucket.assign(path.data(), path.size());
+    }
+    else
+    {
+        info.bucket.assign(path.substr(0, slash).data(), slash);
+        std::string_view prefix = path.substr(slash + 1);
+        while (!prefix.empty() && prefix.front() == '/')
+        {
+            prefix.remove_prefix(1);
+        }
+        while (!prefix.empty() && prefix.back() == '/')
+        {
+            prefix.remove_suffix(1);
+        }
+        info.prefix.assign(prefix.data(), prefix.size());
+    }
+    if (info.bucket.empty())
+    {
+        LOG(FATAL) << "Invalid cloud_store_path: missing bucket name";
+    }
+    return info;
+}
+
 }  // namespace
 
 ObjectStore::ObjectStore(const KvOptions *options, CloudStorageService *service)
