@@ -38,7 +38,7 @@ TEST_CASE("cloud start with different term", "[cloud][term]")
     CleanupLocalStore(cloud_options);
 
     // start with term 5, can read data written by term 1
-    store->Start(5);
+    store->Start(eloqstore::MainBranchName, 5);
     tester.Validate();
     REQUIRE(tester.CheckKey(30) == eloqstore::KvError::NoError);
     REQUIRE(tester.CheckKey(200) == eloqstore::KvError::NotFound);
@@ -51,7 +51,7 @@ TEST_CASE("cloud start with different term", "[cloud][term]")
 
     // start with term 3, should be expired, because term 3 is less than
     // term 5
-    store->Start(3);
+    store->Start(eloqstore::MainBranchName, 3);
     REQUIRE(tester.CheckKey(30) == eloqstore::KvError::ExpiredTerm);
 
     store->Stop();
@@ -75,7 +75,7 @@ TEST_CASE("cloud start with different term", "[cloud][term]")
 
     // start with term 7, can read data written by term 1 and term 5,
     // can't read data written by term 1'
-    store->Start(7);
+    store->Start(eloqstore::MainBranchName, 7);
     tester.Validate();
     REQUIRE(tester.CheckKey(450) == eloqstore::KvError::NotFound);
 
