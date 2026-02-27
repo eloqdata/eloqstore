@@ -1017,15 +1017,18 @@ void ManifestVerifier::Snapshot()
 {
     eloqstore::FilePageId max_fp_id =
         answer_.FilePgAllocator()->MaxFilePageId();
-    // Serialize FileIdTermMapping to string_view
-    std::string term_buf;
-    eloqstore::SerializeFileIdTermMapping(term_mapping_, term_buf);
+    // Create BranchManifestMetadata
+    eloqstore::BranchManifestMetadata branch_metadata;
+    branch_metadata.branch_name = eloqstore::MainBranchName;
+    branch_metadata.term = 0;
+    // file_ranges will be populated from term_mapping_ in future
+    
     std::string_view sv = builder_.Snapshot(root_id_,
                                             eloqstore::MaxPageId,
                                             answer_.GetMapping(),
                                             max_fp_id,
                                             std::string_view{},
-                                            term_buf);
+                                            branch_metadata);
     file_ = sv;
     const size_t alignment = eloqstore::page_align;
     const size_t padded_size =

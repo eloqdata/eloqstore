@@ -308,13 +308,8 @@ FileId ParseArchiveForMaxFileId(const std::string &archive_filename,
     uint64_t manifest_term = ManifestTermFromFilename(archive_filename);
     if (manifest_term != 0)
     {
-        if (!replayer.file_id_term_mapping_)
-        {
-            replayer.file_id_term_mapping_ =
-                std::make_shared<FileIdTermMapping>();
-        }
-        replayer.file_id_term_mapping_->insert_or_assign(
-            IouringMgr::LruFD::kManifest, manifest_term);
+        // Set branch metadata term for GC replay
+        replayer.branch_metadata_.term = manifest_term;
     }
 
     KvError err = replayer.Replay(&manifest);

@@ -716,4 +716,63 @@ inline BranchFileMapping DeserializeBranchFileMapping(std::string_view data)
     return mapping;
 }
 
+// Serialize BranchManifestMetadata to string
+// Format: [branch_name_len(4B)][branch_name][term(8B)][BranchFileMapping]
+inline std::string SerializeBranchManifestMetadata(const BranchManifestMetadata &metadata)
+{
+    std::string result;
+    
+    // Branch name length (4 bytes)
+    uint32_t name_len = static_cast<uint32_t>(metadata.branch_name.size());
+    result.append(reinterpret_cast<const char *>(&name_len), sizeof(uint32_t));
+    
+    // Branch name
+    result.append(metadata.branch_name);
+    
+    // Term (8 bytes)
+    uint64_t term = metadata.term;
+    result.append(reinterpret_cast<const char *>(&term), sizeof(uint64_t));
+    
+    // BranchFileMapping
+    std::string mapping_str = SerializeBranchFileMapping(metadata.file_ranges);
+    result.append(mapping_str);
+    
+    return result;
+}
+
+// Deserialize BranchManifestMetadata from string_view
+// Returns metadata with empty fields on error
+inline BranchManifestMetadata DeserializeBranchManifestMetadata(std::string_view data)
+{
+    BranchManifestMetadata metadata;
+    
+    if (data.size() < sizeof(uint32_t))
+    {
+        return metadata;  // Error: invalid data
+    }
+    
+    // Branch name length
+    uint32_t name_len = 0;
+    std::memcpy(&name_len, data.data(), sizeof(uint32_t));
+    data = data.substr(sizeof(uint32_t));
+    
+    if (data.size() < name_len + sizeof(uint64_t))
+    {
+        return metadata;  // Error: invalid data
+    }
+    
+    // Branch name
+    metadata.branch_name = std::string(data.substr(0, name_len));
+    data = data.substr(name_len);
+    
+    // Term
+    std::memcpy(&metadata.term, data.data(), sizeof(uint64_t));
+    data = data.substr(sizeof(uint64_t));
+    
+    // BranchFileMapping
+    metadata.file_ranges = DeserializeBranchFileMapping(data);
+    
+    return metadata;
+}
+
 }  // namespace eloqstore

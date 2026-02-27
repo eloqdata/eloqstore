@@ -19,7 +19,7 @@ namespace eloqstore
 {
 
 Replayer::Replayer(const KvOptions *opts)
-    : file_id_term_mapping_(std::make_shared<FileIdTermMapping>()), opts_(opts)
+    : opts_(opts)
 {
     log_buf_.resize(ManifestBuilder::header_bytes);
 }
@@ -179,16 +179,12 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
         mapping_tbl_.PushBack(value);
     }
 
-    // Deserialize FileIdTermMapping section
-    std::string_view file_term_mapping_view = snapshot.substr(4 + mapping_len);
-    CHECK(file_term_mapping_view.size() >= 4)
-        << "DeserializeSnapshot failed, insufficient data for "
-           "file_term_mapping, expect >= 4, got "
-        << file_term_mapping_view.size();
-    if (!DeserializeFileIdTermMapping(file_term_mapping_view,
-                                      *file_id_term_mapping_))
+    // Deserialize BranchManifestMetadata section
+    std::string_view branch_metadata_view = snapshot.substr(4 + mapping_len);
+    branch_metadata_ = DeserializeBranchManifestMetadata(branch_metadata_view);
+    if (branch_metadata_.branch_name.empty())
     {
-        LOG(FATAL) << "Failed to deserialize FileIdTermMapping from snapshot.";
+        LOG(FATAL) << "Failed to deserialize BranchManifestMetadata from snapshot.";
     }
 }
 
@@ -219,11 +215,11 @@ void Replayer::ReplayLog()
         }
     }
 
-    // Deserialize FileIdTermMapping section
-    if (!DeserializeFileIdTermMapping(file_term_mapping_view,
-                                      *file_id_term_mapping_))
+    // Deserialize BranchManifestMetadata section
+    branch_metadata_ = DeserializeBranchManifestMetadata(file_term_mapping_view);
+    if (branch_metadata_.branch_name.empty())
     {
-        LOG(FATAL) << "Failed to deserialize FileIdTermMapping from snapshot.";
+        LOG(FATAL) << "Failed to deserialize BranchManifestMetadata from log.";
     }
 }
 
@@ -277,12 +273,7 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
         // In cloud mode, when manifest term differs from process term, bump
         // the allocator to the next file boundary to avoid cross-term
         // collisions.
-        uint64_t manifest_term = 0;
-        auto it = file_id_term_mapping_->find(IouringMgr::LruFD::kManifest);
-        if (it != file_id_term_mapping_->end())
-        {
-            manifest_term = it->second;
-        }
+        uint64_t manifest_term = branch_metadata_.term;
         const bool cloud_mode = !opts_->cloud_store_path.empty();
         if (cloud_mode && manifest_term != expect_term)
         {
