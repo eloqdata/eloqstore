@@ -504,7 +504,7 @@ void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
             auto [file_type, suffix] = ParseFileName(filename);
             if (file_type == FileNameManifest)
             {
-                std::string branch_name;
+                std::string_view branch_name;
                 uint64_t term = 0;
                 std::optional<uint64_t> ts;
                 if (!ParseManifestFileSuffix(suffix, branch_name, term, ts) ||
@@ -519,7 +519,7 @@ void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
             }
             else if (file_type == FileNameData)
             {
-                std::string branch_name;
+                std::string_view branch_name;
                 if (!ParseDataFileSuffix(suffix, file.file_id, branch_name, file.term))
                 {
                     total_files_skipped++;

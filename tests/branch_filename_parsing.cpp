@@ -175,7 +175,7 @@ TEST_CASE("BranchCurrentTermFileName - dot separator", "[branch][generation]")
 TEST_CASE("ParseDataFileSuffix - branch format", "[branch][parsing]")
 {
     eloqstore::FileId file_id = 0;
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     
     // Valid format: file_id_branch_term
@@ -206,7 +206,7 @@ TEST_CASE("ParseDataFileSuffix - branch format", "[branch][parsing]")
 TEST_CASE("ParseDataFileSuffix - case normalization during parse", "[branch][parsing]")
 {
     eloqstore::FileId file_id = 0;
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     
     // Note: Normalization happens at file creation time (BranchDataFileName)
@@ -227,7 +227,7 @@ TEST_CASE("ParseDataFileSuffix - case normalization during parse", "[branch][par
 TEST_CASE("ParseDataFileSuffix - old format rejected", "[branch][parsing]")
 {
     eloqstore::FileId file_id = 0;
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     
     // Old format: file_id_term (no branch) should fail
@@ -241,7 +241,7 @@ TEST_CASE("ParseDataFileSuffix - old format rejected", "[branch][parsing]")
 TEST_CASE("ParseDataFileSuffix - invalid formats", "[branch][parsing]")
 {
     eloqstore::FileId file_id = 0;
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     
     // Empty
@@ -270,7 +270,7 @@ TEST_CASE("ParseDataFileSuffix - invalid formats", "[branch][parsing]")
 
 TEST_CASE("ParseManifestFileSuffix - branch format without timestamp", "[branch][parsing]")
 {
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     std::optional<uint64_t> ts;
     
@@ -295,7 +295,7 @@ TEST_CASE("ParseManifestFileSuffix - branch format without timestamp", "[branch]
 
 TEST_CASE("ParseManifestFileSuffix - branch format with timestamp", "[branch][parsing]")
 {
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     std::optional<uint64_t> ts;
     
@@ -321,7 +321,7 @@ TEST_CASE("ParseManifestFileSuffix - branch format with timestamp", "[branch][pa
 
 TEST_CASE("ParseManifestFileSuffix - case normalization", "[branch][parsing]")
 {
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     std::optional<uint64_t> ts;
     
@@ -338,7 +338,7 @@ TEST_CASE("ParseManifestFileSuffix - case normalization", "[branch][parsing]")
 
 TEST_CASE("ParseManifestFileSuffix - old format rejected", "[branch][parsing]")
 {
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     std::optional<uint64_t> ts;
     
@@ -352,7 +352,7 @@ TEST_CASE("ParseManifestFileSuffix - old format rejected", "[branch][parsing]")
 
 TEST_CASE("ParseManifestFileSuffix - invalid formats", "[branch][parsing]")
 {
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     std::optional<uint64_t> ts;
     
@@ -379,7 +379,7 @@ TEST_CASE("ParseManifestFileSuffix - invalid formats", "[branch][parsing]")
 
 TEST_CASE("ParseCurrentTermFilename - valid formats", "[branch][parsing]")
 {
-    std::string branch_name;
+    std::string_view branch_name;
     
     // Valid format with dot separator
     REQUIRE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM.main", branch_name));
@@ -398,19 +398,22 @@ TEST_CASE("ParseCurrentTermFilename - valid formats", "[branch][parsing]")
 
 TEST_CASE("ParseCurrentTermFilename - case normalization", "[branch][parsing]")
 {
-    std::string branch_name;
+    std::string_view branch_name;
     
-    // Uppercase branch name should be normalized
-    REQUIRE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM.MAIN", branch_name));
+    // Note: Normalization happens at file creation time
+    // Parsing extracts branch as-is from filename
+    // These tests use lowercase since new files should have lowercase names
+    REQUIRE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM.main", branch_name));
     REQUIRE(branch_name == "main");
     
+    // Mixed case in filename will be returned as-is
     REQUIRE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM.Feature", branch_name));
-    REQUIRE(branch_name == "feature");
+    REQUIRE(branch_name == "Feature");
 }
 
 TEST_CASE("ParseCurrentTermFilename - invalid formats", "[branch][parsing]")
 {
-    std::string branch_name;
+    std::string_view branch_name;
     
     // Old format without branch (no dot separator)
     REQUIRE_FALSE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM", branch_name));
@@ -445,7 +448,7 @@ TEST_CASE("Roundtrip - data files", "[branch][roundtrip]")
     auto [type, suffix] = eloqstore::ParseFileName(filename);
     
     eloqstore::FileId file_id = 0;
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     REQUIRE(eloqstore::ParseDataFileSuffix(suffix, file_id, branch_name, term));
     REQUIRE(file_id == 123);
@@ -476,7 +479,7 @@ TEST_CASE("Roundtrip - manifest files", "[branch][roundtrip]")
     std::string filename = eloqstore::BranchManifestFileName("main", 5);
     auto [type, suffix] = eloqstore::ParseFileName(filename);
     
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     std::optional<uint64_t> ts;
     REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, branch_name, term, ts));
@@ -499,7 +502,7 @@ TEST_CASE("Roundtrip - archive files", "[branch][roundtrip]")
     std::string filename = eloqstore::BranchArchiveName("main", 5, 123456);
     auto [type, suffix] = eloqstore::ParseFileName(filename);
     
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     std::optional<uint64_t> ts;
     REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, branch_name, term, ts));
@@ -522,7 +525,7 @@ TEST_CASE("Roundtrip - CURRENT_TERM files", "[branch][roundtrip]")
 {
     // Generate -> Parse -> Verify
     std::string filename = eloqstore::BranchCurrentTermFileName("main");
-    std::string branch_name;
+    std::string_view branch_name;
     REQUIRE(eloqstore::ParseCurrentTermFilename(filename, branch_name));
     REQUIRE(branch_name == "main");
     

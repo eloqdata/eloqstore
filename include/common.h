@@ -188,13 +188,13 @@ inline bool IsValidBranchName(std::string_view branch_name)
 //   "123_main_5" -> file_id=123, branch_name="main", term=5
 //   "123_feature_5" -> file_id=123, branch_name="feature", term=5
 // Returns true on success, false on parse error
+// Note: branch_name is output as string_view (no allocation)
 inline bool ParseDataFileSuffix(std::string_view suffix,
                                 FileId &file_id,
-                                std::string &branch_name,
+                                std::string_view &branch_name,
                                 uint64_t &term)
 {
     file_id = 0;
-    branch_name.clear();
     term = 0;
 
     if (suffix.empty())
@@ -247,7 +247,7 @@ inline bool ParseDataFileSuffix(std::string_view suffix,
 
     // Success
     file_id = static_cast<FileId>(parsed_id);
-    branch_name = std::string(branch_str);
+    branch_name = branch_str;
     term = parsed_term;
     return true;
 }
@@ -258,12 +258,12 @@ inline bool ParseDataFileSuffix(std::string_view suffix,
 //   "feature_5" -> branch_name="feature", term=5, timestamp=nullopt
 //   "main_5_123456789" -> branch_name="main", term=5, timestamp=123456789
 // Returns true on success, false on parse error
+// Note: branch_name is output as string_view (no allocation)
 inline bool ParseManifestFileSuffix(std::string_view suffix,
-                                    std::string &branch_name,
+                                    std::string_view &branch_name,
                                     uint64_t &term,
                                     std::optional<uint64_t> &timestamp)
 {
-    branch_name.clear();
     term = 0;
     timestamp.reset();
 
@@ -311,7 +311,7 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
         {
             return false;
         }
-        branch_name = std::string(branch_str);
+        branch_name = branch_str;
         term = parsed_term;
         return true;
     }
@@ -327,7 +327,7 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
         return false;
     }
 
-    branch_name = std::string(branch_str);
+    branch_name = branch_str;
     term = parsed_term;
     timestamp = parsed_ts;
     return true;
@@ -345,7 +345,7 @@ inline uint64_t ManifestTermFromFilename(std::string_view filename)
         return 0;
     }
 
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     std::optional<uint64_t> ts;
     if (!ParseManifestFileSuffix(suffix, branch_name, term, ts))
@@ -403,7 +403,7 @@ inline bool IsArchiveFile(std::string_view filename)
     {
         return false;
     }
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     std::optional<uint64_t> ts;
     if (!ParseManifestFileSuffix(suffix, branch_name, term, ts))
@@ -418,11 +418,10 @@ inline bool IsArchiveFile(std::string_view filename)
 //   "CURRENT_TERM.main" -> branch_name="main"
 //   "CURRENT_TERM.feature" -> branch_name="feature"
 // Returns true on success, false on parse error
+// Note: branch_name is output as string_view (no allocation)
 inline bool ParseCurrentTermFilename(std::string_view filename,
-                                     std::string &branch_name)
+                                     std::string_view &branch_name)
 {
-    branch_name.clear();
-
     // Check if filename starts with CURRENT_TERM prefix
     constexpr std::string_view prefix = CurrentTermFileName;
     if (filename.size() <= prefix.size() ||
@@ -439,13 +438,14 @@ inline bool ParseCurrentTermFilename(std::string_view filename,
 
     // Extract branch name after separator
     std::string_view branch_str = filename.substr(prefix.size() + 1);
-    std::string normalized_branch = NormalizeBranchName(branch_str);
-    if (normalized_branch.empty())
+    
+    // Validate branch_name - files contain already-normalized names
+    if (!IsValidBranchName(branch_str))
     {
         return false;
     }
 
-    branch_name = std::move(normalized_branch);
+    branch_name = branch_str;
     return true;
 }
 
@@ -540,7 +540,7 @@ inline bool IsBranchManifest(std::string_view filename)
     {
         return false;
     }
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     std::optional<uint64_t> ts;
     if (!ParseManifestFileSuffix(suffix, branch_name, term, ts))
@@ -558,7 +558,7 @@ inline bool IsBranchArchive(std::string_view filename)
     {
         return false;
     }
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     std::optional<uint64_t> ts;
     if (!ParseManifestFileSuffix(suffix, branch_name, term, ts))
@@ -577,7 +577,7 @@ inline bool IsBranchDataFile(std::string_view filename)
         return false;
     }
     FileId file_id = 0;
-    std::string branch_name;
+    std::string_view branch_name;
     uint64_t term = 0;
     return ParseDataFileSuffix(suffix, file_id, branch_name, term);
 }
