@@ -638,6 +638,25 @@ inline uint64_t GetFileTerm(
     return it->term;
 }
 
+// Get branch_name and term for a given file_id in one lookup
+// Returns true if file_id found in any branch range
+// Uses single binary search for efficiency
+inline bool GetBranchNameAndTerm(
+    const BranchFileMapping &mapping,
+    FileId file_id,
+    std::string &branch_name,
+    uint64_t &term)
+{
+    auto it = FindBranchRange(mapping, file_id);
+    if (it == mapping.end())
+    {
+        return false;
+    }
+    branch_name = it->branch_name;
+    term = it->term;
+    return true;
+}
+
 // Serialize BranchFileMapping to string
 // Format: [num_entries][branch_name_len][branch_name][term(8B)][max_file_id(8B)]...
 inline std::string SerializeBranchFileMapping(const BranchFileMapping &mapping)
