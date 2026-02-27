@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
@@ -580,6 +581,139 @@ inline bool IsBranchDataFile(std::string_view filename)
     std::string_view branch_name;
     uint64_t term = 0;
     return ParseDataFileSuffix(suffix, file_id, branch_name, term);
+}
+
+// Find branch range for a given file_id using binary search
+// Returns iterator to the branch range, or end() if not found
+// Uses std::lower_bound to find first range where max_file_id >= file_id
+inline BranchFileMapping::const_iterator FindBranchRange(
+    const BranchFileMapping &mapping,
+    FileId file_id)
+{
+    BranchFileRange target;
+    target.max_file_id = file_id;
+    return std::lower_bound(mapping.begin(), mapping.end(), target);
+}
+
+// Check if file_id belongs to a specific branch
+// Returns true if file_id is within the branch's range
+inline bool FileIdInBranch(
+    const BranchFileMapping &mapping,
+    FileId file_id,
+    std::string_view branch_name)
+{
+    auto it = FindBranchRange(mapping, file_id);
+    if (it == mapping.end())
+    {
+        return false;
+    }
+    return it->branch_name == branch_name;
+}
+
+// Get branch_name for a given file_id
+// Returns empty string if not found
+inline std::string GetBranchName(
+    const BranchFileMapping &mapping,
+    FileId file_id)
+{
+    auto it = FindBranchRange(mapping, file_id);
+    if (it == mapping.end())
+    {
+        return "";
+    }
+    return it->branch_name;
+}
+
+// Get term for a given file_id
+// Returns 0 if not found
+inline uint64_t GetFileTerm(
+    const BranchFileMapping &mapping,
+    FileId file_id)
+{
+    auto it = FindBranchRange(mapping, file_id);
+    if (it == mapping.end())
+    {
+        return 0;
+    }
+    return it->term;
+}
+
+// Serialize BranchFileMapping to string
+// Format: [num_entries][branch_name_len][branch_name][term(8B)][max_file_id(8B)]...
+inline std::string SerializeBranchFileMapping(const BranchFileMapping &mapping)
+{
+    std::string result;
+    
+    // Number of entries (fixed 8 bytes)
+    uint64_t num_entries = static_cast<uint64_t>(mapping.size());
+    result.append(reinterpret_cast<const char *>(&num_entries), sizeof(uint64_t));
+    
+    for (const auto &range : mapping)
+    {
+        // Branch name length (4 bytes)
+        uint32_t name_len = static_cast<uint32_t>(range.branch_name.size());
+        result.append(reinterpret_cast<const char *>(&name_len), sizeof(uint32_t));
+        
+        // Branch name
+        result.append(range.branch_name);
+        
+        // Term (8 bytes)
+        uint64_t term = range.term;
+        result.append(reinterpret_cast<const char *>(&term), sizeof(uint64_t));
+        
+        // Max file_id (8 bytes)
+        uint64_t max_file_id = range.max_file_id;
+        result.append(reinterpret_cast<const char *>(&max_file_id), sizeof(uint64_t));
+    }
+    
+    return result;
+}
+
+// Deserialize BranchFileMapping from string_view
+// Returns empty mapping on error
+inline BranchFileMapping DeserializeBranchFileMapping(std::string_view data)
+{
+    BranchFileMapping mapping;
+    
+    if (data.size() < sizeof(uint64_t))
+    {
+        return mapping;
+    }
+    
+    uint64_t num_entries = 0;
+    std::memcpy(&num_entries, data.data(), sizeof(uint64_t));
+    data = data.substr(sizeof(uint64_t));
+    
+    for (uint64_t i = 0; i < num_entries; ++i)
+    {
+        if (data.size() < sizeof(uint32_t))
+        {
+            return BranchFileMapping{};  // Error: invalid data
+        }
+        
+        uint32_t name_len = 0;
+        std::memcpy(&name_len, data.data(), sizeof(uint32_t));
+        data = data.substr(sizeof(uint32_t));
+        
+        if (data.size() < name_len + sizeof(uint64_t) * 2)
+        {
+            return BranchFileMapping{};  // Error: invalid data
+        }
+        
+        BranchFileRange range;
+        range.branch_name = std::string(data.substr(0, name_len));
+        data = data.substr(name_len);
+        
+        std::memcpy(&range.term, data.data(), sizeof(uint64_t));
+        data = data.substr(sizeof(uint64_t));
+        
+        std::memcpy(&range.max_file_id, data.data(), sizeof(uint64_t));
+        data = data.substr(sizeof(uint64_t));
+        
+        mapping.push_back(std::move(range));
+    }
+    
+    return mapping;
 }
 
 }  // namespace eloqstore

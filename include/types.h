@@ -34,6 +34,31 @@ constexpr size_t kDefaultScanPrefetchPageCount = 6;
 // Branch name constants
 static constexpr char MainBranchName[] = "main";
 
+// BranchFileRange: tracks file_id range per branch
+// Used in BranchFileMapping to find which branch a file_id belongs to
+struct BranchFileRange
+{
+    std::string branch_name;  // branch identifier (e.g., "main", "feature")
+    uint64_t term;            // term when this file_id range was allocated
+    FileId max_file_id;      // highest file_id allocated in this branch
+
+    // For sorting by max_file_id (required for binary search)
+    bool operator<(const BranchFileRange &other) const
+    {
+        return max_file_id < other.max_file_id;
+    }
+
+    bool operator<(FileId fid) const
+    {
+        return max_file_id < fid;
+    }
+};
+
+// BranchFileMapping: sorted vector of branch ranges
+// Sorted by max_file_id for efficient binary search lookup
+// Use std::lower_bound to find branch given file_id
+using BranchFileMapping = std::vector<BranchFileRange>;
+
 namespace fs = std::filesystem;
 
 struct TableIdent

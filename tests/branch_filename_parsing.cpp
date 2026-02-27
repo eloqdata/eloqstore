@@ -632,3 +632,136 @@ TEST_CASE("IsArchiveFile - branch aware", "[branch][integration]")
     REQUIRE_FALSE(eloqstore::IsArchiveFile("data_123_main_5"));
     REQUIRE_FALSE(eloqstore::IsArchiveFile("invalid"));
 }
+
+// ============================================================================
+// BranchFileMapping Tests
+// ============================================================================
+
+TEST_CASE("BranchFileRange - sorting and comparison", "[branch][mapping]")
+{
+    eloqstore::BranchFileRange r1{"main", 5, 100};
+    eloqstore::BranchFileRange r2{"feature", 3, 50};
+    eloqstore::BranchFileRange r3{"hotfix", 1, 200};
+    
+    // Sort by max_file_id
+    std::vector<eloqstore::BranchFileRange> ranges = {r1, r2, r3};
+    std::sort(ranges.begin(), ranges.end());
+    
+    REQUIRE(ranges[0].branch_name == "feature");
+    REQUIRE(ranges[0].max_file_id == 50);
+    REQUIRE(ranges[1].branch_name == "main");
+    REQUIRE(ranges[1].max_file_id == 100);
+    REQUIRE(ranges[2].branch_name == "hotfix");
+    REQUIRE(ranges[2].max_file_id == 200);
+}
+
+TEST_CASE("BranchFileMapping - binary search lookup", "[branch][mapping]")
+{
+    eloqstore::BranchFileMapping mapping;
+    
+    // Add ranges (must be sorted by max_file_id)
+    mapping.push_back({"main", 5, 100});
+    mapping.push_back({"feature", 3, 50});
+    mapping.push_back({"hotfix", 1, 200});
+    
+    // Sort by max_file_id
+    std::sort(mapping.begin(), mapping.end());
+    
+    // Test FindBranchRange
+    auto it1 = eloqstore::FindBranchRange(mapping, 25);
+    REQUIRE(it1 != mapping.end());
+    REQUIRE(it1->branch_name == "feature");
+    REQUIRE(it1->term == 3);
+    
+    auto it2 = eloqstore::FindBranchRange(mapping, 75);
+    REQUIRE(it2 != mapping.end());
+    REQUIRE(it2->branch_name == "main");
+    
+    auto it3 = eloqstore::FindBranchRange(mapping, 150);
+    REQUIRE(it3 != mapping.end());
+    REQUIRE(it3->branch_name == "hotfix");
+    
+    // Beyond max range
+    auto it4 = eloqstore::FindBranchRange(mapping, 300);
+    REQUIRE(it4 == mapping.end());
+}
+
+TEST_CASE("BranchFileMapping - GetBranchName and GetFileTerm", "[branch][mapping]")
+{
+    eloqstore::BranchFileMapping mapping;
+    mapping.push_back({"main", 5, 100});
+    mapping.push_back({"feature", 3, 50});
+    mapping.push_back({"hotfix", 1, 200});
+    std::sort(mapping.begin(), mapping.end());
+    
+    // Test GetBranchName
+    REQUIRE(eloqstore::GetBranchName(mapping, 25) == "feature");
+    REQUIRE(eloqstore::GetBranchName(mapping, 75) == "main");
+    REQUIRE(eloqstore::GetBranchName(mapping, 150) == "hotfix");
+    REQUIRE(eloqstore::GetBranchName(mapping, 300) == "");  // Beyond range
+    
+    // Test GetFileTerm
+    REQUIRE(eloqstore::GetFileTerm(mapping, 25) == 3);
+    REQUIRE(eloqstore::GetFileTerm(mapping, 75) == 5);
+    REQUIRE(eloqstore::GetFileTerm(mapping, 150) == 1);
+    REQUIRE(eloqstore::GetFileTerm(mapping, 300) == 0);  // Beyond range
+}
+
+TEST_CASE("BranchFileMapping - FileIdInBranch", "[branch][mapping]")
+{
+    eloqstore::BranchFileMapping mapping;
+    mapping.push_back({"main", 5, 100});
+    mapping.push_back({"feature", 3, 50});
+    mapping.push_back({"hotfix", 1, 200});
+    std::sort(mapping.begin(), mapping.end());
+    
+    // Test FileIdInBranch
+    REQUIRE(eloqstore::FileIdInBranch(mapping, 25, "feature") == true);
+    REQUIRE(eloqstore::FileIdInBranch(mapping, 25, "main") == false);
+    REQUIRE(eloqstore::FileIdInBranch(mapping, 75, "main") == true);
+    REQUIRE(eloqstore::FileIdInBranch(mapping, 75, "feature") == false);
+    REQUIRE(eloqstore::FileIdInBranch(mapping, 150, "hotfix") == true);
+    REQUIRE(eloqstore::FileIdInBranch(mapping, 300, "hotfix") == false);  // Beyond range
+}
+
+TEST_CASE("BranchFileMapping - serialization roundtrip", "[branch][mapping]")
+{
+    eloqstore::BranchFileMapping original;
+    original.push_back({"main", 5, 100});
+    original.push_back({"feature", 3, 50});
+    original.push_back({"hotfix", 1, 200});
+    
+    // Serialize
+    std::string serialized = eloqstore::SerializeBranchFileMapping(original);
+    
+    // Deserialize
+    eloqstore::BranchFileMapping deserialized = eloqstore::DeserializeBranchFileMapping(serialized);
+    
+    // Verify
+    REQUIRE(deserialized.size() == 3);
+    REQUIRE(deserialized[0].branch_name == "main");
+    REQUIRE(deserialized[0].term == 5);
+    REQUIRE(deserialized[0].max_file_id == 100);
+    REQUIRE(deserialized[1].branch_name == "feature");
+    REQUIRE(deserialized[1].term == 3);
+    REQUIRE(deserialized[1].max_file_id == 50);
+    REQUIRE(deserialized[2].branch_name == "hotfix");
+    REQUIRE(deserialized[2].term == 1);
+    REQUIRE(deserialized[2].max_file_id == 200);
+}
+
+TEST_CASE("BranchFileMapping - empty mapping", "[branch][mapping]")
+{
+    eloqstore::BranchFileMapping empty;
+    
+    // Serialize empty
+    std::string serialized = eloqstore::SerializeBranchFileMapping(empty);
+    eloqstore::BranchFileMapping deserialized = eloqstore::DeserializeBranchFileMapping(serialized);
+    REQUIRE(deserialized.size() == 0);
+    
+    // Lookup in empty mapping
+    REQUIRE(eloqstore::FindBranchRange(empty, 50) == empty.end());
+    REQUIRE(eloqstore::GetBranchName(empty, 50) == "");
+    REQUIRE(eloqstore::GetFileTerm(empty, 50) == 0);
+    REQUIRE(eloqstore::FileIdInBranch(empty, 50, "main") == false);
+}
