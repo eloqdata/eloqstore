@@ -60,7 +60,7 @@ public:
 
 #ifdef ELOQ_MODULE_ENABLED
     // 0 for running, 1 for to stop, 2 for stopped
-    std::atomic<int8_t> running_status_{false};
+    std::atomic<int8_t> running_status_{0};
 #endif
     const EloqStore *store_;
     const size_t shard_id_{0};
