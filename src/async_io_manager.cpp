@@ -2155,6 +2155,26 @@ KvError IouringMgr::CreateArchive(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
+KvError IouringMgr::WriteBranchManifest(const TableIdent &tbl_id,
+                                         std::string_view branch_name,
+                                         uint64_t term,
+                                         std::string_view snapshot)
+{
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
+    CHECK_KV_ERR(err);
+    
+    // Generate branch manifest filename: manifest_<branch_name>_<term>
+    const std::string name = BranchManifestFileName(branch_name, term);
+    
+    int res = WriteSnapshot(std::move(dir_fd), name, snapshot);
+    if (res < 0)
+    {
+        return ToKvError(res);
+    }
+    CloseDirect(res);
+    return KvError::NoError;
+}
+
 io_uring_sqe *IouringMgr::GetSQE(UserDataType type, const void *user_ptr)
 {
     io_uring_sqe *sqe;
@@ -4104,6 +4124,27 @@ KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
     return err;
 }
 
+KvError CloudStoreMgr::WriteBranchManifest(const TableIdent &tbl_id,
+                                         std::string_view branch_name,
+                                         uint64_t term,
+                                         std::string_view snapshot)
+{
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
+    CHECK_KV_ERR(err);
+    
+    // Generate branch manifest filename: manifest_<branch_name>_<term>
+    const std::string name = BranchManifestFileName(branch_name, term);
+    
+    int res = WriteSnapshot(std::move(dir_fd), name, snapshot);
+    if (res < 0)
+    {
+        return ToKvError(res);
+    }
+    err = UploadFile(tbl_id, name, nullptr, snapshot);
+    IouringMgr::CloseDirect(res);
+    return err;
+}
+
 KvError CloudStoreMgr::AbortWrite(const TableIdent &tbl_id)
 {
     // First abort the base I/O manager state (reset dirty flags, etc.)
@@ -5070,6 +5111,15 @@ KvError MemStoreMgr::CreateArchive(const TableIdent &tbl_id,
                                    std::string_view snapshot,
                                    uint64_t ts,
                                    std::string_view branch_name)
+{
+    LOG(FATAL) << "not implemented";
+    return KvError::InvalidArgs;
+}
+
+KvError MemStoreMgr::WriteBranchManifest(const TableIdent &tbl_id,
+                                         std::string_view branch_name,
+                                         uint64_t term,
+                                         std::string_view snapshot)
 {
     LOG(FATAL) << "not implemented";
     return KvError::InvalidArgs;

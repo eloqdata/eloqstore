@@ -24,7 +24,7 @@ TEST_CASE("cloud start with different term", "[cloud][term]")
     store->Stop();
 
     // start with term 1
-    store->Start(1);
+    store->Start(eloqstore::MainBranchName, 1);
     MapVerifier tester(test_tbl_id, store);
     tester.SetValueSize(40960);
     tester.SetStore(store);
@@ -58,7 +58,7 @@ TEST_CASE("cloud start with different term", "[cloud][term]")
     CleanupLocalStore(cloud_options);
 
     // start with term 1', should only read data written by term 1
-    store->Start(1);
+    store->Start(eloqstore::MainBranchName, 1);
     REQUIRE(tester.CheckKey(50) == eloqstore::KvError::NoError);
     REQUIRE(tester.CheckKey(200) == eloqstore::KvError::NotFound);
 

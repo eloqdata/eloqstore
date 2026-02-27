@@ -731,7 +731,7 @@ bool Benchmark::OpenEloqStore(const eloqstore::KvOptions &kv_options)
 {
     eloq_store_ = std::make_unique<::eloqstore::EloqStore>(kv_options);
 
-    ::eloqstore::KvError res = eloq_store_->Start();
+    ::eloqstore::KvError res = eloq_store_->Start(eloqstore::MainBranchName, 0);
     if (res != ::eloqstore::KvError::NoError)
     {
         LOG(ERROR) << "EloqStore start failed with error code: "

@@ -440,7 +440,7 @@ KvError WriteTask::FlushManifest()
 
     // Create BranchManifestMetadata for this table
     BranchManifestMetadata branch_metadata;
-    branch_metadata.branch_name = MainBranchName;  // Use main branch for now
+    branch_metadata.branch_name = IoMgr()->GetActiveBranch();
     branch_metadata.term = IoMgr()->ProcessTerm();
     // file_ranges will be populated when branch operations are implemented (Phase 3+)
     YieldToLowPQ();

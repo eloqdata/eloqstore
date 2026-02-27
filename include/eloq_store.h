@@ -571,10 +571,20 @@ public:
     EloqStore(const EloqStore &) = delete;
     EloqStore(EloqStore &&) = delete;
     ~EloqStore();
-    KvError Start(uint64_t term = 0);
+    KvError Start(std::string_view branch, uint64_t term);
     void Stop();
     bool IsStopped() const;
     const KvOptions &Options() const;
+
+    /**
+     * @brief Validate KvOptions configuration.
+     * @param opts The options to validate
+     * This routine may adjust some cloud-mode options to safe defaults instead
+     * of failing validation.
+     * @return true if options are valid, false otherwise
+     */
+    static bool ValidateOptions(KvOptions &opts);
+
     CloudStorageService *CloudService() const
     {
         return cloud_service_.get();
@@ -589,19 +599,8 @@ public:
         return prewarm_service_.get();
     }
 
-    uint64_t Term() const
-    {
-        return term_;
-    }
-
-    /**
-     * @brief Validate KvOptions configuration.
-     * @param opts The options to validate
-     * This routine may adjust some cloud-mode options to safe defaults instead
-     * of failing validation.
-     * @return true if options are valid, false otherwise
-     */
-    static bool ValidateOptions(KvOptions &opts);
+    bool ExecAsyn(KvRequest *req);
+    void ExecSync(KvRequest *req);
 
     template <typename F>
     bool ExecAsyn(KvRequest *req, uint64_t data, F callback)
@@ -610,19 +609,21 @@ public:
         req->callback_ = std::move(callback);
         return SendRequest(req);
     }
-    bool ExecAsyn(KvRequest *req);
-    void ExecSync(KvRequest *req);
+
+    uint64_t Term() const
+    {
+        return term_;
+    }
+
+    std::string_view Branch() const
+    {
+        return branch_;
+    }
 
 #ifdef ELOQSTORE_WITH_TXSERVICE
     void InitializeMetrics(metrics::MetricsRegistry *metrics_registry,
                            const metrics::CommonLabels &common_labels);
 
-    /**
-     * @brief Get the metrics meter for a specific shard.
-     * @param shard_id The shard ID.
-     * @return Pointer to the meter for the shard, or nullptr if metrics are not
-     * enabled or shard_id is invalid.
-     */
     metrics::Meter *GetMetricsMeter(size_t shard_id) const;
 #endif
 
@@ -652,6 +653,7 @@ private:
 #endif
     std::atomic<bool> stopped_{true};
     uint64_t term_{0};
+    std::string branch_{MainBranchName};
     std::unique_ptr<ArchiveCrond> archive_crond_{nullptr};
     std::unique_ptr<PrewarmService> prewarm_service_{nullptr};
 #ifdef ELOQ_MODULE_ENABLED
