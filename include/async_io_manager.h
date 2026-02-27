@@ -122,6 +122,10 @@ public:
                                    std::string_view snapshot,
                                    uint64_t ts,
                                    std::string_view branch_name) = 0;
+    virtual KvError WriteBranchManifest(const TableIdent &tbl_id,
+                                        std::string_view branch_name,
+                                        uint64_t term,
+                                        std::string_view snapshot) = 0;
     virtual std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) = 0;
 
@@ -322,6 +326,11 @@ public:
         return 0;
     }
 
+    virtual std::string_view GetActiveBranch() const
+    {
+        return MainBranchName;
+    }
+
     const KvOptions *options_;
 
     std::unordered_map<TableIdent, FileId> least_not_archived_file_ids_;
@@ -385,6 +394,10 @@ public:
                            std::string_view snapshot,
                            uint64_t ts,
                            std::string_view branch_name) override;
+    KvError WriteBranchManifest(const TableIdent &tbl_id,
+                                std::string_view branch_name,
+                                uint64_t term,
+                                std::string_view snapshot) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
 
@@ -752,6 +765,10 @@ public:
                           std::string_view snapshot,
                           uint64_t ts,
                           std::string_view branch_name) override;
+    KvError WriteBranchManifest(const TableIdent &tbl_id,
+                                 std::string_view branch_name,
+                                 uint64_t term,
+                                 std::string_view snapshot) override;
     KvError AbortWrite(const TableIdent &tbl_id) override;
     void CleanManifest(const TableIdent &tbl_id) override;
 
@@ -832,6 +849,14 @@ public:
     uint64_t ProcessTerm() const override
     {
         return process_term_;
+    }
+    void SetActiveBranch(std::string_view branch)
+    {
+        active_branch_ = std::string(branch);
+    }
+    std::string_view GetActiveBranch() const
+    {
+        return active_branch_;
     }
     void OnFileRangeWritePrepared(const TableIdent &tbl_id,
                                   FileId file_id,
@@ -1007,6 +1032,7 @@ private:
     // 0 means unspecified/legacy; in that case term validation in GetManifest
     // will be skipped and the latest manifest term will be used.
     uint64_t process_term_{0};
+    std::string active_branch_{MainBranchName};
 
     size_t inflight_cloud_slots_{0};
     WaitingZone cloud_slot_waiting_;
@@ -1047,6 +1073,10 @@ public:
                           std::string_view snapshot,
                           uint64_t ts,
                           std::string_view branch_name) override;
+    KvError WriteBranchManifest(const TableIdent &tbl_id,
+                                 std::string_view branch_name,
+                                 uint64_t term,
+                                 std::string_view snapshot) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
 

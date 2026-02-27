@@ -61,10 +61,12 @@ KvError Shard::Init()
     if (io_mgr_ != nullptr)
     {
         uint64_t term = store_ != nullptr ? store_->Term() : 0;
+        std::string_view branch = store_ != nullptr ? store_->Branch() : MainBranchName;
         if (auto *cloud_mgr = dynamic_cast<CloudStoreMgr *>(io_mgr_.get());
             cloud_mgr != nullptr)
         {
             cloud_mgr->SetProcessTerm(term);
+            cloud_mgr->SetActiveBranch(branch);
         }
     }
     InitializeTscFrequency();
@@ -544,10 +546,39 @@ bool Shard::ProcessReq(KvRequest *req)
         return true;
     }
     case RequestType::CreateBranch:
+    {
+        auto *branch_req = static_cast<CreateBranchRequest *>(req);
+        BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());
+        if (task == nullptr)
+        {
+            return false;
+        }
+        auto lbd = [task, branch_req]() -> KvError
+        {
+            return task->CreateBranch(branch_req->branch_name, branch_req->parent_branch);
+        };
+        StartTask(task, req, lbd);
+        return true;
+    }
     case RequestType::DeleteBranch:
     {
-        // Branch operations are handled synchronously for now
-        // TODO: Implement async branch operations
+        auto *branch_req = static_cast<DeleteBranchRequest *>(req);
+        BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());
+        if (task == nullptr)
+        {
+            return false;
+        }
+        auto lbd = [task, branch_req]() -> KvError
+        {
+            return task->DeleteBranch(branch_req->branch_name);
+        };
+        StartTask(task, req, lbd);
+        return true;
+    }
+    case RequestType::GlobalCreateBranch:
+    {
+        LOG(ERROR) << "GlobalCreateBranch request routed to shard unexpectedly";
+        req->SetDone(KvError::InvalidArgs);
         return true;
     }
     }

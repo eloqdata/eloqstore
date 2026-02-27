@@ -196,9 +196,9 @@ EloqStore::~EloqStore()
     }
 }
 
-KvError EloqStore::Start(uint64_t term)
+KvError EloqStore::Start(std::string_view branch, uint64_t term)
 {
-    LOG(INFO) << "===Start eloqstore, term: " << term;
+    LOG(INFO) << "===Start eloqstore, branch: " << branch << ", term: " << term;
     if (!IsStopped())
     {
         LOG(ERROR) << "EloqStore started , do not start again";
@@ -221,6 +221,7 @@ KvError EloqStore::Start(uint64_t term)
     else
     {
         term_ = term;
+        branch_ = std::string(branch);
     }
 
     // There are files opened at very early stage like stdin/stdout/stderr, glog

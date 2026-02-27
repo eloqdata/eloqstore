@@ -336,7 +336,7 @@ TEST_CASE("easy rollback to archive", "[archive]")
         archive_file, manifest_path, fs::copy_options::overwrite_existing);
 
     LOG(INFO) << "roll back to archive: " << archive_file;
-    store->Start();
+    store->Start(eloqstore::MainBranchName, 0);
 
     tester.SwitchDataSet(old_dataset);
     tester.Validate();
@@ -349,7 +349,7 @@ TEST_CASE("easy rollback to archive", "[archive]")
     fs::remove(backup_manifest);
 
     LOG(INFO) << "roll back to full dataset";
-    store->Start();
+    store->Start(eloqstore::MainBranchName, 0);
 
     tester.SwitchDataSet(full_dataset);
     tester.Validate();
@@ -433,7 +433,7 @@ TEST_CASE("enhanced rollback with mix operations", "[archive]")
         archive_file, manifest_path, fs::copy_options::overwrite_existing);
 
     LOG(INFO) << "Rollback to archive: " << archive_file;
-    store->Start();
+    store->Start(eloqstore::MainBranchName, 0);
 
     // Verify rollback to phase 1 state
     tester.SwitchDataSet(phase1_dataset);
@@ -445,7 +445,7 @@ TEST_CASE("enhanced rollback with mix operations", "[archive]")
     fs::copy_file(
         backup_manifest, manifest_path, fs::copy_options::overwrite_existing);
     fs::remove(backup_manifest);
-    store->Start();
+    store->Start(eloqstore::MainBranchName, 0);
 
     tester.SwitchDataSet(phase2_dataset);
     tester.Validate();

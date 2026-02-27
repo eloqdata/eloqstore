@@ -86,7 +86,7 @@ TEST_CASE("cloud prewarm downloads while shards idle", "[cloud][prewarm]")
     store->Stop();
     CleanupLocalStore(options);
 
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
     writer.SetStore(store);
 
     const fs::path partition_path =
@@ -142,7 +142,7 @@ TEST_CASE("cloud prewarm supports writes after restart", "[cloud][prewarm]")
     store->Stop();
     CleanupLocalStore(options);
 
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
     writer.SetStore(store);
 
     const fs::path partition_path =
@@ -236,7 +236,7 @@ TEST_CASE("cloud prewarm respects cache budget", "[cloud][prewarm]")
 
     CleanupLocalStore(options);
 
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
     writer.SetStore(store);
 
     const auto partition_path =
@@ -294,7 +294,7 @@ TEST_CASE("cloud reuse cache enforces budgets across restarts",
     CleanupStore(options);
 
     auto store = std::make_unique<eloqstore::EloqStore>(options);
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
 
     eloqstore::TableIdent tbl_id{"reuse-cache", 0};
     MapVerifier writer(tbl_id, store.get());
@@ -318,7 +318,7 @@ TEST_CASE("cloud reuse cache enforces budgets across restarts",
     // Restart with the same budget and ensure writing more data never exceeds
     // the 40MB limit.
     store->Stop();
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
     writer.SetStore(store.get());
 
     WriteBatches(writer, next_key, entries_per_batch, batches_per_phase);
@@ -388,7 +388,7 @@ TEST_CASE("cloud prewarm honors partition filter", "[cloud][prewarm]")
 
     store->Stop();
     CleanupLocalStore(options);
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
 
     REQUIRE(WaitForCondition(
         12s,
@@ -463,7 +463,7 @@ TEST_CASE("cloud prewarm handles pagination with 2000+ files",
     CleanupLocalStore(options);
 
     // Restart with prewarm enabled
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
     writer.SetStore(store);
 
     const fs::path partition_path =
@@ -555,7 +555,7 @@ TEST_CASE("cloud prewarm queue management with producer blocking",
     // Enable debug logging if available
     // export GLOG_v=1 before running to see queue state logs
 
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
     writer.SetStore(store);
 
     const fs::path partition_path =
@@ -659,7 +659,7 @@ TEST_CASE("cloud prewarm aborts gracefully when disk fills",
     CleanupLocalStore(options);
 
     // Restart with prewarm - should abort due to disk full
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
     writer.SetStore(store);
 
     const fs::path partition_path =
@@ -996,7 +996,7 @@ TEST_CASE("cloud store with restart", "[cloud]")
         }
         store->Stop();
         CleanupLocalStore(cloud_options);
-        store->Start();
+        store->Start(eloqstore::MainBranchName, 0);
         for (auto &part : partitions)
         {
             part->Validate();
@@ -1281,7 +1281,7 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
 
         CleanupLocalStore(cloud_archive_opts);
 
-        store->Start();
+        store->Start(eloqstore::MainBranchName, 0);
 
         tester.SwitchDataSet(phase2_dataset);
         tester.Validate();
@@ -1335,7 +1335,7 @@ TEST_CASE("archive triggers with cloud-only partitions", "[cloud][archive]")
 
     store->Stop();
     CleanupLocalStore(options);
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
 
     std::unordered_set<uint32_t> pending;
     for (uint32_t pid = 0; pid < kPartitionCount; ++pid)

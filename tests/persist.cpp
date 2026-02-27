@@ -62,7 +62,7 @@ TEST_CASE("persist with restart", "[persist]")
             tbl->WriteRnd(0, 1000);
         }
         store->Stop();
-        store->Start();
+        store->Start(eloqstore::MainBranchName, 0);
     }
 }
 
@@ -419,7 +419,7 @@ TEST_CASE("append mode with restart", "[persist]")
             tbl->WriteRnd(0, 1000, 10, 90);
         }
         store->Stop();
-        store->Start();
+        store->Start(eloqstore::MainBranchName, 0);
         for (auto &tbl : tbls)
         {
             tbl->Validate();
@@ -439,7 +439,7 @@ TEST_CASE("append mode survives compression toggles across restarts",
         eloqstore::KvOptions opts = base_opts;
         opts.enable_compression = enable_compression;
         auto new_store = std::make_unique<eloqstore::EloqStore>(opts);
-        REQUIRE(new_store->Start() == eloqstore::KvError::NoError);
+        REQUIRE(new_store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
         return new_store;
     };
 
