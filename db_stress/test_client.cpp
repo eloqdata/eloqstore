@@ -55,7 +55,7 @@ int main(int argc, char **argv)
     }
 
     eloqstore::EloqStore store(options);
-    eloqstore::KvError err = store.Start();
+    eloqstore::KvError err = store.Start("main", 0);
     if (err != eloqstore::KvError::NoError)
     {
         LOG(FATAL) << eloqstore::ErrorString(err) << std::endl;

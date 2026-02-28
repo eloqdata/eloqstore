@@ -336,7 +336,7 @@ TEST_CASE("cloud reuse cache enforces budgets across restarts",
     // future writes respect the new limit.
     options.local_space_limit = 20ULL << 20;
     auto trimmed_store = std::make_unique<eloqstore::EloqStore>(options);
-    REQUIRE(trimmed_store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(trimmed_store->Start("main", 0) == eloqstore::KvError::NoError);
     writer.SetStore(trimmed_store.get());
 
     WriteBatches(writer, next_key, entries_per_batch, batches_per_phase / 2);
@@ -755,7 +755,7 @@ TEST_CASE("cloud gc preserves archived data after truncate",
     store->Stop();
     CleanupLocalStore(cloud_archive_opts);
 
-    store->Start();
+    store->Start("main", 0);
     tester.Validate();
 
     tester.Upsert(0, 200);
@@ -795,7 +795,7 @@ TEST_CASE("cloud gc preserves archived data after truncate",
     CleanupLocalStore(cloud_archive_opts);
 
     tester.SwitchDataSet(baseline_dataset);
-    store->Start();
+    store->Start("main", 0);
     tester.Validate();
     store->Stop();
 
@@ -815,7 +815,7 @@ TEST_CASE("cloud gc preserves archived data after truncate",
 
     const std::map<std::string, eloqstore::KvEntry> empty_dataset;
     tester.SwitchDataSet(empty_dataset);
-    store->Start();
+    store->Start("main", 0);
     tester.Validate();
     store->Stop();
 }
@@ -932,8 +932,9 @@ TEST_CASE("cloud global archive shares timestamp and filters partitions",
             }
             auto [type, suffix] = eloqstore::ParseFileName(filename);
             uint64_t term = 0;
+            std::string_view branch_name;
             std::optional<uint64_t> ts;
-            REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, term, ts));
+            REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, branch_name, term, ts));
             REQUIRE(ts.has_value());
             timestamps.push_back(*ts);
         }
@@ -1142,7 +1143,7 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
     CleanupLocalStore(cloud_archive_opts);
 
     tester.SwitchDataSet(old_dataset);
-    store->Start();
+    store->Start("main", 0);
 
     // Validate old dataset (should only have data from 0-99)
 
@@ -1160,7 +1161,7 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
 
     CleanupLocalStore(cloud_archive_opts);
     tester.SwitchDataSet(full_dataset);
-    store->Start();
+    store->Start("main", 0);
 
     // Validate full dataset
     tester.Validate();
@@ -1262,7 +1263,7 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
     CleanupLocalStore(cloud_archive_opts);
 
     LOG(INFO) << "Attempting enhanced rollback to archive in cloud storage";
-    store->Start();
+    store->Start("main", 0);
 
     if (rollback_ok)
     {
