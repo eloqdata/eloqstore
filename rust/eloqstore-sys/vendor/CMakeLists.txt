@@ -398,6 +398,7 @@ set(ELOQ_STORE_SOURCES
         src/kill_point.cpp
         src/kv_options.cpp
         src/replayer.cpp
+        src/storage/cloud_backend.cpp
         src/storage/data_page.cpp
         src/storage/data_page_builder.cpp
         src/storage/index_page_builder.cpp
