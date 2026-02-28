@@ -3019,6 +3019,7 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
         {
             LOG(ERROR) << "Failed to remove max data file " << victim.path
                        << ": " << remove_ec.message();
+            return KvError::InvalidArgs;
         }
         else
         {
@@ -4402,6 +4403,11 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
     auto [dir_fd, dir_err] =
         OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, 0);
     CHECK_KV_ERR(dir_err);
+    if (dir_err != KvError::NoError)
+    {
+        ReleaseCloudBuffer(std::move(download_task.response_data_));
+        return dir_err;
+    }
     std::string tmp_filename = filename + ".tmp";
 
     if (download_to_exist)
