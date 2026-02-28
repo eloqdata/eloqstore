@@ -2910,6 +2910,22 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
         return ToKvError(-ec.value());
     }
 
+    struct CachedFileInfo
+    {
+        std::string filename;
+        fs::path path;
+        bool is_data_file;
+        size_t expected_size;
+        FileId file_id;
+    };
+
+    std::vector<CachedFileInfo> cached_files;
+    cached_files.reserve(64);
+
+    bool has_max_data_file = false;
+    FileId max_file_id = 0;
+    size_t max_data_file_idx = 0;
+
     fs::directory_iterator end;
     for (; file_it != end; file_it.increment(ec))
     {
@@ -2959,11 +2975,32 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
             return KvError::InvalidArgs;
         }
 
-        size_t expected_size = EstimateFileSize(filename);
-        EnqueClosedFile(FileKey{tbl_id, std::move(filename)});
-        used_local_space_ += expected_size;
-        ++restored_files;
-        restored_bytes += expected_size;
+        CachedFileInfo info{filename,
+                            file_it->path(),
+                            is_data_file,
+                            EstimateFileSize(filename),
+                            0};
+
+        if (is_data_file)
+        {
+            FileId file_id = 0;
+            uint64_t term = 0;
+            if (!ParseDataFileSuffix(suffix, file_id, term))
+            {
+                LOG(ERROR) << "Invalid data file name " << info.path
+                           << " encountered during cache restore";
+                return KvError::InvalidArgs;
+            }
+            info.file_id = file_id;
+            if (!has_max_data_file || file_id > max_file_id)
+            {
+                has_max_data_file = true;
+                max_file_id = file_id;
+                max_data_file_idx = cached_files.size();
+            }
+        }
+
+        cached_files.emplace_back(std::move(info));
     }
 
     if (ec)
@@ -2971,6 +3008,37 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
         LOG(ERROR) << "Failed to iterate partition directory " << table_path
                    << " for table " << tbl_id << ": " << ec.message();
         return ToKvError(-ec.value());
+    }
+
+    if (has_max_data_file)
+    {
+        const CachedFileInfo &victim = cached_files[max_data_file_idx];
+        std::error_code remove_ec;
+        fs::remove(victim.path, remove_ec);
+        if (remove_ec)
+        {
+            LOG(ERROR) << "Failed to remove max data file " << victim.path
+                       << ": " << remove_ec.message();
+        }
+        else
+        {
+            LOG(INFO) << "Removed max data file " << victim.path
+                      << " during cache restore";
+        }
+    }
+
+    for (size_t i = 0; i < cached_files.size(); ++i)
+    {
+        if (has_max_data_file && i == max_data_file_idx)
+        {
+            continue;
+        }
+
+        CachedFileInfo &file_info = cached_files[i];
+        EnqueClosedFile(FileKey{tbl_id, std::move(file_info.filename)});
+        used_local_space_ += file_info.expected_size;
+        ++restored_files;
+        restored_bytes += file_info.expected_size;
     }
 
     return KvError::NoError;
