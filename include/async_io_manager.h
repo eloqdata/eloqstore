@@ -334,6 +334,10 @@ public:
         return MainBranchName;
     }
 
+    virtual void SetActiveBranch(std::string_view branch)
+    {
+    }
+
     const KvOptions *options_;
 
     std::unordered_map<TableIdent, FileId> least_not_archived_file_ids_;

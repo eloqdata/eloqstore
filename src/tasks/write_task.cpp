@@ -89,7 +89,14 @@ const TableIdent &WriteTask::TableId() const
 
 void WriteTask::Reset(const TableIdent &tbl_id)
 {
+    Reset(tbl_id, MainBranchName);
+}
+
+void WriteTask::Reset(const TableIdent &tbl_id, std::string_view branch_name)
+{
     tbl_ident_ = tbl_id;
+    branch_name_ = std::string(branch_name.empty() ? MainBranchName : branch_name);
+    IoMgr()->SetActiveBranch(branch_name_);
     write_err_ = KvError::NoError;
     wal_builder_.Reset();
     file_id_term_mapping_dirty_ = false;

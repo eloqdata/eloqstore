@@ -194,6 +194,21 @@ void BatchWriteTask::Reset(const TableIdent &tbl_id)
     }
 }
 
+void BatchWriteTask::Reset(const TableIdent &tbl_id, std::string_view branch_name)
+{
+    WriteTask::Reset(tbl_id, branch_name);
+    stack_.clear();
+    ttl_batch_.clear();
+    idx_page_builder_.Reset();
+    data_page_builder_.Reset();
+    overflow_ptrs_.clear();
+    applying_page_.Clear();
+    for (DataPage &page : leaf_triple_)
+    {
+        page.Clear();
+    }
+}
+
 bool BatchWriteTask::SetBatch(std::span<WriteDataEntry> entries)
 {
 #ifndef NDEBUG
