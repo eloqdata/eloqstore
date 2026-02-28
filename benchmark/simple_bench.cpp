@@ -580,7 +580,7 @@ int main(int argc, char *argv[])
     }
 
     eloqstore::EloqStore store(options);
-    store.Start();
+    store.Start("main", 0);
 
     if (FLAGS_workload == "load")
     {

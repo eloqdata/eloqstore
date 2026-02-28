@@ -136,7 +136,7 @@ int main(int argc, char *argv[])
     }
 
     eloqstore::EloqStore store(options);
-    store.Start();
+    store.Start("main", 0);
 
     std::vector<Writer> writers;
     for (uint32_t i = 0; i < FLAGS_partitions; i++)

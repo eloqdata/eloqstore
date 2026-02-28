@@ -69,7 +69,7 @@ int main(int argc, char **argv)
         }
     }
     eloqstore::EloqStore store(options);
-    store.Start();
+    store.Start("main", 0);
     if (FLAGS_num_client_threads == 1)
     {
         test_util::ConcurrencyTester tester(&store,

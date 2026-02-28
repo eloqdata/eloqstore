@@ -449,7 +449,7 @@ int main(int argc, char *argv[])
     eloqstore::TableIdent tbl_id("perf_test", 1);
 
     eloqstore::EloqStore store(opts);
-    eloqstore::KvError err = store.Start();
+    eloqstore::KvError err = store.Start("main", 0);
     assert(err == eloqstore::KvError::NoError);
 
     // based on command arguments, we run different tests:
