@@ -4402,7 +4402,6 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
 
     auto [dir_fd, dir_err] =
         OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, 0);
-    CHECK_KV_ERR(dir_err);
     if (dir_err != KvError::NoError)
     {
         ReleaseCloudBuffer(std::move(download_task.response_data_));
