@@ -2983,6 +2983,7 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
             {
                 LOG(ERROR) << "Failed to remove manifest file "
                            << file_it->path() << ": " << remove_ec.message();
+                return KvError::InvalidArgs;
             }
             else
             {
