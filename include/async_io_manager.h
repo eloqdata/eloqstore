@@ -123,6 +123,12 @@ public:
                                         std::string_view branch_name,
                                         uint64_t term,
                                         std::string_view snapshot) = 0;
+    virtual KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
+                                          std::string_view branch_name,
+                                          uint64_t term) = 0;
+    virtual KvError DeleteBranchFiles(const TableIdent &tbl_id,
+                                      std::string_view branch_name,
+                                      uint64_t term) = 0;
     virtual std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) = 0;
 
@@ -395,6 +401,12 @@ public:
                                 std::string_view branch_name,
                                 uint64_t term,
                                 std::string_view snapshot) override;
+    KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
+                                   std::string_view branch_name,
+                                   uint64_t term) override;
+    KvError DeleteBranchFiles(const TableIdent &tbl_id,
+                              std::string_view branch_name,
+                              uint64_t term) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
 
@@ -767,6 +779,12 @@ public:
                                  std::string_view branch_name,
                                  uint64_t term,
                                  std::string_view snapshot) override;
+    KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
+                                   std::string_view branch_name,
+                                   uint64_t term) override;
+    KvError DeleteBranchFiles(const TableIdent &tbl_id,
+                              std::string_view branch_name,
+                              uint64_t term) override;
     KvError AbortWrite(const TableIdent &tbl_id) override;
     void CleanManifest(const TableIdent &tbl_id) override;
 
@@ -1080,6 +1098,12 @@ public:
                                  std::string_view branch_name,
                                  uint64_t term,
                                  std::string_view snapshot) override;
+    KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
+                                   std::string_view branch_name,
+                                   uint64_t term) override;
+    KvError DeleteBranchFiles(const TableIdent &tbl_id,
+                              std::string_view branch_name,
+                              uint64_t term) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
 
@@ -1123,6 +1147,9 @@ private:
         std::string wal;
     };
     std::unordered_map<TableIdent, Partition> store_;
+    std::unordered_map<TableIdent, std::unordered_map<std::string, std::string>> manifests_;
+    std::unordered_map<TableIdent, std::unordered_map<std::string, uint64_t>> branch_terms_;
+    std::mutex manifest_mutex_;
 };
 
 }  // namespace eloqstore
