@@ -2975,6 +2975,23 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
             return KvError::InvalidArgs;
         }
 
+        if (is_manifest_file)
+        {
+            std::error_code remove_ec;
+            fs::remove(file_it->path(), remove_ec);
+            if (remove_ec)
+            {
+                LOG(ERROR) << "Failed to remove manifest file "
+                           << file_it->path() << ": " << remove_ec.message();
+            }
+            else
+            {
+                LOG(INFO) << "Removed manifest file " << file_it->path()
+                          << " during cache restore";
+            }
+            continue;
+        }
+
         CachedFileInfo info{filename,
                             file_it->path(),
                             is_data_file,
