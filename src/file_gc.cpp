@@ -276,8 +276,9 @@ KvError DownloadArchiveFile(const TableIdent &tbl_id,
         tbl_id.StorePath(options->store_path, options->store_path_lut) /
         archive_file;
 
+    uint64_t flags = O_WRONLY | O_CREAT | O_DIRECT | O_NOATIME | O_TRUNC;
     KvError write_err = cloud_mgr->WriteFile(
-        tbl_id, archive_file, download_task.response_data_);
+        tbl_id, archive_file, download_task.response_data_, flags);
     cloud_mgr->RecycleBuffer(std::move(download_task.response_data_));
     if (write_err != KvError::NoError)
     {

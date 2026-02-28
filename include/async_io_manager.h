@@ -763,7 +763,8 @@ public:
     void RunPrewarm() override;
     KvError WriteFile(const TableIdent &tbl_id,
                       std::string_view filename,
-                      const DirectIoBuffer &buffer);
+                      const DirectIoBuffer &buffer,
+                      uint64_t flags);
     size_t LocalCacheRemained() const
     {
         return shard_local_space_limit_ - used_local_space_;

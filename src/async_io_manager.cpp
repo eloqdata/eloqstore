@@ -3675,7 +3675,8 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
     }
 
     std::string tmp_name = ManifestFileName(selected_term) + ".tmp";
-    KvError write_err = WriteFile(tbl_id, tmp_name, buffer);
+    uint64_t flags = O_WRONLY | O_CREAT | O_DIRECT | O_NOATIME | O_TRUNC;
+    KvError write_err = WriteFile(tbl_id, tmp_name, buffer, flags);
     RecycleBuffer(std::move(buffer));
     if (write_err != KvError::NoError)
     {
@@ -4346,7 +4347,9 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
         }
     }
 
-    KvError err = WriteFile(tbl_id, tmp_filename, download_task.response_data_);
+    uint64_t flags = O_WRONLY | O_CREAT | O_DIRECT | O_NOATIME;
+    KvError err =
+        WriteFile(tbl_id, tmp_filename, download_task.response_data_, flags);
     ReleaseCloudBuffer(std::move(download_task.response_data_));
     CHECK_KV_ERR(err);
 
@@ -4996,7 +4999,8 @@ KvError MemStoreMgr::Manifest::SkipPadding(size_t n)
 
 KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
                                  std::string_view filename,
-                                 const DirectIoBuffer &buffer)
+                                 const DirectIoBuffer &buffer,
+                                 uint64_t flags)
 {
     auto [dir_fd, dir_err] =
         OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, 0);
@@ -5006,7 +5010,6 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
     }
 
     std::string filename_str(filename);
-    const uint64_t flags = O_WRONLY | O_CREAT | O_DIRECT | O_NOATIME;
     int fd = OpenAt(dir_fd.FdPair(), filename_str.c_str(), flags, 0644, false);
     if (fd < 0)
     {
