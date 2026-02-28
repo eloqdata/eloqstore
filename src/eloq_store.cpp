@@ -530,7 +530,7 @@ KvError EloqStore::CollectTablePartitions(
         bool has_more = false;
         do
         {
-#ifdef ELOQSTORE_WITH_TXSERVICE
+#ifdef ELOQ_MODULE_ENABLED
             {
                 std::lock_guard<bthread::Mutex> lk(list_object_request.mutex_);
                 list_object_request.done_ = false;
@@ -979,7 +979,7 @@ bool EloqStore::SendRequest(KvRequest *req)
     }
 
     req->err_ = KvError::NoError;
-#ifdef ELOQSTORE_WITH_TXSERVICE
+#ifdef ELOQ_MODULE_ENABLED
     {
         std::lock_guard<bthread::Mutex> lk(req->mutex_);
         req->done_ = false;
@@ -1416,7 +1416,7 @@ const TableIdent &KvRequest::TableId() const
 
 bool KvRequest::IsDone() const
 {
-#ifdef ELOQSTORE_WITH_TXSERVICE
+#ifdef ELOQ_MODULE_ENABLED
     std::lock_guard<bthread::Mutex> lk(mutex_);
     return done_;
 #else
@@ -1427,7 +1427,7 @@ bool KvRequest::IsDone() const
 void KvRequest::SetDone(KvError err)
 {
     err_ = err;
-#ifdef ELOQSTORE_WITH_TXSERVICE
+#ifdef ELOQ_MODULE_ENABLED
     {
         std::lock_guard<bthread::Mutex> lk(mutex_);
         done_ = true;
@@ -1443,7 +1443,7 @@ void KvRequest::SetDone(KvError err)
     else
     {
         // Synchronous request
-#ifdef ELOQSTORE_WITH_TXSERVICE
+#ifdef ELOQ_MODULE_ENABLED
         cv_.notify_one();
 #else
         done_.notify_one();
