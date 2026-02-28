@@ -280,7 +280,6 @@ public:
 
     KvError EnsureBucketExists();
 
-    void Cleanup();
     bool IsIdle() const
     {
         return active_request_count_.load(std::memory_order_acquire) == 0;

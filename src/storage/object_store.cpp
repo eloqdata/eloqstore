@@ -985,7 +985,12 @@ AsyncHttpManager::AsyncHttpManager(const KvOptions *option,
 
 AsyncHttpManager::~AsyncHttpManager()
 {
-    Cleanup();
+    CHECK(active_requests_.empty())
+        << "AsyncHttpManager destroyed with active requests";
+    CHECK(pending_retries_.empty())
+        << "AsyncHttpManager destroyed with pending retries";
+    CHECK_EQ(active_request_count_.load(std::memory_order_acquire), 0);
+    CHECK_EQ(pending_retry_count_.load(std::memory_order_acquire), 0);
     if (multi_handle_)
     {
         curl_multi_cleanup(multi_handle_);
@@ -1578,8 +1583,13 @@ void AsyncHttpManager::Shutdown()
             OnTaskFinished(task);
         }
     }
+    pending_retry_count_.store(0, std::memory_order_release);
 
-    Cleanup();
+    CHECK(active_requests_.empty())
+        << "Shutdown called with active requests; cloud tasks were not drained";
+    CHECK_EQ(active_request_count_.load(std::memory_order_acquire), 0);
+    CHECK(pending_retries_.empty());
+    CHECK_EQ(pending_retry_count_.load(std::memory_order_acquire), 0);
 }
 
 void AsyncHttpManager::CleanupTaskResources(ObjectStore::Task *task)
@@ -1590,27 +1600,6 @@ void AsyncHttpManager::CleanupTaskResources(ObjectStore::Task *task)
     }
     curl_slist_free_all(task->headers_);
     task->headers_ = nullptr;
-}
-
-void AsyncHttpManager::Cleanup()
-{
-    for (auto &[easy, task] : active_requests_)
-    {
-        curl_multi_remove_handle(multi_handle_, easy);
-        CleanupTaskResources(task);
-        curl_easy_cleanup(easy);
-
-        if (task->kv_task_->inflight_io_ > 0)
-        {
-            task->error_ = KvError::CloudErr;
-            OnTaskFinished(task);
-        }
-    }
-    active_requests_.clear();
-    active_request_count_.store(0, std::memory_order_release);
-
-    pending_retries_.clear();
-    pending_retry_count_.store(0, std::memory_order_release);
 }
 
 void AsyncHttpManager::OnTaskFinished(ObjectStore::Task *task)
