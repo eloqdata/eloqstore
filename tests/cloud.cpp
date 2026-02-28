@@ -1201,8 +1201,8 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
         std::filesystem::path restored_manifest =
             std::filesystem::path(options.store_path.front()) /
             tbl_id.ToString() / manifest_name;
-        REQUIRE(std::filesystem::file_size(restored_manifest) ==
-                v1_manifest_size);
+        // Manifest should be removed to avoid to be outdated.
+        REQUIRE(!std::filesystem::exists(restored_manifest));
     }
 
     // Reopen should refresh local manifest to latest remote.
@@ -1485,8 +1485,7 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
         std::filesystem::path restored_manifest =
             std::filesystem::path(options.store_path.front()) /
             tbl_ids[i].ToString() / manifest_name;
-        REQUIRE(std::filesystem::file_size(restored_manifest) ==
-                v1_manifest_sizes[i]);
+        REQUIRE(!std::filesystem::exists(restored_manifest));
     }
 
     eloqstore::GlobalReopenRequest reopen_req;
