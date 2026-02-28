@@ -353,7 +353,6 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name,
 {
     if (!IsValidBranchName(branch_name))
     {
-        LOG(ERROR) << "Invalid branch name: " << branch_name;
         return KvError::InvalidArgs;
     }
 
@@ -365,22 +364,21 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name,
 
     std::string parent = parent_branch.empty() ? MainBranchName : std::string(parent_branch);
 
-    LOG(INFO) << "Creating branch " << normalized_branch << " from parent " << parent;
-
     auto [manifest_ptr, manifest_err] = IoMgr()->GetManifest(tbl_ident_);
     if (manifest_err != KvError::NoError)
     {
-        LOG(ERROR) << "Failed to get manifest for table " << tbl_ident_
-                    << ": " << static_cast<int>(manifest_err);
         return manifest_err;
+    }
+
+    if (!manifest_ptr)
+    {
+        return KvError::NotFound;
     }
 
     Replayer replayer(Options());
     KvError replay_err = replayer.Replay(manifest_ptr.get());
     if (replay_err != KvError::NoError)
     {
-        LOG(ERROR) << "Failed to replay manifest for table " << tbl_ident_
-                    << ": " << static_cast<int>(replay_err);
         return replay_err;
     }
 
@@ -389,9 +387,6 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name,
     {
         parent_metadata.branch_name = MainBranchName;
     }
-
-    LOG(INFO) << "Parent branch " << parent_metadata.branch_name
-              << " has " << parent_metadata.file_ranges.size() << " file ranges";
 
     BranchManifestMetadata branch_metadata;
     branch_metadata.branch_name = normalized_branch;
@@ -402,11 +397,13 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name,
     auto [root_handle, root_err] = shard->IndexManager()->FindRoot(tbl_ident_);
     if (root_err != KvError::NoError)
     {
-        LOG(ERROR) << "Failed to find root for table " << tbl_ident_
-                    << ": " << static_cast<int>(root_err);
         return root_err;
     }
     RootMeta *meta = root_handle.Get();
+    if (!meta)
+    {
+        return KvError::NotFound;
+    }
     PageId root = meta->root_id_;
     PageId ttl_root = meta->ttl_root_id_;
     MappingSnapshot *mapping = meta->mapper_->GetMapping();
@@ -423,14 +420,14 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name,
     KvError err = IoMgr()->WriteBranchManifest(tbl_ident_, normalized_branch, 0, snapshot);
     if (err != KvError::NoError)
     {
-        LOG(ERROR) << "Failed to write branch manifest for " << normalized_branch
-                    << ": " << static_cast<int>(err);
         return err;
     }
 
-    LOG(INFO) << "Successfully created branch " << normalized_branch
-              << " at term 0 with " << branch_metadata.file_ranges.size()
-              << " file ranges copied from parent " << parent;
+    err = IoMgr()->WriteBranchCurrentTerm(tbl_ident_, normalized_branch, 0);
+    if (err != KvError::NoError)
+    {
+        return err;
+    }
 
     return KvError::NoError;
 }
@@ -456,6 +453,10 @@ KvError BackgroundWrite::DeleteBranch(std::string_view branch_name)
     }
 
     LOG(INFO) << "Deleting branch " << normalized_branch;
+
+    // Try to delete the branch files - this is idempotent, so we ignore errors
+    // if the files don't exist
+    IoMgr()->DeleteBranchFiles(tbl_ident_, normalized_branch, 0);
 
     LOG(INFO) << "Successfully deleted branch " << normalized_branch;
 

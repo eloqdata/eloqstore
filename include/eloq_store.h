@@ -476,6 +476,12 @@ public:
     {
         return RequestType::CreateBranch;
     }
+
+    void SetArgs(std::string branch_name_val, std::string parent_branch_val)
+    {
+        branch_name = std::move(branch_name_val);
+        parent_branch = std::move(parent_branch_val);
+    }
 };
 
 class DeleteBranchRequest : public BranchRequest
@@ -484,6 +490,11 @@ public:
     RequestType Type() const override
     {
         return RequestType::DeleteBranch;
+    }
+
+    void SetArgs(std::string branch_name_val)
+    {
+        branch_name = std::move(branch_name_val);
     }
 };
 

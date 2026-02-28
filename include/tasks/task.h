@@ -48,7 +48,8 @@ enum struct TaskType
     Prewarm,
     ListObject,
     BatchWrite,
-    BackgroundWrite
+    BackgroundWrite,
+    BranchOp
 };
 
 std::pair<Page, KvError> LoadPage(const TableIdent &tbl_id,

@@ -314,6 +314,11 @@ void Shard::OnReceivedReq(KvRequest *req)
 {
     if (!req->ReadOnly())
     {
+        if (req->Type() == RequestType::CreateBranch || req->Type() == RequestType::DeleteBranch)
+        {
+            ProcessReq(req);
+            return;
+        }
         auto *wreq = reinterpret_cast<WriteRequest *>(req);
         auto [it, inserted] = pending_queues_.try_emplace(req->tbl_id_);
         if (inserted)
@@ -325,7 +330,7 @@ void Shard::OnReceivedReq(KvRequest *req)
         return;
     }
 
-    (void) ProcessReq(req);
+    ProcessReq(req);
 }
 
 void Shard::TryStartPendingWrite(const TableIdent &tbl_id)
@@ -639,7 +644,11 @@ void Shard::OnTaskFinished(KvTask *task)
     {
         auto wtask = reinterpret_cast<WriteTask *>(task);
         auto it = pending_queues_.find(wtask->TableId());
-        assert(it != pending_queues_.end());
+        if (it == pending_queues_.end())
+        {
+            task_mgr_.FreeTask(task);
+            return;
+        }
         PendingWriteQueue &pending_q = it->second;
         pending_q.running_ = false;
         task_mgr_.FreeTask(task);
