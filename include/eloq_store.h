@@ -1,6 +1,6 @@
 #pragma once
 
-#ifdef ELOQSTORE_WITH_TXSERVICE
+#ifdef ELOQ_MODULE_ENABLED
 #include <bthread/condition_variable.h>
 #include <bthread/mutex.h>
 #endif

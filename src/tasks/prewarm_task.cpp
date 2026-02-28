@@ -310,7 +310,7 @@ bool PrewarmService::ListCloudObjects(
     request.SetRecursive(true);
     request.SetContinuationToken(continuation_token);
     request.err_ = KvError::NoError;
-#ifdef ELOQSTORE_WITH_TXSERVICE
+#ifdef ELOQ_MODULE_ENABLED
     {
         std::lock_guard<bthread::Mutex> lk(request.mutex_);
         request.done_ = false;

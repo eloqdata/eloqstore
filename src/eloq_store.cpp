@@ -1197,7 +1197,7 @@ uint64_t KvRequest::UserData() const
 void KvRequest::Wait() const
 {
     CHECK(callback_ == nullptr);
-#ifdef ELOQSTORE_WITH_TXSERVICE
+#ifdef ELOQ_MODULE_ENABLED
     std::unique_lock<bthread::Mutex> lk(mutex_);
     while (!done_)
     {

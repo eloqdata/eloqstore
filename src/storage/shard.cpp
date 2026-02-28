@@ -231,7 +231,7 @@ void Shard::AddPendingCompact(const TableIdent &tbl_id)
     PendingWriteQueue &pending_q = it->second;
     CompactRequest &req = pending_q.compact_req_;
     req.SetTableId(tbl_id);
-#ifdef ELOQSTORE_WITH_TXSERVICE
+#ifdef ELOQ_MODULE_ENABLED
     {
         std::lock_guard<bthread::Mutex> lk(req.mutex_);
         req.done_ = false;
@@ -247,7 +247,7 @@ bool Shard::HasPendingCompact(const TableIdent &tbl_id)
     auto it = pending_queues_.find(tbl_id);
     assert(it != pending_queues_.end());
     PendingWriteQueue &pending_q = it->second;
-#ifdef ELOQSTORE_WITH_TXSERVICE
+#ifdef ELOQ_MODULE_ENABLED
     std::lock_guard<bthread::Mutex> lk(pending_q.compact_req_.mutex_);
     return !pending_q.compact_req_.done_;
 #else
@@ -264,7 +264,7 @@ void Shard::AddPendingTTL(const TableIdent &tbl_id)
     PendingWriteQueue &pending_q = it->second;
     CleanExpiredRequest &req = pending_q.expire_req_;
     req.SetTableId(tbl_id);
-#ifdef ELOQSTORE_WITH_TXSERVICE
+#ifdef ELOQ_MODULE_ENABLED
     {
         std::lock_guard<bthread::Mutex> lk(req.mutex_);
         req.done_ = false;
@@ -280,7 +280,7 @@ bool Shard::HasPendingTTL(const TableIdent &tbl_id)
     auto it = pending_queues_.find(tbl_id);
     assert(it != pending_queues_.end());
     PendingWriteQueue &pending_q = it->second;
-#ifdef ELOQSTORE_WITH_TXSERVICE
+#ifdef ELOQ_MODULE_ENABLED
     std::lock_guard<bthread::Mutex> lk(pending_q.expire_req_.mutex_);
     return !pending_q.expire_req_.done_;
 #else
@@ -296,7 +296,7 @@ void Shard::AddPendingLocalGc(const TableIdent &tbl_id)
     PendingWriteQueue &pending_q = it->second;
     LocalGcRequest &req = pending_q.local_gc_req_;
     req.SetTableId(tbl_id);
-#ifdef ELOQSTORE_WITH_TXSERVICE
+#ifdef ELOQ_MODULE_ENABLED
     {
         std::lock_guard<bthread::Mutex> lk(req.mutex_);
         req.done_ = false;
@@ -312,7 +312,7 @@ bool Shard::HasPendingLocalGc(const TableIdent &tbl_id)
     auto it = pending_queues_.find(tbl_id);
     assert(it != pending_queues_.end());
     PendingWriteQueue &pending_q = it->second;
-#ifdef ELOQSTORE_WITH_TXSERVICE
+#ifdef ELOQ_MODULE_ENABLED
     std::lock_guard<bthread::Mutex> lk(pending_q.local_gc_req_.mutex_);
     return !pending_q.local_gc_req_.done_;
 #else
