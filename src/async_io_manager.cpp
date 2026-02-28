@@ -4337,7 +4337,8 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
 
     if (download_to_exist)
     {
-        int res = Rename(dir_fd.FdPair(), filename.c_str(), tmp_filename.c_str());
+        int res =
+            Rename(dir_fd.FdPair(), filename.c_str(), tmp_filename.c_str());
         if (res != 0 && res != -ENOENT)
         {
             return ToKvError(res);
