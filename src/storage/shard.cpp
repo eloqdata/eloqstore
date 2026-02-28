@@ -471,20 +471,16 @@ bool Shard::ProcessReq(KvRequest *req)
         {
             return false;
         }
-        auto lbd = [task, req]() -> KvError
+        auto write_req = static_cast<BatchWriteRequest *>(req);
+        task->Reset(req->TableId(), write_req->BranchName());
+        if (!write_req->batch_.empty())
         {
-            auto write_req = static_cast<BatchWriteRequest *>(req);
-            if (write_req->batch_.empty())
-            {
-                return KvError::NoError;
-            }
             if (!task->SetBatch(write_req->batch_))
             {
-                return KvError::InvalidArgs;
+                return false;
             }
-            return task->Apply();
-        };
-        StartTask(task, req, lbd);
+            StartTask(task, req, [task]() { return task->Apply(); });
+        }
         return true;
     }
     case RequestType::Truncate:

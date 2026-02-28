@@ -1119,6 +1119,15 @@ void BatchWriteRequest::SetArgs(TableIdent tbl_id,
     batch_ = std::move(batch);
 }
 
+void BatchWriteRequest::SetArgs(TableIdent tbl_id,
+                                std::string_view branch_name,
+                                std::vector<WriteDataEntry> &&batch)
+{
+    SetTableId(std::move(tbl_id));
+    SetBranchName(branch_name);
+    batch_ = std::move(batch);
+}
+
 void BatchWriteRequest::AddWrite(std::string key,
                                  std::string value,
                                  uint64_t ts,

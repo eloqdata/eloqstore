@@ -337,6 +337,18 @@ public:
      * WriteRequests.
      */
     WriteRequest *next_{nullptr};
+
+    void SetBranchName(std::string_view branch)
+    {
+        branch_name_ = std::string(branch.empty() ? MainBranchName : branch);
+    }
+    const std::string &BranchName() const
+    {
+        return branch_name_;
+    }
+
+protected:
+    std::string branch_name_{MainBranchName};
 };
 
 /**
@@ -350,6 +362,7 @@ public:
         return RequestType::BatchWrite;
     }
     void SetArgs(TableIdent tid, std::vector<WriteDataEntry> &&batch);
+    void SetArgs(TableIdent tid, std::string_view branch_name, std::vector<WriteDataEntry> &&batch);
     void AddWrite(std::string key, std::string value, uint64_t ts, WriteOp op);
     // used by caller.
     void Clear();
