@@ -1184,13 +1184,13 @@ protected:
         {
             if (!options_->cloud_secret_key.empty())
             {
-                LOG(INFO) << "cloud_secret_key is set; disabling auto credentials";
+                LOG(INFO)
+                    << "cloud_secret_key is set; disabling auto credentials";
             }
             else
             {
                 return Aws::MakeShared<
-                    Aws::Auth::DefaultAWSCredentialsProviderChain>(
-                    "eloqstore");
+                    Aws::Auth::DefaultAWSCredentialsProviderChain>("eloqstore");
             }
         }
         return Aws::MakeShared<Aws::Auth::SimpleAWSCredentialsProvider>(
