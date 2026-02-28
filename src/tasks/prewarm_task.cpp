@@ -227,6 +227,7 @@ void Prewarmer::Shutdown()
         return;
     shutting_down_ = true;
     stop_ = true;
+    shard->running_ = this;
     coro_ = coro_.resume();
 }
 

@@ -4822,6 +4822,7 @@ void CloudStoreMgr::FileCleaner::Shutdown()
     if (killed_)
         return;
     killed_ = true;
+    shard->running_ = this;
     coro_ = coro_.resume();
 }
 
