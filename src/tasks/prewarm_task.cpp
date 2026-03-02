@@ -12,6 +12,8 @@
 
 #include "async_io_manager.h"
 #ifdef ELOQ_MODULE_ENABLED
+#include <bthread/bthread.h>
+
 #include "bthread/eloq_module.h"
 #endif
 #include "common.h"
@@ -247,9 +249,11 @@ void PrewarmService::Start()
     thread_ = std::thread(
         [this]
         {
+            stopped_.store(false, std::memory_order_relaxed);
             std::string prewarm_all("");
             PrewarmCloudCache(prewarm_all);
             PrewarmLoop();
+            stopped_.store(true, std::memory_order_relaxed);
         });
 }
 
@@ -280,6 +284,12 @@ void PrewarmService::Stop()
     stop_requested_.store(true, std::memory_order_release);
     AbortPrewarmWorkers();
 
+#ifdef ELOQ_MODULE_ENABLED
+    while (!stopped_.load(std::memory_order_acquire))
+    {
+        bthread_usleep(1000);
+    }
+#endif
     if (thread_.joinable())
     {
         thread_.join();

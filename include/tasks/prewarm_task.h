@@ -144,6 +144,7 @@ private:
     std::thread thread_;
 
     std::atomic<bool> stop_requested_{false};
+    std::atomic<bool> stopped_{true};
 
     // Standby node do prewarm when received ckpt signal from master node.
     moodycamel::BlockingConcurrentQueue<TableIdent> prewarm_tables_;
