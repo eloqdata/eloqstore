@@ -246,14 +246,14 @@ PrewarmService::~PrewarmService()
 void PrewarmService::Start()
 {
     stop_requested_.store(false, std::memory_order_relaxed);
+    stopped_.store(false, std::memory_order_release);
     thread_ = std::thread(
         [this]
         {
-            stopped_.store(false, std::memory_order_relaxed);
             std::string prewarm_all("");
             PrewarmCloudCache(prewarm_all);
             PrewarmLoop();
-            stopped_.store(true, std::memory_order_relaxed);
+            stopped_.store(true, std::memory_order_release);
         });
 }
 
