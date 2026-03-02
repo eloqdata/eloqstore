@@ -1444,6 +1444,7 @@ void KvRequest::SetDone(KvError err)
     {
         // Synchronous request
 #ifdef ELOQ_MODULE_ENABLED
+        std::lock_guard<bthread::Mutex> lk(req->mutex_);
         cv_.notify_one();
 #else
         done_.notify_one();
