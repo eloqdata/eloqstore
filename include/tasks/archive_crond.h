@@ -24,8 +24,14 @@ private:
     uint64_t last_archive_ts_;
     std::thread thd_;
 
+#ifdef ELOQ_MODULE_ENABLED
+    bthread::Mutex mu_;
+    bthread::ConditionVariable cond_var_;
+#else
     std::mutex mu_;
     std::condition_variable cond_var_;
-    bool stopped_{true};
+#endif
+    bool stopp_requested_{true};
+    std::atomic<bool> stopped_{false};
 };
 }  // namespace eloqstore
