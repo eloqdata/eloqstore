@@ -1428,28 +1428,31 @@ void KvRequest::SetDone(KvError err)
 {
     err_ = err;
 #ifdef ELOQ_MODULE_ENABLED
+    bool has_async_cb = false;
     {
         std::lock_guard<bthread::Mutex> lk(mutex_);
         done_ = true;
+        has_async_cb = (callback_ != nullptr);
+        if (!has_async_cb)
+        {
+            cv_.notify_one();
+        }
+    }
+    if (has_async_cb)
+    {
+        callback_(this);
     }
 #else
     done_.store(true, std::memory_order_release);
-#endif
     if (callback_)
     {
-        // Asynchronous request
         callback_(this);
     }
     else
     {
-        // Synchronous request
-#ifdef ELOQ_MODULE_ENABLED
-        std::lock_guard<bthread::Mutex> lk(req->mutex_);
-        cv_.notify_one();
-#else
         done_.notify_one();
-#endif
     }
+#endif
 }
 
 }  // namespace eloqstore
