@@ -678,14 +678,8 @@ std::pair<ManifestFilePtr, KvError> IouringMgr::GetManifest(
         CloseFile(std::move(old_fd));
     }
 
-    uint64_t manifest_term;
-    std::string manifest_br;
-    if (!GetManifestBranchTerm(tbl_id, manifest_br, manifest_term))
-    {
-        // No cached value: fall back to active branch + process term.
-        manifest_br = std::string(GetActiveBranch());
-        manifest_term = ProcessTerm();
-    }
+    std::string manifest_br = std::string(GetActiveBranch());
+    uint64_t manifest_term = ProcessTerm();
     std::string manifest_name = BranchManifestFileName(manifest_br, manifest_term);
     auto [fd, err] = OpenFD(tbl_id, LruFD::kManifest, true, manifest_br, manifest_term);
     if (err != KvError::NoError)
@@ -756,9 +750,9 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
                                       bool use_fixed)
 {
     uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
-    OnFileRangeWritePrepared(
-        tbl_id, file_id, term, offset, std::string_view(buf_ptr, bytes));
     std::string_view branch = GetActiveBranch();
+    OnFileRangeWritePrepared(
+        tbl_id, file_id, branch, term, offset, std::string_view(buf_ptr, bytes));
     auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id, true, true, branch, term);
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;
@@ -1249,26 +1243,6 @@ const BranchFileMapping &IouringMgr::GetBranchFileMapping(
     return it->second;
 }
 
-void IouringMgr::SetManifestBranchTerm(const TableIdent &tbl_id,
-                                        std::string_view branch_name,
-                                        uint64_t term)
-{
-    manifest_branch_term_[tbl_id] = {std::string(branch_name), term};
-}
-
-bool IouringMgr::GetManifestBranchTerm(const TableIdent &tbl_id,
-                                        std::string &branch_name,
-                                        uint64_t &term) const
-{
-    auto it = manifest_branch_term_.find(tbl_id);
-    if (it == manifest_branch_term_.end())
-    {
-        return false;
-    }
-    branch_name = it->second.first;
-    term = it->second.second;
-    return true;
-}
 
 inline uint16_t IouringMgr::LookupRegisteredBufferIndex(const char *ptr) const
 {
@@ -2023,13 +1997,8 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
 
     uint64_t manifest_term;
     std::string manifest_br;
-    if (!GetManifestBranchTerm(tbl_id, manifest_br, manifest_term))
-    {
-        // First append: initialize from active branch + process term.
-        manifest_br = std::string(GetActiveBranch());
-        manifest_term = ProcessTerm();
-        SetManifestBranchTerm(tbl_id, manifest_br, manifest_term);
-    }
+    manifest_br = std::string(GetActiveBranch());
+    manifest_term = ProcessTerm();
     std::string_view active_br = manifest_br;
 #ifndef NDEBUG
     const PageId root =
@@ -2052,7 +2021,7 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
     // Record manifest write payload for cloud upload before submit
     // (manifest segments are tracked too).
     OnFileRangeWritePrepared(
-        tbl_id, LruFD::kManifest, manifest_term, offset, log);
+        tbl_id, LruFD::kManifest, active_br, manifest_term, offset, log);
     auto [fd_ref, err] = OpenFD(tbl_id, LruFD::kManifest, true, active_br, manifest_term);
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;
@@ -2187,11 +2156,10 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
         CHECK_KV_ERR(err);
     }
 
-    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, MainBranchName, 0);
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, GetActiveBranch(), 0);
     CHECK_KV_ERR(err);
     uint64_t manifest_term = ProcessTerm();
     std::string_view active_br = GetActiveBranch();
-    SetManifestBranchTerm(tbl_id, active_br, manifest_term);
     const std::string manifest_name = BranchManifestFileName(active_br, manifest_term);
     int res = WriteSnapshot(std::move(dir_fd), manifest_name, snapshot);
     if (res < 0)
@@ -2781,6 +2749,7 @@ KvError CloudStoreMgr::Init(Shard *shard)
 
 void CloudStoreMgr::OnFileRangeWritePrepared(const TableIdent &tbl_id,
                                              FileId file_id,
+                                             std::string_view branch_name,
                                              uint64_t term,
                                              uint64_t offset,
                                              std::string_view data)
@@ -2795,13 +2764,11 @@ void CloudStoreMgr::OnFileRangeWritePrepared(const TableIdent &tbl_id,
         return;
     }
 
-    std::string branch;
-    uint64_t unused_term;
-    GetBranchNameAndTerm(tbl_id, file_id, branch, unused_term);
     const std::string filename = (file_id == LruFD::kManifest)
-        ? BranchManifestFileName(branch, term)
-        : BranchDataFileName(file_id, branch, term);
+        ? BranchManifestFileName(branch_name, term)
+        : BranchDataFileName(file_id, branch_name, term);
     WriteTask::UploadState &state = owner->MutableUploadState();
+    if (state.invalid)
     {
         LOG(ERROR) << "WriteTask upload state already invalid, table=" << tbl_id
                    << " filename=" << state.filename << " offset=" << offset
@@ -3582,7 +3549,6 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     KvError dl_err = DownloadFile(tbl_id, LruFD::kManifest, process_term, active_br);
     if (dl_err == KvError::NoError)
     {
-        SetManifestBranchTerm(tbl_id, active_br, process_term);
         return IouringMgr::GetManifest(tbl_id);
     }
     else if (dl_err != KvError::NotFound)
@@ -3767,12 +3733,10 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
                        << ErrorString(up_err);
         }
         // Update manifest_branch_term_ to the promoted term/branch.
-        SetManifestBranchTerm(tbl_id, active_br, process_term);
     }
     else
     {
-        // No promotion needed; cache the selected branch/term.
-        SetManifestBranchTerm(tbl_id, selected_branch, selected_term);
+        // No promotion needed; selected branch/term is active_br/process_term.
     }
 
     // Delegate to base implementation to open the local manifest file and
@@ -4213,7 +4177,6 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
     // Always update manifest branch/term from current active branch + process term.
     std::string_view active_br = GetActiveBranch();
     uint64_t manifest_term_val = ProcessTerm();
-    SetManifestBranchTerm(tbl_id, active_br, manifest_term_val);
     std::string manifest_filename = BranchManifestFileName(active_br, manifest_term_val);
     FileKey fkey{tbl_id, manifest_filename};
     bool dequed = DequeClosedFile(fkey);
@@ -4453,14 +4416,7 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
         {
             // Use branch-aware manifest filename for both local read and cloud
             // upload key, consistent with SwitchManifest.
-            std::string manifest_br;
-            uint64_t manifest_term;
-            if (!GetManifestBranchTerm(tbl_id, manifest_br, manifest_term))
-            {
-                manifest_br = std::string(GetActiveBranch());
-                manifest_term = term;
-            }
-            filename = BranchManifestFileName(manifest_br, manifest_term);
+            filename = BranchManifestFileName(GetActiveBranch(), ProcessTerm());
         }
         else
         {

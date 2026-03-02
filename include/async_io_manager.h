@@ -208,12 +208,14 @@ public:
      */
     virtual void OnFileRangeWritePrepared(const TableIdent &tbl_id,
                                           FileId file_id,
+                                          std::string_view branch_name,
                                           uint64_t term,
                                           uint64_t offset,
                                           std::string_view data)
     {
         (void) tbl_id;
         (void) file_id;
+        (void) branch_name;
         (void) term;
         (void) offset;
         (void) data;
@@ -343,30 +345,6 @@ public:
         return empty;
     }
 
-    // Set the manifest branch and term for a table (separate from data-file
-    // ranges — must NOT be stored in branch_file_mapping_ to avoid corrupting
-    // binary-search lookups with the sentinel kManifest file_id).
-    virtual void SetManifestBranchTerm(const TableIdent &tbl_id,
-                                       std::string_view branch_name,
-                                       uint64_t term)
-    {
-        (void) tbl_id;
-        (void) branch_name;
-        (void) term;
-    }
-
-    // Get the manifest branch and term for a table.
-    // Returns true and populates branch_name/term if found; false otherwise.
-    virtual bool GetManifestBranchTerm(const TableIdent &tbl_id,
-                                       std::string &branch_name,
-                                       uint64_t &term) const
-    {
-        (void) tbl_id;
-        (void) branch_name;
-        (void) term;
-        return false;
-    }
-
     virtual uint64_t ProcessTerm() const
     {
         return 0;
@@ -379,6 +357,7 @@ public:
 
     virtual void SetActiveBranch(std::string_view branch)
     {
+        (void) branch;
     }
 
     const KvOptions *options_;
@@ -483,21 +462,21 @@ public:
     const BranchFileMapping &GetBranchFileMapping(
         const TableIdent &tbl_id) override;
 
-    // Set the manifest branch and term for a table.
-    void SetManifestBranchTerm(const TableIdent &tbl_id,
-                                std::string_view branch_name,
-                                uint64_t term) override;
-
-    // Get the manifest branch and term for a table.
-    bool GetManifestBranchTerm(const TableIdent &tbl_id,
-                                std::string &branch_name,
-                                uint64_t &term) const override;
-
     // Process term management for term-aware file naming.
     // Local mode always returns 0.
     uint64_t ProcessTerm() const override
     {
         return 0;
+    }
+
+    void SetActiveBranch(std::string_view branch) override
+    {
+        active_branch_ = std::string(branch);
+    }
+
+    std::string_view GetActiveBranch() const override
+    {
+        return active_branch_;
     }
 
     KvError ReadFile(const TableIdent &tbl_id,
@@ -783,11 +762,6 @@ public:
     std::unordered_map<TableIdent, PartitionFiles> tables_;
     // Per-table BranchFileMapping storage (branch_name, term, max_file_id ranges).
     absl::flat_hash_map<TableIdent, BranchFileMapping> branch_file_mapping_;
-    // Per-table manifest branch/term cache. Kept separate from
-    // branch_file_mapping_ so that the sentinel kManifest file_id never
-    // corrupts the binary-search sorted data-file mapping.
-    absl::flat_hash_map<TableIdent, std::pair<std::string, uint64_t>>
-        manifest_branch_term_;
     LruFD lru_fd_head_{nullptr, MaxFileId};
     LruFD lru_fd_tail_{nullptr, MaxFileId};
     uint32_t lru_fd_count_{0};
@@ -821,6 +795,9 @@ public:
     io_uring ring_;
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};
+
+    // Active branch for this shard. Set via SetActiveBranch() from Shard::Init().
+    std::string active_branch_{MainBranchName};
 
     KvError BootstrapRing(Shard *shard);
 };
@@ -939,16 +916,9 @@ public:
     {
         return process_term_;
     }
-    void SetActiveBranch(std::string_view branch)
-    {
-        active_branch_ = std::string(branch);
-    }
-    std::string_view GetActiveBranch() const
-    {
-        return active_branch_;
-    }
     void OnFileRangeWritePrepared(const TableIdent &tbl_id,
                                   FileId file_id,
+                                  std::string_view branch_name,
                                   uint64_t term,
                                   uint64_t offset,
                                   std::string_view data) override;
@@ -1131,7 +1101,6 @@ private:
     // 0 means unspecified/legacy; in that case term validation in GetManifest
     // will be skipped and the latest manifest term will be used.
     uint64_t process_term_{0};
-    std::string active_branch_{MainBranchName};
 
     size_t inflight_cloud_slots_{0};
     WaitingZone cloud_slot_waiting_;
