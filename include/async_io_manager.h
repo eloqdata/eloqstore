@@ -567,7 +567,8 @@ public:
         uint32_t ref_count_{0};
         LruFD *prev_{nullptr};
         LruFD *next_{nullptr};
-        uint64_t term_{0};  // Term of the file this FD represents
+        uint64_t term_{0};        // Term of the file this FD represents
+        std::string branch_name_; // Branch name of the file this FD represents
     };
 
     enum class UserDataType : uint8_t

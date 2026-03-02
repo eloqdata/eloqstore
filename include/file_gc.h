@@ -60,8 +60,10 @@ KvError ListCloudFiles(const TableIdent &tbl_id,
 void ClassifyFiles(const std::vector<std::string> &files,
                    std::vector<std::string> &archive_files,
                    std::vector<uint64_t> &archive_timestamps,
+                   std::vector<std::string> &archive_branch_names,
                    std::vector<std::string> &data_files,
-                   std::vector<uint64_t> &manifest_terms);
+                   std::vector<uint64_t> &manifest_terms,
+                   std::vector<std::string> &manifest_branch_names);
 
 KvError DownloadArchiveFile(const TableIdent &tbl_id,
                             const std::string &archive_file,
@@ -76,9 +78,17 @@ KvError DeleteUnreferencedCloudFiles(
     const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
     const std::vector<uint64_t> &manifest_terms,
+    const std::vector<std::string> &manifest_branch_names,
     const absl::flat_hash_set<FileId> &retained_files,
     FileId least_not_archived_file_id,
     CloudStoreMgr *cloud_mgr);
+
+KvError DeleteOldArchives(const TableIdent &tbl_id,
+                          const std::vector<std::string> &archive_files,
+                          const std::vector<uint64_t> &archive_timestamps,
+                          const std::vector<std::string> &archive_branch_names,
+                          uint32_t num_retained_archives,
+                          IouringMgr *io_mgr);
 }  // namespace FileGarbageCollector
 
 }  // namespace eloqstore

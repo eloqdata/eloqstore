@@ -3,9 +3,11 @@
 #include <jsoncpp/json/json.h>
 
 #include <boost/algorithm/string/predicate.hpp>
+#include <algorithm>
 #include <filesystem>
 #include <iterator>
 #include <memory>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -75,13 +77,17 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
     // 2. classify files.
     std::vector<std::string> archive_files;
     std::vector<uint64_t> archive_timestamps;
+    std::vector<std::string> archive_branch_names;
     std::vector<std::string> data_files;
     std::vector<uint64_t> manifest_terms;
+    std::vector<std::string> manifest_branch_names;
     ClassifyFiles(local_files,
                   archive_files,
                   archive_timestamps,
+                  archive_branch_names,
                   data_files,
-                  manifest_terms);
+                  manifest_terms,
+                  manifest_branch_names);
 
     // No need to check term expired for local mode.
 
@@ -101,7 +107,22 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
         return err;
     }
 
-    // 4. delete unreferenced data files.
+    // 4. delete old archives beyond num_retained_archives per branch.
+    err = DeleteOldArchives(tbl_id,
+                            archive_files,
+                            archive_timestamps,
+                            archive_branch_names,
+                            io_mgr->options_->num_retained_archives,
+                            io_mgr);
+    if (err != KvError::NoError)
+    {
+        LOG(ERROR)
+            << "ExecuteLocalGC: DeleteOldArchives failed, error="
+            << static_cast<int>(err);
+        return err;
+    }
+
+    // 5. delete unreferenced data files.
     err = DeleteUnreferencedLocalFiles(
         tbl_id, data_files, retained_files, least_not_archived_file_id, io_mgr);
     if (err != KvError::NoError)
@@ -193,13 +214,17 @@ KvError ListCloudFiles(const TableIdent &tbl_id,
 void ClassifyFiles(const std::vector<std::string> &files,
                    std::vector<std::string> &archive_files,
                    std::vector<uint64_t> &archive_timestamps,
+                   std::vector<std::string> &archive_branch_names,
                    std::vector<std::string> &data_files,
-                   std::vector<uint64_t> &manifest_terms)
+                   std::vector<uint64_t> &manifest_terms,
+                   std::vector<std::string> &manifest_branch_names)
 {
     archive_files.clear();
     archive_timestamps.clear();
+    archive_branch_names.clear();
     data_files.clear();
     manifest_terms.clear();
+    manifest_branch_names.clear();
     data_files.reserve(files.size());
 
     for (const std::string &file_name : files)
@@ -232,10 +257,12 @@ void ClassifyFiles(const std::vector<std::string> &files,
             {
                 archive_files.push_back(file_name);
                 archive_timestamps.push_back(timestamp.value());
+                archive_branch_names.emplace_back(branch_name);
             }
             else
             {
                 manifest_terms.push_back(term);
+                manifest_branch_names.emplace_back(branch_name);
             }
         }
         else if (ret.first == FileNameData)
@@ -424,10 +451,119 @@ KvError GetOrUpdateArchivedMaxFileId(
     return KvError::NoError;
 }
 
+KvError DeleteOldArchives(
+    const TableIdent &tbl_id,
+    const std::vector<std::string> &archive_files,
+    const std::vector<uint64_t> &archive_timestamps,
+    const std::vector<std::string> &archive_branch_names,
+    uint32_t num_retained_archives,
+    IouringMgr *io_mgr)
+{
+    assert(archive_files.size() == archive_timestamps.size());
+    assert(archive_files.size() == archive_branch_names.size());
+
+    if (num_retained_archives == 0 || archive_files.empty())
+    {
+        return KvError::NoError;
+    }
+
+    // Group archive indices by branch name.
+    std::unordered_map<std::string, std::vector<size_t>> branch_indices;
+    for (size_t i = 0; i < archive_files.size(); ++i)
+    {
+        branch_indices[archive_branch_names[i]].push_back(i);
+    }
+
+    // For each branch, sort by timestamp descending and collect excess archives.
+    std::vector<std::string> to_delete;
+    for (auto &[branch, indices] : branch_indices)
+    {
+        if (indices.size() <= num_retained_archives)
+        {
+            continue;
+        }
+        // Sort descending by timestamp (newest first).
+        std::sort(indices.begin(),
+                  indices.end(),
+                  [&](size_t a, size_t b)
+                  { return archive_timestamps[a] > archive_timestamps[b]; });
+        // Keep the first num_retained_archives, delete the rest.
+        for (size_t j = num_retained_archives; j < indices.size(); ++j)
+        {
+            to_delete.push_back(archive_files[indices[j]]);
+        }
+    }
+
+    if (to_delete.empty())
+    {
+        return KvError::NoError;
+    }
+
+    if (!io_mgr->options_->cloud_store_path.empty())
+    {
+        // Cloud mode: batch delete via object store.
+        CloudStoreMgr *cloud_mgr = static_cast<CloudStoreMgr *>(io_mgr);
+        KvTask *current_task = ThdTask();
+
+        std::vector<ObjectStore::DeleteTask> delete_tasks;
+        delete_tasks.reserve(to_delete.size());
+
+        for (const std::string &file_name : to_delete)
+        {
+            std::string remote_path = tbl_id.ToString() + "/" + file_name;
+            delete_tasks.emplace_back(remote_path);
+            ObjectStore::DeleteTask &task = delete_tasks.back();
+            task.SetKvTask(current_task);
+            cloud_mgr->AcquireCloudSlot(current_task);
+            cloud_mgr->GetObjectStore().SubmitTask(&task, shard);
+        }
+
+        current_task->WaitIo();
+
+        for (const auto &task : delete_tasks)
+        {
+            if (task.error_ != KvError::NoError)
+            {
+                LOG(ERROR) << "DeleteOldArchives: failed to delete archive "
+                           << task.remote_path_ << ": "
+                           << ErrorString(task.error_);
+                return task.error_;
+            }
+        }
+    }
+    else
+    {
+        // Local mode: delete files from filesystem.
+        namespace fs = std::filesystem;
+        fs::path dir_path = tbl_id.StorePath(io_mgr->options_->store_path);
+
+        std::vector<std::string> full_paths;
+        full_paths.reserve(to_delete.size());
+        for (const std::string &file_name : to_delete)
+        {
+            full_paths.push_back((dir_path / file_name).string());
+        }
+
+        KvError delete_err = io_mgr->DeleteFiles(full_paths);
+        if (delete_err != KvError::NoError)
+        {
+            LOG(ERROR) << "DeleteOldArchives: failed to delete archive files, "
+                          "error: "
+                       << static_cast<int>(delete_err);
+            return delete_err;
+        }
+    }
+
+    DLOG(INFO) << "DeleteOldArchives: deleted " << to_delete.size()
+               << " old archive(s) for table " << tbl_id;
+    return KvError::NoError;
+}
+
 KvError DeleteUnreferencedCloudFiles(
     const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
     const std::vector<uint64_t> &manifest_terms,
+    const std::vector<std::string> &manifest_branch_names,
     const absl::flat_hash_set<FileId> &retained_files,
     FileId least_not_archived_file_id,
     CloudStoreMgr *cloud_mgr)
@@ -479,17 +615,30 @@ KvError DeleteUnreferencedCloudFiles(
 
     if (files_to_delete.size() == data_files.size())
     {
-        files_to_delete.emplace_back(tbl_id.ToString() + "/" +
-                                     ManifestFileName(process_term));
+        // Find the branch name for the current process_term manifest.
+        std::string_view current_manifest_branch = MainBranchName;
+        for (size_t i = 0; i < manifest_terms.size(); ++i)
+        {
+            if (manifest_terms[i] == process_term)
+            {
+                current_manifest_branch = manifest_branch_names[i];
+                break;
+            }
+        }
+        files_to_delete.emplace_back(
+            tbl_id.ToString() + "/" +
+            BranchManifestFileName(current_manifest_branch, process_term));
     }
 
     // delete expired manifest files.
-    for (const uint64_t term : manifest_terms)
+    for (size_t i = 0; i < manifest_terms.size(); ++i)
     {
-        if (term < process_term)
+        if (manifest_terms[i] < process_term)
         {
-            files_to_delete.emplace_back(tbl_id.ToString() + "/" +
-                                         ManifestFileName(term));
+            files_to_delete.emplace_back(
+                tbl_id.ToString() + "/" +
+                BranchManifestFileName(manifest_branch_names[i],
+                                       manifest_terms[i]));
         }
     }
 
@@ -662,13 +811,17 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
     // 2. classify files.
     std::vector<std::string> archive_files;
     std::vector<uint64_t> archive_timestamps;
+    std::vector<std::string> archive_branch_names;
     std::vector<std::string> data_files;
     std::vector<uint64_t> manifest_terms;
+    std::vector<std::string> manifest_branch_names;
     ClassifyFiles(cloud_files,
                   archive_files,
                   archive_timestamps,
+                  archive_branch_names,
                   data_files,
-                  manifest_terms);
+                  manifest_terms,
+                  manifest_branch_names);
 
     // 3. check if term expired to avoid deleting invisible files.
     for (auto term : manifest_terms)
@@ -691,10 +844,25 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
         return err;
     }
 
+    // 4a. delete old archives beyond num_retained_archives per branch.
+    err = DeleteOldArchives(tbl_id,
+                            archive_files,
+                            archive_timestamps,
+                            archive_branch_names,
+                            cloud_mgr->options_->num_retained_archives,
+                            static_cast<IouringMgr *>(cloud_mgr));
+    if (err != KvError::NoError)
+    {
+        LOG(ERROR) << "ExecuteCloudGC: DeleteOldArchives failed, error="
+                   << static_cast<int>(err);
+        return err;
+    }
+
     // 5. delete unreferenced data files.
     err = DeleteUnreferencedCloudFiles(tbl_id,
                                        data_files,
                                        manifest_terms,
+                                       manifest_branch_names,
                                        retained_files,
                                        least_not_archived_file_id,
                                        cloud_mgr);
