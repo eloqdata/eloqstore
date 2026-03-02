@@ -26,7 +26,6 @@ class IndexPageManager
 
 public:
     IndexPageManager(AsyncIoManager *io_manager);
-    ~IndexPageManager();
 
     void Shutdown();
 

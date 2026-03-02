@@ -64,11 +64,6 @@ IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
     index_pages_.reserve(page_limit);
 }
 
-IndexPageManager::~IndexPageManager()
-{
-    CHECK(shutdown_) << "IndexPageManager::Shutdown must be called explicitly";
-}
-
 void IndexPageManager::Shutdown()
 {
     if (shutdown_)
