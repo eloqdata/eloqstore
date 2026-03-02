@@ -326,8 +326,7 @@ KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
     BranchManifestMetadata branch_metadata;
     branch_metadata.branch_name = MainBranchName;  // Use main branch for archives
     branch_metadata.term = IoMgr()->ProcessTerm();
-    // file_ranges will be populated when branch operations are implemented (Phase 3+)
-    // For now, use empty mapping - this will be updated when we implement branch support
+    branch_metadata.file_ranges = IoMgr()->GetBranchFileMapping(tbl_ident_);
     
     std::string_view snapshot = wal_builder_.Snapshot(
         root, ttl_root, mapping, max_fp_id, dict_bytes, branch_metadata);
@@ -348,8 +347,7 @@ KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
     return KvError::NoError;
 }
 
-KvError BackgroundWrite::CreateBranch(std::string_view branch_name,
-                                    std::string_view parent_branch)
+KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
 {
     if (!IsValidBranchName(branch_name))
     {
@@ -362,7 +360,8 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name,
         return KvError::InvalidArgs;
     }
 
-    std::string parent = parent_branch.empty() ? MainBranchName : std::string(parent_branch);
+    // Parent branch is the current active branch
+    std::string parent = std::string(IoMgr()->GetActiveBranch());
 
     auto [manifest_ptr, manifest_err] = IoMgr()->GetManifest(tbl_ident_);
     if (manifest_err != KvError::NoError)
@@ -393,6 +392,17 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name,
     branch_metadata.term = 0;
     branch_metadata.file_ranges = parent_metadata.file_ranges;
 
+    // Find parent's max_file_id and initialize allocator to continue from there
+    FileId parent_max_file_id = 0;
+    for (const auto &range : parent_metadata.file_ranges)
+    {
+        if (range.branch_name == parent_metadata.branch_name)
+        {
+            parent_max_file_id = range.max_file_id;
+            break;
+        }
+    }
+    // Initialize file allocator to continue from parent's max + 1
     wal_builder_.Reset();
     auto [root_handle, root_err] = shard->IndexManager()->FindRoot(tbl_ident_);
     if (root_err != KvError::NoError)
@@ -404,6 +414,9 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name,
     {
         return KvError::NotFound;
     }
+    // Set the allocator to continue from parent's max + 1
+    meta->mapper_->FilePgAllocator()->SetCurrentFileId(parent_max_file_id + 1);
+
     PageId root = meta->root_id_;
     PageId ttl_root = meta->ttl_root_id_;
     MappingSnapshot *mapping = meta->mapper_->GetMapping();

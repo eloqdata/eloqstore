@@ -22,7 +22,7 @@ public:
 
     KvError CreateArchive(uint64_t provided_ts = 0);
 
-    KvError CreateBranch(std::string_view branch_name, std::string_view parent_branch);
+    KvError CreateBranch(std::string_view branch_name);
 
     KvError DeleteBranch(std::string_view branch_name);
 

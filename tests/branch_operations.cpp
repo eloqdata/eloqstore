@@ -28,7 +28,7 @@ TEST_CASE("create branch from main", "[branch]")
 
     eloqstore::CreateBranchRequest req;
     req.SetTableId(test_tbl_id);
-    req.SetArgs("feature1", eloqstore::MainBranchName);
+    req.SetArgs("feature1");
     store->ExecSync(&req);
 
     REQUIRE(req.Error() == eloqstore::KvError::NoError);
@@ -51,7 +51,6 @@ TEST_CASE("create branch - invalid branch name", "[branch]")
     eloqstore::CreateBranchRequest req;
     req.SetTableId(test_tbl_id);
     req.branch_name = "invalid_branch";  // underscore not allowed
-    req.parent_branch = eloqstore::MainBranchName;
     store->ExecSync(&req);
 
     REQUIRE(req.Error() == eloqstore::KvError::InvalidArgs);
@@ -70,7 +69,6 @@ TEST_CASE("create branch - uppercase normalized to lowercase", "[branch]")
     eloqstore::CreateBranchRequest req;
     req.SetTableId(test_tbl_id);
     req.branch_name = "FeatureBranch";
-    req.parent_branch = eloqstore::MainBranchName;
     store->ExecSync(&req);
 
     REQUIRE(req.Error() == eloqstore::KvError::NoError);
@@ -93,21 +91,18 @@ TEST_CASE("create multiple branches from main", "[branch]")
     eloqstore::CreateBranchRequest req1;
     req1.SetTableId(test_tbl_id);
     req1.branch_name = "feature1";
-    req1.parent_branch = eloqstore::MainBranchName;
     store->ExecSync(&req1);
     REQUIRE(req1.Error() == eloqstore::KvError::NoError);
 
     eloqstore::CreateBranchRequest req2;
     req2.SetTableId(test_tbl_id);
     req2.branch_name = "feature2";
-    req2.parent_branch = eloqstore::MainBranchName;
     store->ExecSync(&req2);
     REQUIRE(req2.Error() == eloqstore::KvError::NoError);
 
     eloqstore::CreateBranchRequest req3;
     req3.SetTableId(test_tbl_id);
     req3.branch_name = "hotfix";
-    req3.parent_branch = eloqstore::MainBranchName;
     store->ExecSync(&req3);
     REQUIRE(req3.Error() == eloqstore::KvError::NoError);
 
@@ -133,7 +128,6 @@ TEST_CASE("delete branch", "[branch]")
     eloqstore::CreateBranchRequest create_req;
     create_req.SetTableId(test_tbl_id);
     create_req.branch_name = "feature1";
-    create_req.parent_branch = eloqstore::MainBranchName;
     store->ExecSync(&create_req);
     REQUIRE(create_req.Error() == eloqstore::KvError::NoError);
 
@@ -201,7 +195,6 @@ TEST_CASE("branch files persist after restart", "[branch][persist]")
         eloqstore::CreateBranchRequest req;
         req.SetTableId(test_tbl_id);
         req.branch_name = "feature1";
-        req.parent_branch = eloqstore::MainBranchName;
         store->ExecSync(&req);
 
         REQUIRE(req.Error() == eloqstore::KvError::NoError);

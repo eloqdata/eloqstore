@@ -183,8 +183,21 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
             // ensuring the next write operation will trigger a TTL check.
             meta->next_expire_ts_ = 1;
         }
-        // Set branch metadata term from manifest
-        replayer.branch_metadata_.term = IoMgr()->ProcessTerm();
+        // Restore the branch file mapping from the manifest so that read paths
+        // can look up branch_name and term for pre-existing file IDs.
+        if (!replayer.branch_metadata_.file_ranges.empty())
+        {
+            IoMgr()->SetBranchFileMapping(entry_tbl,
+                                          replayer.branch_metadata_.file_ranges);
+        }
+        // Restore the manifest branch/term so that AppendManifest and
+        // GetManifest use the correct branch-aware filename after restart.
+        if (!replayer.branch_metadata_.branch_name.empty())
+        {
+            IoMgr()->SetManifestBranchTerm(entry_tbl,
+                                           replayer.branch_metadata_.branch_name,
+                                           replayer.branch_metadata_.term);
+        }
         return KvError::NoError;
     };
 

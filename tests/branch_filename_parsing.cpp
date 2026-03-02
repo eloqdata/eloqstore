@@ -686,25 +686,30 @@ TEST_CASE("BranchFileMapping - binary search lookup", "[branch][mapping]")
     REQUIRE(it4 == mapping.end());
 }
 
-TEST_CASE("BranchFileMapping - GetBranchName and GetFileTerm", "[branch][mapping]")
+TEST_CASE("BranchFileMapping - GetBranchNameAndTerm", "[branch][mapping]")
 {
     eloqstore::BranchFileMapping mapping;
     mapping.push_back({"main", 5, 100});
     mapping.push_back({"feature", 3, 50});
     mapping.push_back({"hotfix", 1, 200});
     std::sort(mapping.begin(), mapping.end());
-    
-    // Test GetBranchName
-    REQUIRE(eloqstore::GetBranchName(mapping, 25) == "feature");
-    REQUIRE(eloqstore::GetBranchName(mapping, 75) == "main");
-    REQUIRE(eloqstore::GetBranchName(mapping, 150) == "hotfix");
-    REQUIRE(eloqstore::GetBranchName(mapping, 300) == "");  // Beyond range
-    
-    // Test GetFileTerm
-    REQUIRE(eloqstore::GetFileTerm(mapping, 25) == 3);
-    REQUIRE(eloqstore::GetFileTerm(mapping, 75) == 5);
-    REQUIRE(eloqstore::GetFileTerm(mapping, 150) == 1);
-    REQUIRE(eloqstore::GetFileTerm(mapping, 300) == 0);  // Beyond range
+
+    std::string branch;
+    uint64_t term;
+
+    REQUIRE(eloqstore::GetBranchNameAndTerm(mapping, 25, branch, term) == true);
+    REQUIRE(branch == "feature");
+    REQUIRE(term == 3);
+
+    REQUIRE(eloqstore::GetBranchNameAndTerm(mapping, 75, branch, term) == true);
+    REQUIRE(branch == "main");
+    REQUIRE(term == 5);
+
+    REQUIRE(eloqstore::GetBranchNameAndTerm(mapping, 150, branch, term) == true);
+    REQUIRE(branch == "hotfix");
+    REQUIRE(term == 1);
+
+    REQUIRE(eloqstore::GetBranchNameAndTerm(mapping, 300, branch, term) == false);  // Beyond range
 }
 
 TEST_CASE("BranchFileMapping - FileIdInBranch", "[branch][mapping]")
@@ -761,7 +766,8 @@ TEST_CASE("BranchFileMapping - empty mapping", "[branch][mapping]")
     
     // Lookup in empty mapping
     REQUIRE(eloqstore::FindBranchRange(empty, 50) == empty.end());
-    REQUIRE(eloqstore::GetBranchName(empty, 50) == "");
-    REQUIRE(eloqstore::GetFileTerm(empty, 50) == 0);
+    std::string branch;
+    uint64_t term;
+    REQUIRE(eloqstore::GetBranchNameAndTerm(empty, 50, branch, term) == false);
     REQUIRE(eloqstore::FileIdInBranch(empty, 50, "main") == false);
 }
