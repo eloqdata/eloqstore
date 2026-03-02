@@ -66,7 +66,7 @@ IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
 
 IndexPageManager::~IndexPageManager()
 {
-    CHECK(shutdown_ && "IndexPageManager::Shutdown must be called explicitly");
+    CHECK(shutdown_) << "IndexPageManager::Shutdown must be called explicitly";
 }
 
 void IndexPageManager::Shutdown()
