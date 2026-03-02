@@ -162,7 +162,9 @@ void Shard::WorkLoop()
 #endif
     }
 
+    index_mgr_.Shutdown();
     io_mgr_->Stop();
+    task_mgr_.Shutdown();
 }
 
 void Shard::Start()
@@ -205,7 +207,6 @@ void Shard::Stop()
 #ifndef ELOQ_MODULE_ENABLED
     thd_.join();
 #endif
-    task_mgr_.Shutdown();
 }
 
 bool Shard::AddKvRequest(KvRequest *req)
@@ -691,7 +692,9 @@ void Shard::WorkOneRound()
     {
         if (running_status == 1)
         {
+            index_mgr_.Shutdown();
             io_mgr_->Stop();
+            task_mgr_.Shutdown();
             running_status_.store(2, std::memory_order_release);
         }
         return;

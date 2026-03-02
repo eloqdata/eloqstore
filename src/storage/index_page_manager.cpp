@@ -66,7 +66,28 @@ IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
 
 IndexPageManager::~IndexPageManager()
 {
+    CHECK(shutdown_ && "IndexPageManager::Shutdown must be called explicitly");
+}
+
+void IndexPageManager::Shutdown()
+{
+    if (shutdown_)
+    {
+        return;
+    }
+    shutdown_ = true;
+
     root_meta_mgr_.ReleaseMappers();
+    index_pages_.clear();
+
+    active_head_.next_ = &active_tail_;
+    active_head_.prev_ = nullptr;
+    active_tail_.prev_ = &active_head_;
+    active_tail_.next_ = nullptr;
+
+    free_head_.next_ = nullptr;
+    free_head_.prev_ = nullptr;
+    free_head_.in_free_list_ = false;
 }
 
 const Comparator *IndexPageManager::GetComparator() const

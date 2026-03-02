@@ -28,6 +28,8 @@ public:
     IndexPageManager(AsyncIoManager *io_manager);
     ~IndexPageManager();
 
+    void Shutdown();
+
     const Comparator *GetComparator() const;
 
     /**
@@ -124,5 +126,6 @@ private:
     MappingArena mapping_arena_;
     MappingChunkArena mapping_chunk_arena_;
     RootMetaMgr root_meta_mgr_;
+    bool shutdown_{false};
 };
 }  // namespace eloqstore

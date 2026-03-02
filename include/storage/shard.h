@@ -207,6 +207,8 @@ private:
     moodycamel::BlockingConcurrentQueue<KvRequest *> requests_;
     std::thread thd_;
     PagesPool page_pool_;
+    // These members depend on thread-local `shard`; ensure their Shutdown/
+    // cleanup routines are invoked on the shard thread before destruction.
     TaskManager task_mgr_;
 #ifndef NDEBUG
     boost::context::protected_fixedsize_stack stack_allocator_;

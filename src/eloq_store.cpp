@@ -33,6 +33,8 @@
 #include "utils.h"
 
 #ifdef ELOQ_MODULE_ENABLED
+#include <bthread/bthread.h>
+
 #include "eloqstore_module.h"
 #endif
 
@@ -1038,7 +1040,7 @@ void EloqStore::Stop()
         }
         if (all_stopped)
             break;
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        bthread_usleep(1000);
     }
     eloq::unregister_module(module_.get());
 #endif
