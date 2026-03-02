@@ -288,22 +288,6 @@ public:
 
     virtual void CleanManifest(const TableIdent &tbl_id) = 0;
 
-    // Get or create FileIdTermMapping for a table (default: nullptr, concrete
-    // implementations can override).
-    virtual std::shared_ptr<FileIdTermMapping> GetOrCreateFileIdTermMapping(
-        const TableIdent &tbl_id)
-    {
-        return std::make_shared<FileIdTermMapping>();
-    }
-
-    virtual void SetFileIdTermMapping(
-        const TableIdent &tbl_id, std::shared_ptr<FileIdTermMapping> mapping)
-    {
-        DLOG(INFO) << "SetFileIdTermMapping tbl_id=" << tbl_id.ToString()
-                   << " size=" << mapping->size()
-                   << ", no need to set store term info";
-    }
-
     // Get term for a specific file_id in a table (default: 0 for non-cloud
     // modes, concrete cloud implementations can override to return actual
     // terms).
@@ -313,15 +297,74 @@ public:
         return 0;
     }
 
-    // Update term for a specific file_id in a table (default no-op; concrete
-    // implementations can override for efficient updates).
-    virtual void SetFileIdTerm(const TableIdent &tbl_id,
-                               FileId file_id,
-                               uint64_t term)
+    // Get branch_name and term for a specific file_id in a table in one lookup.
+    // Returns true if found, false otherwise (branch_name and term unchanged).
+    virtual bool GetBranchNameAndTerm(const TableIdent &tbl_id,
+                                      FileId file_id,
+                                      std::string &branch_name,
+                                      uint64_t &term)
     {
         (void) tbl_id;
         (void) file_id;
+        (void) branch_name;
         (void) term;
+        return false;
+    }
+
+    // Update branch and term for a specific file_id in a table (default no-op;
+    // concrete implementations can override for efficient updates).
+    virtual void SetBranchFileIdTerm(const TableIdent &tbl_id,
+                                     FileId file_id,
+                                     std::string_view branch_name,
+                                     uint64_t term)
+    {
+        (void) tbl_id;
+        (void) file_id;
+        (void) branch_name;
+        (void) term;
+    }
+
+    // Bulk-replace the BranchFileMapping for a table (used on recovery to
+    // restore the full file-range history from the manifest).
+    virtual void SetBranchFileMapping(const TableIdent &tbl_id,
+                                      BranchFileMapping mapping)
+    {
+        (void) tbl_id;
+        (void) mapping;
+    }
+
+    // Return the current BranchFileMapping for a table (used on write to
+    // persist the full file-range history into the manifest).
+    virtual const BranchFileMapping &GetBranchFileMapping(
+        const TableIdent &tbl_id)
+    {
+        static const BranchFileMapping empty{};
+        (void) tbl_id;
+        return empty;
+    }
+
+    // Set the manifest branch and term for a table (separate from data-file
+    // ranges — must NOT be stored in branch_file_mapping_ to avoid corrupting
+    // binary-search lookups with the sentinel kManifest file_id).
+    virtual void SetManifestBranchTerm(const TableIdent &tbl_id,
+                                       std::string_view branch_name,
+                                       uint64_t term)
+    {
+        (void) tbl_id;
+        (void) branch_name;
+        (void) term;
+    }
+
+    // Get the manifest branch and term for a table.
+    // Returns true and populates branch_name/term if found; false otherwise.
+    virtual bool GetManifestBranchTerm(const TableIdent &tbl_id,
+                                       std::string &branch_name,
+                                       uint64_t &term) const
+    {
+        (void) tbl_id;
+        (void) branch_name;
+        (void) term;
+        return false;
     }
 
     virtual uint64_t ProcessTerm() const
@@ -415,22 +458,40 @@ public:
         const TableIdent &tbl_id) override;
 
     // Get or create FileIdTermMapping for a table.
-    std::shared_ptr<FileIdTermMapping> GetOrCreateFileIdTermMapping(
-        const TableIdent &tbl_id) override;
-
-    void SetFileIdTermMapping(
-        const TableIdent &tbl_id,
-        std::shared_ptr<FileIdTermMapping> mapping) override;
-
     // Get term for a specific file_id in a table (returns nullopt if not
     // found).
     std::optional<uint64_t> GetFileIdTerm(const TableIdent &tbl_id,
                                           FileId file_id) override;
 
-    // Update term for a specific file_id in a table.
-    void SetFileIdTerm(const TableIdent &tbl_id,
-                       FileId file_id,
-                       uint64_t term) override;
+    // Get branch_name and term for a specific file_id in a table in one lookup.
+    bool GetBranchNameAndTerm(const TableIdent &tbl_id,
+                              FileId file_id,
+                              std::string &branch_name,
+                              uint64_t &term) override;
+
+    // Update branch and term for a specific file_id in a table.
+    void SetBranchFileIdTerm(const TableIdent &tbl_id,
+                             FileId file_id,
+                             std::string_view branch_name,
+                             uint64_t term) override;
+
+    // Bulk-replace the BranchFileMapping for a table.
+    void SetBranchFileMapping(const TableIdent &tbl_id,
+                               BranchFileMapping mapping) override;
+
+    // Return the current BranchFileMapping for a table.
+    const BranchFileMapping &GetBranchFileMapping(
+        const TableIdent &tbl_id) override;
+
+    // Set the manifest branch and term for a table.
+    void SetManifestBranchTerm(const TableIdent &tbl_id,
+                                std::string_view branch_name,
+                                uint64_t term) override;
+
+    // Get the manifest branch and term for a table.
+    bool GetManifestBranchTerm(const TableIdent &tbl_id,
+                                std::string &branch_name,
+                                uint64_t &term) const override;
 
     // Process term management for term-aware file naming.
     // Local mode always returns 0.
@@ -636,12 +697,14 @@ public:
                               std::string_view content);
     virtual int CreateFile(LruFD::Ref dir_fd,
                            FileId file_id,
-                           uint64_t term = 0);
+                           std::string_view branch_name,
+                           uint64_t term);
     virtual int OpenFile(const TableIdent &tbl_id,
                          FileId file_id,
                          uint64_t flags,
                          uint64_t mode,
-                         uint64_t term = 0);
+                         std::string_view branch_name,
+                         uint64_t term);
     virtual KvError SyncFile(LruFD::Ref fd);
     virtual KvError SyncFiles(const TableIdent &tbl_id,
                               std::span<LruFD::Ref> fds);
@@ -663,6 +726,7 @@ public:
     std::pair<LruFD::Ref, KvError> OpenFD(const TableIdent &tbl_id,
                                           FileId file_id,
                                           bool direct = false,
+                                          std::string_view branch_name = MainBranchName,
                                           uint64_t term = 0);
     /**
      * @brief Open file or create it if not exists. This method can be used to
@@ -674,6 +738,7 @@ public:
                                                   FileId file_id,
                                                   bool direct = false,
                                                   bool create = true,
+                                                  std::string_view branch_name = MainBranchName,
                                                   uint64_t term = 0);
     bool EvictFD();
 
@@ -716,10 +781,13 @@ public:
     std::unique_ptr<MergedWriteReqPool> merged_write_req_pool_{nullptr};
 
     std::unordered_map<TableIdent, PartitionFiles> tables_;
-    // Per-table FileIdTermMapping storage. Mapping is shared between
-    // components via shared_ptr and keyed by TableIdent.
-    absl::flat_hash_map<TableIdent, std::shared_ptr<FileIdTermMapping>>
-        file_terms_;
+    // Per-table BranchFileMapping storage (branch_name, term, max_file_id ranges).
+    absl::flat_hash_map<TableIdent, BranchFileMapping> branch_file_mapping_;
+    // Per-table manifest branch/term cache. Kept separate from
+    // branch_file_mapping_ so that the sentinel kManifest file_id never
+    // corrupts the binary-search sorted data-file mapping.
+    absl::flat_hash_map<TableIdent, std::pair<std::string, uint64_t>>
+        manifest_branch_term_;
     LruFD lru_fd_head_{nullptr, MaxFileId};
     LruFD lru_fd_tail_{nullptr, MaxFileId};
     uint32_t lru_fd_count_{0};
@@ -922,17 +990,23 @@ private:
 private:
     int CreateFile(LruFD::Ref dir_fd,
                    FileId file_id,
-                   uint64_t term = 0) override;
+                   std::string_view branch_name,
+                   uint64_t term) override;
     int OpenFile(const TableIdent &tbl_id,
                  FileId file_id,
                  uint64_t flags,
                  uint64_t mode,
-                 uint64_t term = 0) override;
+                 std::string_view branch_name,
+                 uint64_t term) override;
     KvError SyncFile(LruFD::Ref fd) override;
     KvError SyncFiles(const TableIdent &tbl_id,
                       std::span<LruFD::Ref> fds) override;
     KvError CloseFile(LruFD::Ref fd) override;
 
+    KvError DownloadFile(const TableIdent &tbl_id,
+                         FileId file_id,
+                         uint64_t term = 0,
+                         std::string_view branch_name = MainBranchName);
     KvError UploadFile(const TableIdent &tbl_id,
                        std::string filename,
                        WriteTask *owner,

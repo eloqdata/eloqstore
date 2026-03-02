@@ -633,6 +633,13 @@ FileId FilePageAllocator::CurrentFileId() const
     return max_fp_id_ >> pages_per_file_shift_;
 }
 
+void FilePageAllocator::SetCurrentFileId(FileId file_id)
+{
+    // Set max_fp_id_ so that next CurrentFileId() returns file_id
+    // and first Allocate() returns a page with that file_id
+    max_fp_id_ = (file_id + 1) << pages_per_file_shift_;
+}
+
 FilePageId FilePageAllocator::Allocate()
 {
     FilePageId file_page_id = max_fp_id_++;

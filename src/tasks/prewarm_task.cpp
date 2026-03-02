@@ -170,7 +170,7 @@ void Prewarmer::Run()
                            : "data_" + std::to_string(file.file_id))
                    << "_" + std::to_string(file.term);
         auto [fd_ref, err] =
-            io_mgr_->OpenFD(file.tbl_id, file.file_id, true, file.term);
+            io_mgr_->OpenFD(file.tbl_id, file.file_id, true, file.branch_name, file.term);
         if (err == KvError::NoError)
         {
             fd_ref = nullptr;
@@ -515,6 +515,7 @@ void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
                 }
                 file.file_id = CloudStoreMgr::ManifestFileId();
                 file.term = term;
+                file.branch_name = std::string(branch_name);
                 file.is_manifest = true;
             }
             else if (file_type == FileNameData)
@@ -525,6 +526,7 @@ void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
                     total_files_skipped++;
                     continue;
                 }
+                file.branch_name = std::string(branch_name);
                 file.is_manifest = false;
             }
             else

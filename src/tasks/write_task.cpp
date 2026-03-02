@@ -89,14 +89,7 @@ const TableIdent &WriteTask::TableId() const
 
 void WriteTask::Reset(const TableIdent &tbl_id)
 {
-    Reset(tbl_id, MainBranchName);
-}
-
-void WriteTask::Reset(const TableIdent &tbl_id, std::string_view branch_name)
-{
     tbl_ident_ = tbl_id;
-    branch_name_ = std::string(branch_name.empty() ? MainBranchName : branch_name);
-    IoMgr()->SetActiveBranch(branch_name_);
     write_err_ = KvError::NoError;
     wal_builder_.Reset();
     file_id_term_mapping_dirty_ = false;
@@ -387,14 +380,14 @@ std::pair<PageId, FilePageId> WriteTask::AllocatePage(PageId page_id)
              ->GetFileIdTerm(tbl_ident_, file_id_before_allocate)
              .has_value())
     {
-        IoMgr()->SetFileIdTerm(
-            tbl_ident_, file_id_before_allocate, IoMgr()->ProcessTerm());
+        IoMgr()->SetBranchFileIdTerm(
+            tbl_ident_, file_id_before_allocate, IoMgr()->GetActiveBranch(), IoMgr()->ProcessTerm());
         file_id_term_mapping_dirty_ = true;
     }
     if (file_id_before_allocate != file_id_after_allocate)
     {
-        IoMgr()->SetFileIdTerm(
-            tbl_ident_, file_id_after_allocate, IoMgr()->ProcessTerm());
+        IoMgr()->SetBranchFileIdTerm(
+            tbl_ident_, file_id_after_allocate, IoMgr()->GetActiveBranch(), IoMgr()->ProcessTerm());
         file_id_term_mapping_dirty_ = true;
     }
 
@@ -449,7 +442,7 @@ KvError WriteTask::FlushManifest()
     BranchManifestMetadata branch_metadata;
     branch_metadata.branch_name = IoMgr()->GetActiveBranch();
     branch_metadata.term = IoMgr()->ProcessTerm();
-    // file_ranges will be populated when branch operations are implemented (Phase 3+)
+    branch_metadata.file_ranges = IoMgr()->GetBranchFileMapping(tbl_ident_);
     YieldToLowPQ();
 
     if (need_empty_snapshot)

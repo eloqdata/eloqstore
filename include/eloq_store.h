@@ -346,18 +346,6 @@ public:
      * WriteRequests.
      */
     WriteRequest *next_{nullptr};
-
-    void SetBranchName(std::string_view branch)
-    {
-        branch_name_ = std::string(branch.empty() ? MainBranchName : branch);
-    }
-    const std::string &BranchName() const
-    {
-        return branch_name_;
-    }
-
-protected:
-    std::string branch_name_{MainBranchName};
 };
 
 class ReopenRequest : public WriteRequest
@@ -381,7 +369,6 @@ public:
         return RequestType::BatchWrite;
     }
     void SetArgs(TableIdent tid, std::vector<WriteDataEntry> &&batch);
-    void SetArgs(TableIdent tid, std::string_view branch_name, std::vector<WriteDataEntry> &&batch);
     void AddWrite(std::string key, std::string value, uint64_t ts, WriteOp op);
     // used by caller.
     void Clear();
@@ -522,7 +509,6 @@ class BranchRequest : public KvRequest
 {
 public:
     std::string branch_name;
-    std::string parent_branch;
     std::string result_branch;
 };
 
@@ -534,10 +520,9 @@ public:
         return RequestType::CreateBranch;
     }
 
-    void SetArgs(std::string branch_name_val, std::string parent_branch_val)
+    void SetArgs(std::string branch_name_val)
     {
         branch_name = std::move(branch_name_val);
-        parent_branch = std::move(parent_branch_val);
     }
 };
 

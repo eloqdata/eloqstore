@@ -24,7 +24,7 @@ public:
 
     KvError RunLocalFileGc();
 
-    KvError CreateBranch(std::string_view branch_name, std::string_view parent_branch);
+    KvError CreateBranch(std::string_view branch_name);
 
     KvError DeleteBranch(std::string_view branch_name);
 

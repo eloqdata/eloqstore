@@ -44,7 +44,6 @@ public:
 
     void Abort() override;
     virtual void Reset(const TableIdent &tbl_id);
-    virtual void Reset(const TableIdent &tbl_id, std::string_view branch_name);
     const TableIdent &TableId() const;
 
     /**
@@ -91,7 +90,6 @@ protected:
     FilePageId ToFilePage(PageId page_id);
 
     TableIdent tbl_ident_;
-    std::string branch_name_{MainBranchName};
 
     CowRootMeta cow_meta_;
     ManifestBuilder wal_builder_;

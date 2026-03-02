@@ -520,7 +520,7 @@ bool Shard::ProcessReq(KvRequest *req)
             return false;
         }
         auto write_req = static_cast<BatchWriteRequest *>(req);
-        task->Reset(req->TableId(), write_req->BranchName());
+        task->Reset(req->TableId());
         if (!write_req->batch_.empty())
         {
             if (!task->SetBatch(write_req->batch_))
@@ -621,7 +621,7 @@ bool Shard::ProcessReq(KvRequest *req)
         }
         auto lbd = [task, branch_req]() -> KvError
         {
-            return task->CreateBranch(branch_req->branch_name, branch_req->parent_branch);
+            return task->CreateBranch(branch_req->branch_name);
         };
         StartTask(task, req, lbd);
         return true;

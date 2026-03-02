@@ -640,34 +640,6 @@ inline bool FileIdInBranch(
     return it->branch_name == branch_name;
 }
 
-// Get branch_name for a given file_id
-// Returns empty string if not found
-inline std::string GetBranchName(
-    const BranchFileMapping &mapping,
-    FileId file_id)
-{
-    auto it = FindBranchRange(mapping, file_id);
-    if (it == mapping.end())
-    {
-        return "";
-    }
-    return it->branch_name;
-}
-
-// Get term for a given file_id
-// Returns 0 if not found
-inline uint64_t GetFileTerm(
-    const BranchFileMapping &mapping,
-    FileId file_id)
-{
-    auto it = FindBranchRange(mapping, file_id);
-    if (it == mapping.end())
-    {
-        return 0;
-    }
-    return it->term;
-}
-
 // Get branch_name and term for a given file_id in one lookup
 // Returns true if file_id found in any branch range
 // Uses single binary search for efficiency
