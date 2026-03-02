@@ -312,6 +312,7 @@ void RootMetaMgr::ReleaseMappers()
             snapshot->idx_mgr_ = nullptr;
         }
         meta.mapping_snapshots_.clear();
+        meta.index_pages_.clear();
         meta.mapper_ = nullptr;
     }
 }
