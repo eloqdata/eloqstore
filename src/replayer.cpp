@@ -113,13 +113,7 @@ KvError Replayer::ParseNextRecord(ManifestFile *file)
     }
     content = content.substr(checksum_bytes);
 
-    root_ = DecodeFixed32(content.data());
-    content = content.substr(sizeof(PageId));
-    ttl_root_ = DecodeFixed32(content.data());
-    content = content.substr(sizeof(PageId));
-    payload_ = content.substr(sizeof(uint32_t), payload_len);
     const size_t record_bytes = header_len + payload_len;
-    file_size_ += record_bytes;
     const size_t alignment = page_align;
     const size_t remainder = record_bytes & (alignment - 1);
     if (remainder > 0)
@@ -128,13 +122,24 @@ KvError Replayer::ParseNextRecord(ManifestFile *file)
         err = file->SkipPadding(padding);
         if (err != KvError::NoError)
         {
-            // This is the last log and checksum is correct. Can be accepted.
+            // The last record is truncated (padding missing). Discard it so
+            // the caller sees the state up to the previous record.
             LOG(WARNING) << "Manifest is truncated. Ignore the missed padding";
-            file_size_ += padding;
+            file_size_ += record_bytes + padding;
             return KvError::EndOfFile;
         }
-        file_size_ += padding;
+        file_size_ += record_bytes + padding;
     }
+    else
+    {
+        file_size_ += record_bytes;
+    }
+
+    root_ = DecodeFixed32(content.data());
+    content = content.substr(sizeof(PageId));
+    ttl_root_ = DecodeFixed32(content.data());
+    content = content.substr(sizeof(PageId));
+    payload_ = content.substr(sizeof(uint32_t), payload_len);
 
     return KvError::NoError;
 }

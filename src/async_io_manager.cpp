@@ -1165,10 +1165,11 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
         lru_fd.Get()->fd_ = LruFD::FdEmpty;
     }
 
-    // Set term on newly opened data file FD.
+    // Set term and branch_name on newly opened data file FD.
     if (file_id <= LruFD::kMaxDataFile)
     {
         lru_fd.Get()->term_ = term;
+        lru_fd.Get()->branch_name_ = std::string(branch_name);
     }
     lru_fd.Get()->mu_.Unlock();
     return {std::move(lru_fd), KvError::NoError};
@@ -4420,9 +4421,7 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
         }
         else
         {
-            std::string branch;
-            uint64_t unused_term;
-            GetBranchNameAndTerm(tbl_id, file_id, branch, unused_term);
+            const std::string &branch = fd.Get()->branch_name_;
             filename = BranchDataFileName(file_id, branch, term);
         }
         err = UploadFile(tbl_id, filename, CurrentWriteTask());
@@ -4485,9 +4484,7 @@ KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
             }
             else
             {
-                std::string branch;
-                uint64_t unused_term;
-                GetBranchNameAndTerm(tbl_id, file_id, branch, unused_term);
+                const std::string &branch = fd.Get()->branch_name_;
                 filename = BranchDataFileName(file_id, branch, term);
             }
             filenames.emplace_back(std::move(filename));
@@ -4519,12 +4516,16 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
     {
         const TableIdent *tbl_id = fd.Get()->tbl_->tbl_id_;
         uint64_t term = fd.Get()->term_;
-        std::string branch;
-        uint64_t unused_term;
-        GetBranchNameAndTerm(*tbl_id, file_id, branch, unused_term);
-        std::string filename = (file_id == LruFD::kManifest)
-            ? BranchManifestFileName(branch, term)
-            : BranchDataFileName(file_id, branch, term);
+        std::string filename;
+        if (file_id == LruFD::kManifest)
+        {
+            filename = BranchManifestFileName(GetActiveBranch(), ProcessTerm());
+        }
+        else
+        {
+            const std::string &branch = fd.Get()->branch_name_;
+            filename = BranchDataFileName(file_id, branch, term);
+        }
         EnqueClosedFile(FileKey{*tbl_id, filename});
     }
     return KvError::NoError;
