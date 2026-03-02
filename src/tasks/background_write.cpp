@@ -324,7 +324,7 @@ KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
     }
     // Archive snapshot should also carry BranchManifestMetadata for this table
     BranchManifestMetadata branch_metadata;
-    branch_metadata.branch_name = MainBranchName;  // Use main branch for archives
+    branch_metadata.branch_name = std::string(IoMgr()->GetActiveBranch());
     branch_metadata.term = IoMgr()->ProcessTerm();
     branch_metadata.file_ranges = IoMgr()->GetBranchFileMapping(tbl_ident_);
     
@@ -384,7 +384,9 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
     BranchManifestMetadata parent_metadata = replayer.branch_metadata_;
     if (parent_metadata.branch_name.empty())
     {
-        parent_metadata.branch_name = MainBranchName;
+        LOG(ERROR) << "CreateBranch: parent manifest has empty branch_name, "
+                      "manifest is corrupted.";
+        return KvError::Corrupted;
     }
 
     BranchManifestMetadata branch_metadata;

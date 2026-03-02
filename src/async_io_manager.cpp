@@ -3859,7 +3859,7 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
         }
     }
 
-    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, MainBranchName, 0);
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, active_br, 0);
     CHECK_KV_ERR(err);
     const std::string manifest_name = BranchManifestFileName(active_br, manifest_term_val);
     int res = WriteSnapshot(std::move(dir_fd), manifest_name, snapshot);
@@ -4088,7 +4088,10 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
         }
         else
         {
-            filename = ToFilename(file_id, term);
+            std::string branch;
+            uint64_t unused_term;
+            GetBranchNameAndTerm(tbl_id, file_id, branch, unused_term);
+            filename = BranchDataFileName(file_id, branch, term);
         }
         err = UploadFile(tbl_id, filename, CurrentWriteTask());
         if (file_id == LruFD::kManifest)
@@ -4143,7 +4146,19 @@ KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
         if (file_id != LruFD::kDirectory)
         {
             uint64_t term = fd.Get()->term_;
-            filenames.emplace_back(ToFilename(file_id, term));
+            std::string filename;
+            if (file_id == LruFD::kManifest)
+            {
+                filename = BranchManifestFileName(GetActiveBranch(), ProcessTerm());
+            }
+            else
+            {
+                std::string branch;
+                uint64_t unused_term;
+                GetBranchNameAndTerm(tbl_id, file_id, branch, unused_term);
+                filename = BranchDataFileName(file_id, branch, term);
+            }
+            filenames.emplace_back(std::move(filename));
         }
     }
     KvError err = UploadFiles(tbl_id, std::move(filenames));
@@ -4181,19 +4196,6 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
         EnqueClosedFile(FileKey{*tbl_id, filename});
     }
     return KvError::NoError;
-}
-
-std::string CloudStoreMgr::ToFilename(FileId file_id, uint64_t term)
-{
-    if (file_id == LruFD::kManifest)
-    {
-        return ManifestFileName(term);
-    }
-    else
-    {
-        assert(file_id <= LruFD::kMaxDataFile);
-        return DataFileName(file_id, term);
-    }
 }
 
 size_t CloudStoreMgr::EstimateFileSize(FileId file_id) const
@@ -4313,15 +4315,11 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
                                     std::string_view branch_name)
 {
     KvTask *current_task = ThdTask();
-    // Cloud object key uses legacy naming (no branch), so remote peers can
-    // always locate the manifest by term alone.
-    std::string cloud_filename = ToFilename(file_id, term);
-    // Local disk file uses branch-aware naming.
-    std::string local_filename = (file_id == LruFD::kManifest)
+    std::string filename = (file_id == LruFD::kManifest)
         ? BranchManifestFileName(branch_name, term)
-        : cloud_filename;
+        : BranchDataFileName(file_id, branch_name, term);
 
-    ObjectStore::DownloadTask download_task(&tbl_id, cloud_filename);
+    ObjectStore::DownloadTask download_task(&tbl_id, filename);
 
     // Set KvTask pointer and initialize inflight_io_
     download_task.SetKvTask(current_task);
@@ -4337,7 +4335,7 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
         return download_task.error_;
     }
 
-    KvError err = WriteFile(tbl_id, local_filename, download_task.response_data_);
+    KvError err = WriteFile(tbl_id, filename, download_task.response_data_);
     ReleaseCloudBuffer(std::move(download_task.response_data_));
     CHECK_KV_ERR(err);
     return KvError::NoError;

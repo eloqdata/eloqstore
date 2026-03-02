@@ -1004,7 +1004,6 @@ private:
     void EnqueClosedFile(FileKey key);
     bool HasEvictableFile() const;
     int ReserveCacheSpace(size_t size);
-    static std::string ToFilename(FileId file_id, uint64_t term = 0);
     size_t EstimateFileSize(FileId file_id) const;
     size_t EstimateFileSize(std::string_view filename) const;
     void InitBackgroundJob() override;
