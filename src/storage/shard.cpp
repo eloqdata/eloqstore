@@ -56,17 +56,18 @@ Shard::Shard(const EloqStore *store, size_t shard_id, uint32_t fd_limit)
 
 KvError Shard::Init()
 {
-    // Inject process term into IO manager before any file operations.
-    // Only CloudStoreMgr needs term support; IouringMgr always uses term=0.
+    // Inject process term and active branch into IO manager before any file
+    // operations. All IouringMgr instances support SetActiveBranch; only
+    // CloudStoreMgr additionally needs SetProcessTerm (local mode uses term=0).
     if (io_mgr_ != nullptr)
     {
         uint64_t term = store_ != nullptr ? store_->Term() : 0;
         std::string_view branch = store_ != nullptr ? store_->Branch() : MainBranchName;
+        io_mgr_->SetActiveBranch(branch);
         if (auto *cloud_mgr = dynamic_cast<CloudStoreMgr *>(io_mgr_.get());
             cloud_mgr != nullptr)
         {
             cloud_mgr->SetProcessTerm(term);
-            cloud_mgr->SetActiveBranch(branch);
         }
     }
     InitializeTscFrequency();

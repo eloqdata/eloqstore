@@ -190,14 +190,6 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
             IoMgr()->SetBranchFileMapping(entry_tbl,
                                           replayer.branch_metadata_.file_ranges);
         }
-        // Restore the manifest branch/term so that AppendManifest and
-        // GetManifest use the correct branch-aware filename after restart.
-        if (!replayer.branch_metadata_.branch_name.empty())
-        {
-            IoMgr()->SetManifestBranchTerm(entry_tbl,
-                                           replayer.branch_metadata_.branch_name,
-                                           replayer.branch_metadata_.term);
-        }
         return KvError::NoError;
     };
 
