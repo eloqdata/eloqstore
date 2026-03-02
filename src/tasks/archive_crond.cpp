@@ -1,6 +1,8 @@
 #include "tasks/archive_crond.h"
 
+#ifdef ELOQ_MODULE_ENABLED
 #include <bthread/bthread.h>
+#endif
 #include <glog/logging.h>
 
 #include <cassert>
