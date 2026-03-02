@@ -23,7 +23,7 @@ ArchiveCrond::ArchiveCrond(EloqStore *store) : store_(store)
 void ArchiveCrond::Start()
 {
     assert(!thd_.joinable());
-    stopp_requested_ = false;
+    stop_requested_ = false;
     thd_ = std::thread(&ArchiveCrond::Crond, this);
     LOG(INFO) << "Archive crond started";
 }
@@ -31,7 +31,7 @@ void ArchiveCrond::Start()
 void ArchiveCrond::Stop()
 {
     mu_.lock();
-    stopp_requested_ = true;
+    stop_requested_ = true;
     mu_.unlock();
 #ifdef ELOQ_MODULE_ENABLED
     while (!stopped_.load(std::memory_order_acquire))
@@ -56,7 +56,7 @@ void ArchiveCrond::Stop()
 bool ArchiveCrond::IsStopped()
 {
     std::scoped_lock lk(mu_);
-    return stopp_requested_;
+    return stop_requested_;
 }
 
 void ArchiveCrond::Crond()
@@ -69,11 +69,20 @@ void ArchiveCrond::Crond()
         auto elapsed = utils::UnixTs<chrono::seconds>() - last_archive_ts_;
         while (elapsed < interval_secs)
         {
-            auto wait_period = chrono::seconds(interval_secs - elapsed);
             std::unique_lock lk(mu_);
+#ifdef ELOQ_MODULE_ENABLED
+            for (uint64_t sleeped_secs = 0;
+                 sleeped_secs < interval_secs - elapsed && !stop_requested_;
+                 ++sleeped_secs)
+            {
+                bthread_usleep(1);
+            }
+#else
+            auto wait_period = chrono::seconds(interval_secs - elapsed);
             cond_var_.wait_for(
-                lk, wait_period, [this] { return stopp_requested_; });
-            if (stopp_requested_)
+                lk, wait_period, [this] { return stop_requested_; });
+#endif
+            if (stop_requested_)
             {
                 // Stopped during wait.
                 return;

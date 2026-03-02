@@ -31,7 +31,7 @@ private:
     std::mutex mu_;
     std::condition_variable cond_var_;
 #endif
-    bool stopp_requested_{true};
+    bool stop_requested_{true};
     std::atomic<bool> stopped_{false};
 };
 }  // namespace eloqstore
