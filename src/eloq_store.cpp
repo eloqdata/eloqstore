@@ -1332,7 +1332,16 @@ void BatchWriteRequest::SetArgs(TableIdent tbl_id,
                                 std::vector<WriteDataEntry> &&batch)
 {
     SetTableId(std::move(tbl_id));
+    batch_refs_.clear();
     batch_ = std::move(batch);
+}
+
+void BatchWriteRequest::SetArgs(TableIdent tbl_id,
+                                std::vector<WriteDataEntryRef> &&refs)
+{
+    SetTableId(std::move(tbl_id));
+    batch_.clear();
+    batch_refs_ = std::move(refs);
 }
 
 void BatchWriteRequest::AddWrite(std::string key,
@@ -1347,6 +1356,8 @@ void BatchWriteRequest::Clear()
 {
     batch_.clear();
     batch_.shrink_to_fit();
+    batch_refs_.clear();
+    batch_refs_.shrink_to_fit();
 }
 
 void TruncateRequest::SetArgs(TableIdent tbl_id, std::string_view position)

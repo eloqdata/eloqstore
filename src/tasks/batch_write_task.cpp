@@ -184,6 +184,8 @@ void BatchWriteTask::Reset(const TableIdent &tbl_id)
     WriteTask::Reset(tbl_id);
     stack_.clear();
     ttl_batch_.clear();
+    data_batch_refs_ = {};
+    use_refs_ = false;
     idx_page_builder_.Reset();
     data_page_builder_.Reset();
     overflow_ptrs_.clear();
@@ -203,7 +205,7 @@ bool BatchWriteTask::SetBatch(std::span<WriteDataEntry> entries)
         // Ensure the input batch keys are unique and ordered.
         for (uint64_t i = 1; i < entries.size(); i++)
         {
-            if (cmp->Compare(entries[i - 1].key_, entries[i].key_) >= 0)
+            if (cmp->Compare(entries[i - 1].Key(), entries[i].Key()) >= 0)
             {
                 assert(false);
             }
@@ -214,15 +216,80 @@ bool BatchWriteTask::SetBatch(std::span<WriteDataEntry> entries)
     uint16_t max_key_len = Options()->data_page_size >> 1;
     for (WriteDataEntry &ent : entries)
     {
-        if (ent.key_.empty() || ent.key_.size() > max_key_len)
+        if (ent.Key().empty() || ent.Key().size() > max_key_len)
         {
             assert(false);
         }
     }
 #endif
 
+    data_batch_refs_ = {};
+    use_refs_ = false;
     data_batch_ = entries;
     return true;
+}
+
+bool BatchWriteTask::SetBatch(std::span<WriteDataEntryRef> refs)
+{
+#ifndef NDEBUG
+    const Comparator *cmp = Comp();
+    if (refs.size() > 1)
+    {
+        for (uint64_t i = 1; i < refs.size(); i++)
+        {
+            if (cmp->Compare(refs[i - 1].Key(), refs[i].Key()) >= 0)
+            {
+                assert(false);
+            }
+        }
+    }
+
+    uint16_t max_key_len = Options()->data_page_size >> 1;
+    for (const WriteDataEntryRef &ent : refs)
+    {
+        if (ent.Key().empty() || ent.Key().size() > max_key_len)
+        {
+            assert(false);
+        }
+    }
+#endif
+
+    data_batch_ = {};
+    use_refs_ = true;
+    data_batch_refs_ = refs;
+    return true;
+}
+
+size_t BatchWriteTask::BatchSize() const
+{
+    return use_refs_ ? data_batch_refs_.size() : data_batch_.size();
+}
+
+std::string_view BatchWriteTask::GetKey(size_t i) const
+{
+    return use_refs_ ? data_batch_refs_[i].Key() : data_batch_[i].Key();
+}
+
+std::string_view BatchWriteTask::GetVal(size_t i) const
+{
+    return use_refs_ ? data_batch_refs_[i].Val() : data_batch_[i].Val();
+}
+
+uint64_t BatchWriteTask::GetTimestamp(size_t i) const
+{
+    return use_refs_ ? data_batch_refs_[i].timestamp
+                    : data_batch_[i].timestamp_;
+}
+
+WriteOp BatchWriteTask::GetOp(size_t i) const
+{
+    return use_refs_ ? data_batch_refs_[i].op : data_batch_[i].op_;
+}
+
+uint64_t BatchWriteTask::GetExpireTs(size_t i) const
+{
+    return use_refs_ ? data_batch_refs_[i].expire_ts
+                    : data_batch_[i].expire_ts_;
 }
 
 void BatchWriteTask::Abort()
@@ -244,7 +311,15 @@ KvError BatchWriteTask::Apply()
     // directly go to low priority queue and wait for scheduling
     YieldToLowPQ();
     KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
-    cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
+    if (use_refs_)
+    {
+        cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(
+            data_batch_refs_);
+    }
+    else
+    {
+        cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
+    }
     CHECK_KV_ERR(err);
     err = ApplyBatch(cow_meta_.root_id_, true);
     if (err != KvError::NoError)
@@ -309,10 +384,9 @@ KvError BatchWriteTask::ApplyBatch(PageId &root_id,
     size_t cidx = 0;
     const uint64_t now_ms =
         now_ts != 0 ? now_ts : utils::UnixTs<chrono::milliseconds>();
-    while (cidx < data_batch_.size())
+    while (cidx < BatchSize())
     {
-        std::string_view batch_start_key = {data_batch_[cidx].key_.data(),
-                                            data_batch_[cidx].key_.size()};
+        std::string_view batch_start_key = GetKey(cidx);
         if (stack_.size() > 1)
         {
             err = SeekStack(batch_start_key);
@@ -413,30 +487,22 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
 
     data_page_builder_.Reset();
 
-    assert(cidx < data_batch_.size());
-    std::string_view change_key = {data_batch_[cidx].key_.data(),
-                                   data_batch_[cidx].key_.size()};
+    assert(cidx < BatchSize());
+    std::string_view change_key = GetKey(cidx);
     assert(cmp->Compare(page_left_bound, change_key) <= 0);
     assert(page_right_bound.empty() ||
            cmp->Compare(page_left_bound, page_right_bound) < 0);
 
-    auto change_it = data_batch_.begin() + cidx;
-    auto change_end_it = std::lower_bound(
-        change_it,
-        data_batch_.end(),
-        page_right_bound,
-        [&](const WriteDataEntry &change_item, std::string_view key)
+    size_t change_end_idx = cidx;
+    while (change_end_idx < BatchSize())
+    {
+        if (!page_right_bound.empty() &&
+            cmp->Compare(GetKey(change_end_idx), page_right_bound) >= 0)
         {
-            if (key.empty())
-            {
-                // An empty-string right bound represents positive infinity.
-                return true;
-            }
-
-            std::string_view ckey{change_item.key_.data(),
-                                  change_item.key_.size()};
-            return cmp->Compare(ckey, key) < 0;
-        });
+            break;
+        }
+        change_end_idx++;
+    }
 
     std::string prev_key;
     std::string_view page_key = stack_.back()->idx_page_iter_.Key();
@@ -452,6 +518,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     std::string compression_scratch;
     compression::CompressionType compression_type =
         compression::CompressionType::None;
+
+    size_t change_idx = cidx;
 
     auto add_to_page = utils::MakeYCombinator(
         [&](auto &&self,
@@ -504,7 +572,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             prev_key = key;
             return KvError::NoError;
         });
-    while (is_base_iter_valid && change_it != change_end_it)
+    while (is_base_iter_valid && change_idx < change_end_idx)
     {
         std::string_view base_key = base_page_iter.Key();
         bool add_change_key = false;
@@ -512,10 +580,9 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         uint64_t base_ts = base_page_iter.Timestamp();
         bool is_overflow_ptr = false;
 
-        change_key = {change_it->key_.data(), change_it->key_.size()};
-        std::string_view change_val = {change_it->val_.data(),
-                                       change_it->val_.size()};
-        uint64_t change_ts = change_it->timestamp_;
+        change_key = GetKey(change_idx);
+        std::string_view change_val = GetVal(change_idx);
+        uint64_t change_ts = GetTimestamp(change_idx);
 
         enum struct AdvanceType
         {
@@ -552,8 +619,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
                     CHECK_KV_ERR(err);
                 }
                 const uint64_t base_expire = base_page_iter.ExpireTs();
-                expire_ts = change_it->expire_ts_;
-                if (change_it->op_ == WriteOp::Delete)
+                expire_ts = GetExpireTs(change_idx);
+                if (GetOp(change_idx) == WriteOp::Delete)
                 {
                     /* DELETE */
                     new_key = std::string_view{};
@@ -594,8 +661,9 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         else
         {
             adv_type = AdvanceType::Changes;
-            if (change_it->op_ == WriteOp::Delete ||
-                (change_it->expire_ts_ != 0 && change_it->expire_ts_ <= now_ms))
+            if (GetOp(change_idx) == WriteOp::Delete ||
+                (GetExpireTs(change_idx) != 0 &&
+                 GetExpireTs(change_idx) <= now_ms))
             {
                 // deleting key not exists.
                 new_key = std::string_view{};
@@ -607,7 +675,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
                 new_val = change_val;
                 new_ts = change_ts;
                 add_change_key = true;
-                expire_ts = change_it->expire_ts_;
+                expire_ts = GetExpireTs(change_idx);
                 UpdateTTL(expire_ts, new_key, WriteOp::Upsert);
             }
         }
@@ -643,11 +711,11 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             AdvanceDataPageIter(base_page_iter, is_base_iter_valid);
             break;
         case AdvanceType::Changes:
-            ++change_it;
+            ++change_idx;
             break;
         default:
             AdvanceDataPageIter(base_page_iter, is_base_iter_valid);
-            ++change_it;
+            ++change_idx;
             break;
         }
     }
@@ -666,18 +734,16 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         AdvanceDataPageIter(base_page_iter, is_base_iter_valid);
     }
 
-    while (change_it != change_end_it)
+    while (change_idx < change_end_idx)
     {
-        if (change_it->op_ == WriteOp::Upsert &&
-            (change_it->expire_ts_ == 0 || change_it->expire_ts_ > now_ms))
+        if (GetOp(change_idx) == WriteOp::Upsert &&
+            (GetExpireTs(change_idx) == 0 || GetExpireTs(change_idx) > now_ms))
         {
             /* INSERT */
-            std::string_view key{change_it->key_.data(),
-                                 change_it->key_.size()};
-            std::string_view val{change_it->val_.data(),
-                                 change_it->val_.size()};
-            uint64_t ts = change_it->timestamp_;
-            uint64_t expire_ts = change_it->expire_ts_;
+            std::string_view key = GetKey(change_idx);
+            std::string_view val = GetVal(change_idx);
+            uint64_t ts = GetTimestamp(change_idx);
+            uint64_t expire_ts = GetExpireTs(change_idx);
             UpdateTTL(expire_ts, key, WriteOp::Upsert);
 
             if (Options()->enable_compression)
@@ -698,7 +764,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         {
             // deleting key not exists.
         }
-        ++change_it;
+        ++change_idx;
     }
 
     if (data_page_builder_.IsEmpty())
@@ -722,7 +788,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     assert(!TripleElement(1));
     leaf_triple_[1] = std::move(leaf_triple_[2]);
 
-    cidx = cidx + std::distance(data_batch_.begin() + cidx, change_end_it);
+    cidx = change_end_idx;
     return KvError::NoError;
 }
 

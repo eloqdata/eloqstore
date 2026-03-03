@@ -514,13 +514,23 @@ bool Shard::ProcessReq(KvRequest *req)
         auto lbd = [task, req]() -> KvError
         {
             auto write_req = static_cast<BatchWriteRequest *>(req);
-            if (write_req->batch_.empty())
+            if (!write_req->batch_refs_.empty())
+            {
+                if (!task->SetBatch(write_req->batch_refs_))
+                {
+                    return KvError::InvalidArgs;
+                }
+            }
+            else if (!write_req->batch_.empty())
+            {
+                if (!task->SetBatch(write_req->batch_))
+                {
+                    return KvError::InvalidArgs;
+                }
+            }
+            else
             {
                 return KvError::NoError;
-            }
-            if (!task->SetBatch(write_req->batch_))
-            {
-                return KvError::InvalidArgs;
             }
             return task->Apply();
         };

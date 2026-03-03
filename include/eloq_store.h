@@ -360,12 +360,14 @@ public:
         return RequestType::BatchWrite;
     }
     void SetArgs(TableIdent tid, std::vector<WriteDataEntry> &&batch);
+    void SetArgs(TableIdent tid, std::vector<WriteDataEntryRef> &&refs);
     void AddWrite(std::string key, std::string value, uint64_t ts, WriteOp op);
     // used by caller.
     void Clear();
 
     // input
     std::vector<WriteDataEntry> batch_;
+    std::vector<WriteDataEntryRef> batch_refs_;
 };
 
 class TruncateRequest : public WriteRequest

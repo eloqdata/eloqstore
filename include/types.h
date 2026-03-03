@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <ostream>
 #include <string>
+#include <string_view>
 #include <utility>  // NOLINT(build/include_order)
 
 #include "external/span.hpp"
@@ -99,11 +100,41 @@ struct WriteDataEntry
                    uint64_t expire_ts = 0);
     bool operator<(const WriteDataEntry &other) const;
 
+    std::string_view Key() const
+    {
+        return std::string_view(key_.data(), key_.size());
+    }
+    std::string_view Val() const
+    {
+        return std::string_view(val_.data(), val_.size());
+    }
+
     std::string key_;
     std::string val_;
     uint64_t timestamp_;
     WriteOp op_;
     uint64_t expire_ts_{0};  // 0 means never expire.
+};
+
+/**
+ * @brief Zero-copy batch write entry using string_view.
+ * Use only when backing storage (e.g. WriteRecordsRequest) outlives the
+ * entire batch write operation.
+ */
+struct WriteDataEntryRef
+{
+    std::string_view key;
+    std::string_view val;
+    uint64_t timestamp{0};
+    WriteOp op{WriteOp::Upsert};
+    uint64_t expire_ts{0};
+
+    std::string_view Key() const { return key; }
+    std::string_view Val() const { return val; }
+    bool operator<(const WriteDataEntryRef &other) const
+    {
+        return key < other.key;
+    }
 };
 
 }  // namespace eloqstore
