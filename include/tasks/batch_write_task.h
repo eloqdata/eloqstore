@@ -87,16 +87,8 @@ private:
      */
     std::string RightBound(bool is_data_page);
 
-    size_t BatchSize() const;
-    std::string_view GetKey(size_t i) const;
-    std::string_view GetVal(size_t i) const;
-    uint64_t GetTimestamp(size_t i) const;
-    WriteOp GetOp(size_t i) const;
-    uint64_t GetExpireTs(size_t i) const;
-
     std::span<WriteDataEntry> data_batch_;
-    std::span<WriteDataEntryRef> data_batch_refs_;
-    bool use_refs_{false};
+    std::vector<WriteDataEntry> data_batch_storage_;
     DataPage applying_page_;
     /**
      * @brief Batch of updates that need to be applied on the TTL tree.

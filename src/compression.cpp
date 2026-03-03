@@ -193,12 +193,6 @@ void DictCompression::AddSample(const std::string &sample)
     sample_sizes_.push_back(sample.size());
 }
 
-void DictCompression::AddSample(std::string_view sample)
-{
-    sample_data_.append(sample.data(), sample.size());
-    sample_sizes_.push_back(sample.size());
-}
-
 void DictCompression::SampleAndBuildDictionaryIfNeeded(
     const std::span<WriteDataEntry> &entries)
 {
@@ -243,56 +237,6 @@ void DictCompression::SampleAndBuildDictionaryIfNeeded(
     {
         const auto &sample = entries[valid_indices[dist(rng)]].val_;
         AddSample(sample);
-    }
-    if (sample_data_.size() >= kSampleTargetBytes)
-    {
-        BuildDictionary();
-    }
-}
-
-void DictCompression::SampleAndBuildDictionaryIfNeeded(
-    const std::span<WriteDataEntryRef> &entries)
-{
-    if (!Options()->enable_compression || HasDictionary())
-    {
-        return;
-    }
-    size_t total_size = 0;
-    std::vector<size_t> valid_indices;
-    valid_indices.reserve(entries.size());
-    for (size_t i = 0; i < entries.size(); ++i)
-    {
-        size_t len = entries[i].Val().size();
-        if (len >= kSkipCompressionThreshold &&
-            len <= kStandaloneCompressionThreshold)
-        {
-            valid_indices.push_back(i);
-            total_size += len;
-        }
-    }
-    if (valid_indices.empty())
-    {
-        return;
-    }
-    const size_t remaining = kSampleTargetBytes - sample_data_.size();
-    if (total_size < remaining)
-    {
-        for (size_t idx : valid_indices)
-        {
-            AddSample(entries[idx].Val());
-        }
-        return;
-    }
-    thread_local std::mt19937_64 rng(std::random_device{}());
-    std::uniform_int_distribution<size_t> dist(0, valid_indices.size() - 1);
-
-    const bool need_min_samples =
-        SampleCount() + valid_indices.size() >= kMinSamples;
-
-    while (sample_data_.size() < kSampleTargetBytes ||
-           (need_min_samples && SampleCount() < kMinSamples))
-    {
-        AddSample(entries[valid_indices[dist(rng)]].Val());
     }
     if (sample_data_.size() >= kSampleTargetBytes)
     {

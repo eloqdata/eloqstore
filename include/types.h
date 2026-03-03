@@ -100,15 +100,6 @@ struct WriteDataEntry
                    uint64_t expire_ts = 0);
     bool operator<(const WriteDataEntry &other) const;
 
-    std::string_view Key() const
-    {
-        return std::string_view(key_.data(), key_.size());
-    }
-    std::string_view Val() const
-    {
-        return std::string_view(val_.data(), val_.size());
-    }
-
     std::string key_;
     std::string val_;
     uint64_t timestamp_;
@@ -129,8 +120,6 @@ struct WriteDataEntryRef
     WriteOp op{WriteOp::Upsert};
     uint64_t expire_ts{0};
 
-    std::string_view Key() const { return key; }
-    std::string_view Val() const { return val; }
     bool operator<(const WriteDataEntryRef &other) const
     {
         return key < other.key;

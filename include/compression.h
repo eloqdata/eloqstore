@@ -62,11 +62,8 @@ public:
 
     void ClearSamples();
     void AddSample(const std::string &sample);
-    void AddSample(std::string_view sample);
     void SampleAndBuildDictionaryIfNeeded(
         const std::span<WriteDataEntry> &entries);
-    void SampleAndBuildDictionaryIfNeeded(
-        const std::span<WriteDataEntryRef> &entries);
     size_t SampleCount();
     void BuildDictionary();
 
