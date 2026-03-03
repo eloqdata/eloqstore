@@ -9,6 +9,7 @@
 
 #include "async_io_manager.h"
 #include "coding.h"
+#include "eloq_store.h"
 #include "error.h"
 #include "kv_options.h"
 #include "storage/index_page_manager.h"
@@ -283,8 +284,8 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
         {
             manifest_term = it->second;
         }
-        const bool cloud_mode = !opts_->cloud_store_path.empty();
-        if (cloud_mode && manifest_term != expect_term)
+        if (eloq_store->Mode() != StoreMode::Local &&
+            manifest_term != expect_term)
         {
             FileId next_file_id =
                 (max_fp_id_ >> opts_->pages_per_file_shift) + 1;

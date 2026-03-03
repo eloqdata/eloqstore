@@ -1,0 +1,5 @@
+if(EXISTS "/home/chenzhao/ssh-projects/eloqstore_standby_local/bld/tests/concurrency_tests-b12d07c.cmake")
+  include("/home/chenzhao/ssh-projects/eloqstore_standby_local/bld/tests/concurrency_tests-b12d07c.cmake")
+else()
+  add_test(concurrency_NOT_BUILT-b12d07c concurrency_NOT_BUILT-b12d07c)
+endif()

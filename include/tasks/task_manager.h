@@ -9,6 +9,7 @@
 #include "tasks/background_write.h"
 #include "tasks/batch_write_task.h"
 #include "tasks/list_object_task.h"
+#include "tasks/list_standby_partition_task.h"
 #include "tasks/read_task.h"
 #include "tasks/reopen_task.h"
 #include "tasks/scan_task.h"
@@ -35,6 +36,7 @@ public:
     ReadTask *GetReadTask();
     ScanTask *GetScanTask();
     ListObjectTask *GetListObjectTask();
+    ListStandbyPartitionTask *GetListStandbyPartitionTask();
     ReopenTask *GetReopenTask(const TableIdent &tbl_id);
     void FreeTask(KvTask *task);
 
@@ -108,6 +110,7 @@ private:
     TaskPool<ReadTask> read_pool_;
     TaskPool<ScanTask> scan_pool_;
     TaskPool<ListObjectTask> list_object_pool_;
+    TaskPool<ListStandbyPartitionTask> list_standby_partition_pool_;
     TaskPool<ReopenTask> reopen_pool_;
     size_t num_active_{0};
     size_t num_active_write_{0};

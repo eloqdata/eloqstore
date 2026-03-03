@@ -55,7 +55,7 @@ void ArchiveCrond::Stop()
 #endif
 }
 
-bool ArchiveCrond::IsStopped()
+bool ArchiveCrond::StopRequested()
 {
     std::scoped_lock lk(mu_);
     return stop_requested_;
@@ -65,7 +65,7 @@ void ArchiveCrond::Crond()
 {
     const uint64_t interval_secs = store_->Options().archive_interval_secs;
     last_archive_ts_ = utils::UnixTs<chrono::seconds>();
-    while (!IsStopped())
+    while (!StopRequested())
     {
         // Loop required to prevent spurious wakeups
         auto elapsed = utils::UnixTs<chrono::seconds>() - last_archive_ts_;

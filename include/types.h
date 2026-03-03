@@ -14,6 +14,14 @@
 
 namespace eloqstore
 {
+enum class StoreMode
+{
+    Local = 0,
+    StandbyMaster,
+    StandbyReplica,
+    Cloud
+};
+
 using PageId = uint32_t;
 constexpr PageId MaxPageId = UINT32_MAX;
 

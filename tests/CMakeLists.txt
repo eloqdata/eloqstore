@@ -25,6 +25,7 @@ set(UTEST_SOURCES
     replayer_term.cpp
     store_path_lut.cpp
     write_task.cpp
+    standby.cpp
 )
 
 string( REPLACE ".cpp" "" BASENAMES_UTEST "${UTEST_SOURCES}" )

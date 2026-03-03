@@ -27,7 +27,7 @@ namespace eloqstore
 namespace
 {
 KvError BuildRetainedFiles(const TableIdent &tbl_id,
-                           absl::flat_hash_set<FileId> &retained_files,
+                           RetainedFiles &retained_files,
                            std::vector<MappingSnapshot::Ref> &snapshot_array)
 {
     auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_id);
@@ -47,12 +47,34 @@ KvError BuildRetainedFiles(const TableIdent &tbl_id,
         }
         snapshot_array.emplace_back(MappingSnapshot::Ref(mapping));
     }
-    retained_files.clear();
-    retained_files.reserve(approx_file_cnt);
+
+    absl::flat_hash_set<FileId> file_ids;
+    file_ids.reserve(approx_file_cnt);
     for (const MappingSnapshot::Ref &mapping : snapshot_array)
     {
-        GetRetainedFiles(retained_files, mapping->mapping_tbl_, shift);
+        GetRetainedFiles(file_ids, mapping->mapping_tbl_, shift);
         ThdTask()->YieldToLowPQ();
+    }
+
+    retained_files.clear();
+    retained_files.reserve(file_ids.size());
+    auto *io_mgr = reinterpret_cast<IouringMgr *>(shard->IoManager());
+    for (FileId file_id : file_ids)
+    {
+        uint64_t term = 0;
+        if (io_mgr != nullptr)
+        {
+            if (auto file_term = io_mgr->GetFileIdTerm(tbl_id, file_id))
+            {
+                term = *file_term;
+            }
+            else
+            {
+                LOG(WARNING) << "BuildRetainedFiles: missing term for file_id "
+                             << file_id << " in table " << tbl_id;
+            }
+        }
+        retained_files.emplace(file_id, term);
     }
     return KvError::NoError;
 }
@@ -75,6 +97,8 @@ std::string_view WriteTask::TaskTypeName() const
         return "Scan";
     case TaskType::ListObject:
         return "ListObject";
+    case TaskType::ListStandbyPartition:
+        return "ListStandbyPartition";
     case TaskType::Reopen:
         return "Reopen";
     default:
@@ -660,7 +684,7 @@ void WriteTask::TriggerFileGC() const
 {
     assert(Options()->data_append_mode);
 
-    absl::flat_hash_set<FileId> retained_files;
+    RetainedFiles retained_files;
     std::vector<MappingSnapshot::Ref> snapshot_array;
     KvError build_err =
         BuildRetainedFiles(tbl_ident_, retained_files, snapshot_array);
@@ -710,7 +734,7 @@ void WriteTask::TriggerFileGC() const
 KvError WriteTask::TriggerLocalFileGC() const
 {
     assert(Options()->data_append_mode);
-    absl::flat_hash_set<FileId> retained_files;
+    RetainedFiles retained_files;
     std::vector<MappingSnapshot::Ref> snapshot_array;
     KvError build_err =
         BuildRetainedFiles(tbl_ident_, retained_files, snapshot_array);

@@ -1,0 +1,5 @@
+if(EXISTS "/home/chenzhao/ssh-projects/eloqstore_standby_local/bld/tests/replayer_term_tests-b12d07c.cmake")
+  include("/home/chenzhao/ssh-projects/eloqstore_standby_local/bld/tests/replayer_term_tests-b12d07c.cmake")
+else()
+  add_test(replayer_term_NOT_BUILT-b12d07c replayer_term_NOT_BUILT-b12d07c)
+endif()

@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "error.h"
 #include "kv_options.h"
@@ -13,24 +14,26 @@
 
 namespace eloqstore
 {
-void GetRetainedFiles(absl::flat_hash_set<FileId> &result,
-                      const MappingSnapshot::MappingTbl &tbl,
-                      uint8_t pages_per_file_shift);
+using RetainedFiles = absl::flat_hash_map<FileId, uint64_t>;
 
 class ObjectStore;
 class IouringMgr;
 class CloudStoreMgr;
 
+void GetRetainedFiles(absl::flat_hash_set<FileId> &file_ids,
+                      const MappingSnapshot::MappingTbl &tbl,
+                      uint8_t pages_per_file_shift);
+
 namespace FileGarbageCollector
 {
 // Local mode method (direct execution)
 KvError ExecuteLocalGC(const TableIdent &tbl_id,
-                       const absl::flat_hash_set<FileId> &retained_files,
+                       const RetainedFiles &retained_files,
                        IouringMgr *io_mgr);
 
 // Cloud mode method (coroutine-based)
 KvError ExecuteCloudGC(const TableIdent &tbl_id,
-                       const absl::flat_hash_set<FileId> &retained_files,
+                       const RetainedFiles &retained_files,
                        CloudStoreMgr *cloud_mgr);
 
 // Local mode implementation
@@ -38,12 +41,11 @@ KvError ListLocalFiles(const TableIdent &tbl_id,
                        std::vector<std::string> &local_files,
                        IouringMgr *io_mgr);
 
-KvError DeleteUnreferencedLocalFiles(
-    const TableIdent &tbl_id,
-    const std::vector<std::string> &data_files,
-    const absl::flat_hash_set<FileId> &retained_files,
-    FileId least_not_archived_file_id,
-    IouringMgr *io_mgr);
+KvError DeleteUnreferencedLocalFiles(const TableIdent &tbl_id,
+                                     const std::vector<std::string> &data_files,
+                                     const RetainedFiles &retained_files,
+                                     FileId least_not_archived_file_id,
+                                     IouringMgr *io_mgr);
 
 KvError GetOrUpdateArchivedMaxFileId(
     const TableIdent &tbl_id,
@@ -76,7 +78,7 @@ KvError DeleteUnreferencedCloudFiles(
     const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
     const std::vector<uint64_t> &manifest_terms,
-    const absl::flat_hash_set<FileId> &retained_files,
+    const RetainedFiles &retained_files,
     FileId least_not_archived_file_id,
     CloudStoreMgr *cloud_mgr);
 }  // namespace FileGarbageCollector

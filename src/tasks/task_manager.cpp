@@ -21,6 +21,7 @@ uint32_t background_write_pool_size_default = 1024;
 uint32_t read_pool_size_default = 2048;
 uint32_t scan_pool_size_default = 2048;
 uint32_t list_object_pool_size_default = 512;
+uint32_t list_standby_partition_pool_size_default = 128;
 uint32_t reopen_pool_size_default = 256;
 }  // namespace
 
@@ -36,6 +37,7 @@ TaskManager::TaskManager(const KvOptions *opts)
       read_pool_(read_pool_size_default),
       scan_pool_(scan_pool_size_default),
       list_object_pool_(list_object_pool_size_default),
+      list_standby_partition_pool_(list_standby_partition_pool_size_default),
       reopen_pool_(reopen_pool_size_default)
 {
     if (opts != nullptr && opts->max_write_concurrency > 0)
@@ -55,6 +57,8 @@ void TaskManager::Shutdown()
     read_pool_.Clear();
     scan_pool_.Clear();
     list_object_pool_.Clear();
+    list_standby_partition_pool_.Clear();
+    reopen_pool_.Clear();
 }
 
 void TaskManager::SetPoolSizesForTest(uint32_t batch_write_pool_size,
@@ -124,6 +128,12 @@ ListObjectTask *TaskManager::GetListObjectTask()
     return list_object_pool_.GetTask();
 }
 
+ListStandbyPartitionTask *TaskManager::GetListStandbyPartitionTask()
+{
+    num_active_++;
+    return list_standby_partition_pool_.GetTask();
+}
+
 ReopenTask *TaskManager::GetReopenTask(const TableIdent &tbl_id)
 {
     num_active_++;
@@ -157,6 +167,10 @@ void TaskManager::FreeTask(KvTask *task)
         break;
     case TaskType::ListObject:
         list_object_pool_.FreeTask(static_cast<ListObjectTask *>(task));
+        break;
+    case TaskType::ListStandbyPartition:
+        list_standby_partition_pool_.FreeTask(
+            static_cast<ListStandbyPartitionTask *>(task));
         break;
     case TaskType::Reopen:
         reopen_pool_.FreeTask(static_cast<ReopenTask *>(task));

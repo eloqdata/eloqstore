@@ -14,7 +14,7 @@ public:
     ArchiveCrond(EloqStore *store);
     void Start();
     void Stop();
-    bool IsStopped();
+    bool StopRequested();
 
 private:
     void Crond();

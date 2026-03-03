@@ -1,0 +1,5 @@
+if(EXISTS "/home/chenzhao/ssh-projects/eloqstore_standby_local/bld/tests/store_path_lut_tests-b12d07c.cmake")
+  include("/home/chenzhao/ssh-projects/eloqstore_standby_local/bld/tests/store_path_lut_tests-b12d07c.cmake")
+else()
+  add_test(store_path_lut_NOT_BUILT-b12d07c store_path_lut_NOT_BUILT-b12d07c)
+endif()

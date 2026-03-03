@@ -1,0 +1,2 @@
+/usr/bin/ar qc libabsl_hashtable_profiler.a CMakeFiles/absl_hashtable_profiler.dir/hashtable.cc.o
+/usr/bin/ranlib libabsl_hashtable_profiler.a

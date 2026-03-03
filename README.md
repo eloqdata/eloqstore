@@ -34,6 +34,8 @@ EloqStore uses `io_uring` for high-performance asynchronous I/O operations. As a
 
 - **Minimum OS**: Ubuntu 24.04 or later (or equivalent Linux kernel 6.8+)
 - **Kernel**: Linux kernel 6.8+ (required for full io_uring support)
+- **Tooling**: `rsync` (required for standby replication and tests). Install via
+  `sudo apt-get install rsync` on Debian/Ubuntu or `brew install rsync` on macOS.
 
 
 ## 🏗️ Architecture

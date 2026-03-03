@@ -27,6 +27,7 @@
 #include "cloud_storage_service.h"
 #include "common.h"
 #include "file_gc.h"
+#include "standby_service.h"
 #include "storage/shard.h"
 #include "tasks/archive_crond.h"
 #include "tasks/prewarm_task.h"
@@ -48,10 +49,32 @@ namespace
 {
 constexpr uint64_t kStorePathWeightGranularity = 1ULL << 20;  // 1 MiB
 constexpr size_t kMaxStorePathLutEntries = kDefaultStorePathLutEntries;
+
+StoreMode DetermineStoreMode(const KvOptions &opts)
+{
+    if (opts.enable_local_standby)
+    {
+        if (opts.standby_master_addr.empty())
+        {
+            return StoreMode::StandbyMaster;
+        }
+        return StoreMode::StandbyReplica;
+    }
+    if (!opts.cloud_store_path.empty())
+    {
+        return StoreMode::Cloud;
+    }
+    return StoreMode::Local;
+}
 }  // namespace
 
 bool EloqStore::ValidateOptions(KvOptions &opts)
 {
+    if (opts.num_threads == 0)
+    {
+        LOG(ERROR) << "Options num_threads cannot be zero";
+        return false;
+    }
     if (opts.max_inflight_write == 0)
     {
         LOG(ERROR) << "Option max_inflight_write cannot be zero";
@@ -100,6 +123,79 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
     {
         LOG(ERROR) << "Invalid option max_write_batch_pages";
         return false;
+    }
+    if (!opts.cloud_store_path.empty())
+    {
+        LOG(ERROR) << "cloud mode already support standby, reset "
+                      "standby_local_standby to false";
+        opts.enable_local_standby = false;
+        opts.standby_master_addr.clear();
+        opts.stanby_master_store_paths.clear();
+        opts.standby_master_addr.shrink_to_fit();
+        opts.stanby_master_store_paths.shrink_to_fit();
+    }
+    if (!opts.enable_local_standby && !opts.standby_master_addr.empty())
+    {
+        LOG(ERROR) << "standby_master_addr requires enable_standby";
+        return false;
+    }
+    if (opts.enable_local_standby)
+    {
+        if (opts.store_path.empty())
+        {
+            LOG(ERROR) << "standby mode requires local store_path";
+            return false;
+        }
+        if (!opts.store_path_weights.empty() &&
+            opts.store_path_weights.size() != opts.store_path.size())
+        {
+            LOG(ERROR) << "store_path_weights must match store_path length";
+            return false;
+        }
+        for (uint64_t weight : opts.store_path_weights)
+        {
+            if (weight == 0)
+            {
+                LOG(ERROR) << "store_path_weights entries must be > 0";
+                return false;
+            }
+        }
+        if (!opts.data_append_mode)
+        {
+            LOG(WARNING) << "append write mode should be enabled when standby "
+                            "storage is enabled, enabling append mode";
+            opts.data_append_mode = true;
+        }
+    }
+    if (!opts.standby_master_addr.empty())
+    {
+        if (opts.store_path.empty())
+        {
+            LOG(ERROR) << "standby_master_addr requires local store_path";
+            return false;
+        }
+        if (opts.standby_master_addr != "local" &&
+            opts.standby_master_addr.find('@') == std::string::npos)
+        {
+            LOG(ERROR) << "standby_master_addr must be 'local' or "
+                       << "'username@addr'";
+            return false;
+        }
+        if (opts.stanby_master_store_paths.size() != opts.store_path.size())
+        {
+            LOG(ERROR) << "stanby_master_store_paths must match store_path "
+                       << "length when standby_master_addr is set";
+            return false;
+        }
+        for (std::string &remote_path : opts.stanby_master_store_paths)
+        {
+            if (remote_path.empty() || remote_path.front() != '/')
+            {
+                LOG(ERROR) << "stanby_master_store_paths must be "
+                           << "absolute paths";
+                return false;
+            }
+        }
     }
     if (!opts.cloud_store_path.empty())
     {
@@ -189,15 +285,21 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
     return true;
 }
 
-EloqStore::EloqStore(const KvOptions &opts) : options_(opts), stopped_(true)
+EloqStore::EloqStore(const KvOptions &opts) : options_(opts)
 {
     if (!ValidateOptions(options_))
     {
         LOG(FATAL) << "Invalid KvOptions configuration";
     }
-    if (!options_.cloud_store_path.empty())
+    store_mode_ = DetermineStoreMode(options_);
+    if (store_mode_ == StoreMode::Cloud)
     {
         cloud_service_ = std::make_unique<CloudStorageService>(this);
+    }
+    else if (store_mode_ == StoreMode::StandbyMaster ||
+             store_mode_ == StoreMode::StandbyReplica)
+    {
+        standby_service_ = std::make_unique<StandbyService>(this);
     }
 }
 
@@ -226,15 +328,8 @@ KvError EloqStore::Start(uint64_t term)
         CHECK_KV_ERR(err);
     }
 
-    if (options_.cloud_store_path.empty())
-    {
-        // local mode, set term to 0
-        term = 0;
-    }
-    else
-    {
-        term_ = term;
-    }
+    // local mode, set term to 0
+    term_ = Mode() == StoreMode::Local ? 0 : term;
 
     // There are files opened at very early stage like stdin/stdout/stderr, glog
     // file, and root directories of data.
@@ -260,6 +355,10 @@ KvError EloqStore::Start(uint64_t term)
     if (cloud_service_)
     {
         cloud_service_->Start();
+    }
+    else if (standby_service_)
+    {
+        standby_service_->Start();
     }
 
     // Start threads.
@@ -289,7 +388,11 @@ KvError EloqStore::Start(uint64_t term)
         archive_crond_->Start();
     }
 
-    if (!options_.cloud_store_path.empty() && options_.prewarm_cloud_cache)
+#ifdef ELOQ_MODULE_ENABLED
+    module_ = std::make_unique<EloqStoreModule>(&shards_);
+    eloq::register_module(module_.get());
+#endif
+    if (options_.prewarm_cloud_cache && store_mode_ == StoreMode::Cloud)
     {
         if (prewarm_service_ == nullptr)
         {
@@ -371,72 +474,106 @@ KvError EloqStore::BuildStorePathLut()
     }
 
     const size_t path_count = options_.store_path.size();
-    std::vector<uint64_t> device_sizes;
-    std::vector<size_t> device_counts;
-    std::vector<size_t> path_device_index(path_count, 0);
-    std::unordered_map<uint64_t, size_t> device_lookup;
-
-    for (size_t i = 0; i < path_count; ++i)
+    std::vector<uint64_t> weights;
+    if (options_.store_path_weights.size() != options_.store_path.size())
     {
-        const fs::path &path = options_.store_path[i];
-        struct stat stat_buf
-        {
-        };
-        if (stat(path.c_str(), &stat_buf) != 0)
-        {
-            int err = errno;
-            LOG(ERROR) << "stat(" << path << ") failed: " << strerror(err);
-            return ToKvError(-err);
-        }
-        struct statvfs vfs_buf
-        {
-        };
-        if (statvfs(path.c_str(), &vfs_buf) != 0)
-        {
-            int err = errno;
-            LOG(ERROR) << "statvfs(" << path << ") failed: " << strerror(err);
-            return ToKvError(-err);
-        }
-        uint64_t total_bytes =
-            static_cast<uint64_t>(vfs_buf.f_blocks) * vfs_buf.f_frsize;
-        if (total_bytes == 0)
-        {
-            total_bytes = 1;
-        }
-        uint64_t dev_key = static_cast<uint64_t>(stat_buf.st_dev);
-        auto [it, inserted] =
-            device_lookup.emplace(dev_key, device_sizes.size());
-        size_t dev_idx = it->second;
-        if (inserted)
-        {
-            device_sizes.push_back(total_bytes);
-            device_counts.push_back(1);
-        }
-        else
-        {
-            device_counts[dev_idx] += 1;
-            device_sizes[dev_idx] =
-                std::min(device_sizes[dev_idx], total_bytes);
-        }
-        path_device_index[i] = dev_idx;
+        LOG(WARNING) << "store_path_weights has a different size from "
+                        "store_path, reset to empty";
+        options_.store_path_weights.clear();
     }
-
-    std::vector<uint64_t> weights(path_count, 1);
-    for (size_t i = 0; i < path_count; ++i)
+    if (options_.standby_master_store_path_weights.size() !=
+        options_.stanby_master_store_paths.size())
     {
-        size_t dev_idx = path_device_index[i];
-        size_t dev_paths = std::max<size_t>(1, device_counts[dev_idx]);
-        uint64_t per_path_bytes = device_sizes[dev_idx] / dev_paths;
-        if (per_path_bytes == 0)
+        LOG(WARNING) << "standby_master_store_path_weights has a different "
+                        "size from store_path, reset to empty";
+        options_.standby_master_store_path_weights.clear();
+    }
+    if (!options_.store_path_weights.empty())
+    {
+        weights = options_.store_path_weights;
+        for (uint64_t &weight : weights)
         {
-            per_path_bytes = 1;
+            if (weight == 0)
+            {
+                weight = 1;
+            }
         }
-        uint64_t weight = per_path_bytes / kStorePathWeightGranularity;
-        if (weight == 0)
+    }
+    else
+    {
+        weights.resize(path_count, 1);
+
+        if (!options_.enable_local_standby)
         {
-            weight = 1;
+            std::vector<uint64_t> device_sizes;
+            std::vector<size_t> device_counts;
+            std::vector<size_t> path_device_index(path_count, 0);
+            std::unordered_map<uint64_t, size_t> device_lookup;
+
+            for (size_t i = 0; i < path_count; ++i)
+            {
+                const fs::path &path = options_.store_path[i];
+                struct stat stat_buf
+                {
+                };
+                if (stat(path.c_str(), &stat_buf) != 0)
+                {
+                    int err = errno;
+                    LOG(ERROR)
+                        << "stat(" << path << ") failed: " << strerror(err);
+                    return ToKvError(-err);
+                }
+                struct statvfs vfs_buf
+                {
+                };
+                if (statvfs(path.c_str(), &vfs_buf) != 0)
+                {
+                    int err = errno;
+                    LOG(ERROR)
+                        << "statvfs(" << path << ") failed: " << strerror(err);
+                    return ToKvError(-err);
+                }
+                uint64_t total_bytes =
+                    static_cast<uint64_t>(vfs_buf.f_blocks) * vfs_buf.f_frsize;
+                if (total_bytes == 0)
+                {
+                    total_bytes = 1;
+                }
+                uint64_t dev_key = static_cast<uint64_t>(stat_buf.st_dev);
+                auto [it, inserted] =
+                    device_lookup.emplace(dev_key, device_sizes.size());
+                size_t dev_idx = it->second;
+                if (inserted)
+                {
+                    device_sizes.push_back(total_bytes);
+                    device_counts.push_back(1);
+                }
+                else
+                {
+                    device_counts[dev_idx] += 1;
+                    device_sizes[dev_idx] =
+                        std::min(device_sizes[dev_idx], total_bytes);
+                }
+                path_device_index[i] = dev_idx;
+            }
+
+            for (size_t i = 0; i < path_count; ++i)
+            {
+                size_t dev_idx = path_device_index[i];
+                size_t dev_paths = std::max<size_t>(1, device_counts[dev_idx]);
+                uint64_t per_path_bytes = device_sizes[dev_idx] / dev_paths;
+                if (per_path_bytes == 0)
+                {
+                    per_path_bytes = 1;
+                }
+                uint64_t weight = per_path_bytes / kStorePathWeightGranularity;
+                if (weight == 0)
+                {
+                    weight = 1;
+                }
+                weights[i] = weight;
+            }
         }
-        weights[i] = weight;
     }
 
     for (size_t i = 0; i < weights.size(); ++i)
@@ -451,6 +588,13 @@ KvError EloqStore::BuildStorePathLut()
         return KvError::InvalidArgs;
     }
     options_.store_path_lut = std::move(lut);
+    if (options_.standby_master_store_path_weights.empty())
+    {
+        options_.standby_master_store_path_weights.resize(
+            options_.stanby_master_store_paths.size(), 1);
+    }
+    options_.standby_master_store_path_lut = std::move(ComputeStorePathLut(
+        options_.standby_master_store_path_weights, kMaxStorePathLutEntries));
     DLOG(INFO) << "Constructed store_path LUT with "
                << options_.store_path_lut.size() << " entries";
     return KvError::NoError;
@@ -722,8 +866,20 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
         list_request.SetRecursive(false);
         do
         {
+#ifdef ELOQ_MODULE_ENABLED
+            {
+                std::lock_guard<bthread::Mutex> lk(list_request.mutex_);
+                list_request.done_ = false;
+            }
+#else
+            list_request.done_.store(false, std::memory_order_relaxed);
+#endif
+            list_request.err_ = KvError::NoError;
+            list_request.GetNextContinuationToken()->clear();
             objects.clear();
-            ExecSync(&list_request);
+            shards_[utils::RandomInt(static_cast<int>(shards_.size()))]
+                ->AddKvRequest(&list_request);
+            list_request.Wait();
 
             if (list_request.Error() != KvError::NoError)
             {
@@ -885,50 +1041,91 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
     req->reopen_reqs_.clear();
 
     std::vector<TableIdent> partitions;
-    std::error_code ec;
-    for (const fs::path root : options_.store_path)
+    if (Mode() == StoreMode::StandbyReplica)
     {
-        const fs::path db_path(root);
-        fs::directory_iterator dir_it(db_path, ec);
-        if (ec)
+        std::vector<std::string> names;
+        ListStandbyPartitionRequest list_request(&names);
+#ifdef ELOQ_MODULE_ENABLED
         {
-            req->SetDone(ToKvError(-ec.value()));
+            std::lock_guard<bthread::Mutex> lk(list_request.mutex_);
+            list_request.done_ = false;
+        }
+#else
+        list_request.done_.store(false, std::memory_order_relaxed);
+#endif
+        list_request.err_ = KvError::NoError;
+        shards_[utils::RandomInt(static_cast<int>(shards_.size()))]
+            ->AddKvRequest(&list_request);
+        list_request.Wait();
+        if (list_request.Error() != KvError::NoError)
+        {
+            req->SetDone(list_request.Error());
             return;
         }
-        fs::directory_iterator end;
-        for (; dir_it != end; dir_it.increment(ec))
+
+        partitions.reserve(names.size());
+        for (const std::string &name : names)
         {
-            if (ec)
-            {
-                req->SetDone(ToKvError(-ec.value()));
-                return;
-            }
-            const fs::directory_entry &ent = *dir_it;
-            const fs::path ent_path = ent.path();
-            bool is_dir = fs::is_directory(ent_path, ec);
-            if (ec)
-            {
-                req->SetDone(ToKvError(-ec.value()));
-                return;
-            }
-            if (!is_dir)
+            TableIdent tbl_id = TableIdent::FromString(name);
+            if (!tbl_id.IsValid())
             {
                 continue;
             }
-
-            TableIdent tbl_id = TableIdent::FromString(ent_path.filename());
-            if (tbl_id.tbl_name_.empty())
-            {
-                LOG(WARNING) << "unexpected partition " << ent.path();
-                continue;
-            }
-
             if (options_.partition_filter && !options_.partition_filter(tbl_id))
             {
                 continue;
             }
-
             partitions.emplace_back(std::move(tbl_id));
+        }
+    }
+    else
+    {
+        std::error_code ec;
+        for (const fs::path root : options_.store_path)
+        {
+            const fs::path db_path(root);
+            fs::directory_iterator dir_it(db_path, ec);
+            if (ec)
+            {
+                req->SetDone(ToKvError(-ec.value()));
+                return;
+            }
+            fs::directory_iterator end;
+            for (; dir_it != end; dir_it.increment(ec))
+            {
+                if (ec)
+                {
+                    req->SetDone(ToKvError(-ec.value()));
+                    return;
+                }
+                const fs::directory_entry &ent = *dir_it;
+                const fs::path ent_path = ent.path();
+                bool is_dir = fs::is_directory(ent_path, ec);
+                if (ec)
+                {
+                    req->SetDone(ToKvError(-ec.value()));
+                    return;
+                }
+                if (!is_dir)
+                {
+                    continue;
+                }
+
+                TableIdent tbl_id = TableIdent::FromString(ent_path.filename());
+                if (tbl_id.tbl_name_.empty())
+                {
+                    LOG(WARNING) << "unexpected partition " << ent.path();
+                    continue;
+                }
+
+                if (options_.partition_filter &&
+                    !options_.partition_filter(tbl_id))
+                {
+                    continue;
+                }
+
+                partitions.emplace_back(std::move(tbl_id));
+            }
         }
     }
 
@@ -967,6 +1164,10 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
     {
         auto reopen_req = std::make_unique<ReopenRequest>();
         reopen_req->SetArgs(partition);
+        if (Mode() == StoreMode::StandbyReplica)
+        {
+            reopen_req->SetSnapshotTimestamp(req->SnapshotTimestamp());
+        }
         ReopenRequest *ptr = reopen_req.get();
         req->reopen_reqs_.push_back(std::move(reopen_req));
         if (!ExecAsyn(ptr, 0, on_reopen_done))
@@ -1055,7 +1256,10 @@ void EloqStore::Stop()
     {
         shard->Stop();
     }
-
+    if (standby_service_)
+    {
+        standby_service_->Stop();
+    }
     if (cloud_service_)
     {
         cloud_service_->Stop();
@@ -1392,6 +1596,7 @@ void TruncateRequest::SetArgs(TableIdent tbl_id, std::string position)
 void ReopenRequest::SetArgs(TableIdent tbl_id)
 {
     SetTableId(std::move(tbl_id));
+    snapshot_ts_ = 0;
 }
 
 void DropTableRequest::SetArgs(std::string table_name)

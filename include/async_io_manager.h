@@ -427,6 +427,16 @@ public:
         return 0;
     }
 
+    static std::string ToFilename(FileId file_id, uint64_t term)
+    {
+        if (file_id == LruFD::kManifest)
+        {
+            return ManifestFileName(term);
+        }
+        assert(file_id <= LruFD::kMaxDataFile);
+        return DataFileName(file_id, term);
+    }
+
     KvError ReadFile(const TableIdent &tbl_id,
                      std::string_view filename,
                      DirectIoBuffer &content) override;
@@ -750,23 +760,17 @@ public:
     KvError BootstrapRing(Shard *shard);
 };
 
-class CloudStoreMgr : public IouringMgr
+class CloudStoreMgr final : public IouringMgr
 {
 public:
     CloudStoreMgr(const KvOptions *opts,
                   uint32_t fd_limit,
                   CloudStorageService *service);
     ~CloudStoreMgr() override;
-    static constexpr FileId ManifestFileId()
-    {
-        return LruFD::kManifest;
-    }
     KvError Init(Shard *shard) override;
     KvError RestoreStartupState() override;
     bool IsIdle() override;
     void Stop() override;
-    void Submit() override;
-    void PollComplete() override;
     KvError SwitchManifest(const TableIdent &tbl_id,
                            std::string_view snapshot) override;
     KvError CreateArchive(const TableIdent &tbl_id,
@@ -850,6 +854,10 @@ public:
     const PrewarmStats &GetPrewarmStats() const
     {
         return prewarm_stats_;
+    }
+    bool HasPrewarmWorkers() const
+    {
+        return !prewarmers_.empty();
     }
 
     void SetProcessTerm(uint64_t term)
@@ -947,7 +955,6 @@ private:
     void EnqueClosedFile(FileKey key);
     bool HasEvictableFile() const;
     int ReserveCacheSpace(size_t size);
-    static std::string ToFilename(FileId file_id, uint64_t term = 0);
     size_t EstimateFileSize(FileId file_id) const;
     size_t EstimateFileSize(std::string_view filename) const;
     void InitBackgroundJob() override;
@@ -1046,6 +1053,36 @@ private:
 
     friend class Prewarmer;
     friend class PrewarmService;
+};
+
+class StandbyStoreMgr final : public IouringMgr
+{
+public:
+    StandbyStoreMgr(const KvOptions *opts, uint32_t fd_limit);
+    void Stop() override;
+
+    std::pair<ManifestFilePtr, KvError> RefreshManifest(
+        const TableIdent &tbl_id);
+
+    void SetProcessTerm(uint64_t term)
+    {
+        process_term_ = term;
+    }
+
+    uint64_t ProcessTerm() const override
+    {
+        return process_term_;
+    }
+
+private:
+    void WaitForStandbyTasksToDrain();
+    std::string BuildRemoteFilePath(const TableIdent &tbl_id,
+                                    std::string_view filename) const;
+    int RunRsync(const std::string &remote, const std::string &dst);
+    uint64_t process_term_{0};
+    std::atomic<size_t> inflight_standby_tasks_{0};
+
+    std::string remote_addr_;
 };
 
 class MemStoreMgr : public AsyncIoManager

@@ -6,7 +6,9 @@
 #include <liburing.h>
 #include <liburing/io_uring.h>
 #include <linux/openat2.h>
+#include <spawn.h>
 #include <sys/uio.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -37,6 +39,7 @@
 #include "utils.h"
 
 #ifdef ELOQ_MODULE_ENABLED
+#include <bthread/bthread.h>
 #include <bthread/eloq_module.h>
 #endif
 
@@ -53,12 +56,15 @@
 #include "tasks/task.h"
 #include "tasks/write_task.h"
 
+extern char **environ;
+
 namespace eloqstore
 {
 namespace fs = std::filesystem;
 
 namespace
 {
+constexpr std::string_view kManifestTmp = "manifest.tmp";
 WriteTask *CurrentWriteTask()
 {
     KvTask *task = ThdTask();
@@ -127,15 +133,24 @@ std::unique_ptr<AsyncIoManager> AsyncIoManager::Instance(const EloqStore *store,
     {
         return std::make_unique<MemStoreMgr>(opts);
     }
-    else if (opts->cloud_store_path.empty())
+    StoreMode mode = store->Mode();
+    std::unique_ptr<AsyncIoManager> mgr;
+    switch (mode)
     {
-        return std::make_unique<IouringMgr>(opts, fd_limit);
-    }
-    else
-    {
-        return std::make_unique<CloudStoreMgr>(
+    case StoreMode::Cloud:
+        mgr = std::make_unique<CloudStoreMgr>(
             opts, fd_limit, store->CloudService());
+        break;
+    case StoreMode::StandbyReplica:
+    case StoreMode::StandbyMaster:
+        mgr = std::make_unique<StandbyStoreMgr>(opts, fd_limit);
+        break;
+    case StoreMode::Local:
+    default:
+        mgr = std::make_unique<IouringMgr>(opts, fd_limit);
+        break;
     }
+    return mgr;
 }
 
 bool AsyncIoManager::IsIdle()
@@ -3175,16 +3190,6 @@ void CloudStoreMgr::Stop()
     obj_store_.Shutdown();
 }
 
-void CloudStoreMgr::Submit()
-{
-    IouringMgr::Submit();
-}
-
-void CloudStoreMgr::PollComplete()
-{
-    IouringMgr::PollComplete();
-}
-
 bool CloudStoreMgr::NeedPrewarm() const
 {
     return options_->prewarm_cloud_cache && HasPrewarmPending();
@@ -3198,6 +3203,7 @@ void CloudStoreMgr::RunPrewarm()
     }
     for (auto &prewarmer : prewarmers_)
     {
+        prewarmer->stop_.store(false, std::memory_order_release);
         prewarmer->Resume();
     }
 }
@@ -3209,7 +3215,7 @@ void CloudStoreMgr::RegisterPrewarmActive()
 
 void CloudStoreMgr::UnregisterPrewarmActive()
 {
-    assert(active_prewarm_tasks_ > 0);
+    CHECK_GT(active_prewarm_tasks_, 0);
     --active_prewarm_tasks_;
 }
 
@@ -3220,43 +3226,21 @@ bool CloudStoreMgr::HasPrewarmPending() const
 
 bool CloudStoreMgr::PopPrewarmFile(PrewarmFile &file)
 {
-    // Lock-free dequeue from concurrent queue
     if (!prewarm_queue_.try_dequeue(file))
     {
         return false;
     }
-
-    // Update counters atomically
+    prewarm_queue_size_.fetch_sub(1, std::memory_order_acq_rel);
     prewarm_files_pulled_.fetch_add(1, std::memory_order_relaxed);
-
-    // Decrement size counter, but prevent underflow using compare-exchange
-    size_t old_size = prewarm_queue_size_.load(std::memory_order_acquire);
-    while (old_size > 0)
-    {
-        if (prewarm_queue_size_.compare_exchange_weak(
-                old_size,
-                old_size - 1,
-                std::memory_order_acq_rel,
-                std::memory_order_acquire))
-        {
-            break;
-        }
-    }
-
     return true;
 }
 
 void CloudStoreMgr::ClearPrewarmFiles()
 {
-    // Drain all items from queue
     PrewarmFile dummy;
-    size_t drained = 0;
     while (prewarm_queue_.try_dequeue(dummy))
     {
-        ++drained;
     }
-
-    // Reset size counter
     prewarm_queue_size_.store(0, std::memory_order_release);
 }
 
@@ -3270,11 +3254,16 @@ void CloudStoreMgr::StopAllPrewarmTasks()
 
 void CloudStoreMgr::WaitForCloudTasksToDrain()
 {
-    constexpr auto kPollInterval = std::chrono::milliseconds(5);
+    constexpr uint64_t kPollIntervalUs = 5000;
 
     while (obj_store_.HasPendingWork() || inflight_cloud_slots_ > 0)
     {
+#ifdef ELOQ_MODULE_ENABLED
+        bthread_usleep(kPollIntervalUs);
+#else
+        constexpr auto kPollInterval = std::chrono::milliseconds(5);
         std::this_thread::sleep_for(kPollInterval);
+#endif
     }
 }
 
@@ -3310,6 +3299,7 @@ void CloudStoreMgr::ProcessCloudReadyTasks(Shard *shard)
         return;
     }
     ObjectStore::Task *ready_tasks[128];
+    CHECK(shard != nullptr);
     size_t nready = cloud_ready_tasks_.try_dequeue_bulk(ready_tasks,
                                                         std::size(ready_tasks));
     if (nready == 0)
@@ -3332,15 +3322,10 @@ bool CloudStoreMgr::AppendPrewarmFiles(std::vector<PrewarmFile> &files)
         return true;
     }
 
-    size_t num_files = files.size();
-
-    // Wake up worker before potentially blocking
-    // This ensures worker is actively draining queue if it was idle
 #ifdef ELOQ_MODULE_ENABLED
     eloq::EloqModule::NotifyWorker(shard_id_);
 #endif
 
-    // Wait until queue has space (only place we use mutex/CV)
     while (!prewarm_listing_complete_.load(std::memory_order_acquire))
     {
         size_t current_size =
@@ -3349,35 +3334,21 @@ bool CloudStoreMgr::AppendPrewarmFiles(std::vector<PrewarmFile> &files)
         {
             break;
         }
-
-        // Debug log
-        DLOG(INFO) << "Producer waiting: queue full with " << current_size
-                   << " pending files on shard " << shard_id_;
-
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
-    // Check if we were aborted
     if (prewarm_listing_complete_.load(std::memory_order_acquire))
     {
-        DLOG(INFO) << "Producer aborted: listing marked complete";
-        return false;  // Abort requested
+        return false;
     }
 
-    // Enqueue files (lock-free operation)
+    size_t num_files = files.size();
     prewarm_queue_.enqueue_bulk(std::make_move_iterator(files.begin()),
                                 num_files);
-
-    // Update size counter
     size_t prev_size =
         prewarm_queue_size_.fetch_add(num_files, std::memory_order_release);
-
     files.clear();
 
-    DLOG(INFO) << "Producer appended " << num_files << " to shard " << shard_id_
-               << " prewarm queue, current size: " << (prev_size + num_files);
-
-    // Wake up prewarmers if queue was empty
     if (prev_size == 0)
     {
         for (auto &prewarmer : prewarmers_)
@@ -3385,7 +3356,6 @@ bool CloudStoreMgr::AppendPrewarmFiles(std::vector<PrewarmFile> &files)
             prewarmer->stop_.store(false, std::memory_order_release);
         }
     }
-
     return true;
 }
 
@@ -4304,19 +4274,6 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
     return KvError::NoError;
 }
 
-std::string CloudStoreMgr::ToFilename(FileId file_id, uint64_t term)
-{
-    if (file_id == LruFD::kManifest)
-    {
-        return ManifestFileName(term);
-    }
-    else
-    {
-        assert(file_id <= LruFD::kMaxDataFile);
-        return DataFileName(file_id, term);
-    }
-}
-
 size_t CloudStoreMgr::EstimateFileSize(FileId file_id) const
 {
     if (file_id == LruFD::kManifest)
@@ -4484,6 +4441,152 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
         return ToKvError(res);
     }
     return KvError::NoError;
+}
+
+StandbyStoreMgr::StandbyStoreMgr(const KvOptions *opts, uint32_t fd_limit)
+    : IouringMgr(opts, fd_limit)
+{
+    CHECK(opts != nullptr);
+    const std::string &addr = opts->standby_master_addr;
+    if (addr.empty())
+        return;
+    remote_addr_ = addr;
+    LOG(INFO) << "StandbyStoreMgr replicating from " << remote_addr_;
+}
+
+void StandbyStoreMgr::Stop()
+{
+    WaitForStandbyTasksToDrain();
+}
+
+void StandbyStoreMgr::WaitForStandbyTasksToDrain()
+{
+    constexpr uint64_t kPollIntervalUs = 5000;
+
+    while (inflight_standby_tasks_.load(std::memory_order_acquire) > 0)
+    {
+#ifdef ELOQ_MODULE_ENABLED
+        bthread_usleep(kPollIntervalUs);
+#else
+        constexpr auto kPollInterval = std::chrono::milliseconds(5);
+        std::this_thread::sleep_for(kPollInterval);
+#endif
+    }
+}
+
+std::string StandbyStoreMgr::BuildRemoteFilePath(
+    const TableIdent &tbl_id, std::string_view filename) const
+{
+    size_t remote_path_idx =
+        tbl_id.StorePathIndex(options_->stanby_master_store_paths.size(),
+                              options_->standby_master_store_path_lut);
+    CHECK_LT(remote_path_idx, options_->stanby_master_store_paths.size());
+    std::string remote_path =
+        options_->stanby_master_store_paths[remote_path_idx];
+    while (remote_path.size() > 1 && remote_path.back() == '/')
+    {
+        remote_path.pop_back();
+    }
+    if (!remote_path.empty() && remote_path.back() != '/')
+    {
+        remote_path.push_back('/');
+    }
+    remote_path.append(tbl_id.ToString());
+    remote_path.push_back('/');
+    remote_path.append(filename);
+    std::string remote;
+    if (remote_addr_.empty() || remote_addr_ == "local")
+    {
+        remote = std::move(remote_path);
+    }
+    else
+    {
+        remote = remote_addr_;
+        remote.push_back(':');
+        remote.append(remote_path);
+    }
+    return remote;
+}
+
+int StandbyStoreMgr::RunRsync(const std::string &remote, const std::string &dst)
+{
+    inflight_standby_tasks_.fetch_add(1, std::memory_order_acq_rel);
+    struct InflightTaskGuard
+    {
+        std::atomic<size_t> *counter;
+        ~InflightTaskGuard()
+        {
+            counter->fetch_sub(1, std::memory_order_acq_rel);
+        }
+    } guard{&inflight_standby_tasks_};
+
+    char *const argv[] = {const_cast<char *>("rsync"),
+                          const_cast<char *>("-a"),
+                          const_cast<char *>("-z"),
+                          const_cast<char *>("--inplace"),
+                          const_cast<char *>(remote.c_str()),
+                          const_cast<char *>(dst.c_str()),
+                          nullptr};
+    pid_t pid = 0;
+    int rc = posix_spawnp(&pid, "rsync", nullptr, nullptr, argv, environ);
+    if (rc != 0)
+    {
+        LOG(ERROR) << "posix_spawnp rsync failed: " << strerror(rc);
+        return -1;
+    }
+
+    int status = 0;
+    if (waitpid(pid, &status, 0) < 0)
+    {
+        LOG(ERROR) << "waitpid for rsync failed: " << strerror(errno);
+        return -1;
+    }
+    if (WIFEXITED(status))
+    {
+        return WEXITSTATUS(status);
+    }
+    if (WIFSIGNALED(status))
+    {
+        return -WTERMSIG(status);
+    }
+    return -1;
+}
+
+std::pair<ManifestFilePtr, KvError> StandbyStoreMgr::RefreshManifest(
+    const TableIdent &tbl_id)
+{
+    LruFD::Ref old_fd = GetOpenedFD(tbl_id, LruFD::kManifest);
+    if (old_fd != nullptr)
+    {
+        CloseFile(std::move(old_fd));
+    }
+
+    fs::path table_dir =
+        tbl_id.StorePath(options_->store_path, options_->store_path_lut);
+    fs::path manifest_tmp = table_dir / kManifestTmp;
+    if (!fs::exists(manifest_tmp))
+    {
+        LOG(ERROR) << "StandbyStoreMgr: manifest.tmp missing for " << tbl_id;
+        return {nullptr, KvError::NotFound};
+    }
+
+    uint64_t term = ProcessTerm();
+    fs::path manifest_dst = table_dir / ManifestFileName(term);
+    auto [dir_fd, dir_err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
+    if (dir_err != KvError::NoError)
+    {
+        return {nullptr, dir_err};
+    }
+    int rename_res = Rename(
+        dir_fd.FdPair(), kManifestTmp.data(), manifest_dst.filename().c_str());
+    if (rename_res < 0)
+    {
+        LOG(ERROR) << "StandbyStoreMgr: rename manifest failed: "
+                   << strerror(-rename_res);
+        return {nullptr, ToKvError(rename_res)};
+    }
+
+    return IouringMgr::GetManifest(tbl_id);
 }
 
 DirectIoBuffer CloudStoreMgr::AcquireCloudBuffer(KvTask *task)

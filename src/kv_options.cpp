@@ -232,6 +232,11 @@ int KvOptions::LoadFromIni(const char *path)
         allow_reuse_local_caches =
             reader.GetBoolean(sec_run, "allow_reuse_local_caches", false);
     }
+    if (reader.HasValue(sec_run, "enable_standby"))
+    {
+        enable_local_standby =
+            reader.GetBoolean(sec_run, "enable_standby", false);
+    }
     if (reader.HasValue(sec_run, "prewarm_cloud_cache"))
     {
         prewarm_cloud_cache =
@@ -255,9 +260,52 @@ int KvOptions::LoadFromIni(const char *path)
         std::string input = reader.Get(sec_permanent, "store_path", "");
         boost::split(store_path, input, boost::is_any_of(": "));
     }
+    if (reader.HasValue(sec_permanent, "store_path_weights"))
+    {
+        store_path_weights.clear();
+        std::string input = reader.Get(sec_permanent, "store_path_weights", "");
+        std::vector<std::string> tokens;
+        boost::split(tokens, input, boost::is_any_of(","));
+        for (std::string &token : tokens)
+        {
+            boost::algorithm::trim(token);
+            if (token.empty())
+            {
+                continue;
+            }
+            uint64_t weight = 0;
+            auto [ptr, ec] = std::from_chars(
+                token.data(), token.data() + token.size(), weight);
+            if (ec == std::errc() && ptr == token.data() + token.size())
+            {
+                store_path_weights.push_back(weight);
+            }
+        }
+    }
     if (reader.HasValue(sec_permanent, "cloud_store_path"))
     {
         cloud_store_path = reader.Get(sec_permanent, "cloud_store_path", "");
+    }
+    if (reader.HasValue(sec_permanent, "standby_master_addr"))
+    {
+        standby_master_addr =
+            reader.Get(sec_permanent, "standby_master_addr", "");
+    }
+    if (reader.HasValue(sec_permanent, "stanby_master_store_paths"))
+    {
+        stanby_master_store_paths.clear();
+        std::string input =
+            reader.Get(sec_permanent, "stanby_master_store_paths", "");
+        std::vector<std::string> tokens;
+        boost::split(tokens, input, boost::is_any_of(","));
+        for (std::string &token : tokens)
+        {
+            boost::algorithm::trim(token);
+            if (!token.empty())
+            {
+                stanby_master_store_paths.push_back(token);
+            }
+        }
     }
     if (reader.HasValue(sec_permanent, "cloud_provider"))
     {
@@ -373,10 +421,14 @@ bool KvOptions::operator==(const KvOptions &other) const
            non_page_io_batch_size == other.non_page_io_batch_size &&
            write_buffer_ratio == other.write_buffer_ratio &&
            allow_reuse_local_caches == other.allow_reuse_local_caches &&
+           enable_local_standby == other.enable_local_standby &&
            prewarm_cloud_cache == other.prewarm_cloud_cache &&
            prewarm_task_count == other.prewarm_task_count &&
            store_path == other.store_path &&
+           store_path_weights == other.store_path_weights &&
            cloud_store_path == other.cloud_store_path &&
+           standby_master_addr == other.standby_master_addr &&
+           stanby_master_store_paths == other.stanby_master_store_paths &&
            cloud_provider == other.cloud_provider &&
            cloud_endpoint == other.cloud_endpoint &&
            cloud_region == other.cloud_region &&

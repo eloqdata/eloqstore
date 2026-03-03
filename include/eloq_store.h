@@ -39,6 +39,7 @@ enum class RequestType : uint8_t
     Floor,
     Scan,
     ListObject,
+    ListStandbyPartition,
     BatchWrite,
     Reopen,
     Truncate,
@@ -63,6 +64,8 @@ inline const char *RequestTypeToString(RequestType type)
         return "scan";
     case RequestType::ListObject:
         return "list_object";
+    case RequestType::ListStandbyPartition:
+        return "list_standby_partition";
     case RequestType::BatchWrite:
         return "batch_write";
     case RequestType::Reopen:
@@ -328,6 +331,28 @@ private:
     std::string next_continuation_token_;  // output token
 };
 
+class ListStandbyPartitionRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::ListStandbyPartition;
+    }
+
+    explicit ListStandbyPartitionRequest(std::vector<std::string> *partitions)
+        : partitions_(partitions)
+    {
+    }
+
+    std::vector<std::string> *GetPartitions() const
+    {
+        return partitions_;
+    }
+
+private:
+    std::vector<std::string> *partitions_;
+};
+
 class WriteRequest : public KvRequest
 {
 public:
@@ -347,6 +372,20 @@ public:
         return RequestType::Reopen;
     }
     void SetArgs(TableIdent tbl_id);
+    void SetSnapshotTimestamp(uint64_t ts)
+    {
+        snapshot_ts_ = ts;
+    }
+    uint64_t SnapshotTimestamp() const
+    {
+        return snapshot_ts_;
+    }
+
+private:
+    uint64_t snapshot_ts_{0};
+
+    friend class EloqStore;
+    friend class ReopenTask;
 };
 
 /**
@@ -461,7 +500,17 @@ public:
         return RequestType::GlobalReopen;
     }
 
+    void SetSnapshotTimestamp(uint64_t ts)
+    {
+        snapshot_ts_ = ts;
+    }
+    uint64_t SnapshotTimestamp() const
+    {
+        return snapshot_ts_;
+    }
+
 private:
+    uint64_t snapshot_ts_{0};
     std::vector<std::unique_ptr<ReopenRequest>> reopen_reqs_;
     std::atomic<uint32_t> pending_{0};
     std::atomic<uint8_t> first_error_{static_cast<uint8_t>(KvError::NoError)};
@@ -501,6 +550,7 @@ class ObjectStore;
 class EloqStoreModule;
 class PrewarmService;
 class CloudStorageService;
+class StandbyService;
 
 class EloqStore
 {
@@ -525,6 +575,16 @@ public:
     PrewarmService *GetPrewarmService() const
     {
         return prewarm_service_.get();
+    }
+
+    StandbyService *GetStandbyService() const
+    {
+        return standby_service_.get();
+    }
+
+    StoreMode Mode() const
+    {
+        return store_mode_;
     }
 
     uint64_t Term() const
@@ -592,11 +652,13 @@ private:
     uint64_t term_{0};
     std::unique_ptr<ArchiveCrond> archive_crond_{nullptr};
     std::unique_ptr<PrewarmService> prewarm_service_{nullptr};
+    std::unique_ptr<StandbyService> standby_service_{nullptr};
 #ifdef ELOQ_MODULE_ENABLED
     std::unique_ptr<EloqStoreModule> module_{nullptr};
 #endif
 
     bool enable_eloqstore_metrics_{false};
+    StoreMode store_mode_{StoreMode::Local};
 
     friend class Shard;
     friend class AsyncIoManager;

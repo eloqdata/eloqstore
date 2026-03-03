@@ -1,0 +1,5 @@
+add_test( [==[standby rsync replica follows master changes]==] /home/chenzhao/ssh-projects/eloqstore_standby_local/bld/tests/standby [==[standby rsync replica follows master changes]==]  )
+set_tests_properties( [==[standby rsync replica follows master changes]==] PROPERTIES WORKING_DIRECTORY /home/chenzhao/ssh-projects/eloqstore_standby_local/bld/tests)
+add_test( [==[standby replica follows cloud-mode master]==] /home/chenzhao/ssh-projects/eloqstore_standby_local/bld/tests/standby [==[standby replica follows cloud-mode master]==]  )
+set_tests_properties( [==[standby replica follows cloud-mode master]==] PROPERTIES WORKING_DIRECTORY /home/chenzhao/ssh-projects/eloqstore_standby_local/bld/tests)
+set( standby_TESTS [==[standby rsync replica follows master changes]==] [==[standby replica follows cloud-mode master]==])

@@ -1,0 +1,2 @@
+/usr/bin/ar qc libabsl_profile_builder.a CMakeFiles/absl_profile_builder.dir/internal/profile_builder.cc.o
+/usr/bin/ranlib libabsl_profile_builder.a

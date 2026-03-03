@@ -41,7 +41,6 @@ void GetRetainedFiles(absl::flat_hash_set<FileId> &result,
         {
             MemIndexPage *idx_page = reinterpret_cast<MemIndexPage *>(val);
             FilePageId fp_id = idx_page->GetFilePageId();
-
             result.emplace(fp_id >> pages_per_file_shift);
         }
         if ((page_id & 0xFF) == 0)
@@ -54,8 +53,23 @@ void GetRetainedFiles(absl::flat_hash_set<FileId> &result,
 namespace FileGarbageCollector
 {
 
+namespace
+{
+bool IsFileRetained(const RetainedFiles &retained_files,
+                    FileId file_id,
+                    uint64_t term)
+{
+    auto it = retained_files.find(file_id);
+    if (it == retained_files.end())
+    {
+        return false;
+    }
+    return it->second == term;
+}
+}  // namespace
+
 KvError ExecuteLocalGC(const TableIdent &tbl_id,
-                       const absl::flat_hash_set<FileId> &retained_files,
+                       const RetainedFiles &retained_files,
                        IouringMgr *io_mgr)
 {
     DLOG(INFO) << "ExecuteLocalGC: starting for table " << tbl_id.tbl_name_
@@ -437,7 +451,7 @@ KvError DeleteUnreferencedCloudFiles(
     const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
     const std::vector<uint64_t> &manifest_terms,
-    const absl::flat_hash_set<FileId> &retained_files,
+    const RetainedFiles &retained_files,
     FileId least_not_archived_file_id,
     CloudStoreMgr *cloud_mgr)
 {
@@ -472,7 +486,7 @@ KvError DeleteUnreferencedCloudFiles(
         // max file ID)
         // 2. Not in retained_files (files not needed in the current version)
         if (file_id >= least_not_archived_file_id &&
-            !retained_files.contains(file_id))
+            !IsFileRetained(retained_files, file_id, term))
         {
             std::string remote_path = tbl_id.ToString() + "/" + file_name;
             files_to_delete.push_back(remote_path);
@@ -537,12 +551,11 @@ KvError DeleteUnreferencedCloudFiles(
     return KvError::NoError;
 }
 
-KvError DeleteUnreferencedLocalFiles(
-    const TableIdent &tbl_id,
-    const std::vector<std::string> &data_files,
-    const absl::flat_hash_set<FileId> &retained_files,
-    FileId least_not_archived_file_id,
-    IouringMgr *io_mgr)
+KvError DeleteUnreferencedLocalFiles(const TableIdent &tbl_id,
+                                     const std::vector<std::string> &data_files,
+                                     const RetainedFiles &retained_files,
+                                     FileId least_not_archived_file_id,
+                                     IouringMgr *io_mgr)
 {
     namespace fs = std::filesystem;
     fs::path dir_path = tbl_id.StorePath(io_mgr->options_->store_path,
@@ -575,7 +588,7 @@ KvError DeleteUnreferencedLocalFiles(
         // the archived max file ID)
         // 2. Not in retained_files (files not needed in the current version)
         if (file_id >= least_not_archived_file_id &&
-            !retained_files.contains(file_id))
+            !IsFileRetained(retained_files, file_id, term))
         {
             fs::path file_path = dir_path / file_name;
             files_to_delete.push_back(file_path.string());
@@ -589,7 +602,9 @@ KvError DeleteUnreferencedLocalFiles(
                        << " since file_id=" << file_id
                        << ", least_not_archived_file_id="
                        << least_not_archived_file_id << ", in_retained="
-                       << (retained_files.contains(file_id) ? "true" : "false");
+                       << (IsFileRetained(retained_files, file_id, term)
+                               ? "true"
+                               : "false");
         }
     }
 
@@ -625,7 +640,7 @@ KvError DeleteUnreferencedLocalFiles(
 }
 
 KvError ExecuteCloudGC(const TableIdent &tbl_id,
-                       const absl::flat_hash_set<FileId> &retained_files,
+                       const RetainedFiles &retained_files,
                        CloudStoreMgr *cloud_mgr)
 {
     // Check term file before proceeding

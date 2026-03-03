@@ -55,7 +55,6 @@ public:
     TaskManager *TaskMgr();
     PagesPool *PagePool();
 
-    bool oss_enabled_{false};
     bool io_mgr_and_page_pool_inited_{false};
     bool startup_restore_finished_{false};
 
@@ -185,6 +184,8 @@ private:
             return "scan";
         case RequestType::ListObject:
             return "list_object";
+        case RequestType::ListStandbyPartition:
+            return "list_standby_partition";
         case RequestType::Reopen:
             return "reopen";
         case RequestType::BatchWrite:

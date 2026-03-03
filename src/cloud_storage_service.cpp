@@ -24,10 +24,6 @@ CloudStorageService::CloudStorageService(EloqStore *store) : store_(store)
 {
     CHECK(store_ != nullptr);
     size_t shard_count = store_->Options().num_threads;
-    if (shard_count == 0)
-    {
-        shard_count = 1;
-    }
     shard_stores_.assign(shard_count, nullptr);
     shard_locks_.resize(shard_count);
 

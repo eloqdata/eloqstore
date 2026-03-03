@@ -53,6 +53,7 @@ size_t RootMetaBytes(const RootMeta &meta)
     bytes += meta.compression_->DictionaryMemoryBytes();
     return bytes;
 }
+
 }  // namespace
 
 IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
@@ -341,11 +342,12 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
 KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
                                                   CowRootMeta &cow_meta)
 {
-    if (Options()->cloud_store_path.empty())
+    CHECK(eloq_store != nullptr);
+    const StoreMode mode = eloq_store->Mode();
+    if (mode != StoreMode::Cloud && mode != StoreMode::StandbyReplica)
     {
         return KvError::InvalidArgs;
     }
-    auto *cloud_mgr = static_cast<CloudStoreMgr *>(IoMgr());
 
     auto [root_handle, root_err] = FindRoot(tbl_ident);
     if (root_err == KvError::NoError)
@@ -356,8 +358,10 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
             FilePageId max_fp_id =
                 old_meta->mapper_->FilePgAllocator()->MaxFilePageId();
             FileId max_file_id = max_fp_id >> Options()->pages_per_file_shift;
-            if (max_file_id <= IouringMgr::LruFD::kMaxDataFile)
+            if (mode == StoreMode::Cloud &&
+                max_file_id <= IouringMgr::LruFD::kMaxDataFile)
             {
+                auto *cloud_mgr = static_cast<CloudStoreMgr *>(IoMgr());
                 uint64_t term = IoMgr()
                                     ->GetFileIdTerm(tbl_ident, max_file_id)
                                     .value_or(IoMgr()->ProcessTerm());
@@ -372,7 +376,22 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
         }
     }
 
-    auto [manifest, err] = cloud_mgr->RefreshManifest(tbl_ident);
+    ManifestFilePtr manifest;
+    KvError err = KvError::NoError;
+    if (mode == StoreMode::Cloud)
+    {
+        auto *cloud_mgr = static_cast<CloudStoreMgr *>(IoMgr());
+        auto [m, cloud_err] = cloud_mgr->RefreshManifest(tbl_ident);
+        err = cloud_err;
+        manifest = std::move(m);
+    }
+    else if (mode == StoreMode::StandbyReplica)
+    {
+        auto *standby_mgr = static_cast<StandbyStoreMgr *>(IoMgr());
+        auto [m, standby_err] = standby_mgr->RefreshManifest(tbl_ident);
+        err = standby_err;
+        manifest = std::move(m);
+    }
     CHECK_KV_ERR(err);
 
     Replayer replayer(Options());

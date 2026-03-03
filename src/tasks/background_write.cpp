@@ -4,6 +4,7 @@
 #include <memory>  // for std::shared_ptr
 #include <string>
 
+#include "standby_service.h"
 #include "storage/mem_index_page.h"
 #include "storage/shard.h"
 #include "utils.h"
@@ -308,10 +309,6 @@ KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
     CHECK_KV_ERR(err);
     RootMeta *meta = root_handle.Get();
     PageId root = meta->root_id_;
-    if (root == MaxPageId)
-    {
-        return KvError::NotFound;
-    }
 
     PageId ttl_root = meta->ttl_root_id_;
     MappingSnapshot *mapping = meta->mapper_->GetMapping();
