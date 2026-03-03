@@ -203,12 +203,15 @@ TEST_CASE("branch files persist after restart", "[branch][persist]")
     }
 
     {
-        eloqstore::EloqStore *store = InitStore(default_opts);
+        // Restart without cleaning up to verify files persist across restarts.
+        eloqstore::EloqStore fresh_store(default_opts);
+        eloqstore::KvError err = fresh_store.Start(eloqstore::MainBranchName, 0);
+        REQUIRE(err == eloqstore::KvError::NoError);
 
         fs::path table_path = fs::path(test_path) / test_tbl_id.ToString();
         REQUIRE(fs::exists(table_path / "manifest_feature1_0"));
         REQUIRE(fs::exists(table_path / "CURRENT_TERM.feature1"));
 
-        store->Stop();
+        fresh_store.Stop();
     }
 }
