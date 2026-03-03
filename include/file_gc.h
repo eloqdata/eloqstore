@@ -89,6 +89,18 @@ KvError DeleteOldArchives(const TableIdent &tbl_id,
                           const std::vector<std::string> &archive_branch_names,
                           uint32_t num_retained_archives,
                           IouringMgr *io_mgr);
+
+// Augment retained_files by reading every on-disk branch manifest and
+// collecting all file IDs they reference. This prevents GC from deleting data
+// files that are still live in another branch's manifest.
+KvError AugmentRetainedFilesFromBranchManifests(
+    const TableIdent &tbl_id,
+    const std::vector<std::string> &manifest_branch_names,
+    const std::vector<uint64_t> &manifest_terms,
+    absl::flat_hash_set<FileId> &retained_files,
+    uint8_t pages_per_file_shift,
+    IouringMgr *io_mgr);
+
 }  // namespace FileGarbageCollector
 
 }  // namespace eloqstore
