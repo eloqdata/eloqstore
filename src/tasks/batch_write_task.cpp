@@ -493,15 +493,26 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
     assert(page_right_bound.empty() ||
            cmp->Compare(page_left_bound, page_right_bound) < 0);
 
-    size_t change_end_idx = cidx;
-    while (change_end_idx < BatchSize())
+    // Binary search for first index where GetKey(i) >= page_right_bound.
+    // Restores O(log N) behavior (original used std::lower_bound).
+    size_t change_end_idx = BatchSize();
+    if (!page_right_bound.empty())
     {
-        if (!page_right_bound.empty() &&
-            cmp->Compare(GetKey(change_end_idx), page_right_bound) >= 0)
+        size_t lo = cidx;
+        size_t hi = BatchSize();
+        while (lo < hi)
         {
-            break;
+            size_t mid = lo + (hi - lo) / 2;
+            if (cmp->Compare(GetKey(mid), page_right_bound) < 0)
+            {
+                lo = mid + 1;
+            }
+            else
+            {
+                hi = mid;
+            }
         }
-        change_end_idx++;
+        change_end_idx = lo;
     }
 
     std::string prev_key;
