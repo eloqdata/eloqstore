@@ -292,10 +292,9 @@ bool RootMetaMgr::EvictRootForCache(Entry *entry)
         meta.waiting_.WakeAll();
     }
 
-    std::vector<MemIndexPage *> pages(meta.index_pages_.begin(),
-                                      meta.index_pages_.end());
-    for (MemIndexPage *page : pages)
+    while (!meta.index_pages_.empty())
     {
+        MemIndexPage *page = *meta.index_pages_.begin();
         owner_->RecyclePage(page);
     }
     meta.index_pages_.clear();
