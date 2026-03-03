@@ -46,22 +46,21 @@ TEST_CASE(
     eloqstore::MappingSnapshot mapping(&idx_mgr, &tbl_id, {});
     // file_id=1, next boundary => 32 for shift=4
     const eloqstore::FilePageId max_fp_id = 17;
-    eloqstore::FileIdTermMapping empty_mapping;
-    std::string term_buf;
-    eloqstore::SerializeFileIdTermMapping(empty_mapping, term_buf);
+    eloqstore::BranchManifestMetadata branch_meta;
+    branch_meta.branch_name = eloqstore::MainBranchName;
+    branch_meta.term = 1;
     std::string_view snapshot = builder.Snapshot(eloqstore::MaxPageId,
                                                  eloqstore::MaxPageId,
                                                  &mapping,
                                                  max_fp_id,
                                                  {},
-                                                 term_buf);
+                                                 branch_meta);
 
     eloqstore::MemStoreMgr::Manifest file(snapshot);
     eloqstore::Replayer replayer(&opts);
     REQUIRE(replayer.Replay(&file) == eloqstore::KvError::NoError);
 
-    replayer.file_id_term_mapping_->insert_or_assign(
-        eloqstore::IouringMgr::LruFD::kManifest, 1);
+    // branch_metadata_.term == 1 (embedded in snapshot)
     // expect_term is equal to manifest_term => no bumping
     auto mapper = replayer.GetMapper(&idx_mgr, &tbl_id, 1);
     REQUIRE(mapper != nullptr);
@@ -83,24 +82,21 @@ TEST_CASE("Replayer allocator bumping does not occur when terms match",
     eloqstore::TableIdent tbl_id("test", 1);
     eloqstore::MappingSnapshot mapping(&idx_mgr, &tbl_id, {});
     const eloqstore::FilePageId max_fp_id = 17;
-    eloqstore::FileIdTermMapping empty_mapping;
-    std::string term_buf;
-    eloqstore::SerializeFileIdTermMapping(empty_mapping, term_buf);
+    eloqstore::BranchManifestMetadata branch_meta;
+    branch_meta.branch_name = eloqstore::MainBranchName;
+    branch_meta.term = 7;
     std::string_view snapshot = builder.Snapshot(eloqstore::MaxPageId,
                                                  eloqstore::MaxPageId,
                                                  &mapping,
                                                  max_fp_id,
                                                  {},
-                                                 term_buf);
+                                                 branch_meta);
 
     eloqstore::MemStoreMgr::Manifest file(snapshot);
     eloqstore::Replayer replayer(&opts);
     REQUIRE(replayer.Replay(&file) == eloqstore::KvError::NoError);
 
-    // Set manifest_term to match expect_term (no bumping)
-    replayer.file_id_term_mapping_->insert_or_assign(
-        eloqstore::IouringMgr::LruFD::kManifest, 7);
-
+    // branch_metadata_.term == 7 (embedded in snapshot), expect_term matches
     auto mapper = replayer.GetMapper(&idx_mgr, &tbl_id, 7);
     REQUIRE(mapper != nullptr);
     REQUIRE(mapper->FilePgAllocator()->MaxFilePageId() == 17);
@@ -116,15 +112,15 @@ TEST_CASE("Replayer allocator bumping does not occur when expect_term==0",
     eloqstore::TableIdent tbl_id("test", 1);
     eloqstore::MappingSnapshot mapping(&idx_mgr, &tbl_id, {});
     const eloqstore::FilePageId max_fp_id = 17;
-    eloqstore::FileIdTermMapping empty_mapping;
-    std::string term_buf;
-    eloqstore::SerializeFileIdTermMapping(empty_mapping, term_buf);
+    eloqstore::BranchManifestMetadata branch_meta;
+    branch_meta.branch_name = eloqstore::MainBranchName;
+    branch_meta.term = 0;
     std::string_view snapshot = builder.Snapshot(eloqstore::MaxPageId,
                                                  eloqstore::MaxPageId,
                                                  &mapping,
                                                  max_fp_id,
                                                  {},
-                                                 term_buf);
+                                                 branch_meta);
 
     eloqstore::MemStoreMgr::Manifest file(snapshot);
     eloqstore::Replayer replayer(&opts);
@@ -145,15 +141,15 @@ TEST_CASE("Replayer allocator bumping does not occur in local mode",
     eloqstore::TableIdent tbl_id("test", 1);
     eloqstore::MappingSnapshot mapping(&idx_mgr, &tbl_id, {});
     const eloqstore::FilePageId max_fp_id = 17;
-    eloqstore::FileIdTermMapping empty_mapping;
-    std::string term_buf;
-    eloqstore::SerializeFileIdTermMapping(empty_mapping, term_buf);
+    eloqstore::BranchManifestMetadata branch_meta;
+    branch_meta.branch_name = eloqstore::MainBranchName;
+    branch_meta.term = 0;
     std::string_view snapshot = builder.Snapshot(eloqstore::MaxPageId,
                                                  eloqstore::MaxPageId,
                                                  &mapping,
                                                  max_fp_id,
                                                  {},
-                                                 term_buf);
+                                                 branch_meta);
 
     eloqstore::MemStoreMgr::Manifest file(snapshot);
     eloqstore::Replayer replayer(&opts);
@@ -175,7 +171,6 @@ TEST_CASE("Replayer replay with multi appended mapping table log",
     eloqstore::MappingSnapshot::MappingTbl mapping_tbl;
 
     std::unordered_map<eloqstore::PageId, eloqstore::FilePageId> all_page_map;
-    std::unordered_map<eloqstore::FileId, uint64_t> all_term_map;
 
     // init mapping table
     mapping_tbl.Set(1, eloqstore::MappingSnapshot::EncodeFilePageId(2));
@@ -193,23 +188,17 @@ TEST_CASE("Replayer replay with multi appended mapping table log",
     eloqstore::MappingSnapshot mapping(
         &idx_mgr, &tbl_id, std::move(mapping_tbl));
     const eloqstore::FilePageId max_fp_id = 17;
-    eloqstore::FileIdTermMapping term_mapping;
-    term_mapping.insert_or_assign(eloqstore::IouringMgr::LruFD::kManifest, 10);
-    term_mapping.insert_or_assign(1, 10);
-    term_mapping.insert_or_assign(5, 10);
-    term_mapping.insert_or_assign(10, 10);
-    all_term_map[eloqstore::IouringMgr::LruFD::kManifest] = 10;
-    all_term_map[1] = 10;
-    all_term_map[5] = 10;
-    all_term_map[10] = 10;
-    std::string term_buf;
-    eloqstore::SerializeFileIdTermMapping(term_mapping, term_buf);
+
+    // Snapshot with branch term = 10
+    eloqstore::BranchManifestMetadata meta10;
+    meta10.branch_name = eloqstore::MainBranchName;
+    meta10.term = 10;
     std::string_view snapshot = builder.Snapshot(eloqstore::MaxPageId,
                                                  eloqstore::MaxPageId,
                                                  &mapping,
                                                  max_fp_id,
                                                  {},
-                                                 term_buf);
+                                                 meta10);
 
     std::string manifest_buf;
     manifest_buf.append(snapshot);
@@ -227,18 +216,13 @@ TEST_CASE("Replayer replay with multi appended mapping table log",
     all_page_map[13] = 13;
     all_page_map[25] = 25;
 
-    term_mapping.insert_or_assign(eloqstore::IouringMgr::LruFD::kManifest, 20);
-    term_mapping.insert_or_assign(10, 20);
-    term_mapping.insert_or_assign(13, 20);
-    term_mapping.insert_or_assign(25, 20);
-    all_term_map[eloqstore::IouringMgr::LruFD::kManifest] = 20;
-    all_term_map[10] = 20;
-    all_term_map[13] = 20;
-    all_term_map[25] = 20;
-    std::string term_buf2;
-    eloqstore::SerializeFileIdTermMapping(term_mapping, term_buf2);
-
-    builder1.AppendFileIdTermMapping(term_buf2);
+    // Log1 carries branch term = 20
+    eloqstore::BranchManifestMetadata meta20;
+    meta20.branch_name = eloqstore::MainBranchName;
+    meta20.term = 20;
+    std::string meta20_str =
+        eloqstore::SerializeBranchManifestMetadata(meta20);
+    builder1.AppendFileIdTermMapping(meta20_str);
     std::string_view append_log1 = builder1.Finalize(10, 10);
 
     manifest_buf.append(append_log1);
@@ -250,18 +234,13 @@ TEST_CASE("Replayer replay with multi appended mapping table log",
     all_page_map[20] = 20;
     all_page_map[21] = 21;
 
-    term_mapping.insert_or_assign(eloqstore::IouringMgr::LruFD::kManifest, 30);
-    term_mapping.insert_or_assign(30, 30);
-    term_mapping.insert_or_assign(31, 30);
-    term_mapping.insert_or_assign(32, 30);
-    all_term_map[eloqstore::IouringMgr::LruFD::kManifest] = 30;
-    all_term_map[30] = 30;
-    all_term_map[31] = 30;
-    all_term_map[32] = 30;
-    std::string term_buf3;
-    eloqstore::SerializeFileIdTermMapping(term_mapping, term_buf3);
-
-    builder2.AppendFileIdTermMapping(term_buf3);
+    // Log2 carries branch term = 30
+    eloqstore::BranchManifestMetadata meta30;
+    meta30.branch_name = eloqstore::MainBranchName;
+    meta30.term = 30;
+    std::string meta30_str =
+        eloqstore::SerializeBranchManifestMetadata(meta30);
+    builder2.AppendFileIdTermMapping(meta30_str);
     std::string_view append_log2 = builder2.Finalize(30, 30);
 
     manifest_buf.append(append_log2);
@@ -284,10 +263,7 @@ TEST_CASE("Replayer replay with multi appended mapping table log",
                 file_page_id);
     }
 
-    // check file_id_term_mapping
-    REQUIRE(replayer.file_id_term_mapping_->size() == 9);
-    for (auto &[file_id, term] : all_term_map)
-    {
-        REQUIRE(replayer.file_id_term_mapping_->at(file_id) == term);
-    }
+    // After replaying snapshot (term=10) + log1 (term=20) + log2 (term=30),
+    // the final branch term should be 30.
+    REQUIRE(replayer.branch_metadata_.term == 30);
 }
