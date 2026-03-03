@@ -23,6 +23,7 @@ set(UTEST_SOURCES
     replayer_term.cpp
     branch_filename_parsing.cpp
     branch_operations.cpp
+    branch_gc.cpp
 )
 
 string( REPLACE ".cpp" "" BASENAMES_UTEST "${UTEST_SOURCES}" )

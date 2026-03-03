@@ -91,6 +91,15 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
 
     // No need to check term expired for local mode.
 
+    // 2a. augment retained_files from all other branch manifests on disk.
+    auto all_retained = retained_files;
+    AugmentRetainedFilesFromBranchManifests(tbl_id,
+                                            manifest_branch_names,
+                                            manifest_terms,
+                                            all_retained,
+                                            io_mgr->options_->pages_per_file_shift,
+                                            io_mgr);
+
     // 3. get archived max file id.
     FileId least_not_archived_file_id = 0;
     err = GetOrUpdateArchivedMaxFileId(tbl_id,
@@ -124,7 +133,7 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
 
     // 5. delete unreferenced data files.
     err = DeleteUnreferencedLocalFiles(
-        tbl_id, data_files, retained_files, least_not_archived_file_id, io_mgr);
+        tbl_id, data_files, all_retained, least_not_archived_file_id, io_mgr);
     if (err != KvError::NoError)
     {
         LOG(ERROR)
@@ -322,6 +331,73 @@ KvError DownloadArchiveFile(const TableIdent &tbl_id,
 
     LOG(INFO) << "Successfully downloaded and read archive file: "
               << archive_file;
+    return KvError::NoError;
+}
+
+KvError AugmentRetainedFilesFromBranchManifests(
+    const TableIdent &tbl_id,
+    const std::vector<std::string> &manifest_branch_names,
+    const std::vector<uint64_t> &manifest_terms,
+    absl::flat_hash_set<FileId> &retained_files,
+    uint8_t pages_per_file_shift,
+    IouringMgr *io_mgr)
+{
+    assert(manifest_branch_names.size() == manifest_terms.size());
+
+    for (size_t i = 0; i < manifest_branch_names.size(); ++i)
+    {
+        const std::string &branch = manifest_branch_names[i];
+        uint64_t term = manifest_terms[i];
+        std::string filename = BranchManifestFileName(branch, term);
+
+        DirectIoBuffer buf;
+        KvError err = KvError::NoError;
+
+        if (!io_mgr->options_->cloud_store_path.empty())
+        {
+            // Cloud mode: download the manifest file from cloud.
+            CloudStoreMgr *cloud_mgr = static_cast<CloudStoreMgr *>(io_mgr);
+            err = DownloadArchiveFile(
+                tbl_id, filename, buf, cloud_mgr, cloud_mgr->options_);
+        }
+        else
+        {
+            // Local mode: read directly from disk.
+            err = io_mgr->ReadFile(tbl_id, filename, buf);
+        }
+
+        if (err != KvError::NoError)
+        {
+            LOG(WARNING)
+                << "AugmentRetainedFilesFromBranchManifests: failed to read "
+                   "manifest "
+                << filename << " for branch " << branch << " term " << term
+                << ", error=" << static_cast<int>(err) << "; skipping";
+            continue;
+        }
+
+        MemStoreMgr::Manifest manifest(buf.view());
+        Replayer replayer(Options());
+        replayer.branch_metadata_.term = term;
+
+        KvError replay_err = replayer.Replay(&manifest);
+        if (replay_err != KvError::NoError)
+        {
+            LOG(WARNING)
+                << "AugmentRetainedFilesFromBranchManifests: failed to replay "
+                   "manifest "
+                << filename << " for branch " << branch << " term " << term
+                << ", error=" << static_cast<int>(replay_err) << "; skipping";
+            continue;
+        }
+
+        GetRetainedFiles(retained_files, replayer.mapping_tbl_, pages_per_file_shift);
+
+        DLOG(INFO) << "AugmentRetainedFilesFromBranchManifests: augmented from "
+                   << "branch=" << branch << " term=" << term
+                   << ", retained_files now size=" << retained_files.size();
+    }
+
     return KvError::NoError;
 }
 
@@ -832,6 +908,16 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
         }
     }
 
+    // 3a. augment retained_files from all other branch manifests in cloud.
+    auto all_retained = retained_files;
+    AugmentRetainedFilesFromBranchManifests(
+        tbl_id,
+        manifest_branch_names,
+        manifest_terms,
+        all_retained,
+        cloud_mgr->options_->pages_per_file_shift,
+        static_cast<IouringMgr *>(cloud_mgr));
+
     // 4. get or update archived max file id.
     FileId least_not_archived_file_id = 0;
     err = GetOrUpdateArchivedMaxFileId(tbl_id,
@@ -863,7 +949,7 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
                                        data_files,
                                        manifest_terms,
                                        manifest_branch_names,
-                                       retained_files,
+                                       all_retained,
                                        least_not_archived_file_id,
                                        cloud_mgr);
     if (err != KvError::NoError)
