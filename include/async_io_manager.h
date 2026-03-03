@@ -126,6 +126,9 @@ public:
                                         std::string_view branch_name,
                                         uint64_t term,
                                         std::string_view snapshot) = 0;
+    virtual KvError BranchManifestExists(const TableIdent &tbl_id,
+                                         std::string_view branch_name,
+                                         uint64_t term) = 0;
     virtual KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                           std::string_view branch_name,
                                           uint64_t term) = 0;
@@ -430,6 +433,9 @@ public:
                                 std::string_view branch_name,
                                 uint64_t term,
                                 std::string_view snapshot) override;
+    KvError BranchManifestExists(const TableIdent &tbl_id,
+                                  std::string_view branch_name,
+                                  uint64_t term) override;
     KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                    std::string_view branch_name,
                                    uint64_t term) override;
@@ -831,6 +837,9 @@ public:
                                  std::string_view branch_name,
                                  uint64_t term,
                                  std::string_view snapshot) override;
+    KvError BranchManifestExists(const TableIdent &tbl_id,
+                                  std::string_view branch_name,
+                                  uint64_t term) override;
     KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                    std::string_view branch_name,
                                    uint64_t term) override;
@@ -1139,6 +1148,9 @@ public:
                                  std::string_view branch_name,
                                  uint64_t term,
                                  std::string_view snapshot) override;
+    KvError BranchManifestExists(const TableIdent &tbl_id,
+                                  std::string_view branch_name,
+                                  uint64_t term) override;
     KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                    std::string_view branch_name,
                                    uint64_t term) override;

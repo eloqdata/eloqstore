@@ -29,6 +29,7 @@ enum struct KvError : uint8_t
     IoFail,
     ExpiredTerm,
     OssInsufficientStorage,
+    AlreadyExists,
 
 };
 
@@ -70,6 +71,8 @@ constexpr const char *ErrorString(KvError err)
         return "Expired term";
     case KvError::OssInsufficientStorage:
         return "Object storage insufficient storage";
+    case KvError::AlreadyExists:
+        return "Resource already exists";
     }
     return "Unknown error";
 }

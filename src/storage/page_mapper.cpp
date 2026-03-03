@@ -635,8 +635,8 @@ FileId FilePageAllocator::CurrentFileId() const
 
 void FilePageAllocator::SetCurrentFileId(FileId file_id)
 {
-    // Set max_fp_id_ so that next CurrentFileId() returns file_id
-    // and first Allocate() returns a page with that file_id
+    // Sets the allocator so that the next CurrentFileId() returns (file_id + 1)
+    // and the first Allocate() returns the first page of file (file_id + 1).
     max_fp_id_ = (file_id + 1) << pages_per_file_shift_;
 }
 

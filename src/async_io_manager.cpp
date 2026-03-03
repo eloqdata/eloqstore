@@ -2204,6 +2204,27 @@ KvError IouringMgr::WriteBranchManifest(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
+KvError IouringMgr::BranchManifestExists(const TableIdent &tbl_id,
+                                          std::string_view branch_name,
+                                          uint64_t term)
+{
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, branch_name, 0);
+    CHECK_KV_ERR(err);
+
+    const std::string name = BranchManifestFileName(branch_name, term);
+    struct statx probe = {};
+    int res = StatxAt(dir_fd.FdPair(), name.c_str(), &probe);
+    if (res == 0)
+    {
+        return KvError::NoError;   // file exists
+    }
+    if (res == -ENOENT)
+    {
+        return KvError::NotFound;  // file does not exist
+    }
+    return ToKvError(res);         // I/O error
+}
+
 KvError IouringMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                             std::string_view branch_name,
                                             uint64_t term)
@@ -3940,6 +3961,30 @@ KvError CloudStoreMgr::WriteBranchManifest(const TableIdent &tbl_id,
     return err;
 }
 
+KvError CloudStoreMgr::BranchManifestExists(const TableIdent &tbl_id,
+                                             std::string_view branch_name,
+                                             uint64_t term)
+{
+    // Check local cache first (fast path, avoids a cloud round-trip).
+    KvError local = IouringMgr::BranchManifestExists(tbl_id, branch_name, term);
+    if (local != KvError::NotFound)
+    {
+        return local;  // found locally, or a hard I/O error
+    }
+
+    // Not cached locally — probe cloud storage by attempting a download.
+    KvError dl_err = DownloadFile(tbl_id, LruFD::kManifest, term, branch_name);
+    if (dl_err == KvError::NoError)
+    {
+        return KvError::NoError;   // exists in cloud
+    }
+    if (dl_err == KvError::NotFound)
+    {
+        return KvError::NotFound;  // does not exist
+    }
+    return dl_err;                 // I/O error
+}
+
 KvError CloudStoreMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                                std::string_view branch_name,
                                                uint64_t term)
@@ -4967,6 +5012,20 @@ KvError MemStoreMgr::WriteBranchManifest(const TableIdent &tbl_id,
     std::string key = BranchManifestFileName(branch_name, term);
     manifests_[tbl_id][key] = std::string(snapshot);
     return KvError::NoError;
+}
+
+KvError MemStoreMgr::BranchManifestExists(const TableIdent &tbl_id,
+                                           std::string_view branch_name,
+                                           uint64_t term)
+{
+    std::lock_guard lock(manifest_mutex_);
+    const std::string key = BranchManifestFileName(branch_name, term);
+    auto it = manifests_.find(tbl_id);
+    if (it == manifests_.end())
+    {
+        return KvError::NotFound;
+    }
+    return it->second.count(key) > 0 ? KvError::NoError : KvError::NotFound;
 }
 
 KvError MemStoreMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
