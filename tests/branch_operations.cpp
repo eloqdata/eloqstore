@@ -208,6 +208,119 @@ TEST_CASE("create branch - already exists returns AlreadyExists", "[branch]")
     store->Stop();
 }
 
+TEST_CASE("global create branch - creates manifest on single partition",
+          "[branch][global]")
+{
+    eloqstore::EloqStore *store = InitStore(default_opts);
+    MapVerifier verify(test_tbl_id, store, false);
+    verify.SetAutoClean(false);
+
+    verify.Upsert(0, 100);
+
+    eloqstore::GlobalCreateBranchRequest req;
+    req.SetArgs("feature1", eloqstore::MainBranchName);
+    store->ExecSync(&req);
+
+    REQUIRE(req.Error() == eloqstore::KvError::NoError);
+
+    fs::path table_path = fs::path(test_path) / test_tbl_id.ToString();
+    REQUIRE(fs::exists(table_path / "manifest_feature1_0"));
+    REQUIRE(fs::exists(table_path / "CURRENT_TERM.feature1"));
+
+    store->Stop();
+}
+
+TEST_CASE("global create branch - creates manifests on all partitions",
+          "[branch][global]")
+{
+    static const eloqstore::TableIdent tbl_p1 = {"t0", 1};
+
+    eloqstore::EloqStore *store = InitStore(default_opts);
+
+    // Write to two partitions so both directories appear on disk.
+    MapVerifier verify0(test_tbl_id, store, false);
+    verify0.SetAutoClean(false);
+    verify0.Upsert(0, 100);
+
+    MapVerifier verify1(tbl_p1, store, false);
+    verify1.SetAutoClean(false);
+    verify1.Upsert(0, 100);
+
+    eloqstore::GlobalCreateBranchRequest req;
+    req.SetArgs("feature1", eloqstore::MainBranchName);
+    store->ExecSync(&req);
+
+    REQUIRE(req.Error() == eloqstore::KvError::NoError);
+
+    // Both partition directories must have the branch manifest files.
+    for (const eloqstore::TableIdent &tbl_id : {test_tbl_id, tbl_p1})
+    {
+        fs::path table_path = fs::path(test_path) / tbl_id.ToString();
+        REQUIRE(fs::exists(table_path / "manifest_feature1_0"));
+        REQUIRE(fs::exists(table_path / "CURRENT_TERM.feature1"));
+    }
+
+    store->Stop();
+}
+
+TEST_CASE("global create branch - invalid branch name returns InvalidArgs",
+          "[branch][global]")
+{
+    eloqstore::EloqStore *store = InitStore(default_opts);
+    MapVerifier verify(test_tbl_id, store, false);
+    verify.SetAutoClean(false);
+
+    verify.Upsert(0, 100);
+
+    eloqstore::GlobalCreateBranchRequest req;
+    req.SetArgs("bad_name", eloqstore::MainBranchName);  // underscore not allowed
+    store->ExecSync(&req);
+
+    REQUIRE(req.Error() == eloqstore::KvError::InvalidArgs);
+
+    store->Stop();
+}
+
+TEST_CASE("global create branch - already exists returns AlreadyExists",
+          "[branch][global]")
+{
+    eloqstore::EloqStore *store = InitStore(default_opts);
+    MapVerifier verify(test_tbl_id, store, false);
+    verify.SetAutoClean(false);
+
+    verify.Upsert(0, 100);
+
+    // First global create must succeed.
+    eloqstore::GlobalCreateBranchRequest req1;
+    req1.SetArgs("feature1", eloqstore::MainBranchName);
+    store->ExecSync(&req1);
+    REQUIRE(req1.Error() == eloqstore::KvError::NoError);
+
+    // Second global create for the same branch must be rejected.
+    eloqstore::GlobalCreateBranchRequest req2;
+    req2.SetArgs("feature1", eloqstore::MainBranchName);
+    store->ExecSync(&req2);
+    REQUIRE(req2.Error() == eloqstore::KvError::AlreadyExists);
+
+    store->Stop();
+}
+
+TEST_CASE("global create branch - no-op on empty store", "[branch][global]")
+{
+    // InitStore cleans up the store directory and starts fresh with no data.
+    // There are no partition subdirectories, so the handler returns NoError
+    // immediately without fanning out any sub-requests.
+    eloqstore::EloqStore *store = InitStore(default_opts);
+
+    eloqstore::GlobalCreateBranchRequest req;
+    req.SetArgs("feature1", eloqstore::MainBranchName);
+    store->ExecSync(&req);
+
+    REQUIRE(req.Error() == eloqstore::KvError::NoError);
+
+    store->Stop();
+}
+
 TEST_CASE("branch files persist after restart", "[branch][persist]")
 {
     {
