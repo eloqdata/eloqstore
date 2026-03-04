@@ -507,3 +507,264 @@ TEST_CASE("branch data isolation: bidirectional fork", "[branch][isolation]")
 
     CleanupStore(default_opts);
 }
+
+TEST_CASE("chained fork: fork from feature branch", "[branch][isolation]")
+{
+    // Phase 1: main → write DS1, create feature1.
+    {
+        eloqstore::EloqStore *store = InitStore(default_opts);
+        MapVerifier verify(test_tbl_id, store, false);
+        verify.SetAutoClean(false);
+
+        verify.Upsert(0, 100);  // DS1: keys [0, 100)
+
+        eloqstore::CreateBranchRequest req;
+        req.SetTableId(test_tbl_id);
+        req.SetArgs("feature1");
+        store->ExecSync(&req);
+        REQUIRE(req.Error() == eloqstore::KvError::NoError);
+
+        store->Stop();
+    }
+
+    // Phase 2: feature1 → verify DS1 inherited, write DS2, create sub1.
+    {
+        eloqstore::EloqStore f1_store(default_opts);
+        REQUIRE(f1_store.Start("feature1", 0) == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &f1_store, false);
+        verify.SetAutoClean(false);
+
+        // DS1 inherited from main.
+        REQUIRE(verify.CheckKey(0) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(99) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NotFound);
+
+        verify.Upsert(100, 200);  // DS2: keys [100, 200)
+
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NoError);
+
+        // Fork sub1 from feature1 (captures DS1 + DS2).
+        eloqstore::CreateBranchRequest req;
+        req.SetTableId(test_tbl_id);
+        req.SetArgs("sub1");
+        f1_store.ExecSync(&req);
+        REQUIRE(req.Error() == eloqstore::KvError::NoError);
+
+        f1_store.Stop();
+    }
+
+    // Phase 3: sub1 → DS1+DS2 both inherited, write DS3.
+    {
+        eloqstore::EloqStore sub1_store(default_opts);
+        REQUIRE(sub1_store.Start("sub1", 0) == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &sub1_store, false);
+        verify.SetAutoClean(false);
+
+        // DS1 (from main) and DS2 (from feature1) must both be visible.
+        REQUIRE(verify.CheckKey(0) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(99) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(200) == eloqstore::KvError::NotFound);
+
+        verify.Upsert(200, 300);  // DS3: keys [200, 300)
+
+        REQUIRE(verify.CheckKey(200) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(299) == eloqstore::KvError::NoError);
+
+        sub1_store.Stop();
+    }
+
+    // Phase 4: feature1 (restart) → DS1+DS2 still visible, DS3 must NOT leak.
+    {
+        eloqstore::EloqStore f1_store(default_opts);
+        REQUIRE(f1_store.Start("feature1", 0) == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &f1_store, false);
+        verify.SetAutoClean(false);
+
+        REQUIRE(verify.CheckKey(0) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(99) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NoError);
+        // DS3 is sub1-only — must not be visible on feature1.
+        REQUIRE(verify.CheckKey(200) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(299) == eloqstore::KvError::NotFound);
+
+        f1_store.Stop();
+    }
+
+    CleanupStore(default_opts);
+}
+
+TEST_CASE("sibling branches are isolated from each other", "[branch][isolation]")
+{
+    // Phase 1: main → write DS1, fork both feature1 and feature2.
+    {
+        eloqstore::EloqStore *store = InitStore(default_opts);
+        MapVerifier verify(test_tbl_id, store, false);
+        verify.SetAutoClean(false);
+
+        verify.Upsert(0, 100);  // DS1: keys [0, 100)
+
+        eloqstore::CreateBranchRequest req1;
+        req1.SetTableId(test_tbl_id);
+        req1.SetArgs("feature1");
+        store->ExecSync(&req1);
+        REQUIRE(req1.Error() == eloqstore::KvError::NoError);
+
+        eloqstore::CreateBranchRequest req2;
+        req2.SetTableId(test_tbl_id);
+        req2.SetArgs("feature2");
+        store->ExecSync(&req2);
+        REQUIRE(req2.Error() == eloqstore::KvError::NoError);
+
+        store->Stop();
+    }
+
+    // Phase 2: feature1 → verify DS1, write DS2.
+    {
+        eloqstore::EloqStore f1_store(default_opts);
+        REQUIRE(f1_store.Start("feature1", 0) == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &f1_store, false);
+        verify.SetAutoClean(false);
+
+        REQUIRE(verify.CheckKey(0) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(99) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NotFound);
+
+        verify.Upsert(100, 200);  // DS2: keys [100, 200)
+
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NoError);
+
+        f1_store.Stop();
+    }
+
+    // Phase 3: feature2 → DS1 visible, DS2 (feature1-only) NOT visible,
+    //           write DS3.
+    {
+        eloqstore::EloqStore f2_store(default_opts);
+        REQUIRE(f2_store.Start("feature2", 0) == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &f2_store, false);
+        verify.SetAutoClean(false);
+
+        REQUIRE(verify.CheckKey(0) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(99) == eloqstore::KvError::NoError);
+        // DS2 written on feature1 must not bleed into feature2.
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NotFound);
+
+        verify.Upsert(200, 300);  // DS3: keys [200, 300)
+
+        REQUIRE(verify.CheckKey(200) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(299) == eloqstore::KvError::NoError);
+
+        f2_store.Stop();
+    }
+
+    // Phase 4: feature1 (restart) → DS1+DS2 visible, DS3 (feature2-only)
+    //          must NOT be visible.
+    {
+        eloqstore::EloqStore f1_store(default_opts);
+        REQUIRE(f1_store.Start("feature1", 0) == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &f1_store, false);
+        verify.SetAutoClean(false);
+
+        REQUIRE(verify.CheckKey(0) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(99) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NoError);
+        // DS3 is feature2-only — must not be visible on feature1.
+        REQUIRE(verify.CheckKey(200) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(299) == eloqstore::KvError::NotFound);
+
+        f1_store.Stop();
+    }
+
+    CleanupStore(default_opts);
+}
+
+TEST_CASE("sequential forks capture correct snapshot", "[branch][isolation]")
+{
+    // Phase 1: main → write DS1, fork featureA (snapshot: DS1 only).
+    {
+        eloqstore::EloqStore *store = InitStore(default_opts);
+        MapVerifier verify(test_tbl_id, store, false);
+        verify.SetAutoClean(false);
+
+        verify.Upsert(0, 100);  // DS1: keys [0, 100)
+
+        eloqstore::CreateBranchRequest req;
+        req.SetTableId(test_tbl_id);
+        req.SetArgs("featurea");
+        store->ExecSync(&req);
+        REQUIRE(req.Error() == eloqstore::KvError::NoError);
+
+        store->Stop();
+    }
+
+    // Phase 2: main (restart) → write DS2, fork featureB (snapshot: DS1+DS2).
+    {
+        eloqstore::EloqStore main_store(default_opts);
+        REQUIRE(main_store.Start(eloqstore::MainBranchName, 0) ==
+                eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &main_store, false);
+        verify.SetAutoClean(false);
+
+        verify.Upsert(100, 200);  // DS2: keys [100, 200)
+
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NoError);
+
+        eloqstore::CreateBranchRequest req;
+        req.SetTableId(test_tbl_id);
+        req.SetArgs("featureb");
+        main_store.ExecSync(&req);
+        REQUIRE(req.Error() == eloqstore::KvError::NoError);
+
+        main_store.Stop();
+    }
+
+    // Phase 3: featureA → only DS1 visible (forked before DS2 was written).
+    {
+        eloqstore::EloqStore fa_store(default_opts);
+        REQUIRE(fa_store.Start("featurea", 0) == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &fa_store, false);
+        verify.SetAutoClean(false);
+
+        REQUIRE(verify.CheckKey(0) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(99) == eloqstore::KvError::NoError);
+        // DS2 written to main after featureA's fork must not be visible.
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NotFound);
+
+        fa_store.Stop();
+    }
+
+    // Phase 4: featureB → DS1+DS2 visible (forked after DS2 was written).
+    {
+        eloqstore::EloqStore fb_store(default_opts);
+        REQUIRE(fb_store.Start("featureb", 0) == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &fb_store, false);
+        verify.SetAutoClean(false);
+
+        REQUIRE(verify.CheckKey(0) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(99) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NoError);
+
+        fb_store.Stop();
+    }
+
+    CleanupStore(default_opts);
+}
