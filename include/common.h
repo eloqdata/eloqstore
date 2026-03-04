@@ -371,20 +371,6 @@ inline std::string DataFileName(FileId file_id, uint64_t term)
 }
 
 
-// ArchiveName: generates term-aware archive filename
-// Format: manifest_<term>_<ts>
-// Note: term must be provided (use 0 for legacy compatibility if needed)
-inline std::string ArchiveName(uint64_t term, uint64_t ts)
-{
-    std::string name;
-    name.reserve(std::size(FileNameManifest) + 31);
-    name.append(FileNameManifest);
-    name.push_back(FileNameSeparator);
-    name.append(std::to_string(term));
-    name.push_back(FileNameSeparator);
-    name.append(std::to_string(ts));
-    return name;
-}
 
 inline bool IsArchiveFile(std::string_view filename)
 {

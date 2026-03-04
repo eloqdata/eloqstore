@@ -776,9 +776,8 @@ TEST_CASE("cloud gc preserves archived data after truncate",
     store->Stop();
 
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
-    // Use ArchiveName to generate a valid archive-like filename. This ensures
-    // it won't be treated as a current manifest during selection.
-    std::string backup_name = eloqstore::ArchiveName(0, backup_ts);
+    std::string backup_name =
+        eloqstore::BranchArchiveName(eloqstore::MainBranchName, 0, backup_ts);
 
     bool backup_ok = MoveCloudFile(cloud_archive_opts,
                                    partition_remote,
@@ -1120,11 +1119,9 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
     store->Stop();
 
     // Create backup with timestamp.
-    // NOTE: ArchiveName produces the old two-field format (manifest_0_<ts>)
-    // which the new BranchManifestFileName parser deliberately rejects — used
-    // here so this filename is opaque to the active-manifest selector.
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
-    std::string backup_name = eloqstore::ArchiveName(0, backup_ts);
+    std::string backup_name =
+        eloqstore::BranchArchiveName(eloqstore::MainBranchName, 0, backup_ts);
 
     // Move current manifest to backup
     bool backup_success = MoveCloudFile(
@@ -1227,11 +1224,9 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString();
 
     // Create backup with timestamp.
-    // NOTE: ArchiveName produces the old two-field format (manifest_0_<ts>)
-    // which the new BranchManifestFileName parser deliberately rejects — used
-    // here so this filename is opaque to the active-manifest selector.
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
-    std::string backup_name = eloqstore::ArchiveName(0, backup_ts);
+    std::string backup_name =
+        eloqstore::BranchArchiveName(eloqstore::MainBranchName, 0, backup_ts);
 
     // Backup current manifest
     bool backup_ok = MoveCloudFile(cloud_archive_opts,
