@@ -466,21 +466,32 @@ KvError WriteTask::FlushManifest()
     }
 
     const size_t alignment = page_align;
+
+    // Serialize branch metadata first so its size is included in both the
+    // limit guard and the manifest_size_ update.
+    std::string branch_metadata_str =
+        SerializeBranchManifestMetadata(branch_metadata);
+    // CurrentSize() already accounts for the 4-byte mapping_len field
+    // (resized_for_mapping_bytes_len_ is always true here because Empty()
+    // returned false above, meaning at least one mapping entry was appended).
     const uint64_t log_physical_size =
-        (wal_builder_.CurrentSize() + alignment - 1) &
+        (wal_builder_.CurrentSize() + branch_metadata_str.size() +
+         alignment - 1) &
         ~(alignment - 1);
 
     if (!dict_dirty && manifest_size > 0 &&
         manifest_size + log_physical_size <= opts->manifest_limit)
     {
         // Append branch metadata to manifest log
-        std::string branch_metadata_str = SerializeBranchManifestMetadata(branch_metadata);
         wal_builder_.AppendFileIdTermMapping(branch_metadata_str);
         std::string_view blob =
             wal_builder_.Finalize(cow_meta_.root_id_, cow_meta_.ttl_root_id_);
         err = IoMgr()->AppendManifest(tbl_ident_, blob, manifest_size);
         CHECK_KV_ERR(err);
-        cow_meta_.manifest_size_ += log_physical_size;
+        // Use the actual blob size (aligned) to keep manifest_size_ accurate.
+        cow_meta_.manifest_size_ +=
+            (blob.size() + alignment - 1) & ~(alignment - 1);
+        file_id_term_mapping_dirty_ = false;
     }
     else
     {
