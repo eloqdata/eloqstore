@@ -1622,7 +1622,10 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
     // Stop the store
     store->Stop();
 
-    // Create backup with timestamp
+    // Create backup with timestamp.
+    // NOTE: ArchiveName produces the old two-field format (manifest_0_<ts>)
+    // which the new BranchManifestFileName parser deliberately rejects — used
+    // here so this filename is opaque to the active-manifest selector.
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
     std::string backup_name = eloqstore::ArchiveName(0, backup_ts);
 
@@ -1726,7 +1729,10 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
     const std::string cloud_path =
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString();
 
-    // Create backup with timestamp
+    // Create backup with timestamp.
+    // NOTE: ArchiveName produces the old two-field format (manifest_0_<ts>)
+    // which the new BranchManifestFileName parser deliberately rejects — used
+    // here so this filename is opaque to the active-manifest selector.
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
     std::string backup_name = eloqstore::ArchiveName(0, backup_ts);
 

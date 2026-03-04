@@ -815,8 +815,18 @@ public:
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};
 
-    // Active branch for this shard. Set via SetActiveBranch() from
-    // Shard::Init().
+    // Active branch for this shard.
+    //
+    // Lifetime invariant: written ONCE by SetActiveBranch(), which is called
+    // only from Shard::Init() on the main thread, BEFORE Shard::Start()
+    // constructs the worker std::thread.  The C++11 thread-creation
+    // happens-before guarantee (§30.3.1.2) ensures the worker thread observes
+    // the write.  After the worker starts, this field is effectively read-only
+    // for the lifetime of the shard — no mutex is needed.
+    //
+    // WARNING: if runtime branch-switching (SetActiveBranch called after
+    // Shard::Start()) is ever introduced, this field must be protected by a
+    // mutex or converted to std::atomic<std::string>.
     std::string active_branch_{MainBranchName};
 
     KvError BootstrapRing(Shard *shard);

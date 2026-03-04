@@ -370,17 +370,6 @@ inline std::string DataFileName(FileId file_id, uint64_t term)
     return name;
 }
 
-// ManifestFileName - generates manifest filename with term suffix
-inline std::string ManifestFileName(uint64_t term)
-{
-    // Always use term-aware format: manifest_<term> (including term=0).
-    std::string name;
-    name.reserve(std::size(FileNameManifest) + 11);
-    name.append(FileNameManifest);
-    name.push_back(FileNameSeparator);
-    name.append(std::to_string(term));
-    return name;
-}
 
 // ArchiveName: generates term-aware archive filename
 // Format: manifest_<term>_<ts>
