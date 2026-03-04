@@ -2238,6 +2238,26 @@ KvError IouringMgr::BranchManifestExists(const TableIdent &tbl_id,
     return ToKvError(res);         // I/O error
 }
 
+KvError IouringMgr::BranchCurrentTermExists(const TableIdent &tbl_id,
+                                             std::string_view branch_name)
+{
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, branch_name, 0);
+    CHECK_KV_ERR(err);
+
+    const std::string name = BranchCurrentTermFileName(branch_name);
+    struct statx probe = {};
+    int res = StatxAt(dir_fd.FdPair(), name.c_str(), &probe);
+    if (res == 0)
+    {
+        return KvError::NoError;   // CURRENT_TERM file exists → branch fully created
+    }
+    if (res == -ENOENT)
+    {
+        return KvError::NotFound;  // branch not yet fully created
+    }
+    return ToKvError(res);         // I/O error
+}
+
 KvError IouringMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                             std::string_view branch_name,
                                             uint64_t term)
@@ -4362,6 +4382,36 @@ KvError CloudStoreMgr::BranchManifestExists(const TableIdent &tbl_id,
     return dl_err;                 // I/O error
 }
 
+KvError CloudStoreMgr::BranchCurrentTermExists(const TableIdent &tbl_id,
+                                                std::string_view branch_name)
+{
+    // Check local cache first (fast path).
+    KvError local = IouringMgr::BranchCurrentTermExists(tbl_id, branch_name);
+    if (local != KvError::NotFound)
+    {
+        return local;  // found locally, or a hard I/O error
+    }
+
+    // Not cached locally — probe cloud storage by attempting a download.
+    std::string filename = BranchCurrentTermFileName(branch_name);
+    KvTask *current_task = ThdTask();
+    ObjectStore::DownloadTask download_task(&tbl_id, filename);
+    download_task.SetKvTask(current_task);
+    AcquireCloudSlot(current_task);
+    obj_store_.SubmitTask(&download_task, shard);
+    current_task->WaitIo();
+
+    if (download_task.error_ == KvError::NoError)
+    {
+        return KvError::NoError;   // CURRENT_TERM exists in cloud
+    }
+    if (download_task.error_ == KvError::NotFound)
+    {
+        return KvError::NotFound;  // does not exist
+    }
+    return download_task.error_;   // I/O error
+}
+
 KvError CloudStoreMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                                std::string_view branch_name,
                                                uint64_t term)
@@ -4435,6 +4485,19 @@ KvError CloudStoreMgr::DeleteBranchFiles(const TableIdent &tbl_id,
         AcquireCloudSlot(current_task);
         obj_store_.SubmitTask(&delete_tasks.back(), shard);
         current_task->WaitIo();
+    }
+
+    // Clean up local cache files for this branch so they don't linger until
+    // space-pressure eviction.  IouringMgr::DeleteBranchFiles silently
+    // ignores ENOENT, so it is safe to call even if nothing was cached.
+    KvError local_err = IouringMgr::DeleteBranchFiles(tbl_id, branch_name, 0);
+    if (local_err != KvError::NoError)
+    {
+        LOG(WARNING) << "DeleteBranchFiles: failed to remove local cache files "
+                     << "for branch " << branch_name << ": "
+                     << static_cast<int>(local_err);
+        // Non-fatal: the cloud objects are already gone; stale local files will
+        // eventually be evicted by the LRU cache.
     }
 
     return KvError::NoError;
@@ -5432,6 +5495,20 @@ KvError MemStoreMgr::BranchManifestExists(const TableIdent &tbl_id,
         return KvError::NotFound;
     }
     return it->second.count(key) > 0 ? KvError::NoError : KvError::NotFound;
+}
+
+KvError MemStoreMgr::BranchCurrentTermExists(const TableIdent &tbl_id,
+                                              std::string_view branch_name)
+{
+    std::lock_guard lock(manifest_mutex_);
+    auto it = branch_terms_.find(tbl_id);
+    if (it == branch_terms_.end())
+    {
+        return KvError::NotFound;
+    }
+    return it->second.count(std::string(branch_name)) > 0
+               ? KvError::NoError
+               : KvError::NotFound;
 }
 
 KvError MemStoreMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,

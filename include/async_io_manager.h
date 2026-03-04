@@ -126,6 +126,11 @@ public:
     virtual KvError BranchManifestExists(const TableIdent &tbl_id,
                                          std::string_view branch_name,
                                          uint64_t term) = 0;
+    // Check whether CURRENT_TERM.<branch> exists.  CURRENT_TERM is written
+    // after the manifest during CreateBranch, so its presence is the
+    // canonical "branch fully created" marker.
+    virtual KvError BranchCurrentTermExists(const TableIdent &tbl_id,
+                                            std::string_view branch_name) = 0;
     virtual KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                            std::string_view branch_name,
                                            uint64_t term) = 0;
@@ -433,6 +438,8 @@ public:
     KvError BranchManifestExists(const TableIdent &tbl_id,
                                  std::string_view branch_name,
                                  uint64_t term) override;
+    KvError BranchCurrentTermExists(const TableIdent &tbl_id,
+                                    std::string_view branch_name) override;
     KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                    std::string_view branch_name,
                                    uint64_t term) override;
@@ -844,6 +851,8 @@ public:
     KvError BranchManifestExists(const TableIdent &tbl_id,
                                  std::string_view branch_name,
                                  uint64_t term) override;
+    KvError BranchCurrentTermExists(const TableIdent &tbl_id,
+                                    std::string_view branch_name) override;
     KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                    std::string_view branch_name,
                                    uint64_t term) override;
@@ -1163,6 +1172,8 @@ public:
     KvError BranchManifestExists(const TableIdent &tbl_id,
                                  std::string_view branch_name,
                                  uint64_t term) override;
+    KvError BranchCurrentTermExists(const TableIdent &tbl_id,
+                                    std::string_view branch_name) override;
     KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                    std::string_view branch_name,
                                    uint64_t term) override;
