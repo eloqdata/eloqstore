@@ -230,6 +230,7 @@ KvError EloqStore::Start(std::string_view branch, uint64_t term)
     {
         // local mode, set term to 0
         term = 0;
+        branch_ = std::string(branch);
     }
     else
     {
