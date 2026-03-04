@@ -1224,7 +1224,7 @@ void IouringMgr::SetBranchFileIdTerm(const TableIdent &tbl_id,
         mapping.back().branch_name == branch_name &&
         mapping.back().term == term)
     {
-        CHECK(file_id > mapping.back().max_file_id)
+        CHECK(file_id >= mapping.back().max_file_id)
             << "file_id must be allocated in ascending order for the same branch and term";
         mapping.back().max_file_id = file_id;
     }
