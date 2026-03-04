@@ -291,13 +291,12 @@ private:
                 Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
                 false);
         }
-        if (settings.requested_auto_credentials &&
-            !settings.secret_key.empty())
+        if (settings.requested_auto_credentials && !settings.secret_key.empty())
         {
             LOG(INFO) << "cloud_secret_key is set; disabling auto credentials";
         }
-        Aws::Auth::AWSCredentials credentials(settings.access_key.c_str(),
-                                             settings.secret_key.c_str());
+        Aws::Auth::AWSCredentials credentials(settings.access_key,
+                                              settings.secret_key);
         return std::make_shared<Aws::S3::S3Client>(
             credentials,
             config,
