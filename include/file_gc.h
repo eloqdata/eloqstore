@@ -67,7 +67,7 @@ void ClassifyFiles(const std::vector<std::string> &files,
 
 KvError DownloadArchiveFile(const TableIdent &tbl_id,
                             const std::string &archive_file,
-                            std::string &content,
+                            DirectIoBuffer &content,
                             CloudStoreMgr *cloud_mgr,
                             const KvOptions *options);
 

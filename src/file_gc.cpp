@@ -711,15 +711,31 @@ KvError DeleteUnreferencedCloudFiles(
             BranchManifestFileName(current_manifest_branch, process_term));
     }
 
-    // delete expired manifest files.
-    for (size_t i = 0; i < manifest_terms.size(); ++i)
+    // Delete superseded manifest files: only manifests belonging to the same
+    // branch as the current process_term manifest are version-chained and safe
+    // to prune. Manifests for OTHER branches are managed by DeleteBranch and
+    // must not be deleted here.
     {
-        if (manifest_terms[i] < process_term)
+        // Identify the active branch (the one whose manifest carries process_term).
+        std::string_view active_branch = MainBranchName;
+        for (size_t i = 0; i < manifest_terms.size(); ++i)
         {
-            files_to_delete.emplace_back(
-                tbl_id.ToString() + "/" +
-                BranchManifestFileName(manifest_branch_names[i],
-                                       manifest_terms[i]));
+            if (manifest_terms[i] == process_term)
+            {
+                active_branch = manifest_branch_names[i];
+                break;
+            }
+        }
+        for (size_t i = 0; i < manifest_terms.size(); ++i)
+        {
+            if (manifest_terms[i] < process_term &&
+                manifest_branch_names[i] == active_branch)
+            {
+                files_to_delete.emplace_back(
+                    tbl_id.ToString() + "/" +
+                    BranchManifestFileName(manifest_branch_names[i],
+                                           manifest_terms[i]));
+            }
         }
     }
 
