@@ -1,11 +1,10 @@
-#include "tasks/background_write.h"
-
 #include <algorithm>
 #include <memory>  // for std::shared_ptr
 #include <string>
 
 #include "storage/mem_index_page.h"
 #include "storage/shard.h"
+#include "tasks/background_write.h"
 #include "utils.h"
 
 namespace eloqstore
@@ -332,7 +331,8 @@ KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
 
     uint64_t current_ts =
         provided_ts != 0 ? provided_ts : utils::UnixTs<chrono::microseconds>();
-    err = IoMgr()->CreateArchive(tbl_ident_, snapshot, current_ts, branch_metadata.branch_name);
+    err = IoMgr()->CreateArchive(
+        tbl_ident_, snapshot, current_ts, branch_metadata.branch_name);
     CHECK_KV_ERR(err);
 
     // Update the cached max file id.
@@ -360,7 +360,8 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
         IoMgr()->BranchManifestExists(tbl_ident_, normalized_branch, 0);
     if (exists_err == KvError::NoError)
     {
-        LOG(ERROR) << "CreateBranch: branch already exists: " << normalized_branch;
+        LOG(ERROR) << "CreateBranch: branch already exists: "
+                   << normalized_branch;
         return KvError::AlreadyExists;
     }
     if (exists_err != KvError::NotFound)
@@ -386,12 +387,12 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
         return KvError::NotFound;
     }
 
-    // The new branch starts at the first page of the file after the live
-    // allocator's current file.  This avoids sharing any file with the parent
-    // and does NOT mutate the live allocator.
+    // new branch jump to use the next file id to avoid any collision with
+    // parent branch
+    FileId parent_branch_max_file_id =
+        meta->mapper_->FilePgAllocator()->CurrentFileId();
     FilePageId new_max_fp_id =
-        static_cast<FilePageId>(
-            meta->mapper_->FilePgAllocator()->CurrentFileId() + 1)
+        static_cast<FilePageId>(parent_branch_max_file_id + 1)
         << Options()->pages_per_file_shift;
 
     PageId root = meta->root_id_;
@@ -406,7 +407,8 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
     std::string_view snapshot = wal_builder_.Snapshot(
         root, ttl_root, mapping, new_max_fp_id, dict_bytes, branch_metadata);
 
-    KvError err = IoMgr()->WriteBranchManifest(tbl_ident_, normalized_branch, 0, snapshot);
+    KvError err = IoMgr()->WriteBranchManifest(
+        tbl_ident_, normalized_branch, 0, snapshot);
     if (err != KvError::NoError)
     {
         return err;
@@ -418,6 +420,12 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
         return err;
     }
 
+    // Update the GC floor so that files up to and including the parent
+    // branch's current file are never deleted by GC.  The new branch manifest
+    // references those files; they must be kept alive.  This mirrors what
+    // CreateArchive does after writing an archive snapshot.
+    IoMgr()->least_not_archived_file_ids_[tbl_ident_] =
+        parent_branch_max_file_id + 1;
     return KvError::NoError;
 }
 
@@ -438,7 +446,8 @@ KvError BackgroundWrite::DeleteBranch(std::string_view branch_name)
     LOG(INFO) << "Deleting branch " << normalized_branch;
 
     // Delete all manifest files for this branch (all terms) plus CURRENT_TERM.
-    // The term argument is ignored; DeleteBranchFiles reads CURRENT_TERM itself.
+    // The term argument is ignored; DeleteBranchFiles reads CURRENT_TERM
+    // itself.
     KvError del_err =
         IoMgr()->DeleteBranchFiles(tbl_ident_, normalized_branch, 0);
     if (del_err != KvError::NoError && del_err != KvError::NotFound)
