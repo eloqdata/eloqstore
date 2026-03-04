@@ -974,6 +974,170 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
     }
 }
 
+void EloqStore::HandleGlobalCreateBranchRequest(GlobalCreateBranchRequest *req)
+{
+    req->first_error_.store(static_cast<uint8_t>(KvError::NoError),
+                            std::memory_order_relaxed);
+    req->pending_.store(0, std::memory_order_relaxed);
+    req->branch_reqs_.clear();
+
+    LOG(INFO) << "Creating global branch " << req->GetBranchName();
+
+    // Enumerate all partitions — mirrors HandleGlobalArchiveRequest.
+    std::vector<TableIdent> all_partitions;
+    if (options_.cloud_store_path.empty())
+    {
+        std::error_code ec;
+        for (const fs::path root : options_.store_path)
+        {
+            const fs::path db_path(root);
+            fs::directory_iterator dir_it(db_path, ec);
+            if (ec)
+            {
+                req->SetDone(ToKvError(-ec.value()));
+                return;
+            }
+            fs::directory_iterator end;
+            for (; dir_it != end; dir_it.increment(ec))
+            {
+                if (ec)
+                {
+                    req->SetDone(ToKvError(-ec.value()));
+                    return;
+                }
+                const fs::directory_entry &ent = *dir_it;
+                const fs::path ent_path = ent.path();
+                bool is_dir = fs::is_directory(ent_path, ec);
+                if (ec)
+                {
+                    req->SetDone(ToKvError(-ec.value()));
+                    return;
+                }
+                if (!is_dir)
+                {
+                    continue;
+                }
+
+                TableIdent tbl_id =
+                    TableIdent::FromString(ent_path.filename());
+                if (tbl_id.tbl_name_.empty())
+                {
+                    LOG(WARNING) << "unexpected partition " << ent.path();
+                    continue;
+                }
+
+                if (options_.partition_filter &&
+                    !options_.partition_filter(tbl_id))
+                {
+                    continue;
+                }
+
+                all_partitions.emplace_back(std::move(tbl_id));
+            }
+        }
+    }
+    else
+    {
+        std::vector<std::string> objects;
+        ListObjectRequest list_request(&objects);
+        list_request.SetRemotePath(std::string{});
+        list_request.SetRecursive(false);
+        do
+        {
+            objects.clear();
+            ExecSync(&list_request);
+
+            if (list_request.Error() != KvError::NoError)
+            {
+                LOG(ERROR)
+                    << "Failed to list cloud objects for global branch "
+                       "creation: "
+                    << static_cast<int>(list_request.Error());
+                req->SetDone(list_request.Error());
+                return;
+            }
+
+            if (all_partitions.empty())
+            {
+                all_partitions.reserve(objects.size());
+            }
+
+            for (auto &name : objects)
+            {
+                TableIdent tbl_id = TableIdent::FromString(name);
+                if (!tbl_id.IsValid())
+                {
+                    continue;
+                }
+
+                if (options_.partition_filter &&
+                    !options_.partition_filter(tbl_id))
+                {
+                    continue;
+                }
+
+                all_partitions.emplace_back(std::move(tbl_id));
+            }
+
+            if (list_request.HasMoreResults())
+            {
+                list_request.SetContinuationToken(
+                    *list_request.GetNextContinuationToken());
+            }
+        } while (list_request.HasMoreResults());
+    }
+
+    if (all_partitions.empty())
+    {
+        LOG(INFO) << "No partitions to branch (all filtered out or none exist)";
+        req->SetDone(KvError::NoError);
+        return;
+    }
+
+    LOG(INFO) << "Creating branch " << req->GetBranchName() << " on "
+              << all_partitions.size() << " partitions";
+
+    req->branch_reqs_.reserve(all_partitions.size());
+    req->pending_.store(static_cast<uint32_t>(all_partitions.size()),
+                        std::memory_order_relaxed);
+
+    auto on_branch_done = [req](KvRequest *sub_req)
+    {
+        KvError sub_err = sub_req->Error();
+        if (sub_err != KvError::NoError)
+        {
+            uint8_t expected = static_cast<uint8_t>(KvError::NoError);
+            uint8_t desired = static_cast<uint8_t>(sub_err);
+            req->first_error_.compare_exchange_strong(
+                expected,
+                desired,
+                std::memory_order_relaxed,
+                std::memory_order_relaxed);
+        }
+        if (req->pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        {
+            KvError final_err = static_cast<KvError>(
+                req->first_error_.load(std::memory_order_relaxed));
+            req->SetDone(final_err);
+        }
+    };
+
+    for (const TableIdent &partition : all_partitions)
+    {
+        auto branch_req = std::make_unique<CreateBranchRequest>();
+        branch_req->SetTableId(partition);
+        branch_req->SetArgs(req->branch_name_);
+        CreateBranchRequest *ptr = branch_req.get();
+        req->branch_reqs_.push_back(std::move(branch_req));
+        if (!ExecAsyn(ptr, 0, on_branch_done))
+        {
+            LOG(ERROR) << "Handle global create branch request, enqueue "
+                          "create branch request fail";
+            ptr->SetDone(KvError::NotRunning);
+        }
+    }
+}
+
 bool EloqStore::SendRequest(KvRequest *req)
 {
     if (stopped_.load(std::memory_order_relaxed))
@@ -1005,6 +1169,13 @@ bool EloqStore::SendRequest(KvRequest *req)
     if (req->Type() == RequestType::GlobalReopen)
     {
         HandleGlobalReopenRequest(static_cast<GlobalReopenRequest *>(req));
+        return true;
+    }
+
+    if (req->Type() == RequestType::GlobalCreateBranch)
+    {
+        HandleGlobalCreateBranchRequest(
+            static_cast<GlobalCreateBranchRequest *>(req));
         return true;
     }
 

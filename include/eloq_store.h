@@ -646,6 +646,7 @@ private:
     void HandleDropTableRequest(DropTableRequest *req);
     void HandleGlobalArchiveRequest(GlobalArchiveRequest *req);
     void HandleGlobalReopenRequest(GlobalReopenRequest *req);
+    void HandleGlobalCreateBranchRequest(GlobalCreateBranchRequest *req);
     KvError CollectTablePartitions(const std::string &table_name,
                                    std::vector<TableIdent> &partitions) const;
     KvError InitStoreSpace();
