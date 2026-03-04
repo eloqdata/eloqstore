@@ -204,10 +204,68 @@ public:
     explicit S3TestClient(const eloqstore::KvOptions &opts)
     {
         EnsureAwsSdkInitialized();
+        auto settings = ResolveSettings(opts);
+        std::lock_guard<std::mutex> lock(ClientMutex());
+        auto &shared_client = SharedClient();
+        auto &shared_settings = SharedSettings();
+        if (!shared_client)
+        {
+            shared_client = BuildClient(settings);
+            shared_settings = std::move(settings);
+        }
+        else if (!(shared_settings == settings))
+        {
+            LOG(FATAL) << "S3TestClient is process-global and was already "
+                          "initialized with different settings";
+        }
+        client_ = shared_client;
+    }
+
+    ~S3TestClient() = default;
+
+    Aws::S3::S3Client &Client()
+    {
+        return *client_;
+    }
+
+private:
+    struct ClientSettings
+    {
+        std::string endpoint;
+        std::string region;
+        bool verify_ssl{false};
+        bool requested_auto_credentials{false};
+        bool auto_credentials{false};
+        std::string access_key;
+        std::string secret_key;
+
+        bool operator==(const ClientSettings &other) const = default;
+    };
+
+    static ClientSettings ResolveSettings(const eloqstore::KvOptions &opts)
+    {
+        ClientSettings settings;
+        settings.endpoint = opts.cloud_endpoint.empty()
+                                ? std::string(kDefaultTestAwsEndpoint)
+                                : opts.cloud_endpoint;
+        settings.region = opts.cloud_region.empty()
+                              ? std::string(kDefaultTestAwsRegion)
+                              : opts.cloud_region;
+        settings.verify_ssl =
+            opts.cloud_endpoint.empty() ? false : opts.cloud_verify_ssl;
+        settings.requested_auto_credentials = opts.cloud_auto_credentials;
+        settings.auto_credentials =
+            opts.cloud_auto_credentials && opts.cloud_secret_key.empty();
+        settings.access_key = opts.cloud_access_key;
+        settings.secret_key = opts.cloud_secret_key;
+        return settings;
+    }
+
+    static std::shared_ptr<Aws::S3::S3Client> BuildClient(
+        const ClientSettings &settings)
+    {
         Aws::Client::ClientConfiguration config;
-        std::string endpoint = opts.cloud_endpoint.empty()
-                                   ? std::string(kDefaultTestAwsEndpoint)
-                                   : opts.cloud_endpoint;
+        const std::string &endpoint = settings.endpoint;
         if (!endpoint.empty())
         {
             config.endpointOverride = endpoint.c_str();
@@ -220,51 +278,52 @@ public:
                 config.scheme = Aws::Http::Scheme::HTTP;
             }
         }
-        std::string region = opts.cloud_region.empty()
-                                 ? std::string(kDefaultTestAwsRegion)
-                                 : opts.cloud_region;
-        config.region = region.c_str();
-        bool verify_ssl =
-            opts.cloud_endpoint.empty() ? false : opts.cloud_verify_ssl;
-        config.verifySSL = verify_ssl;
-        if (opts.cloud_auto_credentials && opts.cloud_secret_key.empty())
+        config.region = settings.region.c_str();
+        config.verifySSL = settings.verify_ssl;
+        if (settings.auto_credentials)
         {
-            credentials_provider_ =
+            auto credentials_provider =
                 Aws::MakeShared<Aws::Auth::DefaultAWSCredentialsProviderChain>(
                     "eloqstore");
-            client_ = std::make_unique<Aws::S3::S3Client>(
-                credentials_provider_,
+            return std::make_shared<Aws::S3::S3Client>(
+                credentials_provider,
                 config,
                 Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
                 false);
         }
-        else
+        if (settings.requested_auto_credentials &&
+            !settings.secret_key.empty())
         {
-            if (opts.cloud_auto_credentials && !opts.cloud_secret_key.empty())
-            {
-                LOG(INFO)
-                    << "cloud_secret_key is set; disabling auto credentials";
-            }
-            Aws::Auth::AWSCredentials credentials(
-                opts.cloud_access_key.c_str(), opts.cloud_secret_key.c_str());
-            client_ = std::make_unique<Aws::S3::S3Client>(
-                credentials,
-                config,
-                Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-                false);
+            LOG(INFO) << "cloud_secret_key is set; disabling auto credentials";
         }
+        Aws::Auth::AWSCredentials credentials(settings.access_key.c_str(),
+                                             settings.secret_key.c_str());
+        return std::make_shared<Aws::S3::S3Client>(
+            credentials,
+            config,
+            Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
+            false);
     }
 
-    ~S3TestClient() = default;
-
-    Aws::S3::S3Client &Client()
+    static std::mutex &ClientMutex()
     {
-        return *client_;
+        static std::mutex mutex;
+        return mutex;
     }
 
-private:
-    std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentials_provider_;
-    std::unique_ptr<Aws::S3::S3Client> client_;
+    static std::shared_ptr<Aws::S3::S3Client> &SharedClient()
+    {
+        static std::shared_ptr<Aws::S3::S3Client> client;
+        return client;
+    }
+
+    static ClientSettings &SharedSettings()
+    {
+        static ClientSettings settings;
+        return settings;
+    }
+
+    std::shared_ptr<Aws::S3::S3Client> client_;
 };
 
 struct ObjectListResult
@@ -273,7 +332,7 @@ struct ObjectListResult
     uint64_t total_size{0};
 };
 
-inline bool ListObjects(const eloqstore::KvOptions &opts,
+inline bool ListObjects(S3TestClient &client,
                         const ParsedCloudPath &path,
                         ObjectListResult &out,
                         bool raw_keys)
@@ -282,7 +341,6 @@ inline bool ListObjects(const eloqstore::KvOptions &opts,
     {
         return false;
     }
-    S3TestClient client(opts);
     Aws::S3::Model::ListObjectsV2Request request;
     request.SetBucket(path.bucket.c_str());
     std::string request_prefix = path.prefix;
@@ -327,11 +385,19 @@ inline bool ListObjects(const eloqstore::KvOptions &opts,
     return true;
 }
 
-inline bool DeleteObjects(const eloqstore::KvOptions &opts,
-                          const ParsedCloudPath &path)
+inline bool ListObjects(const eloqstore::KvOptions &opts,
+                        const ParsedCloudPath &path,
+                        ObjectListResult &out,
+                        bool raw_keys)
+{
+    S3TestClient client(opts);
+    return ListObjects(client, path, out, raw_keys);
+}
+
+inline bool DeleteObjects(S3TestClient &client, const ParsedCloudPath &path)
 {
     ObjectListResult objects;
-    if (!ListObjects(opts, path, objects, true))
+    if (!ListObjects(client, path, objects, true))
     {
         return false;
     }
@@ -339,7 +405,6 @@ inline bool DeleteObjects(const eloqstore::KvOptions &opts,
     {
         return true;
     }
-    S3TestClient client(opts);
     for (const auto &key : objects.keys)
     {
         Aws::S3::Model::DeleteObjectRequest request;
@@ -354,6 +419,13 @@ inline bool DeleteObjects(const eloqstore::KvOptions &opts,
         }
     }
     return true;
+}
+
+inline bool DeleteObjects(const eloqstore::KvOptions &opts,
+                          const ParsedCloudPath &path)
+{
+    S3TestClient client(opts);
+    return DeleteObjects(client, path);
 }
 
 inline std::string ComposeObjectKey(const ParsedCloudPath &path,
