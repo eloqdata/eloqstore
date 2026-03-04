@@ -318,14 +318,35 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
     }
     else
     {
+        // In non-append mode, only give back as free the pages that belong to
+        // the CURRENT branch (branch_metadata_.branch_name).  Pages that live
+        // in a parent-branch file (tracked in branch_metadata_.file_ranges with
+        // a different branch_name) must never be recycled by this branch;
+        // writing to them would silently corrupt the parent's live data.
+        //
+        // When file_ranges is empty (legacy manifests or the very first main
+        // manifest) there is no parent-file information, so we fall back to
+        // the original behaviour and allow all unused pages.
+        const BranchFileMapping &ranges = branch_metadata_.file_ranges;
+        const std::string &active_branch = branch_metadata_.branch_name;
         std::vector<uint32_t> free_ids;
         free_ids.reserve(mapper->free_page_cnt_);
         for (FilePageId i = 0; i < max_fp_id_; i++)
         {
-            if (!using_fp_ids_set.contains(i))
+            if (using_fp_ids_set.contains(i))
             {
-                free_ids.push_back(i);
+                continue;
             }
+            // Skip pages belonging to a different branch's file range.
+            if (!ranges.empty())
+            {
+                FileId fid = i >> opts_->pages_per_file_shift;
+                if (!FileIdInBranch(ranges, fid, active_branch))
+                {
+                    continue;
+                }
+            }
+            free_ids.push_back(i);
         }
         mapper->file_page_allocator_ = std::make_unique<PooledFilePages>(
             opts_, max_fp_id_, std::move(free_ids));
