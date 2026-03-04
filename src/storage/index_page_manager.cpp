@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -203,6 +204,64 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
         // can look up branch_name and term for pre-existing file IDs.
         if (!replayer.branch_metadata_.file_ranges.empty())
         {
+            const auto &ranges = replayer.branch_metadata_.file_ranges;
+#ifndef NDEBUG
+            // Validate invariants restored from the manifest:
+            //   1. max_file_id is strictly ascending across all entries.
+            //   2. All entries for the same branch_name are contiguous
+            //      (no other branch's entries interleaved within a branch's
+            //      block).
+            //   3. For each branch, term is non-decreasing in max_file_id
+            //      order.
+            std::unordered_map<std::string, uint64_t> branch_last_term;
+            std::string last_branch_name;
+            for (size_t i = 0; i < ranges.size(); ++i)
+            {
+                if (i > 0 &&
+                    ranges[i].max_file_id <= ranges[i - 1].max_file_id)
+                {
+                    LOG(ERROR)
+                        << "branch_metadata file_ranges: max_file_id not "
+                           "strictly ascending at index "
+                        << i << " (prev=" << ranges[i - 1].max_file_id
+                        << ", cur=" << ranges[i].max_file_id << ")";
+                    return KvError::Corrupted;
+                }
+                const std::string &bn = ranges[i].branch_name;
+                auto it = branch_last_term.find(bn);
+                if (it != branch_last_term.end())
+                {
+                    // Branch seen before — entries must be contiguous.
+                    if (bn != last_branch_name)
+                    {
+                        LOG(ERROR)
+                            << "branch_metadata file_ranges: non-adjacent "
+                               "entries for branch '"
+                            << bn << "' at index " << i
+                            << " (last branch was '" << last_branch_name
+                            << "')";
+                        return KvError::Corrupted;
+                    }
+                    // Term must not decrease within the branch's block.
+                    if (ranges[i].term < it->second)
+                    {
+                        LOG(ERROR)
+                            << "branch_metadata file_ranges: term decreases "
+                               "for branch '"
+                            << bn << "' at index " << i
+                            << " (prev_term=" << it->second
+                            << ", cur_term=" << ranges[i].term << ")";
+                        return KvError::Corrupted;
+                    }
+                    it->second = ranges[i].term;
+                }
+                else
+                {
+                    branch_last_term.emplace(bn, ranges[i].term);
+                }
+                last_branch_name = bn;
+            }
+#endif
             IoMgr()->SetBranchFileMapping(entry_tbl,
                                           replayer.branch_metadata_.file_ranges);
         }
