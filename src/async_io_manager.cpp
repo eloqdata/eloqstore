@@ -1220,6 +1220,8 @@ void IouringMgr::SetBranchFileIdTerm(const TableIdent &tbl_id,
         mapping.back().branch_name == branch_name &&
         mapping.back().term == term)
     {
+        CHECK(file_id > mapping.back().max_file_id)
+            << "file_id must be allocated in ascending order for the same branch and term";
         mapping.back().max_file_id = file_id;
     }
     else
@@ -2197,10 +2199,10 @@ KvError IouringMgr::WriteBranchManifest(const TableIdent &tbl_id,
 {
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, branch_name, 0);
     CHECK_KV_ERR(err);
-    
+
     // Generate branch manifest filename: manifest_<branch_name>_<term>
     const std::string name = BranchManifestFileName(branch_name, term);
-    
+
     int res = WriteSnapshot(std::move(dir_fd), name, snapshot);
     if (res < 0)
     {
@@ -3990,10 +3992,10 @@ KvError CloudStoreMgr::WriteBranchManifest(const TableIdent &tbl_id,
 {
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, branch_name, 0);
     CHECK_KV_ERR(err);
-    
+
     // Generate branch manifest filename: manifest_<branch_name>_<term>
     const std::string name = BranchManifestFileName(branch_name, term);
-    
+
     int res = WriteSnapshot(std::move(dir_fd), name, snapshot);
     if (res < 0)
     {
