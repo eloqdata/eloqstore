@@ -406,3 +406,104 @@ TEST_CASE("branch files persist after restart", "[branch][persist]")
         fresh_store.Stop();
     }
 }
+
+TEST_CASE("branch data isolation: bidirectional fork", "[branch][isolation]")
+{
+    // Phase 1: open on main, write DS1 (keys 0-99), create branch "feature1".
+    {
+        eloqstore::EloqStore *store = InitStore(default_opts);
+        MapVerifier verify(test_tbl_id, store, false);
+        verify.SetAutoClean(false);
+
+        verify.Upsert(0, 100);  // DS1: keys [0, 100)
+
+        eloqstore::CreateBranchRequest req;
+        req.SetTableId(test_tbl_id);
+        req.SetArgs("feature1");
+        store->ExecSync(&req);
+        REQUIRE(req.Error() == eloqstore::KvError::NoError);
+
+        store->Stop();
+    }
+
+    // Phase 2: open on feature1, verify DS1 inherited, write DS2 (keys 100-199).
+    {
+        eloqstore::EloqStore feature1_store(default_opts);
+        eloqstore::KvError err = feature1_store.Start("feature1", 0);
+        REQUIRE(err == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &feature1_store, false);
+        verify.SetAutoClean(false);
+
+        // DS1 must be visible on feature1 (inherited from main at fork point).
+        REQUIRE(verify.CheckKey(0) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(50) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(99) == eloqstore::KvError::NoError);
+
+        // DS2 not yet written on feature1.
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NotFound);
+
+        verify.Upsert(100, 200);  // DS2: keys [100, 200)
+
+        // DS2 now visible on feature1.
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NoError);
+
+        feature1_store.Stop();
+    }
+
+    // Phase 3: open on main, verify DS1 still present and DS2 NOT visible,
+    //          then write DS3 (keys 200-299).
+    {
+        eloqstore::EloqStore main_store(default_opts);
+        eloqstore::KvError err = main_store.Start(eloqstore::MainBranchName, 0);
+        REQUIRE(err == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &main_store, false);
+        verify.SetAutoClean(false);
+
+        // DS1 still on main.
+        REQUIRE(verify.CheckKey(0) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(99) == eloqstore::KvError::NoError);
+
+        // DS2 written on feature1 must NOT be visible on main.
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NotFound);
+
+        verify.Upsert(200, 300);  // DS3: keys [200, 300)
+
+        // DS3 visible on main.
+        REQUIRE(verify.CheckKey(200) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(299) == eloqstore::KvError::NoError);
+
+        main_store.Stop();
+    }
+
+    // Phase 4: open on feature1 again, verify DS1+DS2 present and DS3 NOT
+    //          visible (main's writes after the fork must not leak into feature1).
+    {
+        eloqstore::EloqStore feature1_store(default_opts);
+        eloqstore::KvError err = feature1_store.Start("feature1", 0);
+        REQUIRE(err == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &feature1_store, false);
+        verify.SetAutoClean(false);
+
+        // DS1 still visible on feature1.
+        REQUIRE(verify.CheckKey(0) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(99) == eloqstore::KvError::NoError);
+
+        // DS2 still visible on feature1.
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NoError);
+
+        // DS3 written on main after the fork must NOT be visible on feature1.
+        REQUIRE(verify.CheckKey(200) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(299) == eloqstore::KvError::NotFound);
+
+        feature1_store.Stop();
+    }
+
+    CleanupStore(default_opts);
+}
