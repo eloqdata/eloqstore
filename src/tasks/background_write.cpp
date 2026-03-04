@@ -354,10 +354,12 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
         return KvError::InvalidArgs;
     }
 
-    // Guard against silent overwrite of an existing branch manifest.
-    // TODO(githubzilla): Add check for all possible term numbers
+    // Guard against silent overwrite of an existing branch.
+    // Use CURRENT_TERM.<branch> as the canonical "branch fully created"
+    // marker — it is written after manifest_<branch>_0 in CreateBranch, so
+    // its presence reliably means the branch already exists.
     KvError exists_err =
-        IoMgr()->BranchManifestExists(tbl_ident_, normalized_branch, 0);
+        IoMgr()->BranchCurrentTermExists(tbl_ident_, normalized_branch);
     if (exists_err == KvError::NoError)
     {
         LOG(ERROR) << "CreateBranch: branch already exists: "
