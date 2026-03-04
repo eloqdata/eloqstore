@@ -2264,15 +2264,40 @@ KvError IouringMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
 
 KvError IouringMgr::DeleteBranchFiles(const TableIdent &tbl_id,
                                        std::string_view branch_name,
-                                       uint64_t term)
+                                       uint64_t /* term (unused: we read from CURRENT_TERM) */)
 {
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, branch_name, 0);
     CHECK_KV_ERR(err);
 
-    std::string manifest_filename = BranchManifestFileName(branch_name, term);
     std::string current_term_filename = BranchCurrentTermFileName(branch_name);
 
-    std::vector<std::string> files_to_delete = {manifest_filename, current_term_filename};
+    // Read CURRENT_TERM.<branch> to find the highest term written for this branch.
+    // If the file is missing, fall back to term 0 so we still delete manifest_<branch>_0.
+    uint64_t max_term = 0;
+    {
+        int ct_fd = OpenAt(
+            dir_fd.FdPair(), current_term_filename.c_str(), O_RDONLY, 0);
+        if (ct_fd >= 0)
+        {
+            char buf[32] = {};
+            int n = Read(FdIdx{ct_fd, false}, buf, sizeof(buf) - 1, 0);
+            if (n > 0)
+            {
+                max_term = ParseBranchTerm(std::string_view(buf, n));
+            }
+            CloseDirect(ct_fd);
+        }
+    }
+
+    // Build the delete list: manifest_<branch>_0 .. manifest_<branch>_<max_term>
+    // plus CURRENT_TERM.<branch>.  ENOENT is ignored per file so gaps are safe.
+    std::vector<std::string> files_to_delete;
+    files_to_delete.reserve(max_term + 2);
+    for (uint64_t t = 0; t <= max_term; ++t)
+    {
+        files_to_delete.push_back(BranchManifestFileName(branch_name, t));
+    }
+    files_to_delete.push_back(current_term_filename);
 
     // Use the directory fd for unlink operations
     KvTask *current_task = ThdTask();
@@ -2298,7 +2323,8 @@ KvError IouringMgr::DeleteBranchFiles(const TableIdent &tbl_id,
     KvError first_error = KvError::NoError;
     for (const auto &req : reqs)
     {
-        if (req.res_ < 0 && first_error == KvError::NoError)
+        // Ignore ENOENT: not every term slot is guaranteed to have a manifest.
+        if (req.res_ < 0 && req.res_ != -ENOENT && first_error == KvError::NoError)
         {
             LOG(ERROR) << "Failed to unlink file: " << req.path
                        << ", error: " << req.res_;
@@ -4344,28 +4370,53 @@ KvError CloudStoreMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
 }
 
 KvError CloudStoreMgr::DeleteBranchFiles(const TableIdent &tbl_id,
-                                        std::string_view branch_name,
-                                        uint64_t term)
+                                         std::string_view branch_name,
+                                         uint64_t /* term (unused: we read from CURRENT_TERM) */)
 {
-    std::string manifest_filename = BranchManifestFileName(branch_name, term);
     std::string current_term_filename = BranchCurrentTermFileName(branch_name);
 
-    std::string manifest_path = tbl_id.ToString() + "/" + manifest_filename;
-    std::string term_path = tbl_id.ToString() + "/" + current_term_filename;
+    // Download CURRENT_TERM.<branch> to find the highest term for this branch.
+    uint64_t max_term = 0;
+    {
+        KvTask *current_task = ThdTask();
+        ObjectStore::DownloadTask download_task(&tbl_id, current_term_filename);
+        download_task.SetKvTask(current_task);
+        AcquireCloudSlot(current_task);
+        obj_store_.SubmitTask(&download_task, shard);
+        current_task->WaitIo();
+
+        if (download_task.error_ == KvError::NoError)
+        {
+            std::string_view content = download_task.response_data_.view();
+            max_term = ParseBranchTerm(content);
+        }
+        // If NotFound or any other error, fall back to term 0.
+    }
+
+    // Build the list of cloud paths to delete: manifest_<branch>_0 ..
+    // manifest_<branch>_<max_term> plus CURRENT_TERM.<branch>.
+    std::vector<std::string> paths_to_delete;
+    paths_to_delete.reserve(max_term + 2);
+    for (uint64_t t = 0; t <= max_term; ++t)
+    {
+        paths_to_delete.push_back(
+            tbl_id.ToString() + "/" + BranchManifestFileName(branch_name, t));
+    }
+    paths_to_delete.push_back(
+        tbl_id.ToString() + "/" + current_term_filename);
 
     KvTask *current_task = ThdTask();
+    std::vector<ObjectStore::DeleteTask> delete_tasks;
+    delete_tasks.reserve(paths_to_delete.size());
 
-    ObjectStore::DeleteTask manifest_delete(manifest_path);
-    manifest_delete.SetKvTask(current_task);
-    AcquireCloudSlot(current_task);
-    obj_store_.SubmitTask(&manifest_delete, shard);
-    current_task->WaitIo();
-
-    ObjectStore::DeleteTask term_delete(term_path);
-    term_delete.SetKvTask(current_task);
-    AcquireCloudSlot(current_task);
-    obj_store_.SubmitTask(&term_delete, shard);
-    current_task->WaitIo();
+    for (const std::string &path : paths_to_delete)
+    {
+        delete_tasks.emplace_back(path);
+        delete_tasks.back().SetKvTask(current_task);
+        AcquireCloudSlot(current_task);
+        obj_store_.SubmitTask(&delete_tasks.back(), shard);
+        current_task->WaitIo();
+    }
 
     return KvError::NoError;
 }
@@ -5376,15 +5427,34 @@ KvError MemStoreMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
 
 KvError MemStoreMgr::DeleteBranchFiles(const TableIdent &tbl_id,
                                        std::string_view branch_name,
-                                       uint64_t term)
+                                       uint64_t /* term (unused: we read from branch_terms_) */)
 {
     std::lock_guard lock(manifest_mutex_);
-    std::string manifest_key = BranchManifestFileName(branch_name, term);
-    std::string term_key = BranchCurrentTermFileName(branch_name);
-    
-    manifests_[tbl_id].erase(manifest_key);
+
+    // Determine the highest term written for this branch.
+    uint64_t max_term = 0;
+    {
+        auto tbl_it = branch_terms_.find(tbl_id);
+        if (tbl_it != branch_terms_.end())
+        {
+            auto br_it = tbl_it->second.find(std::string(branch_name));
+            if (br_it != tbl_it->second.end())
+            {
+                max_term = br_it->second;
+            }
+        }
+    }
+
+    // Erase all manifest entries for this branch (terms 0..max_term).
+    auto &tbl_manifests = manifests_[tbl_id];
+    for (uint64_t t = 0; t <= max_term; ++t)
+    {
+        tbl_manifests.erase(BranchManifestFileName(branch_name, t));
+    }
+
+    // Erase the branch term entry.
     branch_terms_[tbl_id].erase(std::string(branch_name));
-    
+
     return KvError::NoError;
 }
 
