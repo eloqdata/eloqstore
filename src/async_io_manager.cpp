@@ -2255,7 +2255,9 @@ KvError IouringMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
     }
 
     // W3: use io_uring Write instead of blocking write(2) syscall.
-    int written = Write(FdIdx{fd, false}, term_str.data(), term_str.size(), 0);
+    // OpenAt defaults to fixed_target=true, so fd is a registered file index;
+    // use FdIdx{fd, true} (IOSQE_FIXED_FILE) to match.
+    int written = Write(FdIdx{fd, true}, term_str.data(), term_str.size(), 0);
     if (written < 0 || static_cast<size_t>(written) != term_str.size())
     {
         LOG(ERROR) << "Failed to write CURRENT_TERM file " << filename << ": "
@@ -2265,7 +2267,7 @@ KvError IouringMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
     }
 
     // W2: check fsync result instead of silently ignoring it.
-    int sync_res = Fdatasync(FdIdx{fd, false});
+    int sync_res = Fdatasync(FdIdx{fd, true});
     CloseDirect(fd);
     if (sync_res != 0)
     {
@@ -2294,7 +2296,8 @@ KvError IouringMgr::DeleteBranchFiles(const TableIdent &tbl_id,
         if (ct_fd >= 0)
         {
             char buf[32] = {};
-            int n = Read(FdIdx{ct_fd, false}, buf, sizeof(buf) - 1, 0);
+            // OpenAt defaults to fixed_target=true; ct_fd is a registered index.
+            int n = Read(FdIdx{ct_fd, true}, buf, sizeof(buf) - 1, 0);
             if (n > 0)
             {
                 max_term = ParseBranchTerm(std::string_view(buf, n));
