@@ -222,7 +222,7 @@ TEST_CASE("Replayer replay with multi appended mapping table log",
     meta20.term = 20;
     std::string meta20_str =
         eloqstore::SerializeBranchManifestMetadata(meta20);
-    builder1.AppendFileIdTermMapping(meta20_str);
+    builder1.AppendBranchManifestMetadata(meta20_str);
     std::string_view append_log1 = builder1.Finalize(10, 10);
 
     manifest_buf.append(append_log1);
@@ -240,7 +240,7 @@ TEST_CASE("Replayer replay with multi appended mapping table log",
     meta30.term = 30;
     std::string meta30_str =
         eloqstore::SerializeBranchManifestMetadata(meta30);
-    builder2.AppendFileIdTermMapping(meta30_str);
+    builder2.AppendBranchManifestMetadata(meta30_str);
     std::string_view append_log2 = builder2.Finalize(30, 30);
 
     manifest_buf.append(append_log2);

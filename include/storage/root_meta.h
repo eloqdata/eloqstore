@@ -42,10 +42,10 @@ public:
     void UpdateMapping(PageId page_id, FilePageId file_page_id);
     void DeleteMapping(PageId page_id);
     /*
-     * @brief Update the mapping_bytes_len and append file_term_mapping to
-     *         buff_.
+     * @brief Update the mapping_bytes_len and append serialized
+     *        BranchManifestMetadata to buff_.
      */
-    void AppendFileIdTermMapping(std::string_view file_term_mapping);
+    void AppendBranchManifestMetadata(std::string_view branch_metadata);
     std::string_view Snapshot(PageId root_id,
                               PageId ttl_root,
                               const MappingSnapshot *mapping,
