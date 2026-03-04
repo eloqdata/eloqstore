@@ -483,7 +483,7 @@ KvError WriteTask::FlushManifest()
         manifest_size + log_physical_size <= opts->manifest_limit)
     {
         // Append branch metadata to manifest log
-        wal_builder_.AppendFileIdTermMapping(branch_metadata_str);
+        wal_builder_.AppendBranchManifestMetadata(branch_metadata_str);
         std::string_view blob =
             wal_builder_.Finalize(cow_meta_.root_id_, cow_meta_.ttl_root_id_);
         err = IoMgr()->AppendManifest(tbl_ident_, blob, manifest_size);

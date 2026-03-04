@@ -1004,7 +1004,7 @@ void ManifestVerifier::Finish()
             branch_metadata.term = 0;
             std::string term_buf =
                 eloqstore::SerializeBranchManifestMetadata(branch_metadata);
-            builder_.AppendFileIdTermMapping(term_buf);
+            builder_.AppendBranchManifestMetadata(term_buf);
             std::string_view sv =
                 builder_.Finalize(root_id_, eloqstore::MaxPageId);
             file_.append(sv);

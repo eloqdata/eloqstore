@@ -55,8 +55,8 @@ void ManifestBuilder::DeleteMapping(PageId page_id)
     buff_.AppendVarint64(MappingSnapshot::InvalidValue);
 }
 
-void ManifestBuilder::AppendFileIdTermMapping(
-    std::string_view file_term_mapping)
+void ManifestBuilder::AppendBranchManifestMetadata(
+    std::string_view branch_metadata)
 {
     CHECK(resized_for_mapping_bytes_len_ || buff_.size() == header_bytes);
     if (!resized_for_mapping_bytes_len_)
@@ -68,8 +68,8 @@ void ManifestBuilder::AppendFileIdTermMapping(
     uint32_t mapping_len =
         static_cast<uint32_t>(buff_.size() - header_bytes - 4);
     EncodeFixed32(buff_.data() + header_bytes, mapping_len);
-    // append the serialized file_term_mapping
-    buff_.append(file_term_mapping);
+    // append the serialized branch_metadata
+    buff_.append(branch_metadata);
 }
 
 std::string_view ManifestBuilder::Snapshot(PageId root_id,
