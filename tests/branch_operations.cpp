@@ -183,6 +183,31 @@ TEST_CASE("delete non-existent branch", "[branch]")
     store->Stop();
 }
 
+TEST_CASE("create branch - already exists returns AlreadyExists", "[branch]")
+{
+    eloqstore::EloqStore *store = InitStore(default_opts);
+    MapVerifier verify(test_tbl_id, store, false);
+    verify.SetAutoClean(false);
+
+    verify.Upsert(0, 100);
+
+    // First creation must succeed.
+    eloqstore::CreateBranchRequest req1;
+    req1.SetTableId(test_tbl_id);
+    req1.branch_name = "feature1";
+    store->ExecSync(&req1);
+    REQUIRE(req1.Error() == eloqstore::KvError::NoError);
+
+    // Second creation for the same branch must be rejected.
+    eloqstore::CreateBranchRequest req2;
+    req2.SetTableId(test_tbl_id);
+    req2.branch_name = "feature1";
+    store->ExecSync(&req2);
+    REQUIRE(req2.Error() == eloqstore::KvError::AlreadyExists);
+
+    store->Stop();
+}
+
 TEST_CASE("branch files persist after restart", "[branch][persist]")
 {
     {
