@@ -117,11 +117,11 @@ public:
                                    std::string_view log,
                                    uint64_t offset) = 0;
     virtual KvError SwitchManifest(const TableIdent &tbl_id,
-                                    std::string_view snapshot) = 0;
+                                   std::string_view snapshot) = 0;
     virtual KvError CreateArchive(const TableIdent &tbl_id,
-                                   std::string_view snapshot,
-                                   uint64_t ts,
-                                   std::string_view branch_name) = 0;
+                                  std::string_view snapshot,
+                                  uint64_t ts,
+                                  std::string_view branch_name) = 0;
     virtual KvError WriteBranchManifest(const TableIdent &tbl_id,
                                         std::string_view branch_name,
                                         uint64_t term,
@@ -130,8 +130,8 @@ public:
                                          std::string_view branch_name,
                                          uint64_t term) = 0;
     virtual KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
-                                          std::string_view branch_name,
-                                          uint64_t term) = 0;
+                                           std::string_view branch_name,
+                                           uint64_t term) = 0;
     virtual KvError DeleteBranchFiles(const TableIdent &tbl_id,
                                       std::string_view branch_name,
                                       uint64_t term) = 0;
@@ -426,19 +426,21 @@ public:
     KvError SwitchManifest(const TableIdent &tbl_id,
                            std::string_view snapshot) override;
     KvError CreateArchive(const TableIdent &tbl_id,
-                           std::string_view snapshot,
-                           uint64_t ts,
-                           std::string_view branch_name) override;
+                          std::string_view snapshot,
+                          uint64_t ts,
+                          std::string_view branch_name) override;
     KvError WriteBranchManifest(const TableIdent &tbl_id,
                                 std::string_view branch_name,
                                 uint64_t term,
                                 std::string_view snapshot) override;
     KvError BranchManifestExists(const TableIdent &tbl_id,
-                                  std::string_view branch_name,
-                                  uint64_t term) override;
+                                 std::string_view branch_name,
+                                 uint64_t term) override;
     KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                    std::string_view branch_name,
                                    uint64_t term) override;
+    // This function should not called by eloqstore core, it's only used for
+    // cloud store to delete the branch files in remote storage.
     KvError DeleteBranchFiles(const TableIdent &tbl_id,
                               std::string_view branch_name,
                               uint64_t term) override;
@@ -465,7 +467,7 @@ public:
 
     // Bulk-replace the BranchFileMapping for a table.
     void SetBranchFileMapping(const TableIdent &tbl_id,
-                               BranchFileMapping mapping) override;
+                              BranchFileMapping mapping) override;
 
     // Return the current BranchFileMapping for a table.
     const BranchFileMapping &GetBranchFileMapping(
@@ -573,8 +575,8 @@ public:
         uint32_t ref_count_{0};
         LruFD *prev_{nullptr};
         LruFD *next_{nullptr};
-        uint64_t term_{0};        // Term of the file this FD represents
-        std::string branch_name_; // Branch name of the file this FD represents
+        uint64_t term_{0};         // Term of the file this FD represents
+        std::string branch_name_;  // Branch name of the file this FD represents
     };
 
     enum class UserDataType : uint8_t
@@ -587,7 +589,7 @@ public:
 
     struct BaseReq
     {
-        explicit BaseReq(KvTask *task = nullptr) : task_(task) {};
+        explicit BaseReq(KvTask *task = nullptr) : task_(task){};
         KvTask *task_;
         int res_{0};
         uint32_t flags_{0};
@@ -712,23 +714,25 @@ public:
      * @brief Open file if already exists. Only data file is opened with
      * O_DIRECT by default. Set `direct` to true to open manifest with O_DIRECT.
      */
-    std::pair<LruFD::Ref, KvError> OpenFD(const TableIdent &tbl_id,
-                                          FileId file_id,
-                                          bool direct = false,
-                                          std::string_view branch_name = MainBranchName,
-                                          uint64_t term = 0);
+    std::pair<LruFD::Ref, KvError> OpenFD(
+        const TableIdent &tbl_id,
+        FileId file_id,
+        bool direct = false,
+        std::string_view branch_name = MainBranchName,
+        uint64_t term = 0);
     /**
      * @brief Open file or create it if not exists. This method can be used to
      * open data-file/manifest or create data-file, but not create manifest.
      * Only data file is opened with O_DIRECT by default. Set `direct` to true
      * to open manifest with O_DIRECT.
      */
-    std::pair<LruFD::Ref, KvError> OpenOrCreateFD(const TableIdent &tbl_id,
-                                                  FileId file_id,
-                                                  bool direct = false,
-                                                  bool create = true,
-                                                  std::string_view branch_name = MainBranchName,
-                                                  uint64_t term = 0);
+    std::pair<LruFD::Ref, KvError> OpenOrCreateFD(
+        const TableIdent &tbl_id,
+        FileId file_id,
+        bool direct = false,
+        bool create = true,
+        std::string_view branch_name = MainBranchName,
+        uint64_t term = 0);
     bool EvictFD();
 
     class WriteReqPool
@@ -770,7 +774,8 @@ public:
     std::unique_ptr<MergedWriteReqPool> merged_write_req_pool_{nullptr};
 
     std::unordered_map<TableIdent, PartitionFiles> tables_;
-    // Per-table BranchFileMapping storage (branch_name, term, max_file_id ranges).
+    // Per-table BranchFileMapping storage (branch_name, term, max_file_id
+    // ranges).
     absl::flat_hash_map<TableIdent, BranchFileMapping> branch_file_mapping_;
     LruFD lru_fd_head_{nullptr, MaxFileId};
     LruFD lru_fd_tail_{nullptr, MaxFileId};
@@ -806,7 +811,8 @@ public:
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};
 
-    // Active branch for this shard. Set via SetActiveBranch() from Shard::Init().
+    // Active branch for this shard. Set via SetActiveBranch() from
+    // Shard::Init().
     std::string active_branch_{MainBranchName};
 
     KvError BootstrapRing(Shard *shard);
@@ -834,12 +840,12 @@ public:
                           uint64_t ts,
                           std::string_view branch_name) override;
     KvError WriteBranchManifest(const TableIdent &tbl_id,
-                                 std::string_view branch_name,
-                                 uint64_t term,
-                                 std::string_view snapshot) override;
+                                std::string_view branch_name,
+                                uint64_t term,
+                                std::string_view snapshot) override;
     KvError BranchManifestExists(const TableIdent &tbl_id,
-                                  std::string_view branch_name,
-                                  uint64_t term) override;
+                                 std::string_view branch_name,
+                                 uint64_t term) override;
     KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                    std::string_view branch_name,
                                    uint64_t term) override;
@@ -1139,18 +1145,18 @@ public:
                            std::string_view log,
                            uint64_t offset) override;
     KvError SwitchManifest(const TableIdent &tbl_id,
-                          std::string_view snapshot) override;
+                           std::string_view snapshot) override;
     KvError CreateArchive(const TableIdent &tbl_id,
                           std::string_view snapshot,
                           uint64_t ts,
                           std::string_view branch_name) override;
     KvError WriteBranchManifest(const TableIdent &tbl_id,
-                                 std::string_view branch_name,
-                                 uint64_t term,
-                                 std::string_view snapshot) override;
+                                std::string_view branch_name,
+                                uint64_t term,
+                                std::string_view snapshot) override;
     KvError BranchManifestExists(const TableIdent &tbl_id,
-                                  std::string_view branch_name,
-                                  uint64_t term) override;
+                                 std::string_view branch_name,
+                                 uint64_t term) override;
     KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                    std::string_view branch_name,
                                    uint64_t term) override;
@@ -1185,7 +1191,7 @@ public:
     class Manifest : public ManifestFile
     {
     public:
-        explicit Manifest(std::string_view content) : content_(content) {};
+        explicit Manifest(std::string_view content) : content_(content){};
         KvError Read(char *dst, size_t n) override;
         KvError SkipPadding(size_t n) override;
 
@@ -1200,8 +1206,10 @@ private:
         std::string wal;
     };
     std::unordered_map<TableIdent, Partition> store_;
-    std::unordered_map<TableIdent, std::unordered_map<std::string, std::string>> manifests_;
-    std::unordered_map<TableIdent, std::unordered_map<std::string, uint64_t>> branch_terms_;
+    std::unordered_map<TableIdent, std::unordered_map<std::string, std::string>>
+        manifests_;
+    std::unordered_map<TableIdent, std::unordered_map<std::string, uint64_t>>
+        branch_terms_;
     std::mutex manifest_mutex_;
 };
 
