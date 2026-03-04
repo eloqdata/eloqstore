@@ -1,6 +1,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -247,6 +248,70 @@ TEST_CASE("gc branch protection: one deleted branch, one live still protects",
     WaitForGC();
 
     // feature2 is still alive – data files must NOT be deleted.
+    REQUIRE(CountDataFiles(branch_gc_opts, bgc_tbl_id) == files_before);
+
+    store->Stop();
+}
+
+// ---------------------------------------------------------------------------
+// Test 6 [corrupt manifest] – warn-and-skip path: GC must survive a branch
+// manifest that cannot be replayed and must still protect files held by a
+// valid sibling branch manifest.
+// ---------------------------------------------------------------------------
+TEST_CASE("gc corrupt manifest: warn-and-skip keeps store alive",
+          "[branch-gc]")
+{
+    CleanupLocalStore(branch_gc_opts);
+    eloqstore::EloqStore *store = InitStore(branch_gc_opts);
+
+    MapVerifier verify(bgc_tbl_id, store, false);
+    verify.SetValueSize(100);
+    verify.SetAutoClean(false);
+
+    verify.Upsert(0, 50);
+
+    // Create two branches that each snapshot the same data files.
+    eloqstore::CreateBranchRequest req_good;
+    req_good.SetTableId(bgc_tbl_id);
+    req_good.branch_name = "good";
+    store->ExecSync(&req_good);
+    REQUIRE(req_good.Error() == eloqstore::KvError::NoError);
+
+    eloqstore::CreateBranchRequest req_corrupt;
+    req_corrupt.SetTableId(bgc_tbl_id);
+    req_corrupt.branch_name = "corrupt";
+    store->ExecSync(&req_corrupt);
+    REQUIRE(req_corrupt.Error() == eloqstore::KvError::NoError);
+
+    // Overwrite manifest_corrupt_0 with garbage bytes of the same size.
+    // The file was written by eloqstore with O_DIRECT (page-aligned size), so
+    // preserving the size lets ReadFile succeed via O_DIRECT – but the content
+    // is 0xFF throughout, which causes Replayer::Replay to fail with
+    // KvError::Corrupted, exercising the warn-and-skip path in
+    // AugmentRetainedFilesFromBranchManifests (file_gc.cpp lines 369-377).
+    fs::path table_path =
+        fs::path(branch_gc_opts.store_path[0]) / bgc_tbl_id.ToString();
+    fs::path corrupt_manifest = table_path / "manifest_corrupt_0";
+    size_t manifest_size = fs::file_size(corrupt_manifest);
+    {
+        std::vector<char> garbage(manifest_size, static_cast<char>(0xFF));
+        std::ofstream of(corrupt_manifest,
+                         std::ios::binary | std::ios::out | std::ios::trunc);
+        of.write(garbage.data(), static_cast<std::streamsize>(garbage.size()));
+    }
+
+    size_t files_before = CountDataFiles(branch_gc_opts, bgc_tbl_id);
+    REQUIRE(files_before > 0);
+
+    // Delete all data – this triggers GC.  GC encounters manifest_corrupt_0,
+    // logs a warning, and skips it.  The "good" branch manifest (and the active
+    // branch's on-disk manifest) still protect the data files.
+    verify.Delete(0, 50);
+
+    WaitForGC();
+
+    // Store must still be running (no crash on corrupt manifest) and the data
+    // files referenced by "good" must remain.
     REQUIRE(CountDataFiles(branch_gc_opts, bgc_tbl_id) == files_before);
 
     store->Stop();

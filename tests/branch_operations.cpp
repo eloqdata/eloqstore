@@ -321,6 +321,59 @@ TEST_CASE("global create branch - no-op on empty store", "[branch][global]")
     store->Stop();
 }
 
+TEST_CASE("delete branch removes all term manifests", "[branch]")
+{
+    eloqstore::EloqStore *store = InitStore(default_opts);
+    MapVerifier verify(test_tbl_id, store, false);
+    verify.SetAutoClean(false);
+
+    verify.Upsert(0, 100);
+
+    // Create branch at term 0.
+    eloqstore::CreateBranchRequest create_req;
+    create_req.SetTableId(test_tbl_id);
+    create_req.branch_name = "feature";
+    store->ExecSync(&create_req);
+    REQUIRE(create_req.Error() == eloqstore::KvError::NoError);
+
+    fs::path table_path = fs::path(test_path) / test_tbl_id.ToString();
+    REQUIRE(fs::exists(table_path / "manifest_feature_0"));
+    REQUIRE(fs::exists(table_path / "CURRENT_TERM.feature"));
+
+    // Simulate the branch having been written to at higher terms (e.g. after a
+    // failover).  Write placeholder manifests for terms 1–3 and advance
+    // CURRENT_TERM.feature to "3".  DeleteBranchFiles reads CURRENT_TERM to
+    // discover max_term, then unlinks manifests 0..max_term; it never reads the
+    // manifest contents, so placeholder content is fine.
+    for (int t = 1; t <= 3; ++t)
+    {
+        std::ofstream mf(table_path /
+                         ("manifest_feature_" + std::to_string(t)));
+        mf << "placeholder";
+    }
+    {
+        std::ofstream ct(table_path / "CURRENT_TERM.feature",
+                         std::ios::out | std::ios::trunc);
+        ct << "3";
+    }
+
+    eloqstore::DeleteBranchRequest delete_req;
+    delete_req.SetTableId(test_tbl_id);
+    delete_req.branch_name = "feature";
+    store->ExecSync(&delete_req);
+    REQUIRE(delete_req.Error() == eloqstore::KvError::NoError);
+
+    // ALL manifests (terms 0–3) and CURRENT_TERM must be gone.
+    for (int t = 0; t <= 3; ++t)
+    {
+        REQUIRE(!fs::exists(
+            table_path / ("manifest_feature_" + std::to_string(t))));
+    }
+    REQUIRE(!fs::exists(table_path / "CURRENT_TERM.feature"));
+
+    store->Stop();
+}
+
 TEST_CASE("branch files persist after restart", "[branch][persist]")
 {
     {
