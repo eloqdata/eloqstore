@@ -437,9 +437,16 @@ KvError BackgroundWrite::DeleteBranch(std::string_view branch_name)
 
     LOG(INFO) << "Deleting branch " << normalized_branch;
 
-    // Try to delete the branch files - this is idempotent, so we ignore errors
-    // if the files don't exist
-    IoMgr()->DeleteBranchFiles(tbl_ident_, normalized_branch, 0);
+    // Delete all manifest files for this branch (all terms) plus CURRENT_TERM.
+    // The term argument is ignored; DeleteBranchFiles reads CURRENT_TERM itself.
+    KvError del_err =
+        IoMgr()->DeleteBranchFiles(tbl_ident_, normalized_branch, 0);
+    if (del_err != KvError::NoError && del_err != KvError::NotFound)
+    {
+        LOG(ERROR) << "DeleteBranch: failed to remove files for branch "
+                   << normalized_branch << ": " << ErrorString(del_err);
+        return del_err;
+    }
 
     LOG(INFO) << "Successfully deleted branch " << normalized_branch;
 
