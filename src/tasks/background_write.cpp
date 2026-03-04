@@ -4,7 +4,6 @@
 #include <memory>  // for std::shared_ptr
 #include <string>
 
-#include "replayer.h"
 #include "storage/mem_index_page.h"
 #include "storage/shard.h"
 #include "utils.h"
@@ -327,7 +326,7 @@ KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
     branch_metadata.branch_name = std::string(IoMgr()->GetActiveBranch());
     branch_metadata.term = IoMgr()->ProcessTerm();
     branch_metadata.file_ranges = IoMgr()->GetBranchFileMapping(tbl_ident_);
-    
+
     std::string_view snapshot = wal_builder_.Snapshot(
         root, ttl_root, mapping, max_fp_id, dict_bytes, branch_metadata);
 
@@ -356,6 +355,7 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
     }
 
     // Guard against silent overwrite of an existing branch manifest.
+    // TODO(githubzilla): Add check for all possible term numbers
     KvError exists_err =
         IoMgr()->BranchManifestExists(tbl_ident_, normalized_branch, 0);
     if (exists_err == KvError::NoError)
@@ -368,36 +368,10 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
         return exists_err;
     }
 
-    auto [manifest_ptr, manifest_err] = IoMgr()->GetManifest(tbl_ident_);
-    if (manifest_err != KvError::NoError)
-    {
-        return manifest_err;
-    }
-
-    if (!manifest_ptr)
-    {
-        return KvError::NotFound;
-    }
-
-    Replayer replayer(Options());
-    KvError replay_err = replayer.Replay(manifest_ptr.get());
-    if (replay_err != KvError::NoError)
-    {
-        return replay_err;
-    }
-
-    BranchManifestMetadata parent_metadata = replayer.branch_metadata_;
-    if (parent_metadata.branch_name.empty())
-    {
-        LOG(ERROR) << "CreateBranch: parent manifest has empty branch_name, "
-                      "manifest is corrupted.";
-        return KvError::Corrupted;
-    }
-
     BranchManifestMetadata branch_metadata;
     branch_metadata.branch_name = normalized_branch;
     branch_metadata.term = 0;
-    branch_metadata.file_ranges = parent_metadata.file_ranges;
+    branch_metadata.file_ranges = IoMgr()->GetBranchFileMapping(tbl_ident_);
 
     // Initialize file allocator to continue from parent's max + 1
     wal_builder_.Reset();
