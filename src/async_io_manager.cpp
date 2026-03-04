@@ -747,7 +747,13 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
                                       std::vector<uint16_t> &release_indices,
                                       bool use_fixed)
 {
-    uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
+    std::optional<uint64_t> term_opt = GetFileIdTerm(tbl_id, file_id);
+    // term must have been registered by SetBranchFileIdTerm in AllocatePage
+    // before any write to this file_id is submitted.
+    CHECK(term_opt.has_value())
+        << "No branch term registered for file_id " << file_id
+        << " — SetBranchFileIdTerm must be called before SubmitMergedWrite";
+    uint64_t term = *term_opt;
     std::string_view branch = GetActiveBranch();
     OnFileRangeWritePrepared(
         tbl_id, file_id, branch, term, offset, std::string_view(buf_ptr, bytes));
@@ -2243,17 +2249,25 @@ KvError IouringMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
         return ToKvError(fd);
     }
 
-    ssize_t written = write(fd, term_str.data(), term_str.size());
+    // W3: use io_uring Write instead of blocking write(2) syscall.
+    int written = Write(FdIdx{fd, false}, term_str.data(), term_str.size(), 0);
     if (written < 0 || static_cast<size_t>(written) != term_str.size())
     {
         LOG(ERROR) << "Failed to write CURRENT_TERM file " << filename << ": "
-                   << strerror(errno);
+                   << strerror(-written);
         CloseDirect(fd);
         return KvError::IoFail;
     }
 
-    fsync(fd);
+    // W2: check fsync result instead of silently ignoring it.
+    int sync_res = Fdatasync(FdIdx{fd, false});
     CloseDirect(fd);
+    if (sync_res != 0)
+    {
+        LOG(ERROR) << "Failed to fsync CURRENT_TERM file " << filename << ": "
+                   << strerror(-sync_res);
+        return KvError::IoFail;
+    }
     return KvError::NoError;
 }
 
