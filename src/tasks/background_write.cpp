@@ -421,9 +421,7 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
     }
 
     // Update the GC floor so that files up to and including the parent
-    // branch's current file are never deleted by GC.  The new branch manifest
-    // references those files; they must be kept alive.  This mirrors what
-    // CreateArchive does after writing an archive snapshot.
+    // branch's current file are never deleted by GC.
     IoMgr()->least_not_archived_file_ids_[tbl_ident_] =
         parent_branch_max_file_id + 1;
     return KvError::NoError;
