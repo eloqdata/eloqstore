@@ -692,18 +692,31 @@ KvError DeleteUnreferencedCloudFiles(
     if (files_to_delete.size() == data_files.size())
     {
         // Find the branch name for the current process_term manifest.
-        std::string_view current_manifest_branch = MainBranchName;
+        bool found_current = false;
+        std::string_view current_manifest_branch;
         for (size_t i = 0; i < manifest_terms.size(); ++i)
         {
             if (manifest_terms[i] == process_term)
             {
                 current_manifest_branch = manifest_branch_names[i];
+                found_current = true;
                 break;
             }
         }
-        files_to_delete.emplace_back(
-            tbl_id.ToString() + "/" +
-            BranchManifestFileName(current_manifest_branch, process_term));
+        if (!found_current)
+        {
+            LOG(WARNING)
+                << "ExecuteLocalGC: no manifest found for process_term="
+                << process_term
+                << " in tbl=" << tbl_id.ToString()
+                << "; skipping current-manifest deletion";
+        }
+        else
+        {
+            files_to_delete.emplace_back(
+                tbl_id.ToString() + "/" +
+                BranchManifestFileName(current_manifest_branch, process_term));
+        }
     }
 
     // Delete superseded manifest files: only manifests belonging to the same
@@ -712,24 +725,37 @@ KvError DeleteUnreferencedCloudFiles(
     // must not be deleted here.
     {
         // Identify the active branch (the one whose manifest carries process_term).
-        std::string_view active_branch = MainBranchName;
+        bool found_active = false;
+        std::string_view active_branch;
         for (size_t i = 0; i < manifest_terms.size(); ++i)
         {
             if (manifest_terms[i] == process_term)
             {
                 active_branch = manifest_branch_names[i];
+                found_active = true;
                 break;
             }
         }
-        for (size_t i = 0; i < manifest_terms.size(); ++i)
+        if (!found_active)
         {
-            if (manifest_terms[i] < process_term &&
-                manifest_branch_names[i] == active_branch)
+            LOG(WARNING)
+                << "ExecuteLocalGC: no active branch found for process_term="
+                << process_term
+                << " in tbl=" << tbl_id.ToString()
+                << "; skipping superseded-manifest pruning";
+        }
+        else
+        {
+            for (size_t i = 0; i < manifest_terms.size(); ++i)
             {
-                files_to_delete.emplace_back(
-                    tbl_id.ToString() + "/" +
-                    BranchManifestFileName(manifest_branch_names[i],
-                                           manifest_terms[i]));
+                if (manifest_terms[i] < process_term &&
+                    manifest_branch_names[i] == active_branch)
+                {
+                    files_to_delete.emplace_back(
+                        tbl_id.ToString() + "/" +
+                        BranchManifestFileName(manifest_branch_names[i],
+                                               manifest_terms[i]));
+                }
             }
         }
     }
