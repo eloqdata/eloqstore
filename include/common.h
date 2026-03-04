@@ -737,6 +737,13 @@ inline BranchFileMapping DeserializeBranchFileMapping(std::string_view data)
     return mapping;
 }
 
+// TODO(Phase 7): BranchManifestMetadata is serialized without a total-length
+// prefix or version field. The Replayer consumes everything after the mapping
+// table as this blob (snapshot.substr(4 + mapping_len)). If Phase 7 needs to
+// append additional fields after BranchManifestMetadata, a length prefix or
+// version byte must be added here first; otherwise the deserializer will
+// misparse the new bytes as BranchFileMapping entries.
+//
 // Serialize BranchManifestMetadata to string
 // Format: [branch_name_len(4B)][branch_name][term(8B)][BranchFileMapping]
 inline std::string SerializeBranchManifestMetadata(const BranchManifestMetadata &metadata)

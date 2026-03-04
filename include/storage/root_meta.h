@@ -23,14 +23,18 @@ namespace eloqstore
 {
 // For Manifest snapshot, the structure is:
 // Header :  [ Checksum(8B) | Root(4B) | TTL Root(4B) | Payload Len(4B) ]
-// Body   :  [ MaxFpId(8B) | DictLen(4B) | dict_bytes(bytes) |
+// Body   :  [ MaxFpId(varint64) | DictLen(varint32) | dict_bytes(bytes) |
 //             mapping_bytes_len(4B) | mapping_tbl(varint64...) |
-//             Serialized FileIdTermMapping bytes(4B|varint64...) ]
-
+//             BranchManifestMetadata:
+//               branch_name_len(4B) | branch_name(bytes) | term(8B) |
+//               BranchFileMapping:
+//                 num_entries(8B) |
+//                 per entry: name_len(4B) | name(bytes) | term(8B) | max_file_id(8B) ]
+//
 // For appended Manifest log, the structure is:
 // Header  :  [ Checksum(8B) | Root(4B) | TTL Root(4B) | Payload Len(4B) ]
 // LogBody :  [ mapping_bytes_len(4B) | mapping_bytes(varint64...) |
-//              | Serialized FileIdTermMapping bytes(4B|varint64...) ]
+//              BranchManifestMetadata (same layout as above) ]
 class PageMapper;
 struct MappingSnapshot;
 class IndexPageManager;
