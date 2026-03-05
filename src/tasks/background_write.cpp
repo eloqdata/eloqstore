@@ -335,14 +335,8 @@ KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
         tbl_ident_, snapshot, current_ts, branch_metadata.branch_name);
     CHECK_KV_ERR(err);
 
-    // Update the cached max file id.
-    FileId max_file_id =
-        static_cast<FileId>(max_fp_id >> Options()->pages_per_file_shift);
-    IoMgr()->least_not_archived_file_ids_[tbl_ident_] = max_file_id + 1;
-
     LOG(INFO) << "created archive for partition " << tbl_ident_ << " at "
-              << current_ts << ", updated cached max file id to "
-              << max_file_id + 1;
+              << current_ts;
     return KvError::NoError;
 }
 
@@ -422,10 +416,6 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
         return err;
     }
 
-    // Update the GC floor so that files up to and including the parent
-    // branch's current file are never deleted by GC.
-    IoMgr()->least_not_archived_file_ids_[tbl_ident_] =
-        parent_branch_max_file_id + 1;
     return KvError::NoError;
 }
 

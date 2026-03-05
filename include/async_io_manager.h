@@ -372,8 +372,6 @@ public:
     }
 
     const KvOptions *options_;
-
-    std::unordered_map<TableIdent, FileId> least_not_archived_file_ids_;
 };
 
 KvError ToKvError(int err_no);

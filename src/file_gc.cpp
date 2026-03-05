@@ -8,10 +8,10 @@
 #include <iterator>
 #include <memory>
 #include <unordered_map>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "async_io_manager.h"
 #include "common.h"
@@ -91,32 +91,36 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
 
     // No need to check term expired for local mode.
 
-    // 2a. augment retained_files from all other branch manifests on disk.
+    // 2a. augment retained_files from all branch manifests (regular + archive)
+    // on disk; also build max_file_id_per_branch_term map.
     auto all_retained = retained_files;
+    absl::flat_hash_map<std::string, FileId> max_file_id_per_branch_term;
     AugmentRetainedFilesFromBranchManifests(tbl_id,
                                             manifest_branch_names,
                                             manifest_terms,
+                                            archive_files,
+                                            archive_branch_names,
                                             all_retained,
+                                            max_file_id_per_branch_term,
                                             io_mgr->options_->pages_per_file_shift,
                                             io_mgr);
 
-    // 3. get archived max file id.
-    FileId least_not_archived_file_id = 0;
-    err = GetOrUpdateArchivedMaxFileId(tbl_id,
-                                       archive_files,
-                                       archive_timestamps,
-                                       least_not_archived_file_id,
-                                       io_mgr);
-
+    // 3. delete unreferenced data files (uses map instead of floor).
+    err = DeleteUnreferencedLocalFiles(
+        tbl_id, data_files, all_retained, max_file_id_per_branch_term, io_mgr);
     if (err != KvError::NoError)
     {
         LOG(ERROR)
-            << "ExecuteLocalGC: GetOrUpdateArchivedMaxFileId failed, error="
+            << "ExecuteLocalGC: DeleteUnreferencedLocalFiles failed, error="
             << static_cast<int>(err);
         return err;
     }
 
     // 4. delete old archives beyond num_retained_archives per branch.
+    // NOTE: this step is intentionally AFTER DeleteUnreferencedLocalFiles so
+    // that ALL archives (including those about to be pruned) contribute their
+    // file IDs to retained_files first.  Files exclusively referenced by pruned
+    // archives become deletable only on the next GC cycle.
     err = DeleteOldArchives(tbl_id,
                             archive_files,
                             archive_timestamps,
@@ -127,17 +131,6 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
     {
         LOG(ERROR)
             << "ExecuteLocalGC: DeleteOldArchives failed, error="
-            << static_cast<int>(err);
-        return err;
-    }
-
-    // 5. delete unreferenced data files.
-    err = DeleteUnreferencedLocalFiles(
-        tbl_id, data_files, all_retained, least_not_archived_file_id, io_mgr);
-    if (err != KvError::NoError)
-    {
-        LOG(ERROR)
-            << "ExecuteLocalGC: DeleteUnreferencedLocalFiles failed, error="
             << static_cast<int>(err);
         return err;
     }
@@ -334,16 +327,69 @@ KvError DownloadArchiveFile(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
+// Helper: process one manifest file (regular or archive) — replay it,
+// add all referenced file IDs to retained_files, and update
+// max_file_id_per_branch_term from BranchManifestMetadata.file_ranges.
+static void ProcessOneManifest(
+    const std::string &filename,
+    uint64_t term,
+    DirectIoBuffer &buf,
+    absl::flat_hash_set<FileId> &retained_files,
+    absl::flat_hash_map<std::string, FileId> &max_file_id_per_branch_term,
+    uint8_t pages_per_file_shift)
+{
+    MemStoreMgr::Manifest manifest(buf.view());
+    Replayer replayer(Options());
+    replayer.branch_metadata_.term = term;
+
+    KvError replay_err = replayer.Replay(&manifest);
+    if (replay_err != KvError::NoError)
+    {
+        LOG(WARNING) << "ProcessOneManifest: failed to replay manifest "
+                     << filename << " term " << term
+                     << ", error=" << static_cast<int>(replay_err)
+                     << "; skipping";
+        return;
+    }
+
+    GetRetainedFiles(retained_files, replayer.mapping_tbl_, pages_per_file_shift);
+
+    // Update max_file_id_per_branch_term from all file_ranges in this manifest.
+    for (const BranchFileRange &range : replayer.branch_metadata_.file_ranges)
+    {
+        std::string key =
+            range.branch_name + "_" + std::to_string(range.term);
+        auto it = max_file_id_per_branch_term.find(key);
+        if (it == max_file_id_per_branch_term.end() ||
+            range.max_file_id > it->second)
+        {
+            max_file_id_per_branch_term[key] = range.max_file_id;
+        }
+    }
+
+    DLOG(INFO) << "ProcessOneManifest: processed " << filename
+               << ", retained_files now size=" << retained_files.size();
+}
+
 KvError AugmentRetainedFilesFromBranchManifests(
     const TableIdent &tbl_id,
     const std::vector<std::string> &manifest_branch_names,
     const std::vector<uint64_t> &manifest_terms,
+    const std::vector<std::string> &archive_files,
+    const std::vector<std::string> &archive_branch_names,
     absl::flat_hash_set<FileId> &retained_files,
+    absl::flat_hash_map<std::string, FileId> &max_file_id_per_branch_term,
     uint8_t pages_per_file_shift,
     IouringMgr *io_mgr)
 {
     assert(manifest_branch_names.size() == manifest_terms.size());
+    assert(archive_files.size() == archive_branch_names.size());
 
+    bool is_cloud = !io_mgr->options_->cloud_store_path.empty();
+    CloudStoreMgr *cloud_mgr =
+        is_cloud ? static_cast<CloudStoreMgr *>(io_mgr) : nullptr;
+
+    // --- Process regular manifests ---
     for (size_t i = 0; i < manifest_branch_names.size(); ++i)
     {
         const std::string &branch = manifest_branch_names[i];
@@ -353,16 +399,13 @@ KvError AugmentRetainedFilesFromBranchManifests(
         DirectIoBuffer buf;
         KvError err = KvError::NoError;
 
-        if (!io_mgr->options_->cloud_store_path.empty())
+        if (is_cloud)
         {
-            // Cloud mode: download the manifest file from cloud.
-            CloudStoreMgr *cloud_mgr = static_cast<CloudStoreMgr *>(io_mgr);
             err = DownloadArchiveFile(
                 tbl_id, filename, buf, cloud_mgr, cloud_mgr->options_);
         }
         else
         {
-            // Local mode: read directly from disk.
             err = io_mgr->ReadFile(tbl_id, filename, buf);
         }
 
@@ -376,153 +419,52 @@ KvError AugmentRetainedFilesFromBranchManifests(
             continue;
         }
 
-        MemStoreMgr::Manifest manifest(buf.view());
-        Replayer replayer(Options());
-        replayer.branch_metadata_.term = term;
+        ProcessOneManifest(filename,
+                           term,
+                           buf,
+                           retained_files,
+                           max_file_id_per_branch_term,
+                           pages_per_file_shift);
+    }
 
-        KvError replay_err = replayer.Replay(&manifest);
-        if (replay_err != KvError::NoError)
+    // --- Process archive manifests ---
+    for (size_t i = 0; i < archive_files.size(); ++i)
+    {
+        const std::string &filename = archive_files[i];
+        // Extract term from archive filename.
+        uint64_t term = ManifestTermFromFilename(filename);
+
+        DirectIoBuffer buf;
+        KvError err = KvError::NoError;
+
+        if (is_cloud)
+        {
+            err = DownloadArchiveFile(
+                tbl_id, filename, buf, cloud_mgr, cloud_mgr->options_);
+        }
+        else
+        {
+            err = io_mgr->ReadFile(tbl_id, filename, buf);
+        }
+
+        if (err != KvError::NoError)
         {
             LOG(WARNING)
-                << "AugmentRetainedFilesFromBranchManifests: failed to replay "
-                   "manifest "
-                << filename << " for branch " << branch << " term " << term
-                << ", error=" << static_cast<int>(replay_err) << "; skipping";
+                << "AugmentRetainedFilesFromBranchManifests: failed to read "
+                   "archive "
+                << filename << " for branch " << archive_branch_names[i]
+                << " term " << term
+                << ", error=" << static_cast<int>(err) << "; skipping";
             continue;
         }
 
-        GetRetainedFiles(retained_files, replayer.mapping_tbl_, pages_per_file_shift);
-
-        DLOG(INFO) << "AugmentRetainedFilesFromBranchManifests: augmented from "
-                   << "branch=" << branch << " term=" << term
-                   << ", retained_files now size=" << retained_files.size();
+        ProcessOneManifest(filename,
+                           term,
+                           buf,
+                           retained_files,
+                           max_file_id_per_branch_term,
+                           pages_per_file_shift);
     }
-
-    return KvError::NoError;
-}
-
-FileId ParseArchiveForMaxFileId(const std::string &archive_filename,
-                                std::string_view archive_content)
-{
-    MemStoreMgr::Manifest manifest(archive_content);
-    Replayer replayer(Options());
-
-    // Extract manifest term from archive filename if present.
-    uint64_t manifest_term = ManifestTermFromFilename(archive_filename);
-    if (manifest_term != 0)
-    {
-        // Set branch metadata term for GC replay
-        replayer.branch_metadata_.term = manifest_term;
-    }
-
-    KvError err = replayer.Replay(&manifest);
-    if (err != KvError::NoError)
-    {
-        if (err == KvError::Corrupted)
-        {
-            LOG(ERROR) << "Found corrupted archive content";
-            return 0;  // Corrupted archive, ignore.
-        }
-        LOG(ERROR) << "Failed to replay archive: " << static_cast<int>(err);
-        return 0;
-    }
-
-    // Find the maximum file ID from the mapping table.
-    FileId max_file_id = 0;
-    const uint8_t pages_per_file_shift = Options()->pages_per_file_shift;
-
-    for (PageId page_id = 0; page_id < replayer.mapping_tbl_.size(); ++page_id)
-    {
-        uint64_t val = replayer.mapping_tbl_.Get(page_id);
-        if (MappingSnapshot::IsFilePageId(val))
-        {
-            FilePageId fp_id = MappingSnapshot::DecodeId(val);
-            FileId file_id = fp_id >> pages_per_file_shift;
-            if (file_id > max_file_id)
-            {
-                max_file_id = file_id;
-            }
-        }
-    }
-
-    return max_file_id;
-}
-
-KvError GetOrUpdateArchivedMaxFileId(
-    const TableIdent &tbl_id,
-    const std::vector<std::string> &archive_files,
-    const std::vector<uint64_t> &archive_timestamps,
-    FileId &least_not_archived_file_id,
-    IouringMgr *io_mgr)
-{
-    // 1. check cached max file id.
-    auto &cached_max_ids = io_mgr->least_not_archived_file_ids_;
-    auto it = cached_max_ids.find(tbl_id);
-    if (it != cached_max_ids.end())
-    {
-        least_not_archived_file_id = it->second;
-        return KvError::NoError;
-    }
-
-    // 2. find the latest archive file (timestamp <= mapping_ts).
-    // mapping_ts is the current timestamp, ensure only completed archive files
-    // are processed.
-    std::string latest_archive;
-    uint64_t latest_ts = 0;
-    for (size_t i = 0; i < archive_files.size(); ++i)
-    {
-        uint64_t ts = archive_timestamps[i];
-        if (ts > latest_ts)
-        {
-            latest_ts = ts;
-            latest_archive = archive_files[i];
-        }
-    }
-
-    if (latest_archive.empty())
-    {
-        // No available archive file, use default value.
-        assert(least_not_archived_file_id == 0);
-        cached_max_ids[tbl_id] = least_not_archived_file_id;
-        return KvError::NoError;
-    }
-
-    // 3. read archive file based on mode (cloud or local).
-    DirectIoBuffer archive_content;
-    KvError read_err = KvError::NoError;
-
-    if (!io_mgr->options_->cloud_store_path.empty())
-    {
-        // Cloud mode: download the archive file
-        CloudStoreMgr *cloud_mgr = static_cast<CloudStoreMgr *>(io_mgr);
-        read_err = DownloadArchiveFile(tbl_id,
-                                       latest_archive,
-                                       archive_content,
-                                       cloud_mgr,
-                                       cloud_mgr->options_);
-    }
-    else
-    {
-        read_err = io_mgr->ReadFile(tbl_id, latest_archive, archive_content);
-        if (read_err != KvError::NoError)
-        {
-            fs::path dir_path = tbl_id.StorePath(io_mgr->options_->store_path);
-            fs::path archive_path = dir_path / latest_archive;
-            LOG(ERROR) << "Failed to read archive file: " << archive_path;
-        }
-    }
-
-    if (read_err != KvError::NoError)
-    {
-        return read_err;
-    }
-
-    // 4. parse the archive file to get the maximum file ID.
-    least_not_archived_file_id =
-        ParseArchiveForMaxFileId(latest_archive, archive_content.view()) + 1;
-
-    // 5. cache the result.
-    cached_max_ids[tbl_id] = least_not_archived_file_id;
 
     return KvError::NoError;
 }
@@ -641,7 +583,7 @@ KvError DeleteUnreferencedCloudFiles(
     const std::vector<uint64_t> &manifest_terms,
     const std::vector<std::string> &manifest_branch_names,
     const absl::flat_hash_set<FileId> &retained_files,
-    FileId least_not_archived_file_id,
+    const absl::flat_hash_map<std::string, FileId> &max_file_id_per_branch_term,
     CloudStoreMgr *cloud_mgr)
 {
     std::vector<std::string> files_to_delete;
@@ -657,7 +599,7 @@ KvError DeleteUnreferencedCloudFiles(
 
         FileId file_id = 0;
         std::string_view branch_name;
-        [[maybe_unused]] uint64_t term = 0;
+        uint64_t term = 0;
         if (!ParseDataFileSuffix(ret.second, file_id, branch_name, term))
         {
             LOG(ERROR) << "Failed to parse data file suffix: " << file_name
@@ -671,22 +613,27 @@ KvError DeleteUnreferencedCloudFiles(
             continue;
         }
 
-        // Only delete files that meet the following conditions:
-        // 1. File ID >= least_not_archived_file_id (greater than the archived
-        // max file ID)
-        // 2. Not in retained_files (files not needed in the current version)
-        if (file_id >= least_not_archived_file_id &&
-            !retained_files.contains(file_id))
+        if (retained_files.contains(file_id))
         {
-            std::string remote_path = tbl_id.ToString() + "/" + file_name;
-            files_to_delete.push_back(remote_path);
+            DLOG(INFO) << "skip file " << file_name << " (in retained_files)";
+            continue;
         }
-        else
+
+        // Check max_file_id_per_branch_term to detect in-flight writes.
+        std::string key = std::string(branch_name) + "_" + std::to_string(term);
+        auto it = max_file_id_per_branch_term.find(key);
+        if (it != max_file_id_per_branch_term.end() && file_id > it->second)
         {
-            DLOG(INFO) << "skip file since file_id=" << file_id
-                       << ", least_not_archived_file_id="
-                       << least_not_archived_file_id;
+            // file_id beyond known max → in-flight write, preserve.
+            DLOG(INFO) << "skip file " << file_name << " (file_id=" << file_id
+                       << " > max_known=" << it->second << ", in-flight)";
+            continue;
         }
+
+        // No map entry → deleted/orphaned branch; or file_id within known
+        // range and not retained → safe to delete.
+        std::string remote_path = tbl_id.ToString() + "/" + file_name;
+        files_to_delete.push_back(remote_path);
     }
 
     if (files_to_delete.size() == data_files.size())
@@ -800,7 +747,7 @@ KvError DeleteUnreferencedLocalFiles(
     const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
     const absl::flat_hash_set<FileId> &retained_files,
-    FileId least_not_archived_file_id,
+    const absl::flat_hash_map<std::string, FileId> &max_file_id_per_branch_term,
     IouringMgr *io_mgr)
 {
     namespace fs = std::filesystem;
@@ -823,33 +770,38 @@ KvError DeleteUnreferencedLocalFiles(
 
         FileId file_id = 0;
         std::string_view branch_name;
-        [[maybe_unused]] uint64_t term = 0;
+        uint64_t term = 0;
         if (!ParseDataFileSuffix(ret.second, file_id, branch_name, term))
         {
             continue;
         }
 
-        // Only delete files that meet the following conditions:
-        // 1. File ID >= least_not_archived_file_id (greater than or equal to
-        // the archived max file ID)
-        // 2. Not in retained_files (files not needed in the current version)
-        if (file_id >= least_not_archived_file_id &&
-            !retained_files.contains(file_id))
+        if (retained_files.contains(file_id))
         {
-            fs::path file_path = dir_path / file_name;
-            files_to_delete.push_back(file_path.string());
-            file_ids_to_close.push_back(file_id);
-            DLOG(INFO) << "ExecuteLocalGC: marking file for deletion: "
-                       << file_name << " (file_id=" << file_id << ")";
+            DLOG(INFO) << "ExecuteLocalGC: keep file " << file_name
+                       << " (in retained_files)";
+            continue;
         }
-        else
+
+        // Check max_file_id_per_branch_term to detect in-flight writes.
+        std::string key = std::string(branch_name) + "_" + std::to_string(term);
+        auto it = max_file_id_per_branch_term.find(key);
+        if (it != max_file_id_per_branch_term.end() && file_id > it->second)
         {
-            DLOG(INFO) << "ExecuteLocalGC: skip file " << file_name
-                       << " since file_id=" << file_id
-                       << ", least_not_archived_file_id="
-                       << least_not_archived_file_id << ", in_retained="
-                       << (retained_files.contains(file_id) ? "true" : "false");
+            // file_id beyond known max → in-flight write, preserve.
+            DLOG(INFO) << "ExecuteLocalGC: keep file " << file_name
+                       << " (file_id=" << file_id << " > max_known="
+                       << it->second << ", in-flight)";
+            continue;
         }
+
+        // No map entry → deleted/orphaned branch; or file_id within known
+        // range and not retained → safe to delete.
+        fs::path file_path = dir_path / file_name;
+        files_to_delete.push_back(file_path.string());
+        file_ids_to_close.push_back(file_id);
+        DLOG(INFO) << "ExecuteLocalGC: marking file for deletion: "
+                   << file_name << " (file_id=" << file_id << ")";
     }
 
     DLOG(INFO) << "ExecuteLocalGC: total files to delete: "
@@ -950,29 +902,37 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
         }
     }
 
-    // 3a. augment retained_files from all other branch manifests in cloud.
+    // 3a. augment retained_files from all branch manifests (regular + archive)
+    // in cloud; also build max_file_id_per_branch_term map.
     auto all_retained = retained_files;
+    absl::flat_hash_map<std::string, FileId> max_file_id_per_branch_term;
     AugmentRetainedFilesFromBranchManifests(
         tbl_id,
         manifest_branch_names,
         manifest_terms,
+        archive_files,
+        archive_branch_names,
         all_retained,
+        max_file_id_per_branch_term,
         cloud_mgr->options_->pages_per_file_shift,
         static_cast<IouringMgr *>(cloud_mgr));
 
-    // 4. get or update archived max file id.
-    FileId least_not_archived_file_id = 0;
-    err = GetOrUpdateArchivedMaxFileId(tbl_id,
-                                       archive_files,
-                                       archive_timestamps,
-                                       least_not_archived_file_id,
-                                       static_cast<IouringMgr *>(cloud_mgr));
+    // 4. delete unreferenced data files.
+    err = DeleteUnreferencedCloudFiles(tbl_id,
+                                       data_files,
+                                       manifest_terms,
+                                       manifest_branch_names,
+                                       all_retained,
+                                       max_file_id_per_branch_term,
+                                       cloud_mgr);
     if (err != KvError::NoError)
     {
         return err;
     }
 
-    // 4a. delete old archives beyond num_retained_archives per branch.
+    // 5. delete old archives beyond num_retained_archives per branch.
+    // NOTE: intentionally AFTER DeleteUnreferencedCloudFiles so all archives
+    // contribute their file IDs to retained_files before any are pruned.
     err = DeleteOldArchives(tbl_id,
                             archive_files,
                             archive_timestamps,
@@ -983,19 +943,6 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
     {
         LOG(ERROR) << "ExecuteCloudGC: DeleteOldArchives failed, error="
                    << static_cast<int>(err);
-        return err;
-    }
-
-    // 5. delete unreferenced data files.
-    err = DeleteUnreferencedCloudFiles(tbl_id,
-                                       data_files,
-                                       manifest_terms,
-                                       manifest_branch_names,
-                                       all_retained,
-                                       least_not_archived_file_id,
-                                       cloud_mgr);
-    if (err != KvError::NoError)
-    {
         return err;
     }
 
