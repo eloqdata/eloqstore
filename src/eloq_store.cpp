@@ -1298,6 +1298,10 @@ void EloqStore::Stop()
         assert(res == 0);
     }
     root_fds_.clear();
+    if (eloq_store == this)
+    {
+        eloq_store = nullptr;
+    }
     LOG(INFO) << "EloqStore is stopped.";
 }
 

@@ -7,15 +7,36 @@
 #include <utility>
 
 #include "../include/common.h"
+#include "../include/eloq_store.h"
 #include "../include/kv_options.h"
 #include "../include/replayer.h"
 #include "../include/storage/index_page_manager.h"
 #include "../include/storage/root_meta.h"
+#include "../include/tasks/task.h"
 #include "storage/page_mapper.h"
 #include "types.h"
 
 namespace
 {
+class ScopedGlobalStore
+{
+public:
+    explicit ScopedGlobalStore(const eloqstore::KvOptions &opts)
+        : prev_(eloqstore::eloq_store), store_(opts)
+    {
+        eloqstore::eloq_store = &store_;
+    }
+
+    ~ScopedGlobalStore()
+    {
+        eloqstore::eloq_store = prev_;
+    }
+
+private:
+    eloqstore::EloqStore *prev_{nullptr};
+    eloqstore::EloqStore store_;
+};
+
 eloqstore::KvOptions MakeOpts(bool cloud_mode, uint8_t shift)
 {
     eloqstore::KvOptions opts{};
@@ -37,6 +58,7 @@ TEST_CASE(
 {
     eloqstore::KvOptions opts =
         MakeOpts(true /*cloud_mode*/, 4 /*pages_per_file_shift*/);
+    ScopedGlobalStore scoped_store(opts);
 
     // Build an empty snapshot with max_fp_id not aligned to a file boundary.
     eloqstore::ManifestBuilder builder;
@@ -77,6 +99,7 @@ TEST_CASE("Replayer allocator bumping does not occur when terms match",
           "[replayer][term]")
 {
     eloqstore::KvOptions opts = MakeOpts(true /*cloud_mode*/, 4);
+    ScopedGlobalStore scoped_store(opts);
     eloqstore::ManifestBuilder builder;
     eloqstore::IouringMgr io_mgr(&opts, 1000);
     eloqstore::IndexPageManager idx_mgr(&io_mgr);
@@ -110,6 +133,7 @@ TEST_CASE("Replayer allocator bumping does not occur when expect_term==0",
           "[replayer][term]")
 {
     eloqstore::KvOptions opts = MakeOpts(true /*cloud_mode*/, 4);
+    ScopedGlobalStore scoped_store(opts);
     eloqstore::ManifestBuilder builder;
     eloqstore::IouringMgr io_mgr(&opts, 1000);
     eloqstore::IndexPageManager idx_mgr(&io_mgr);
@@ -139,6 +163,7 @@ TEST_CASE("Replayer allocator bumping does not occur in local mode",
           "[replayer][term]")
 {
     eloqstore::KvOptions opts = MakeOpts(false /*cloud_mode*/, 4);
+    ScopedGlobalStore scoped_store(opts);
     eloqstore::ManifestBuilder builder;
     eloqstore::IouringMgr io_mgr(&opts, 1000);
     eloqstore::IndexPageManager idx_mgr(&io_mgr);
@@ -168,6 +193,7 @@ TEST_CASE("Replayer replay with multi appended mapping table log",
           "[replayer][term]")
 {
     eloqstore::KvOptions opts = MakeOpts(false /*cloud_mode*/, 4);
+    ScopedGlobalStore scoped_store(opts);
     eloqstore::ManifestBuilder builder;
     eloqstore::IouringMgr io_mgr(&opts, 1000);
     eloqstore::IndexPageManager idx_mgr(&io_mgr);
