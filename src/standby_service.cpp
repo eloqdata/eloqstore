@@ -54,8 +54,8 @@ StandbyService::StandbyService(EloqStore *store) : store_(store)
     {
         remote_addr_ = options.standby_master_addr;
         remote_store_paths_.clear();
-        remote_store_paths_.reserve(options.stanby_master_store_paths.size());
-        for (const std::string &root : options.stanby_master_store_paths)
+        remote_store_paths_.reserve(options.standby_master_store_paths.size());
+        for (const std::string &root : options.standby_master_store_paths)
         {
             remote_store_paths_.push_back(root);
             while (remote_store_paths_.back().size() > 1 &&
@@ -253,7 +253,7 @@ std::string StandbyService::RemotePartitionPath(const TableIdent &tbl_id) const
 {
     const KvOptions &options = store_->Options();
     size_t remote_path_idx =
-        tbl_id.StorePathIndex(options.stanby_master_store_paths.size(),
+        tbl_id.StorePathIndex(options.standby_master_store_paths.size(),
                               options.standby_master_store_path_lut);
     if (remote_path_idx >= remote_store_paths_.size())
     {

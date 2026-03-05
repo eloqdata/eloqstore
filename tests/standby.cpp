@@ -54,7 +54,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
     eloqstore::KvOptions master_opts;
     master_opts.store_path = {master_dir.string()};
     master_opts.enable_local_standby = true;
-    master_opts.stanby_master_store_paths = {};
+    master_opts.standby_master_store_paths = {};
     master_opts.pages_per_file_shift = 0;
 
     eloqstore::KvOptions new_master_opts = master_opts;
@@ -64,7 +64,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
     standby_opts.store_path = {standby_dir.string()};
     standby_opts.enable_local_standby = true;
     standby_opts.standby_master_addr = "local";
-    standby_opts.stanby_master_store_paths = {master_dir.string()};
+    standby_opts.standby_master_store_paths = {master_dir.string()};
     standby_opts.pages_per_file_shift = 0;
 
     eloqstore::TableIdent tbl_id{"standby_tbl", 0};
@@ -269,7 +269,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
     }
 
     {
-        standby_opts.stanby_master_store_paths = {new_master_dir.string()};
+        standby_opts.standby_master_store_paths = {new_master_dir.string()};
         eloqstore::EloqStore standby(standby_opts);
         REQUIRE(standby.Start(2) == eloqstore::KvError::NoError);
 
@@ -528,7 +528,7 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
     }
 
     {
-        standby_opts.stanby_master_store_paths = {new_master_dir.string()};
+        standby_opts.standby_master_store_paths = {new_master_dir.string()};
         eloqstore::EloqStore standby(standby_opts);
         REQUIRE(standby.Start(2) == eloqstore::KvError::NoError);
 

@@ -4478,11 +4478,11 @@ std::string StandbyStoreMgr::BuildRemoteFilePath(
     const TableIdent &tbl_id, std::string_view filename) const
 {
     size_t remote_path_idx =
-        tbl_id.StorePathIndex(options_->stanby_master_store_paths.size(),
+        tbl_id.StorePathIndex(options_->standby_master_store_paths.size(),
                               options_->standby_master_store_path_lut);
-    CHECK_LT(remote_path_idx, options_->stanby_master_store_paths.size());
+    CHECK_LT(remote_path_idx, options_->standby_master_store_paths.size());
     std::string remote_path =
-        options_->stanby_master_store_paths[remote_path_idx];
+        options_->standby_master_store_paths[remote_path_idx];
     while (remote_path.size() > 1 && remote_path.back() == '/')
     {
         remote_path.pop_back();

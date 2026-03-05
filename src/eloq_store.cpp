@@ -130,9 +130,9 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
                       "standby_local_standby to false";
         opts.enable_local_standby = false;
         opts.standby_master_addr.clear();
-        opts.stanby_master_store_paths.clear();
+        opts.standby_master_store_paths.clear();
         opts.standby_master_addr.shrink_to_fit();
-        opts.stanby_master_store_paths.shrink_to_fit();
+        opts.standby_master_store_paths.shrink_to_fit();
     }
     if (!opts.enable_local_standby && !opts.standby_master_addr.empty())
     {
@@ -181,18 +181,18 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
                        << "'username@addr'";
             return false;
         }
-        if (opts.stanby_master_store_paths.size() != opts.store_path.size())
+        if (opts.standby_master_store_paths.size() != opts.store_path.size())
         {
-            LOG(ERROR) << "stanby_master_store_paths must match store_path "
+            LOG(ERROR) << "standby_master_store_paths must match store_path "
                        << "length when standby_master_addr is set";
             return false;
         }
         if (!opts.standby_master_store_path_weights.empty() &&
             opts.standby_master_store_path_weights.size() !=
-                opts.stanby_master_store_paths.size())
+                opts.standby_master_store_paths.size())
         {
             LOG(ERROR) << "standby_master_store_path_weights must match "
-                          "stanby_master_store_paths length";
+                          "standby_master_store_paths length";
             return false;
         }
         for (uint64_t weight : opts.standby_master_store_path_weights)
@@ -204,11 +204,11 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
                 return false;
             }
         }
-        for (std::string &remote_path : opts.stanby_master_store_paths)
+        for (std::string &remote_path : opts.standby_master_store_paths)
         {
             if (remote_path.empty() || remote_path.front() != '/')
             {
-                LOG(ERROR) << "stanby_master_store_paths must be "
+                LOG(ERROR) << "standby_master_store_paths must be "
                            << "absolute paths";
                 return false;
             }
@@ -499,7 +499,7 @@ KvError EloqStore::BuildStorePathLut()
         options_.store_path_weights.clear();
     }
     if (options_.standby_master_store_path_weights.size() !=
-        options_.stanby_master_store_paths.size())
+        options_.standby_master_store_paths.size())
     {
         LOG(WARNING) << "standby_master_store_path_weights has a different "
                         "size from store_path, reset to empty";
@@ -608,11 +608,11 @@ KvError EloqStore::BuildStorePathLut()
     if (options_.standby_master_store_path_weights.empty())
     {
         options_.standby_master_store_path_weights.resize(
-            options_.stanby_master_store_paths.size(), 1);
+            options_.standby_master_store_paths.size(), 1);
     }
     options_.standby_master_store_path_lut = std::move(ComputeStorePathLut(
         options_.standby_master_store_path_weights, kMaxStorePathLutEntries));
-    if (!options_.stanby_master_store_paths.empty() &&
+    if (!options_.standby_master_store_paths.empty() &&
         options_.standby_master_store_path_lut.empty())
     {
         LOG(ERROR) << "Failed to compute standby master store path LUT";

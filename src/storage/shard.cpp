@@ -62,14 +62,12 @@ KvError Shard::Init()
         uint64_t term = store_ != nullptr ? store_->Term() : 0;
         if (store_->Mode() == StoreMode::Cloud)
         {
-            reinterpret_cast<CloudStoreMgr *>(io_mgr_.get())
-                ->SetProcessTerm(term);
+            static_cast<CloudStoreMgr *>(io_mgr_.get())->SetProcessTerm(term);
         }
         else if (store_->Mode() == StoreMode::StandbyMaster ||
                  store_->Mode() == StoreMode::StandbyReplica)
         {
-            reinterpret_cast<StandbyStoreMgr *>(io_mgr_.get())
-                ->SetProcessTerm(term);
+            static_cast<StandbyStoreMgr *>(io_mgr_.get())->SetProcessTerm(term);
         }
     }
     InitializeTscFrequency();
@@ -660,7 +658,7 @@ bool Shard::ExecuteReadyTasks()
 {
     if (store_->Mode() == StoreMode::Cloud)
     {
-        auto *cloud_mgr = reinterpret_cast<CloudStoreMgr *>(io_mgr_.get());
+        auto *cloud_mgr = static_cast<CloudStoreMgr *>(io_mgr_.get());
         cloud_mgr->ProcessCloudReadyTasks(this);
     }
     if (StandbyService *standby = store_->GetStandbyService();

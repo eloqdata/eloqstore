@@ -291,11 +291,11 @@ int KvOptions::LoadFromIni(const char *path)
         standby_master_addr =
             reader.Get(sec_permanent, "standby_master_addr", "");
     }
-    if (reader.HasValue(sec_permanent, "stanby_master_store_paths"))
+    if (reader.HasValue(sec_permanent, "standby_master_store_paths"))
     {
-        stanby_master_store_paths.clear();
+        standby_master_store_paths.clear();
         std::string input =
-            reader.Get(sec_permanent, "stanby_master_store_paths", "");
+            reader.Get(sec_permanent, "standby_master_store_paths", "");
         std::vector<std::string> tokens;
         boost::split(tokens, input, boost::is_any_of(","));
         for (std::string &token : tokens)
@@ -303,7 +303,7 @@ int KvOptions::LoadFromIni(const char *path)
             boost::algorithm::trim(token);
             if (!token.empty())
             {
-                stanby_master_store_paths.push_back(token);
+                standby_master_store_paths.push_back(token);
             }
         }
     }
@@ -428,7 +428,7 @@ bool KvOptions::operator==(const KvOptions &other) const
            store_path_weights == other.store_path_weights &&
            cloud_store_path == other.cloud_store_path &&
            standby_master_addr == other.standby_master_addr &&
-           stanby_master_store_paths == other.stanby_master_store_paths &&
+           standby_master_store_paths == other.standby_master_store_paths &&
            cloud_provider == other.cloud_provider &&
            cloud_endpoint == other.cloud_endpoint &&
            cloud_region == other.cloud_region &&

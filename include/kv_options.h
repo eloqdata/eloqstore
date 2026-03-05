@@ -222,7 +222,7 @@ struct KvOptions
      * replica mode. These must be absolute paths and correspond to the master
      * store paths selected by standby_master_store_path_lut.
      */
-    std::vector<std::string> stanby_master_store_paths;
+    std::vector<std::string> standby_master_store_paths;
     /**
      * @brief store_path_weights of master in standby mode.
      */
