@@ -6,6 +6,7 @@
 #include <liburing.h>
 #include <liburing/io_uring.h>
 #include <linux/openat2.h>
+#include <signal.h>
 #include <spawn.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
@@ -4510,6 +4511,9 @@ std::string StandbyStoreMgr::BuildRemoteFilePath(
 
 int StandbyStoreMgr::RunRsync(const std::string &remote, const std::string &dst)
 {
+    constexpr auto kPollInterval = std::chrono::milliseconds(100);
+    constexpr auto kRsyncTimeout = std::chrono::minutes(5);
+
     inflight_standby_tasks_.fetch_add(1, std::memory_order_acq_rel);
     struct InflightTaskGuard
     {
@@ -4536,10 +4540,48 @@ int StandbyStoreMgr::RunRsync(const std::string &remote, const std::string &dst)
     }
 
     int status = 0;
-    if (waitpid(pid, &status, 0) < 0)
+    const auto deadline = std::chrono::steady_clock::now() + kRsyncTimeout;
+    while (true)
     {
-        LOG(ERROR) << "waitpid for rsync failed: " << strerror(errno);
-        return -1;
+        int wp = waitpid(pid, &status, WNOHANG);
+        if (wp == pid)
+        {
+            break;
+        }
+        if (wp < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            LOG(ERROR) << "waitpid for rsync failed: " << strerror(errno);
+            return -1;
+        }
+
+        if (std::chrono::steady_clock::now() >= deadline)
+        {
+            if (kill(pid, SIGKILL) < 0 && errno != ESRCH)
+            {
+                LOG(ERROR) << "failed to kill timed out rsync process: "
+                           << strerror(errno);
+            }
+            while (waitpid(pid, &status, 0) < 0)
+            {
+                if (errno != EINTR)
+                {
+                    LOG(ERROR) << "waitpid after timed out rsync failed: "
+                               << strerror(errno);
+                    break;
+                }
+            }
+            LOG(ERROR) << "rsync timed out after "
+                       << std::chrono::duration_cast<std::chrono::milliseconds>(
+                              kRsyncTimeout)
+                              .count()
+                       << "ms";
+            return -1;
+        }
+        std::this_thread::sleep_for(kPollInterval);
     }
     if (WIFEXITED(status))
     {
