@@ -6,8 +6,8 @@
 #include <aws/core/client/ClientConfiguration.h>
 #include <aws/core/http/Scheme.h>
 #include <aws/s3/S3Client.h>
-#include <aws/s3/model/CreateBucketRequest.h>
 #include <aws/s3/model/CopyObjectRequest.h>
+#include <aws/s3/model/CreateBucketRequest.h>
 #include <aws/s3/model/DeleteObjectRequest.h>
 #include <aws/s3/model/ListObjectsV2Request.h>
 #include <glog/logging.h>
