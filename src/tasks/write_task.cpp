@@ -62,7 +62,8 @@ KvError BuildRetainedFiles(const TableIdent &tbl_id,
     for (FileId file_id : file_ids)
     {
         uint64_t term = 0;
-        if (std::optional<uint64_t> file_term = io_mgr->GetFileIdTerm(tbl_id, file_id))
+        if (std::optional<uint64_t> file_term =
+                io_mgr->GetFileIdTerm(tbl_id, file_id))
         {
             term = *file_term;
         }
