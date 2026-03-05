@@ -136,7 +136,7 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
     }
     if (!opts.enable_local_standby && !opts.standby_master_addr.empty())
     {
-        LOG(ERROR) << "standby_master_addr requires enable_standby";
+        LOG(ERROR) << "standby_master_addr requires enable_local_standby";
         return false;
     }
     if (opts.enable_local_standby)

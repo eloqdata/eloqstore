@@ -232,10 +232,10 @@ int KvOptions::LoadFromIni(const char *path)
         allow_reuse_local_caches =
             reader.GetBoolean(sec_run, "allow_reuse_local_caches", false);
     }
-    if (reader.HasValue(sec_run, "enable_standby"))
+    if (reader.HasValue(sec_run, "enable_local_standby"))
     {
         enable_local_standby =
-            reader.GetBoolean(sec_run, "enable_standby", false);
+            reader.GetBoolean(sec_run, "enable_local_standby", false);
     }
     if (reader.HasValue(sec_run, "prewarm_cloud_cache"))
     {
@@ -304,6 +304,29 @@ int KvOptions::LoadFromIni(const char *path)
             if (!token.empty())
             {
                 standby_master_store_paths.push_back(token);
+            }
+        }
+    }
+    if (reader.HasValue(sec_permanent, "standby_master_store_path_weights"))
+    {
+        standby_master_store_path_weights.clear();
+        std::string input =
+            reader.Get(sec_permanent, "standby_master_store_path_weights", "");
+        std::vector<std::string> tokens;
+        boost::split(tokens, input, boost::is_any_of(","));
+        for (std::string &token : tokens)
+        {
+            boost::algorithm::trim(token);
+            if (token.empty())
+            {
+                continue;
+            }
+            uint64_t weight = 0;
+            auto [ptr, ec] = std::from_chars(
+                token.data(), token.data() + token.size(), weight);
+            if (ec == std::errc() && ptr == token.data() + token.size())
+            {
+                standby_master_store_path_weights.push_back(weight);
             }
         }
     }
@@ -429,6 +452,8 @@ bool KvOptions::operator==(const KvOptions &other) const
            cloud_store_path == other.cloud_store_path &&
            standby_master_addr == other.standby_master_addr &&
            standby_master_store_paths == other.standby_master_store_paths &&
+           standby_master_store_path_weights ==
+               other.standby_master_store_path_weights &&
            cloud_provider == other.cloud_provider &&
            cloud_endpoint == other.cloud_endpoint &&
            cloud_region == other.cloud_region &&
