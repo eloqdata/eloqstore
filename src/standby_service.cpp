@@ -175,8 +175,13 @@ KvError StandbyService::SubmitJob(Job &&job)
     {
         return KvError::NotRunning;
     }
-    job.context.task->inflight_io_++;
     pending_jobs_.fetch_add(1, std::memory_order_acq_rel);
+    if (!accepting_jobs_.load(std::memory_order_acquire))
+    {
+        pending_jobs_.fetch_sub(1, std::memory_order_acq_rel);
+        return KvError::NotRunning;
+    }
+    job.context.task->inflight_io_++;
     jobs_.enqueue(std::move(job));
     return KvError::NoError;
 }
