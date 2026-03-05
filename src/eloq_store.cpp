@@ -187,6 +187,23 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
                        << "length when standby_master_addr is set";
             return false;
         }
+        if (!opts.standby_master_store_path_weights.empty() &&
+            opts.standby_master_store_path_weights.size() !=
+                opts.stanby_master_store_paths.size())
+        {
+            LOG(ERROR) << "standby_master_store_path_weights must match "
+                          "stanby_master_store_paths length";
+            return false;
+        }
+        for (uint64_t weight : opts.standby_master_store_path_weights)
+        {
+            if (weight == 0)
+            {
+                LOG(ERROR) << "standby_master_store_path_weights entries "
+                              "must be > 0";
+                return false;
+            }
+        }
         for (std::string &remote_path : opts.stanby_master_store_paths)
         {
             if (remote_path.empty() || remote_path.front() != '/')
@@ -595,6 +612,12 @@ KvError EloqStore::BuildStorePathLut()
     }
     options_.standby_master_store_path_lut = std::move(ComputeStorePathLut(
         options_.standby_master_store_path_weights, kMaxStorePathLutEntries));
+    if (!options_.stanby_master_store_paths.empty() &&
+        options_.standby_master_store_path_lut.empty())
+    {
+        LOG(ERROR) << "Failed to compute standby master store path LUT";
+        return KvError::InvalidArgs;
+    }
     DLOG(INFO) << "Constructed store_path LUT with "
                << options_.store_path_lut.size() << " entries";
     return KvError::NoError;

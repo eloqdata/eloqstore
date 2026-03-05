@@ -1080,9 +1080,9 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     }
     else if (lru_fd.Get()->reg_idx_ >= 0)
     {
-        // Check for term mismatch in cloud mode.
-        const bool cloud_mode = !options_->cloud_store_path.empty();
-        if (cloud_mode && file_id != LruFD::kDirectory && term != 0)
+        // Check for term mismatch when not in local mode.
+        if (eloq_store->Mode() != StoreMode::Local &&
+            file_id != LruFD::kDirectory && term != 0)
         {
             uint64_t cached_term = lru_fd.Get()->term_;
             if (cached_term != 0 && cached_term != term)

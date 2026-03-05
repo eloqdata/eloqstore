@@ -130,6 +130,22 @@ TEST_CASE("EloqStore ValidateOptions validates all parameters", "[eloq_store]")
     options.stanby_master_store_paths = {"/primary"};
     REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == true);
 
+    // standby weights must match standby path count when provided
+    options = CreateValidOptions(test_dir);
+    options.enable_local_standby = true;
+    options.standby_master_addr = "standby@standby-host";
+    options.stanby_master_store_paths = {"/primary"};
+    options.standby_master_store_path_weights = {1, 2};
+    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
+
+    // standby weights must be non-zero
+    options = CreateValidOptions(test_dir);
+    options.enable_local_standby = true;
+    options.standby_master_addr = "standby@standby-host";
+    options.stanby_master_store_paths = {"/primary"};
+    options.standby_master_store_path_weights = {0};
+    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
+
     CleanupTestDir(test_dir);
 }
 

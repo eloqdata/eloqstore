@@ -351,7 +351,7 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
     standby_opts.pages_per_file_shift = 0;
 
     eloqstore::KvOptions new_master_opts = master_opts;
-    master_opts.store_path = {new_master_dir.string()};
+    new_master_opts.store_path = {new_master_dir.string()};
 
     CleanupStore(master_opts);
     CleanupStore(standby_opts);
