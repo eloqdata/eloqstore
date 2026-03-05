@@ -4440,39 +4440,102 @@ KvError CloudStoreMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
 
 KvError CloudStoreMgr::DeleteBranchFiles(const TableIdent &tbl_id,
                                          std::string_view branch_name,
-                                         uint64_t /* term (unused: we read from CURRENT_TERM) */)
+                                         uint64_t /* term (unused) */)
 {
+    std::string normalized_branch = NormalizeBranchName(branch_name);
     std::string current_term_filename = BranchCurrentTermFileName(branch_name);
 
-    // Download CURRENT_TERM.<branch> to find the highest term for this branch.
-    uint64_t max_term = 0;
-    {
-        KvTask *current_task = ThdTask();
-        ObjectStore::DownloadTask download_task(&tbl_id, current_term_filename);
-        download_task.SetKvTask(current_task);
-        AcquireCloudSlot(current_task);
-        obj_store_.SubmitTask(&download_task, shard);
-        current_task->WaitIo();
-
-        if (download_task.error_ == KvError::NoError)
-        {
-            std::string_view content = download_task.response_data_.view();
-            max_term = ParseBranchTerm(content);
-        }
-        // If NotFound or any other error, fall back to term 0.
-    }
-
-    // Build the list of cloud paths to delete: manifest_<branch>_0 ..
-    // manifest_<branch>_<max_term> plus CURRENT_TERM.<branch>.
+    // Helper lambda: list all cloud objects under a given prefix and append
+    // matching paths to paths_to_delete.  The full object path stored in
+    // paths_to_delete is: prefix + returned_suffix (ParseListObjectsResponse
+    // strips the prefix from every returned key so we reconstruct it here).
     std::vector<std::string> paths_to_delete;
-    paths_to_delete.reserve(max_term + 2);
-    for (uint64_t t = 0; t <= max_term; ++t)
+
+    auto list_and_collect =
+        [&](const std::string &prefix,
+            std::function<bool(const std::string &suffix)> predicate)
     {
-        paths_to_delete.push_back(
-            tbl_id.ToString() + "/" + BranchManifestFileName(branch_name, t));
+        std::string continuation_token;
+        KvTask *list_task_owner = ThdTask();
+        do
+        {
+            ObjectStore::ListTask list_task(prefix, false);
+            list_task.SetContinuationToken(continuation_token);
+            list_task.SetRecursive(true);
+            list_task.SetKvTask(list_task_owner);
+            AcquireCloudSlot(list_task_owner);
+            obj_store_.SubmitTask(&list_task, shard);
+            list_task_owner->WaitIo();
+
+            if (list_task.error_ != KvError::NoError)
+            {
+                LOG(WARNING) << "DeleteBranchFiles: list failed for prefix "
+                             << prefix << ": "
+                             << ErrorString(list_task.error_);
+                break;
+            }
+
+            std::vector<std::string> batch_files;
+            std::string next_token;
+            if (!obj_store_.ParseListObjectsResponse(
+                    list_task.response_data_.view(),
+                    list_task.json_data_,
+                    &batch_files,
+                    nullptr,
+                    &next_token))
+            {
+                LOG(WARNING) << "DeleteBranchFiles: parse list response failed "
+                             << "for prefix " << prefix;
+                break;
+            }
+
+            for (const std::string &suffix : batch_files)
+            {
+                if (predicate(suffix))
+                {
+                    paths_to_delete.push_back(prefix + suffix);
+                }
+            }
+
+            continuation_token = std::move(next_token);
+        } while (!continuation_token.empty());
+    };
+
+    // 1. Collect all manifest_<branch>_<term> objects by listing with the
+    //    exact branch-specific prefix.  This is reliable regardless of whether
+    //    CURRENT_TERM.<branch> is up-to-date, and handles term gaps correctly.
+    {
+        // Prefix covers exactly "manifest_<branch>_" — no other branch can
+        // share this prefix because branch names are unique and normalized.
+        std::string manifest_prefix =
+            tbl_id.ToString() + "/" +
+            std::string(FileNameManifest) + std::string(1, FileNameSeparator) +
+            normalized_branch + std::string(1, FileNameSeparator);
+        list_and_collect(manifest_prefix,
+                         [](const std::string &) { return true; });
     }
+
+    // 2. Always include CURRENT_TERM.<branch> (may or may not exist; the
+    //    delete task is idempotent — NotFound is silently ignored by the
+    //    object store delete path).
     paths_to_delete.push_back(
         tbl_id.ToString() + "/" + current_term_filename);
+
+    // 3. Collect all data_<file_id>_<branch>_<term> objects by listing the
+    //    "data_" prefix and filtering for the branch marker "_<branch>_".
+    {
+        std::string branch_marker =
+            std::string(1, FileNameSeparator) + normalized_branch +
+            std::string(1, FileNameSeparator);
+        std::string data_prefix = tbl_id.ToString() + "/" +
+                                  std::string(FileNameData) +
+                                  std::string(1, FileNameSeparator);
+        list_and_collect(data_prefix,
+                         [&](const std::string &suffix) {
+                             return suffix.find(branch_marker) !=
+                                    std::string::npos;
+                         });
+    }
 
     KvTask *current_task = ThdTask();
     std::vector<ObjectStore::DeleteTask> delete_tasks;

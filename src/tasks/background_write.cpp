@@ -448,6 +448,13 @@ KvError BackgroundWrite::DeleteBranch(std::string_view branch_name)
         return KvError::InvalidArgs;
     }
 
+    if (normalized_branch == IoMgr()->GetActiveBranch())
+    {
+        LOG(ERROR) << "Cannot delete the currently active branch: "
+                   << normalized_branch;
+        return KvError::InvalidArgs;
+    }
+
     LOG(INFO) << "Deleting branch " << normalized_branch;
 
     // Delete all manifest files for this branch (all terms) plus CURRENT_TERM.
