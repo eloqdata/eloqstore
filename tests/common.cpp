@@ -14,6 +14,10 @@ eloqstore::EloqStore *InitStore(const eloqstore::KvOptions &opts)
     {
         eloq_store->Stop();
     }
+    if (!opts.cloud_store_path.empty())
+    {
+        S3TestClient s3_client(opts);
+    }
     CleanupStore(opts);
     // Recreate to ensure latest options are applied
     eloq_store = std::make_unique<eloqstore::EloqStore>(opts);

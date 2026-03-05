@@ -145,6 +145,9 @@ bool ObjectStore::ParseListObjectsResponse(
 
 KvError ObjectStore::EnsureBucketExists()
 {
+#ifdef ELOQ_SKIP_CREATE_BUCKET
+    return KvError::NoError;
+#endif
     if (!async_http_mgr_)
     {
         return KvError::CloudErr;

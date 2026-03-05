@@ -151,6 +151,13 @@ target_link_libraries(manifest_check_tool PRIVATE eloqstore)
 add_library(test_util STATIC src/test_utils.cpp)
 target_link_libraries(test_util PUBLIC eloqstore absl::flat_hash_map)
 
+option(SKIP_CREATE_BUCKET
+       "Skip ObjectStore bucket creation check (intended for unit tests)"
+       OFF)
+if (SKIP_CREATE_BUCKET)
+    target_compile_definitions(eloqstore PRIVATE ELOQ_SKIP_CREATE_BUCKET)
+endif ()
+
 option(WITH_UNIT_TESTS "build with unit tests" ON)
 if (WITH_UNIT_TESTS)
     add_subdirectory(tests)

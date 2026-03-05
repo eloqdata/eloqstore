@@ -6,6 +6,7 @@
 #include <aws/core/client/ClientConfiguration.h>
 #include <aws/core/http/Scheme.h>
 #include <aws/s3/S3Client.h>
+#include <aws/s3/model/CreateBucketRequest.h>
 #include <aws/s3/model/CopyObjectRequest.h>
 #include <aws/s3/model/DeleteObjectRequest.h>
 #include <aws/s3/model/ListObjectsV2Request.h>
@@ -218,6 +219,8 @@ public:
             LOG(FATAL) << "S3TestClient is process-global and was already "
                           "initialized with different settings";
         }
+        EnsureBucketCreated(ParseCloudPathSpec(opts.cloud_store_path).bucket,
+                            *shared_client);
         client_ = shared_client;
     }
 
@@ -304,6 +307,42 @@ private:
             false);
     }
 
+    static void EnsureBucketCreated(const std::string &bucket,
+                                    Aws::S3::S3Client &client)
+    {
+        if (bucket.empty())
+        {
+            return;
+        }
+        auto &created = CreatedBucket();
+        auto &created_bucket = CreatedBucketName();
+        if (created)
+        {
+            if (created_bucket != bucket)
+            {
+                LOG(FATAL) << "S3 test bucket changed from '" << created_bucket
+                           << "' to '" << bucket << "'";
+            }
+            return;
+        }
+
+        Aws::S3::Model::CreateBucketRequest request;
+        request.SetBucket(bucket.c_str());
+        auto outcome = client.CreateBucket(request);
+        if (!outcome.IsSuccess())
+        {
+            auto type = outcome.GetError().GetErrorType();
+            if (type != Aws::S3::S3Errors::BUCKET_ALREADY_EXISTS &&
+                type != Aws::S3::S3Errors::BUCKET_ALREADY_OWNED_BY_YOU)
+            {
+                LOG(FATAL) << "CreateBucket failed for " << bucket << ": "
+                           << outcome.GetError().GetMessage();
+            }
+        }
+        created = true;
+        created_bucket = bucket;
+    }
+
     static std::mutex &ClientMutex()
     {
         static std::mutex mutex;
@@ -320,6 +359,18 @@ private:
     {
         static ClientSettings settings;
         return settings;
+    }
+
+    static bool &CreatedBucket()
+    {
+        static bool created = false;
+        return created;
+    }
+
+    static std::string &CreatedBucketName()
+    {
+        static std::string bucket;
+        return bucket;
     }
 
     std::shared_ptr<Aws::S3::S3Client> client_;

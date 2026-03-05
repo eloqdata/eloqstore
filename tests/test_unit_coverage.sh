@@ -56,7 +56,7 @@ COVERAGE_DIR="$BUILD_DIR/unit_test_coverage_report"
 cd "$PROJECT_ROOT"
 
 echo "2. Configuring project with coverage enabled..."
-cmake -B "$BUILD_DIR" -DWITH_COVERAGE=ON -DWITH_UNIT_TESTS=ON
+cmake -B "$BUILD_DIR" -DWITH_COVERAGE=ON -DWITH_UNIT_TESTS=ON -DSKIP_CREATE_BUCKET=ON
 echo "✓ Project configuration completed"
 echo
 
