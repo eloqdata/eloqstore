@@ -4,7 +4,6 @@
 #include <memory>  // for std::shared_ptr
 #include <string>
 
-#include "standby_service.h"
 #include "storage/mem_index_page.h"
 #include "storage/shard.h"
 #include "utils.h"

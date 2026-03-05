@@ -367,7 +367,7 @@ void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
     for (size_t i = 0; i < store_->shards_.size(); ++i)
     {
         auto *cloud_mgr =
-            reinterpret_cast<CloudStoreMgr *>(store_->shards_[i]->IoManager());
+            static_cast<CloudStoreMgr *>(store_->shards_[i]->IoManager());
         if (!cloud_mgr->HasPrewarmWorkers())
         {
             continue;

@@ -58,21 +58,18 @@ KvError BuildRetainedFiles(const TableIdent &tbl_id,
 
     retained_files.clear();
     retained_files.reserve(file_ids.size());
-    auto *io_mgr = reinterpret_cast<IouringMgr *>(shard->IoManager());
+    auto *io_mgr = static_cast<IouringMgr *>(shard->IoManager());
     for (FileId file_id : file_ids)
     {
         uint64_t term = 0;
-        if (io_mgr != nullptr)
+        if (std::optional<uint64_t> file_term = io_mgr->GetFileIdTerm(tbl_id, file_id))
         {
-            if (auto file_term = io_mgr->GetFileIdTerm(tbl_id, file_id))
-            {
-                term = *file_term;
-            }
-            else
-            {
-                LOG(WARNING) << "BuildRetainedFiles: missing term for file_id "
-                             << file_id << " in table " << tbl_id;
-            }
+            term = *file_term;
+        }
+        else
+        {
+            LOG(WARNING) << "BuildRetainedFiles: missing term for file_id "
+                         << file_id << " in table " << tbl_id;
         }
         retained_files.emplace(file_id, term);
     }
