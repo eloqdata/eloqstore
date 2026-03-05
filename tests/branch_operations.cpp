@@ -233,34 +233,113 @@ TEST_CASE("global create branch - creates manifest on single partition",
 TEST_CASE("global create branch - creates manifests on all partitions",
           "[branch][global]")
 {
-    static const eloqstore::TableIdent tbl_p1 = {"t0", 1};
-
-    eloqstore::EloqStore *store = InitStore(default_opts);
-
-    // Write to two partitions so both directories appear on disk.
-    MapVerifier verify0(test_tbl_id, store, false);
-    verify0.SetAutoClean(false);
-    verify0.Upsert(0, 100);
-
-    MapVerifier verify1(tbl_p1, store, false);
-    verify1.SetAutoClean(false);
-    verify1.Upsert(0, 100);
-
-    eloqstore::GlobalCreateBranchRequest req;
-    req.SetArgs("feature1", eloqstore::MainBranchName);
-    store->ExecSync(&req);
-
-    REQUIRE(req.Error() == eloqstore::KvError::NoError);
-
-    // Both partition directories must have the branch manifest files.
-    for (const eloqstore::TableIdent &tbl_id : {test_tbl_id, tbl_p1})
+    // Test both local and cloud mode with many partitions
+    auto test_impl = [](const eloqstore::KvOptions &opts, const char *mode_name,
+                        int num_partitions)
     {
-        fs::path table_path = fs::path(test_path) / tbl_id.ToString();
-        REQUIRE(fs::exists(table_path / "manifest_feature1_0"));
-        REQUIRE(fs::exists(table_path / "CURRENT_TERM.feature1"));
+        INFO("Testing mode: " << mode_name << " with " << num_partitions
+                              << " partitions");
+        eloqstore::EloqStore *store = InitStore(opts);
+
+        // Write to multiple partitions to verify scalability.
+        // Each partition gets minimal data to keep test fast.
+        std::vector<eloqstore::TableIdent> partitions;
+
+        for (int p = 0; p < num_partitions; ++p)
+        {
+            eloqstore::TableIdent tbl_id = {"t0", static_cast<uint32_t>(p)};
+            partitions.push_back(tbl_id);
+
+            MapVerifier verify(tbl_id, store, false);
+            verify.SetAutoClean(false);
+            verify.SetAutoValidate(false);
+            verify.Upsert(0, 5);  // 5 keys per partition (minimal)
+        }
+
+        // GlobalCreateBranch must fan out to all partitions.
+        eloqstore::GlobalCreateBranchRequest req;
+        req.SetArgs("feature1", eloqstore::MainBranchName);
+        store->ExecSync(&req);
+
+        REQUIRE(req.Error() == eloqstore::KvError::NoError);
+
+        // Verify manifest files exist for all partitions.
+        // In cloud mode, verify a representative sample to keep test fast.
+        std::vector<int> partitions_to_verify;
+        if (opts.cloud_store_path.empty())
+        {
+            // Local mode: verify all
+            for (int p = 0; p < num_partitions; ++p)
+                partitions_to_verify.push_back(p);
+        }
+        else
+        {
+            // Cloud mode: verify sample (first 5 + last 5)
+            for (int p = 0; p < std::min(5, num_partitions); ++p)
+                partitions_to_verify.push_back(p);
+            for (int p = std::max(0, num_partitions - 5); p < num_partitions; ++p)
+            {
+                if (std::find(partitions_to_verify.begin(),
+                              partitions_to_verify.end(), p) ==
+                    partitions_to_verify.end())
+                {
+                    partitions_to_verify.push_back(p);
+                }
+            }
+        }
+
+        for (int p : partitions_to_verify)
+        {
+            const auto &tbl_id = partitions[p];
+            if (opts.cloud_store_path.empty())
+            {
+                // Local mode: check filesystem
+                fs::path table_path = fs::path(test_path) / tbl_id.ToString();
+                REQUIRE(fs::exists(table_path / "manifest_feature1_0"));
+                REQUIRE(fs::exists(table_path / "CURRENT_TERM.feature1"));
+            }
+            else
+            {
+                // Cloud mode: verify manifest objects exist in cloud storage
+                std::string tbl_prefix =
+                    std::string(opts.cloud_store_path) + "/" +
+                    tbl_id.ToString();
+                std::vector<std::string> cloud_files =
+                    ListCloudFiles(opts, tbl_prefix);
+
+                bool found_manifest = false;
+                bool found_current_term = false;
+                for (const auto &f : cloud_files)
+                {
+                    if (f.find("manifest_feature1_0") != std::string::npos)
+                        found_manifest = true;
+                    if (f.find("CURRENT_TERM.feature1") != std::string::npos)
+                        found_current_term = true;
+                }
+                INFO("Partition " << tbl_id.ToString() << " cloud files checked");
+                REQUIRE(found_manifest);
+                REQUIRE(found_current_term);
+            }
+        }
+
+        store->Stop();
+        CleanupStore(opts);
+    };
+
+    SECTION("local mode - 100 partitions")
+    {
+        test_impl(default_opts, "local", 100);
     }
 
-    store->Stop();
+    SECTION("cloud mode - 20 partitions")
+    {
+        // Create custom cloud options with higher fd_limit to support 20 partitions.
+        // Cloud mode requires more file descriptors and takes longer due to network I/O,
+        // so we test with 20 partitions (10x the original test) instead of 100.
+        eloqstore::KvOptions cloud_opts_high_fd = cloud_options;
+        cloud_opts_high_fd.fd_limit = 100 + eloqstore::num_reserved_fd;
+        test_impl(cloud_opts_high_fd, "cloud", 20);
+    }
 }
 
 TEST_CASE("global create branch - invalid branch name returns InvalidArgs",
