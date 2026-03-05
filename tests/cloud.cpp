@@ -916,7 +916,7 @@ TEST_CASE("cloud global archive shares timestamp and filters partitions",
 
     constexpr uint64_t kSnapshotTs = 987654321;
     eloqstore::GlobalArchiveRequest global_req;
-    global_req.SetSnapshotTimestamp(kSnapshotTs);
+    global_req.SetTag(std::to_string(kSnapshotTs));
     store->ExecSync(&global_req);
     REQUIRE(global_req.Error() == eloqstore::KvError::NoError);
 

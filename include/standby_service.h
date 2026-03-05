@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <variant>
 #include <vector>
@@ -31,7 +32,7 @@ public:
     void Start();
     void Stop();
 
-    KvError RsyncPartition(const TableIdent &tbl_id, uint64_t archive_ts);
+    KvError RsyncPartition(const TableIdent &tbl_id, std::string archive_tag);
     KvError CleanupLocalManifest(const TableIdent &tbl_id);
     KvError ListRemotePartitions(std::vector<std::string> *partitions);
     void ProcessReadyTasks(size_t shard_id);
@@ -40,7 +41,7 @@ private:
     struct RsyncJob
     {
         TableIdent tbl_id;
-        uint64_t archive_ts{0};
+        std::string archive_tag;
     };
 
     struct CleanupJob
@@ -91,7 +92,7 @@ private:
     fs::path TablePath(const TableIdent &tbl_id) const;
     std::string RemotePartitionPath(const TableIdent &tbl_id) const;
     std::string RemoteArchiveManifestPath(const TableIdent &tbl_id,
-                                          uint64_t archive_ts) const;
+                                          std::string_view archive_tag) const;
     std::string RemoteSpec(const std::string &path, bool directory) const;
 
     EloqStore *store_{nullptr};

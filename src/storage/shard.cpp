@@ -599,9 +599,16 @@ bool Shard::ProcessReq(KvRequest *req)
         {
             return false;
         }
-        uint64_t snapshot_ts = archive_req->GetSnapshotTimestamp();
-        auto lbd = [task, snapshot_ts]() -> KvError
-        { return task->CreateArchive(snapshot_ts); };
+        const std::string tag = archive_req->Tag();
+        const ArchiveRequest::Action action = archive_req->GetAction();
+        auto lbd = [task, tag, action]() -> KvError
+        {
+            if (action == ArchiveRequest::Action::Create)
+            {
+                return task->CreateArchive(tag);
+            }
+            return task->DeleteArchive(tag);
+        };
         StartTask(task, req, lbd);
         return true;
     }

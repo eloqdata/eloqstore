@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -159,16 +160,16 @@ inline bool ParseDataFileSuffix(std::string_view suffix,
 
 // ParseManifestFileSuffix: parses suffix from manifest file name
 // Input suffix formats:
-//   "5" -> term=5, timestamp=nullopt (term-aware "manifest_5", required)
-//   "5_123456789" -> term=5, timestamp=123456789 (term-aware archive)
+//   "5" -> term=5, tag=nullopt (term-aware "manifest_5", required)
+//   "5_backup-2026-03-05" -> term=5, tag="backup-2026-03-05"
 // Note: Legacy "manifest_<ts>" format is NOT supported (removed)
 // Returns true on success, false on parse error
 inline bool ParseManifestFileSuffix(std::string_view suffix,
                                     uint64_t &term,
-                                    std::optional<uint64_t> &timestamp)
+                                    std::optional<std::string> &tag)
 {
     term = 0;
-    timestamp.reset();
+    tag.reset();
 
     if (suffix.empty())
     {
@@ -176,7 +177,7 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
         return false;
     }
 
-    // Find separator for timestamp
+    // Find separator for archive tag.
     size_t sep_pos = suffix.find(FileNameSeparator);
     if (sep_pos == std::string::npos)
     {
@@ -190,17 +191,15 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
         return false;
     }
 
-    // Term-aware archive format: "manifest_<term>_<timestamp>"
+    // Term-aware archive format: "manifest_<term>_<tag>"
     std::string_view term_str = suffix.substr(0, sep_pos);
-    std::string_view timestamp_str = suffix.substr(sep_pos + 1);
+    std::string_view tag_str = suffix.substr(sep_pos + 1);
 
     uint64_t parsed_term = 0;
-    uint64_t parsed_ts = 0;
-    if (ParseUint64(term_str, parsed_term) &&
-        ParseUint64(timestamp_str, parsed_ts))
+    if (ParseUint64(term_str, parsed_term) && !tag_str.empty())
     {
         term = parsed_term;
-        timestamp = parsed_ts;
+        tag = std::string(tag_str);
         return true;
     }
 
@@ -220,8 +219,8 @@ inline uint64_t ManifestTermFromFilename(std::string_view filename)
     }
 
     uint64_t term = 0;
-    std::optional<uint64_t> ts;
-    if (!ParseManifestFileSuffix(suffix, term, ts))
+    std::optional<std::string> tag;
+    if (!ParseManifestFileSuffix(suffix, term, tag))
     {
         return 0;
     }
@@ -254,19 +253,23 @@ inline std::string ManifestFileName(uint64_t term)
     return name;
 }
 
-// ArchiveName: generates term-aware archive filename
-// Format: manifest_<term>_<ts>
-// Note: term must be provided (use 0 for legacy compatibility if needed)
-inline std::string ArchiveName(uint64_t term, uint64_t ts)
+// ArchiveName: generates term-aware archive filename.
+// Format: manifest_<term>_<tag>
+inline std::string ArchiveName(uint64_t term, std::string_view tag)
 {
     std::string name;
-    name.reserve(std::size(FileNameManifest) + 31);
+    name.reserve(std::size(FileNameManifest) + 21 + tag.size());
     name.append(FileNameManifest);
     name.push_back(FileNameSeparator);
     name.append(std::to_string(term));
     name.push_back(FileNameSeparator);
-    name.append(std::to_string(ts));
+    name.append(tag);
     return name;
+}
+
+inline std::string ArchiveName(uint64_t term, uint64_t tag)
+{
+    return ArchiveName(term, std::to_string(tag));
 }
 
 inline bool IsArchiveFile(std::string_view filename)
@@ -277,12 +280,12 @@ inline bool IsArchiveFile(std::string_view filename)
         return false;
     }
     uint64_t term = 0;
-    std::optional<uint64_t> ts;
-    if (!ParseManifestFileSuffix(suffix, term, ts))
+    std::optional<std::string> tag;
+    if (!ParseManifestFileSuffix(suffix, term, tag))
     {
         return false;
     }
-    return ts.has_value();
+    return tag.has_value();
 }
 
 }  // namespace eloqstore

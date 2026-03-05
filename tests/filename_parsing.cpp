@@ -106,7 +106,7 @@ TEST_CASE("ParseManifestFileSuffix - legacy format rejected", "[filename]")
 {
     // Legacy format: empty suffix (just "manifest") is no longer supported
     uint64_t term = 0;
-    std::optional<uint64_t> timestamp;
+    std::optional<std::string> timestamp;
     REQUIRE_FALSE(eloqstore::ParseManifestFileSuffix("", term, timestamp));
 }
 
@@ -114,19 +114,19 @@ TEST_CASE("ParseManifestFileSuffix - term-only format", "[filename]")
 {
     // Term-only format: "manifest_<term>"
     uint64_t term = 0;
-    std::optional<uint64_t> timestamp;
+    std::optional<std::string> timestamp;
     REQUIRE(eloqstore::ParseManifestFileSuffix("5", term, timestamp));
     REQUIRE(term == 5);
     REQUIRE(!timestamp.has_value());
 
     uint64_t term2 = 0;
-    std::optional<uint64_t> timestamp2;
+    std::optional<std::string> timestamp2;
     REQUIRE(eloqstore::ParseManifestFileSuffix("0", term2, timestamp2));
     REQUIRE(term2 == 0);
     REQUIRE(!timestamp2.has_value());
 
     uint64_t term3 = 0;
-    std::optional<uint64_t> timestamp3;
+    std::optional<std::string> timestamp3;
     REQUIRE(eloqstore::ParseManifestFileSuffix("12345", term3, timestamp3));
     REQUIRE(term3 == 12345);
     REQUIRE(!timestamp3.has_value());
@@ -136,45 +136,45 @@ TEST_CASE("ParseManifestFileSuffix - term-aware archive format", "[filename]")
 {
     // Term-aware archive format: "manifest_<term>_<timestamp>"
     uint64_t term = 0;
-    std::optional<uint64_t> timestamp;
+    std::optional<std::string> timestamp;
     REQUIRE(eloqstore::ParseManifestFileSuffix("5_123456789", term, timestamp));
     REQUIRE(term == 5);
     REQUIRE(timestamp.has_value());
-    REQUIRE(timestamp.value() == 123456789);
+    REQUIRE(timestamp.value() == "123456789");
 
     uint64_t term2 = 0;
-    std::optional<uint64_t> timestamp2;
+    std::optional<std::string> timestamp2;
     REQUIRE(
         eloqstore::ParseManifestFileSuffix("0_999999999", term2, timestamp2));
     REQUIRE(term2 == 0);
     REQUIRE(timestamp2.has_value());
-    REQUIRE(timestamp2.value() == 999999999);
+    REQUIRE(timestamp2.value() == "999999999");
 
     uint64_t term3 = 0;
-    std::optional<uint64_t> timestamp3;
+    std::optional<std::string> timestamp3;
     REQUIRE(
         eloqstore::ParseManifestFileSuffix("123_456789012", term3, timestamp3));
     REQUIRE(term3 == 123);
     REQUIRE(timestamp3.has_value());
-    REQUIRE(timestamp3.value() == 456789012);
+    REQUIRE(timestamp3.value() == "456789012");
 }
 
 TEST_CASE("ParseManifestFileSuffix - edge cases", "[filename]")
 {
     // Invalid format (non-numeric term)
     uint64_t term1 = 0;
-    std::optional<uint64_t> timestamp1;
+    std::optional<std::string> timestamp1;
     REQUIRE_FALSE(eloqstore::ParseManifestFileSuffix("abc", term1, timestamp1));
 
     // Invalid format (non-numeric term in archive)
     uint64_t term2 = 0;
-    std::optional<uint64_t> timestamp2;
+    std::optional<std::string> timestamp2;
     REQUIRE_FALSE(
         eloqstore::ParseManifestFileSuffix("abc_123456789", term2, timestamp2));
 
     // Invalid format (non-numeric timestamp)
     uint64_t term3 = 0;
-    std::optional<uint64_t> timestamp3;
+    std::optional<std::string> timestamp3;
     REQUIRE_FALSE(
         eloqstore::ParseManifestFileSuffix("5_abc", term3, timestamp3));
 }
@@ -256,7 +256,7 @@ TEST_CASE("Roundtrip - ManifestFileName generate and parse", "[filename]")
     auto [type, suffix] = eloqstore::ParseFileName(name);
     REQUIRE(type == "manifest");
     uint64_t term = 0;
-    std::optional<uint64_t> timestamp;
+    std::optional<std::string> timestamp;
     REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, term, timestamp));
     REQUIRE(term == 0);  // No term in legacy format
     REQUIRE(!timestamp.has_value());
@@ -266,7 +266,7 @@ TEST_CASE("Roundtrip - ManifestFileName generate and parse", "[filename]")
     auto [type2, suffix2] = eloqstore::ParseFileName(name2);
     REQUIRE(type2 == "manifest");
     uint64_t term2 = 0;
-    std::optional<uint64_t> timestamp2;
+    std::optional<std::string> timestamp2;
     REQUIRE(eloqstore::ParseManifestFileSuffix(suffix2, term2, timestamp2));
     REQUIRE(term2 == 5);
     REQUIRE(!timestamp2.has_value());
@@ -279,22 +279,22 @@ TEST_CASE("Roundtrip - ArchiveName generate and parse", "[filename]")
     auto [type, suffix] = eloqstore::ParseFileName(name);
     REQUIRE(type == "manifest");
     uint64_t term = 0;
-    std::optional<uint64_t> timestamp;
+    std::optional<std::string> timestamp;
     REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, term, timestamp));
     REQUIRE(term == 5);
     REQUIRE(timestamp.has_value());
-    REQUIRE(timestamp.value() == 123456789);
+    REQUIRE(timestamp.value() == "123456789");
 
     // Test with term=0
     std::string name2 = eloqstore::ArchiveName(0, 999999999);
     auto [type2, suffix2] = eloqstore::ParseFileName(name2);
     REQUIRE(type2 == "manifest");
     uint64_t term2 = 0;
-    std::optional<uint64_t> timestamp2;
+    std::optional<std::string> timestamp2;
     REQUIRE(eloqstore::ParseManifestFileSuffix(suffix2, term2, timestamp2));
     REQUIRE(term2 == 0);
     REQUIRE(timestamp2.has_value());
-    REQUIRE(timestamp2.value() == 999999999);
+    REQUIRE(timestamp2.value() == "999999999");
 }
 
 TEST_CASE("ParseUint64 - valid numbers", "[filename]")
@@ -358,7 +358,7 @@ TEST_CASE("Integration - complete filename workflow", "[filename]")
         eloqstore::ParseFileName(manifest_name);
     REQUIRE(manifest_type == "manifest");
     uint64_t parsed_manifest_term = 0;
-    std::optional<uint64_t> parsed_ts;
+    std::optional<std::string> parsed_ts;
     REQUIRE(eloqstore::ParseManifestFileSuffix(
         manifest_suffix, parsed_manifest_term, parsed_ts));
     REQUIRE(parsed_manifest_term == manifest_term);
@@ -374,10 +374,10 @@ TEST_CASE("Integration - complete filename workflow", "[filename]")
         eloqstore::ParseFileName(archive_name);
     REQUIRE(archive_type == "manifest");
     uint64_t parsed_archive_term = 0;
-    std::optional<uint64_t> parsed_archive_ts;
+    std::optional<std::string> parsed_archive_ts;
     REQUIRE(eloqstore::ParseManifestFileSuffix(
         archive_suffix, parsed_archive_term, parsed_archive_ts));
     REQUIRE(parsed_archive_term == archive_term);
     REQUIRE(parsed_archive_ts.has_value());
-    REQUIRE(parsed_archive_ts.value() == timestamp);
+    REQUIRE(parsed_archive_ts.value() == std::to_string(timestamp));
 }

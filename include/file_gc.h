@@ -50,7 +50,7 @@ KvError DeleteUnreferencedLocalFiles(const TableIdent &tbl_id,
 KvError GetOrUpdateArchivedMaxFileId(
     const TableIdent &tbl_id,
     const std::vector<std::string> &archive_files,
-    const std::vector<uint64_t> &archive_timestamps,
+    const std::vector<std::string> &archive_tags,
     FileId &archived_max_file_id,
     IouringMgr *io_mgr);
 
@@ -61,7 +61,7 @@ KvError ListCloudFiles(const TableIdent &tbl_id,
 
 void ClassifyFiles(const std::vector<std::string> &files,
                    std::vector<std::string> &archive_files,
-                   std::vector<uint64_t> &archive_timestamps,
+                   std::vector<std::string> &archive_tags,
                    std::vector<std::string> &data_files,
                    std::vector<uint64_t> &manifest_terms);
 

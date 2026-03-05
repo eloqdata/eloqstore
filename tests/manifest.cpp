@@ -214,7 +214,7 @@ TEST_CASE("global archive shares timestamp and filters partitions",
 
     constexpr uint64_t kSnapshotTs = 123456789;
     eloqstore::GlobalArchiveRequest global_req;
-    global_req.SetSnapshotTimestamp(kSnapshotTs);
+    global_req.SetTag(std::to_string(kSnapshotTs));
     store->ExecSync(&global_req);
     REQUIRE(global_req.Error() == eloqstore::KvError::NoError);
 
@@ -265,7 +265,7 @@ TEST_CASE("global archive handles more partitions than max_archive_tasks",
 
     constexpr uint64_t kSnapshotTs = 987654321;
     eloqstore::GlobalArchiveRequest global_req;
-    global_req.SetSnapshotTimestamp(kSnapshotTs);
+    global_req.SetTag(std::to_string(kSnapshotTs));
     store->ExecSync(&global_req);
     REQUIRE(global_req.Error() == eloqstore::KvError::NoError);
 

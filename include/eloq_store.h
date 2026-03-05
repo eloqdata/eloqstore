@@ -372,17 +372,17 @@ public:
         return RequestType::Reopen;
     }
     void SetArgs(TableIdent tbl_id);
-    void SetSnapshotTimestamp(uint64_t ts)
+    void SetTag(std::string tag)
     {
-        snapshot_ts_ = ts;
+        tag_ = std::move(tag);
     }
-    uint64_t SnapshotTimestamp() const
+    const std::string &Tag() const
     {
-        return snapshot_ts_;
+        return tag_;
     }
 
 private:
-    uint64_t snapshot_ts_{0};
+    std::string tag_;
 
     friend class EloqStore;
     friend class ReopenTask;
@@ -446,45 +446,83 @@ private:
 class ArchiveRequest : public WriteRequest
 {
 public:
+    enum class Action : uint8_t
+    {
+        Create = 0,
+        Delete = 1,
+    };
+
     RequestType Type() const override
     {
         return RequestType::Archive;
     }
 
-    void SetSnapshotTimestamp(uint64_t ts)
+    void SetTag(std::string tag)
     {
-        snapshot_ts_ = ts;
+        tag_ = std::move(tag);
+    }
+    [[deprecated("Use SetTag(std::string) instead.")]]
+    void SetSnapshotTimestamp(uint64_t ts);
+
+    const std::string &Tag() const
+    {
+        return tag_;
     }
 
-    uint64_t GetSnapshotTimestamp() const
+    void SetAction(Action action)
     {
-        return snapshot_ts_;
+        action_ = action;
+    }
+
+    Action GetAction() const
+    {
+        return action_;
     }
 
 private:
-    uint64_t snapshot_ts_{0};
+    std::string tag_;
+    Action action_{Action::Create};
 };
 
 class GlobalArchiveRequest : public KvRequest
 {
 public:
+    enum class Action : uint8_t
+    {
+        Create = 0,
+        Delete = 1,
+    };
+
     RequestType Type() const override
     {
         return RequestType::GlobalArchive;
     }
 
-    void SetSnapshotTimestamp(uint64_t ts)
+    void SetTag(std::string tag)
     {
-        snapshot_ts_ = ts;
+        tag_ = std::move(tag);
+    }
+    [[deprecated("Use SetTag(std::string) instead.")]]
+    void SetSnapshotTimestamp(uint64_t ts);
+
+    const std::string &Tag() const
+    {
+        return tag_;
     }
 
-    uint64_t GetSnapshotTimestamp() const
+    void SetAction(Action action)
     {
-        return snapshot_ts_;
+        action_ = action;
+    }
+
+    Action GetAction() const
+    {
+        return action_;
     }
 
 private:
-    uint64_t snapshot_ts_{0};
+    std::string tag_;
+    Action action_{Action::Create};
     std::vector<std::unique_ptr<ArchiveRequest>> archive_reqs_;
     std::atomic<uint32_t> pending_{0};
     std::atomic<uint8_t> first_error_{static_cast<uint8_t>(KvError::NoError)};
@@ -500,17 +538,17 @@ public:
         return RequestType::GlobalReopen;
     }
 
-    void SetSnapshotTimestamp(uint64_t ts)
+    void SetTag(std::string tag)
     {
-        snapshot_ts_ = ts;
+        tag_ = std::move(tag);
     }
-    uint64_t SnapshotTimestamp() const
+    const std::string &Tag() const
     {
-        return snapshot_ts_;
+        return tag_;
     }
 
 private:
-    uint64_t snapshot_ts_{0};
+    std::string tag_;
     std::vector<std::unique_ptr<ReopenRequest>> reopen_reqs_;
     std::atomic<uint32_t> pending_{0};
     std::atomic<uint8_t> first_error_{static_cast<uint8_t>(KvError::NoError)};
@@ -591,6 +629,9 @@ public:
     {
         return term_;
     }
+
+    KvError UpdateStandbyMasterStorePaths(
+        std::vector<std::string> paths, std::vector<uint64_t> weights);
 
     /**
      * @brief Validate KvOptions configuration.

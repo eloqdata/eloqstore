@@ -20,7 +20,7 @@ public:
      */
     KvError CompactDataFile();
 
-    KvError CreateArchive(uint64_t provided_ts = 0);
+    KvError CreateArchive(std::string_view tag = {});
 
     KvError RunLocalFileGc();
 

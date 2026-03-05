@@ -125,7 +125,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
         verify_range(master, 0, 5000, true);
 
         eloqstore::GlobalArchiveRequest archive_req;
-        archive_req.SetSnapshotTimestamp(1001);
+        archive_req.SetTag(std::to_string(1001));
         master.ExecSync(&archive_req);
         REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
 
@@ -140,7 +140,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
         Scan(&standby, tbl_id, 0, 10000);
 
         eloqstore::GlobalReopenRequest reopen_req;
-        reopen_req.SetSnapshotTimestamp(1001);
+        reopen_req.SetTag(std::to_string(1001));
         standby.ExecSync(&reopen_req);
         REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
 
@@ -157,7 +157,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
         verify_range(master, 0, 5000, false);
 
         eloqstore::GlobalArchiveRequest archive_req;
-        archive_req.SetSnapshotTimestamp(2002);
+        archive_req.SetTag(std::to_string(2002));
         master.ExecSync(&archive_req);
         REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
 
@@ -172,7 +172,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
         Scan(&standby, tbl_id, 0, 10000);
 
         eloqstore::GlobalReopenRequest reopen_req;
-        reopen_req.SetSnapshotTimestamp(2002);
+        reopen_req.SetTag(std::to_string(2002));
         standby.ExecSync(&reopen_req);
         REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
 
@@ -230,7 +230,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
         verify_range(master, 0, 5000, true);
 
         eloqstore::GlobalArchiveRequest archive_req;
-        archive_req.SetSnapshotTimestamp(3003);
+        archive_req.SetTag(std::to_string(3003));
         master.ExecSync(&archive_req);
         REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
 
@@ -245,7 +245,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
         Scan(&standby, tbl_id, 0, 10000);
 
         eloqstore::GlobalReopenRequest reopen_req;
-        reopen_req.SetSnapshotTimestamp(3003);
+        reopen_req.SetTag(std::to_string(3003));
         standby.ExecSync(&reopen_req);
         REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
 
@@ -259,7 +259,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
         REQUIRE(new_master.Start(2) == eloqstore::KvError::NoError);
         upsert_range(new_master, 5001, 10000);
         eloqstore::GlobalArchiveRequest archive_req;
-        archive_req.SetSnapshotTimestamp(2002);
+        archive_req.SetTag(std::to_string(2002));
         new_master.ExecSync(&archive_req);
         REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
 
@@ -274,7 +274,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
         Scan(&standby, tbl_id, 0, 10000);
 
         eloqstore::GlobalReopenRequest reopen_req;
-        reopen_req.SetSnapshotTimestamp(2002);
+        reopen_req.SetTag(std::to_string(2002));
         standby.ExecSync(&reopen_req);
         REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
 
@@ -414,7 +414,7 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
         verify_range(master, 0, 5000, true);
 
         eloqstore::GlobalArchiveRequest archive_req;
-        archive_req.SetSnapshotTimestamp(1001);
+        archive_req.SetTag(std::to_string(1001));
         master.ExecSync(&archive_req);
         REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
 
@@ -430,7 +430,7 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
 
         eloqstore::ReopenRequest reopen_req;
         reopen_req.SetArgs(tbl_id);
-        reopen_req.SetSnapshotTimestamp(1001);
+        reopen_req.SetTag(std::to_string(1001));
         standby.ExecSync(&reopen_req);
         REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
 
@@ -447,7 +447,7 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
         verify_range(master, 0, 5000, false);
 
         eloqstore::GlobalArchiveRequest archive_req;
-        archive_req.SetSnapshotTimestamp(2002);
+        archive_req.SetTag(std::to_string(2002));
         master.ExecSync(&archive_req);
         REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
 
@@ -463,7 +463,7 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
 
         eloqstore::ReopenRequest reopen_req;
         reopen_req.SetArgs(tbl_id);
-        reopen_req.SetSnapshotTimestamp(2002);
+        reopen_req.SetTag(std::to_string(2002));
         standby.ExecSync(&reopen_req);
         REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
         REQUIRE(WaitForCondition(
@@ -518,7 +518,7 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
         REQUIRE(new_master.Start(2) == eloqstore::KvError::NoError);
         upsert_range(new_master, 5001, 10000);
         eloqstore::GlobalArchiveRequest archive_req;
-        archive_req.SetSnapshotTimestamp(2002);
+        archive_req.SetTag(std::to_string(2002));
         new_master.ExecSync(&archive_req);
         REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
 
@@ -534,7 +534,7 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
 
         eloqstore::ReopenRequest reopen_req;
         reopen_req.SetArgs(tbl_id);
-        reopen_req.SetSnapshotTimestamp(2002);
+        reopen_req.SetTag(std::to_string(2002));
         standby.ExecSync(&reopen_req);
         REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
 

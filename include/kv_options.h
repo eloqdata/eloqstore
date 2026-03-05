@@ -162,6 +162,7 @@ struct KvOptions
     std::vector<std::string> store_path;
     /**
      * @brief Optional per-store-path weights used to compute the LUT.
+     * Parsed from `store_path` suffix `:<w1,w2,...>`.
      * When specified the weights vector must match store_path in size and the
      * automatic disk-capacity based detection will be skipped.
      */
@@ -225,6 +226,7 @@ struct KvOptions
     std::vector<std::string> standby_master_store_paths;
     /**
      * @brief store_path_weights of master in standby mode.
+     * Parsed from `standby_master_store_paths` suffix `:<w1,w2,...>`.
      */
     std::vector<uint64_t> standby_master_store_path_weights;
     /**

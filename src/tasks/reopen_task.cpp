@@ -13,7 +13,7 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
 {
     StoreMode mode = shard->store_->Mode();
     StandbyService *standby_service = nullptr;
-    uint64_t snapshot_ts = 0;
+    std::string tag;
     if (mode == StoreMode::StandbyReplica)
     {
         standby_service = shard->store_->GetStandbyService();
@@ -22,16 +22,15 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
             request_ = nullptr;
             return KvError::InvalidArgs;
         }
-        snapshot_ts = request_->SnapshotTimestamp();
-        if (snapshot_ts == 0)
+        tag = request_->Tag();
+        if (tag.empty())
         {
             request_ = nullptr;
             return KvError::InvalidArgs;
         }
         KvTask *current_task = ThdTask();
         CHECK(current_task != nullptr);
-        KvError enqueue_err =
-            standby_service->RsyncPartition(tbl_id, snapshot_ts);
+        KvError enqueue_err = standby_service->RsyncPartition(tbl_id, tag);
         if (enqueue_err != KvError::NoError)
         {
             request_ = nullptr;
@@ -64,7 +63,7 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
             shard->AddPendingLocalGc(tbl_id);
         }
         if (mode == StoreMode::StandbyReplica && standby_service != nullptr &&
-            snapshot_ts != 0)
+            !tag.empty())
         {
             KvTask *current_task = ThdTask();
             CHECK(current_task != nullptr);
@@ -78,7 +77,7 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
                 if (cleanup_err != KvError::NoError)
                 {
                     LOG(WARNING) << "StandbyService cleanup failed for "
-                                 << tbl_id << " snapshot " << snapshot_ts
+                                 << tbl_id << " tag " << tag
                                  << ": " << ErrorString(cleanup_err);
                 }
             }

@@ -121,7 +121,9 @@ public:
                                    std::string_view snapshot) = 0;
     virtual KvError CreateArchive(const TableIdent &tbl_id,
                                   std::string_view snapshot,
-                                  uint64_t ts) = 0;
+                                  std::string_view tag) = 0;
+    virtual KvError DeleteArchive(const TableIdent &tbl_id,
+                                  std::string_view tag) = 0;
     virtual std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) = 0;
 
@@ -398,7 +400,9 @@ public:
                            std::string_view snapshot) override;
     KvError CreateArchive(const TableIdent &tbl_id,
                           std::string_view snapshot,
-                          uint64_t ts) override;
+                          std::string_view tag) override;
+    KvError DeleteArchive(const TableIdent &tbl_id,
+                          std::string_view tag) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
 
@@ -775,7 +779,9 @@ public:
                            std::string_view snapshot) override;
     KvError CreateArchive(const TableIdent &tbl_id,
                           std::string_view snapshot,
-                          uint64_t ts) override;
+                          std::string_view tag) override;
+    KvError DeleteArchive(const TableIdent &tbl_id,
+                          std::string_view tag) override;
     KvError AbortWrite(const TableIdent &tbl_id) override;
     void CleanManifest(const TableIdent &tbl_id) override;
 
@@ -1113,7 +1119,9 @@ public:
                            std::string_view snapshot) override;
     KvError CreateArchive(const TableIdent &tbl_id,
                           std::string_view snapshot,
-                          uint64_t ts) override;
+                          std::string_view tag) override;
+    KvError DeleteArchive(const TableIdent &tbl_id,
+                          std::string_view tag) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
 

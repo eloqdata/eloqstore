@@ -74,6 +74,7 @@ public:
     }
 
     KvError WaitWrite();
+    KvError DeleteArchive(std::string_view tag);
     // write_err_ record the result of the last failed write
     // request.
     KvError write_err_{KvError::NoError};

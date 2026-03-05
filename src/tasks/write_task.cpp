@@ -602,6 +602,11 @@ KvError WriteTask::FlushManifest()
     return KvError::NoError;
 }
 
+KvError WriteTask::DeleteArchive(std::string_view tag)
+{
+    return IoMgr()->DeleteArchive(tbl_ident_, tag);
+}
+
 KvError WriteTask::UpdateMeta()
 {
     // Flush data pages.

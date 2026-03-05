@@ -1925,13 +1925,14 @@ bool IouringMgr::HasOtherFile(const TableIdent &tbl_id) const
             continue;
         }
         // Ignore current manifest files (manifest or manifest_<term>), but do
-        // NOT ignore archive manifests (manifest_<term>_<ts>).
+        // not ignore archive manifests (manifest_<term>_<tag>).
         auto [type, suffix] = ParseFileName(name);
         if (type == FileNameManifest)
         {
             uint64_t term = 0;
-            std::optional<uint64_t> ts;
-            if (ParseManifestFileSuffix(suffix, term, ts) && !ts.has_value())
+            std::optional<std::string> tag;
+            if (ParseManifestFileSuffix(suffix, term, tag) &&
+                !tag.has_value())
             {
                 continue;
             }
@@ -2163,18 +2164,31 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
 
 KvError IouringMgr::CreateArchive(const TableIdent &tbl_id,
                                   std::string_view snapshot,
-                                  uint64_t ts)
+                                  std::string_view tag)
 {
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
     CHECK_KV_ERR(err);
     uint64_t term = ProcessTerm();
-    const std::string name = ArchiveName(term, ts);
+    const std::string name = ArchiveName(term, tag);
     int res = WriteSnapshot(std::move(dir_fd), name, snapshot);
     if (res < 0)
     {
         return ToKvError(res);
     }
     CloseDirect(res);
+    return KvError::NoError;
+}
+
+KvError IouringMgr::DeleteArchive(const TableIdent &tbl_id, std::string_view tag)
+{
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
+    CHECK_KV_ERR(err);
+    const std::string name = ArchiveName(ProcessTerm(), tag);
+    const int res = UnlinkAt(dir_fd.FdPair(), name.c_str(), false);
+    if (res < 0)
+    {
+        return ToKvError(res);
+    }
     return KvError::NoError;
 }
 
@@ -3486,8 +3500,8 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     {
         // "name" does not contain the prefix("manifest_").
         uint64_t term = 0;
-        std::optional<uint64_t> ts;
-        if (!ParseManifestFileSuffix(name, term, ts))
+        std::optional<std::string> tag;
+        if (!ParseManifestFileSuffix(name, term, tag))
         {
             LOG(FATAL) << "CloudStoreMgr::GetManifest: failed to parse "
                           "manifest file suffix: "
@@ -3495,8 +3509,8 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
             continue;
         }
 
-        // Skip archive manifests (manifest_<term>_<ts>).
-        if (ts.has_value())
+        // Skip archive manifests (manifest_<term>_<tag>).
+        if (tag.has_value())
         {
             continue;
         }
@@ -3719,15 +3733,15 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
         for (const std::string &name : cloud_files)
         {
             uint64_t term = 0;
-            std::optional<uint64_t> ts;
-            if (!ParseManifestFileSuffix(name, term, ts))
+            std::optional<std::string> tag;
+            if (!ParseManifestFileSuffix(name, term, tag))
             {
                 LOG(FATAL) << "CloudStoreMgr::RefreshManifest: failed to "
                               "parse manifest file suffix: "
                            << name;
                 continue;
             }
-            if (ts.has_value())
+            if (tag.has_value())
             {
                 continue;
             }
@@ -4076,7 +4090,7 @@ void CloudStoreMgr::CleanManifest(const TableIdent &tbl_id)
 
 KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
                                      std::string_view snapshot,
-                                     uint64_t ts)
+                                     std::string_view tag)
 {
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
     CHECK_KV_ERR(err);
@@ -4086,7 +4100,7 @@ KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
         return ToKvError(res);
     }
     uint64_t term = ProcessTerm();
-    const std::string name = ArchiveName(term, ts);
+    const std::string name = ArchiveName(term, tag);
     res = WriteSnapshot(std::move(dir_fd), name, snapshot);
     if (res < 0)
     {
@@ -4097,6 +4111,27 @@ KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
     used_local_space_ += options_->manifest_limit;
     EnqueClosedFile(FileKey(tbl_id, name));
     return err;
+}
+
+KvError CloudStoreMgr::DeleteArchive(const TableIdent &tbl_id,
+                                     std::string_view tag)
+{
+    const std::string name = ArchiveName(ProcessTerm(), tag);
+    auto [dir_fd, open_err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
+    CHECK_KV_ERR(open_err);
+    const int local_unlink_res = UnlinkAt(dir_fd.FdPair(), name.c_str(), false);
+    if (local_unlink_res < 0 && local_unlink_res != -ENOENT)
+    {
+        return ToKvError(local_unlink_res);
+    }
+
+    KvTask *current_task = ThdTask();
+    ObjectStore::DeleteTask delete_task(tbl_id.ToString() + "/" + name);
+    delete_task.SetKvTask(current_task);
+    AcquireCloudSlot(current_task);
+    obj_store_.SubmitTask(&delete_task, shard);
+    current_task->WaitIo();
+    return delete_task.error_;
 }
 
 KvError CloudStoreMgr::AbortWrite(const TableIdent &tbl_id)
@@ -5264,8 +5299,20 @@ KvError MemStoreMgr::SwitchManifest(const TableIdent &tbl_id,
 
 KvError MemStoreMgr::CreateArchive(const TableIdent &tbl_id,
                                    std::string_view snapshot,
-                                   uint64_t ts)
+                                   std::string_view tag)
 {
+    (void) tbl_id;
+    (void) snapshot;
+    (void) tag;
+    LOG(FATAL) << "not implemented";
+    return KvError::InvalidArgs;
+}
+
+KvError MemStoreMgr::DeleteArchive(const TableIdent &tbl_id,
+                                   std::string_view tag)
+{
+    (void) tbl_id;
+    (void) tag;
     LOG(FATAL) << "not implemented";
     return KvError::InvalidArgs;
 }

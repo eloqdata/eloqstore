@@ -136,12 +136,12 @@ void StandbyService::Stop()
 }
 
 KvError StandbyService::RsyncPartition(const TableIdent &tbl_id,
-                                       uint64_t archive_ts)
+                                       std::string archive_tag)
 {
     Job job;
     auto &rsync = job.payload.emplace<RsyncJob>();
     rsync.tbl_id = tbl_id;
-    rsync.archive_ts = archive_ts;
+    rsync.archive_tag = std::move(archive_tag);
     CHECK(shard != nullptr);
     KvTask *task = ThdTask();
     CHECK(task != nullptr);
@@ -294,7 +294,7 @@ std::string StandbyService::RemotePartitionPath(const TableIdent &tbl_id) const
 }
 
 std::string StandbyService::RemoteArchiveManifestPath(const TableIdent &tbl_id,
-                                                      uint64_t archive_ts) const
+                                                      std::string_view archive_tag) const
 {
     std::string remote_path = RemotePartitionPath(tbl_id);
     if (remote_path.empty())
@@ -302,7 +302,7 @@ std::string StandbyService::RemoteArchiveManifestPath(const TableIdent &tbl_id,
         return {};
     }
     remote_path.push_back('/');
-    remote_path.append(ArchiveName(store_->Term(), archive_ts));
+    remote_path.append(ArchiveName(store_->Term(), archive_tag));
     return remote_path;
 }
 
@@ -394,13 +394,13 @@ KvError StandbyService::RunListPartitionsJob(const ListPartitionsJob &job)
 
 KvError StandbyService::RunRsyncJob(const RsyncJob &job)
 {
-    if (job.archive_ts == 0)
+    if (job.archive_tag.empty())
     {
         return KvError::InvalidArgs;
     }
     std::string remote_partition_path = RemotePartitionPath(job.tbl_id);
     std::string remote_manifest_path =
-        RemoteArchiveManifestPath(job.tbl_id, job.archive_ts);
+        RemoteArchiveManifestPath(job.tbl_id, job.archive_tag);
     if (remote_partition_path.empty() || remote_manifest_path.empty())
     {
         LOG(ERROR) << "StandbyService: remote partition path missing";

@@ -2,12 +2,16 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cctype>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <numeric>
 #include <random>
+#include <sstream>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace chrono = std::chrono;
@@ -78,6 +82,137 @@ inline int RandomInt(int n)
 namespace eloqstore
 {
 constexpr size_t kDefaultStorePathLutEntries = 1 << 20;
+
+inline std::string TrimAsciiWhitespace(std::string value)
+{
+    auto is_space = [](unsigned char c) { return std::isspace(c) != 0; };
+    auto begin = std::find_if_not(value.begin(), value.end(), is_space);
+    auto end = std::find_if_not(value.rbegin(), value.rend(), is_space).base();
+    if (begin >= end)
+    {
+        return "";
+    }
+    return std::string(begin, end);
+}
+
+inline void ParseCsvStringList(std::string_view input,
+                               std::vector<std::string> &out)
+{
+    out.clear();
+    std::string token;
+    std::istringstream token_stream{std::string(input)};
+    while (std::getline(token_stream, token, ','))
+    {
+        token = TrimAsciiWhitespace(token);
+        if (!token.empty())
+        {
+            out.emplace_back(std::move(token));
+        }
+    }
+}
+
+inline bool ParseStorePathListWithWeights(std::string_view input,
+                                          std::vector<std::string> &paths,
+                                          std::vector<uint64_t> &weights,
+                                          std::string *error_message = nullptr)
+{
+    paths.clear();
+    weights.clear();
+
+    std::string value = TrimAsciiWhitespace(std::string(input));
+    if (value.empty())
+    {
+        return true;
+    }
+
+    std::string_view path_part = value;
+    std::string_view weight_part;
+    size_t colon_pos = value.find(':');
+    if (colon_pos != std::string::npos)
+    {
+        path_part = std::string_view(value.data(), colon_pos);
+        weight_part = std::string_view(value.data() + colon_pos + 1,
+                                       value.size() - colon_pos - 1);
+    }
+
+    ParseCsvStringList(path_part, paths);
+    if (paths.empty())
+    {
+        if (error_message != nullptr)
+        {
+            *error_message = "empty path list";
+        }
+        return false;
+    }
+    if (weight_part.empty())
+    {
+        return true;
+    }
+
+    std::string token;
+    std::istringstream token_stream{std::string(weight_part)};
+    while (std::getline(token_stream, token, ','))
+    {
+        token = TrimAsciiWhitespace(token);
+        if (token.empty())
+        {
+            continue;
+        }
+        uint64_t weight = 0;
+        auto [ptr, ec] = std::from_chars(
+            token.data(), token.data() + token.size(), weight);
+        if (ec != std::errc() || ptr != token.data() + token.size())
+        {
+            if (error_message != nullptr)
+            {
+                *error_message = "invalid weight: " + token;
+            }
+            paths.clear();
+            weights.clear();
+            return false;
+        }
+        weights.push_back(weight);
+    }
+    if (weights.size() != paths.size())
+    {
+        if (error_message != nullptr)
+        {
+            *error_message = "weight count does not match path count";
+        }
+        paths.clear();
+        weights.clear();
+        return false;
+    }
+    return true;
+}
+
+inline std::string BuildStorePathListWithWeights(
+    const std::vector<std::string> &paths, const std::vector<uint64_t> &weights)
+{
+    std::ostringstream oss;
+    for (size_t i = 0; i < paths.size(); ++i)
+    {
+        if (i > 0)
+        {
+            oss << ",";
+        }
+        oss << paths[i];
+    }
+
+    if (!weights.empty())
+    {
+        oss << ":";
+        for (size_t i = 0; i < weights.size(); ++i)
+        {
+            if (i > 0)
+            {
+                oss << ",";
+            }
+            oss << weights[i];
+        }
+    }
+    return oss.str();
+}
 
 inline std::vector<uint32_t> ComputeStorePathLut(
     const std::vector<uint64_t> &weights,

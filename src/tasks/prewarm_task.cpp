@@ -505,9 +505,9 @@ void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
             if (file_type == FileNameManifest)
             {
                 uint64_t term = 0;
-                std::optional<uint64_t> ts;
-                if (!ParseManifestFileSuffix(suffix, term, ts) ||
-                    ts.has_value())
+                std::optional<std::string> tag;
+                if (!ParseManifestFileSuffix(suffix, term, tag) ||
+                    tag.has_value())
                 {
                     total_files_skipped++;
                     continue;

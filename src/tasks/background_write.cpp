@@ -290,7 +290,7 @@ KvError BackgroundWrite::CompactDataFile()
     return KvError::NoError;
 }
 
-KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
+KvError BackgroundWrite::CreateArchive(std::string_view tag)
 {
     assert(Options()->data_append_mode);
     assert(Options()->num_retained_archives > 0);
@@ -327,9 +327,12 @@ KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
     std::string_view snapshot = wal_builder_.Snapshot(
         root, ttl_root, mapping, max_fp_id, dict_bytes, term_buf);
 
-    uint64_t current_ts =
-        provided_ts != 0 ? provided_ts : utils::UnixTs<chrono::microseconds>();
-    err = IoMgr()->CreateArchive(tbl_ident_, snapshot, current_ts);
+    std::string archive_tag(tag);
+    if (archive_tag.empty())
+    {
+        archive_tag = std::to_string(utils::UnixTs<chrono::microseconds>());
+    }
+    err = IoMgr()->CreateArchive(tbl_ident_, snapshot, archive_tag);
     CHECK_KV_ERR(err);
 
     // Update the cached max file id.
@@ -337,8 +340,8 @@ KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
         static_cast<FileId>(max_fp_id >> Options()->pages_per_file_shift);
     IoMgr()->least_not_archived_file_ids_[tbl_ident_] = max_file_id + 1;
 
-    LOG(INFO) << "created archive for partition " << tbl_ident_ << " at "
-              << current_ts << ", updated cached max file id to "
+    LOG(INFO) << "created archive for partition " << tbl_ident_ << " with tag "
+              << archive_tag << ", updated cached max file id to "
               << max_file_id + 1;
     return KvError::NoError;
 }

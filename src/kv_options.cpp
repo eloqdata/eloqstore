@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <bit>
-#include <boost/algorithm/string.hpp>
 #include <cctype>
 #include <charconv>
 #include <limits>
@@ -258,28 +257,12 @@ int KvOptions::LoadFromIni(const char *path)
     if (reader.HasValue(sec_permanent, "store_path"))
     {
         std::string input = reader.Get(sec_permanent, "store_path", "");
-        boost::split(store_path, input, boost::is_any_of(": "));
-    }
-    if (reader.HasValue(sec_permanent, "store_path_weights"))
-    {
-        store_path_weights.clear();
-        std::string input = reader.Get(sec_permanent, "store_path_weights", "");
-        std::vector<std::string> tokens;
-        boost::split(tokens, input, boost::is_any_of(","));
-        for (std::string &token : tokens)
+        std::string error_message;
+        if (!ParseStorePathListWithWeights(
+                input, store_path, store_path_weights, &error_message))
         {
-            boost::algorithm::trim(token);
-            if (token.empty())
-            {
-                continue;
-            }
-            uint64_t weight = 0;
-            auto [ptr, ec] = std::from_chars(
-                token.data(), token.data() + token.size(), weight);
-            if (ec == std::errc() && ptr == token.data() + token.size())
-            {
-                store_path_weights.push_back(weight);
-            }
+            LOG(ERROR) << "Invalid store_path: " << error_message;
+            return -3;
         }
     }
     if (reader.HasValue(sec_permanent, "cloud_store_path"))
@@ -293,41 +276,17 @@ int KvOptions::LoadFromIni(const char *path)
     }
     if (reader.HasValue(sec_permanent, "standby_master_store_paths"))
     {
-        standby_master_store_paths.clear();
         std::string input =
             reader.Get(sec_permanent, "standby_master_store_paths", "");
-        std::vector<std::string> tokens;
-        boost::split(tokens, input, boost::is_any_of(","));
-        for (std::string &token : tokens)
+        std::string error_message;
+        if (!ParseStorePathListWithWeights(input,
+                                           standby_master_store_paths,
+                                           standby_master_store_path_weights,
+                                           &error_message))
         {
-            boost::algorithm::trim(token);
-            if (!token.empty())
-            {
-                standby_master_store_paths.push_back(token);
-            }
-        }
-    }
-    if (reader.HasValue(sec_permanent, "standby_master_store_path_weights"))
-    {
-        standby_master_store_path_weights.clear();
-        std::string input =
-            reader.Get(sec_permanent, "standby_master_store_path_weights", "");
-        std::vector<std::string> tokens;
-        boost::split(tokens, input, boost::is_any_of(","));
-        for (std::string &token : tokens)
-        {
-            boost::algorithm::trim(token);
-            if (token.empty())
-            {
-                continue;
-            }
-            uint64_t weight = 0;
-            auto [ptr, ec] = std::from_chars(
-                token.data(), token.data() + token.size(), weight);
-            if (ec == std::errc() && ptr == token.data() + token.size())
-            {
-                standby_master_store_path_weights.push_back(weight);
-            }
+            LOG(ERROR) << "Invalid standby_master_store_paths: "
+                       << error_message;
+            return -3;
         }
     }
     if (reader.HasValue(sec_permanent, "cloud_provider"))

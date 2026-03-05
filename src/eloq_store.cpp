@@ -41,6 +41,7 @@
 
 #ifdef ELOQSTORE_WITH_TXSERVICE
 #include "eloqstore_metrics.h"
+#include "gflags/gflags.h"
 #endif
 
 namespace eloqstore
@@ -302,12 +303,75 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
     return true;
 }
 
+KvError EloqStore::UpdateStandbyMasterStorePaths(std::vector<std::string> paths,
+                                                 std::vector<uint64_t> weights)
+{
+    if (paths.empty())
+    {
+        LOG(ERROR) << "standby_master_store_paths cannot be empty";
+        return KvError::InvalidArgs;
+    }
+    for (std::string &remote_path : paths)
+    {
+        if (remote_path.empty() || remote_path.front() != '/')
+        {
+            LOG(ERROR) << "standby_master_store_paths must be absolute paths";
+            return KvError::InvalidArgs;
+        }
+        while (remote_path.size() > 1 && remote_path.back() == '/')
+        {
+            remote_path.pop_back();
+        }
+    }
+    if (!weights.empty() && weights.size() != paths.size())
+    {
+        LOG(ERROR) << "standby_master_store_path_weights must match "
+                      "standby_master_store_paths length";
+        return KvError::InvalidArgs;
+    }
+    for (uint64_t weight : weights)
+    {
+        if (weight == 0)
+        {
+            LOG(ERROR) << "standby_master_store_path_weights entries must be "
+                          "> 0";
+            return KvError::InvalidArgs;
+        }
+    }
+
+    options_.standby_master_store_paths = std::move(paths);
+    options_.standby_master_store_path_weights = std::move(weights);
+    if (options_.standby_master_store_path_weights.empty())
+    {
+        options_.standby_master_store_path_weights.resize(
+            options_.standby_master_store_paths.size(), 1);
+    }
+    options_.standby_master_store_path_lut = std::move(ComputeStorePathLut(
+        options_.standby_master_store_path_weights, kMaxStorePathLutEntries));
+    if (options_.standby_master_store_path_lut.empty())
+    {
+        LOG(ERROR) << "Failed to compute standby master store path LUT";
+        return KvError::InvalidArgs;
+    }
+    return KvError::NoError;
+}
+
 EloqStore::EloqStore(const KvOptions &opts) : options_(opts)
 {
     if (!ValidateOptions(options_))
     {
         LOG(FATAL) << "Invalid KvOptions configuration";
     }
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    const std::string store_path_list =
+        BuildStorePathListWithWeights(options_.store_path,
+                                      options_.store_path_weights);
+    if (!store_path_list.empty())
+    {
+        GFLAGS_NAMESPACE::SetCommandLineOption("eloq_store_data_path_list",
+                                               store_path_list.c_str());
+    }
+#endif
     store_mode_ = DetermineStoreMode(options_);
     if (store_mode_ == StoreMode::Cloud)
     {
@@ -822,13 +886,22 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
     req->pending_.store(0, std::memory_order_relaxed);
     req->archive_reqs_.clear();
 
-    uint64_t snapshot_ts = req->GetSnapshotTimestamp();
-    if (snapshot_ts == 0)
+    std::string tag = req->Tag();
+    const GlobalArchiveRequest::Action action = req->GetAction();
+    if (action == GlobalArchiveRequest::Action::Create && tag.empty())
     {
-        snapshot_ts = utils::UnixTs<chrono::microseconds>();
+        tag = std::to_string(utils::UnixTs<chrono::microseconds>());
+    }
+    if (action == GlobalArchiveRequest::Action::Delete && tag.empty())
+    {
+        req->SetDone(KvError::InvalidArgs);
+        return;
     }
 
-    LOG(INFO) << "Creating global snapshot with timestamp " << snapshot_ts;
+    LOG(INFO) << "Handling global archive request action="
+              << (action == GlobalArchiveRequest::Action::Create ? "create"
+                                                                  : "delete")
+              << " tag=" << tag;
 
     std::vector<TableIdent> all_partitions;
     if (options_.cloud_store_path.empty())
@@ -950,15 +1023,19 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
         return;
     }
 
-    LOG(INFO) << "Snapshotting " << all_partitions.size()
-              << " partitions with timestamp " << snapshot_ts;
+    LOG(INFO) << "Scheduling archive action for " << all_partitions.size()
+              << " partitions, tag=" << tag;
 
     req->archive_reqs_.reserve(all_partitions.size());
     for (const TableIdent &partition : all_partitions)
     {
         auto archive_req = std::make_unique<ArchiveRequest>();
         archive_req->SetTableId(partition);
-        archive_req->SetSnapshotTimestamp(snapshot_ts);
+        archive_req->SetAction(
+            action == GlobalArchiveRequest::Action::Create
+                ? ArchiveRequest::Action::Create
+                : ArchiveRequest::Action::Delete);
+        archive_req->SetTag(tag);
         req->archive_reqs_.push_back(std::move(archive_req));
     }
 
@@ -1189,7 +1266,7 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
         reopen_req->SetArgs(partition);
         if (Mode() == StoreMode::StandbyReplica)
         {
-            reopen_req->SetSnapshotTimestamp(req->SnapshotTimestamp());
+            reopen_req->SetTag(req->Tag());
         }
         ReopenRequest *ptr = reopen_req.get();
         req->reopen_reqs_.push_back(std::move(reopen_req));
@@ -1620,10 +1697,26 @@ void TruncateRequest::SetArgs(TableIdent tbl_id, std::string position)
     position_ = position_storage_;
 }
 
+void ArchiveRequest::SetSnapshotTimestamp(uint64_t ts)
+{
+    LOG_FIRST_N(WARNING, 1)
+        << "ArchiveRequest::SetSnapshotTimestamp is deprecated. "
+        << "Use SetTag(std::string) instead.";
+    tag_ = std::to_string(ts);
+}
+
+void GlobalArchiveRequest::SetSnapshotTimestamp(uint64_t ts)
+{
+    LOG_FIRST_N(WARNING, 1)
+        << "GlobalArchiveRequest::SetSnapshotTimestamp is deprecated. "
+        << "Use SetTag(std::string) instead.";
+    tag_ = std::to_string(ts);
+}
+
 void ReopenRequest::SetArgs(TableIdent tbl_id)
 {
     SetTableId(std::move(tbl_id));
-    snapshot_ts_ = 0;
+    tag_.clear();
 }
 
 void DropTableRequest::SetArgs(std::string table_name)
