@@ -944,3 +944,299 @@ TEST_CASE(
 
     CleanupStore(cloud_options);
 }
+
+// ---------------------------------------------------------------------------
+// G1: Start on deleted branch and on a never-created branch both fail the
+//     same way on first I/O (lazy failure — KvError::NotFound).
+// ---------------------------------------------------------------------------
+TEST_CASE(
+    "start on deleted branch and nonexistent branch give same first-IO error",
+    "[branch]")
+{
+    // Sub-case A: branch that existed but was deleted.
+    eloqstore::KvError deleted_branch_err;
+    {
+        eloqstore::EloqStore *store = InitStore(default_opts);
+        MapVerifier verify(test_tbl_id, store, false);
+        verify.SetAutoClean(false);
+        verify.Upsert(0, 100);  // write key 0 so it would be readable if manifest exists
+
+        eloqstore::CreateBranchRequest create_req;
+        create_req.SetTableId(test_tbl_id);
+        create_req.branch_name = "deletedone";
+        store->ExecSync(&create_req);
+        REQUIRE(create_req.Error() == eloqstore::KvError::NoError);
+
+        eloqstore::DeleteBranchRequest delete_req;
+        delete_req.SetTableId(test_tbl_id);
+        delete_req.branch_name = "deletedone";
+        store->ExecSync(&delete_req);
+        REQUIRE(delete_req.Error() == eloqstore::KvError::NoError);
+
+        store->Stop();
+
+        // Start on the now-deleted branch — Start itself returns NoError
+        // (lazy manifest resolution).
+        eloqstore::EloqStore branch_store(default_opts);
+        REQUIRE(branch_store.Start("deletedone", 0) ==
+                eloqstore::KvError::NoError);
+
+        MapVerifier bverify(test_tbl_id, &branch_store, false);
+        // Key 0 was written on main before the fork, but the manifest is gone,
+        // so the first read surfaces NotFound.
+        deleted_branch_err = bverify.CheckKey(0);
+
+        branch_store.Stop();
+    }
+
+    // Sub-case B: branch that was never created.
+    eloqstore::KvError nonexistent_branch_err;
+    {
+        eloqstore::EloqStore *store = InitStore(default_opts);
+        MapVerifier verify(test_tbl_id, store, false);
+        verify.SetAutoClean(false);
+        verify.Upsert(0, 100);
+        store->Stop();
+
+        eloqstore::EloqStore branch_store(default_opts);
+        REQUIRE(branch_store.Start("neverexists", 0) ==
+                eloqstore::KvError::NoError);
+
+        MapVerifier bverify(test_tbl_id, &branch_store, false);
+        nonexistent_branch_err = bverify.CheckKey(0);
+
+        branch_store.Stop();
+    }
+
+    // Both cases must surface the same error on first I/O.
+    REQUIRE(deleted_branch_err == nonexistent_branch_err);
+    REQUIRE(deleted_branch_err == eloqstore::KvError::NotFound);
+
+    CleanupStore(default_opts);
+}
+
+// ---------------------------------------------------------------------------
+// G3: DeleteBranchRequest normalizes mixed-case branch names the same way
+//     CreateBranchRequest does, so "FeatureX" deletes the "featurex" manifest.
+// ---------------------------------------------------------------------------
+TEST_CASE("delete branch with mixed-case name is normalized and succeeds",
+          "[branch]")
+{
+    eloqstore::EloqStore *store = InitStore(default_opts);
+    MapVerifier verify(test_tbl_id, store, false);
+    verify.SetAutoClean(false);
+    verify.Upsert(0, 100);
+
+    // Create with lowercase name (required by create validation).
+    eloqstore::CreateBranchRequest create_req;
+    create_req.SetTableId(test_tbl_id);
+    create_req.branch_name = "featurex";
+    store->ExecSync(&create_req);
+    REQUIRE(create_req.Error() == eloqstore::KvError::NoError);
+
+    fs::path table_path = fs::path(test_path) / test_tbl_id.ToString();
+    REQUIRE(fs::exists(table_path / "manifest_featurex_0"));
+    REQUIRE(fs::exists(table_path / "CURRENT_TERM.featurex"));
+
+    // Delete with mixed-case name — must normalize to "featurex" and succeed.
+    eloqstore::DeleteBranchRequest delete_req;
+    delete_req.SetTableId(test_tbl_id);
+    delete_req.branch_name = "FeatureX";
+    store->ExecSync(&delete_req);
+    REQUIRE(delete_req.Error() == eloqstore::KvError::NoError);
+
+    REQUIRE(!fs::exists(table_path / "manifest_featurex_0"));
+    REQUIRE(!fs::exists(table_path / "CURRENT_TERM.featurex"));
+
+    store->Stop();
+}
+
+// ---------------------------------------------------------------------------
+// G5: Deleting the branch the store was Start()-ed with must be rejected.
+// ---------------------------------------------------------------------------
+TEST_CASE("delete currently active branch is rejected", "[branch]")
+{
+    // Set up: create "activebr" from main, then switch to it.
+    {
+        eloqstore::EloqStore *store = InitStore(default_opts);
+        MapVerifier verify(test_tbl_id, store, false);
+        verify.SetAutoClean(false);
+        verify.Upsert(0, 100);
+
+        eloqstore::CreateBranchRequest create_req;
+        create_req.SetTableId(test_tbl_id);
+        create_req.branch_name = "activebr";
+        store->ExecSync(&create_req);
+        REQUIRE(create_req.Error() == eloqstore::KvError::NoError);
+
+        store->Stop();
+    }
+
+    // Start the store on "activebr" and attempt to delete it.
+    eloqstore::EloqStore branch_store(default_opts);
+    REQUIRE(branch_store.Start("activebr", 0) == eloqstore::KvError::NoError);
+
+    eloqstore::DeleteBranchRequest delete_req;
+    delete_req.SetTableId(test_tbl_id);
+    delete_req.branch_name = "activebr";
+    branch_store.ExecSync(&delete_req);
+
+    // Must be rejected with InvalidArgs — cannot delete the active branch.
+    REQUIRE(delete_req.Error() == eloqstore::KvError::InvalidArgs);
+
+    // Branch manifest must still exist.
+    fs::path table_path = fs::path(test_path) / test_tbl_id.ToString();
+    REQUIRE(fs::exists(table_path / "manifest_activebr_0"));
+    REQUIRE(fs::exists(table_path / "CURRENT_TERM.activebr"));
+
+    branch_store.Stop();
+
+    CleanupStore(default_opts);
+}
+
+// ---------------------------------------------------------------------------
+// G4: Cloud-mode delete removes all objects from object storage.
+// ---------------------------------------------------------------------------
+TEST_CASE("delete branch in cloud mode removes all cloud objects",
+          "[branch][cloud]")
+{
+    // Phase 1: clean slate, write data on main, fork "cloudfeature".
+    eloqstore::EloqStore *store = InitStore(cloud_options);
+
+    {
+        MapVerifier verify(test_tbl_id, store);
+        verify.SetValueSize(40960);
+        verify.SetAutoClean(false);
+        verify.SetAutoValidate(false);
+        verify.Upsert(0, 50);
+
+        eloqstore::CreateBranchRequest create_req;
+        create_req.SetTableId(test_tbl_id);
+        create_req.branch_name = "cloudfeature";
+        store->ExecSync(&create_req);
+        REQUIRE(create_req.Error() == eloqstore::KvError::NoError);
+    }
+
+    // Phase 2: delete the branch while still on main.
+    eloqstore::DeleteBranchRequest delete_req;
+    delete_req.SetTableId(test_tbl_id);
+    delete_req.branch_name = "cloudfeature";
+    store->ExecSync(&delete_req);
+    REQUIRE(delete_req.Error() == eloqstore::KvError::NoError);
+
+    store->Stop();
+    // Remove local cache so the next inspection goes to cloud only.
+    CleanupLocalStore(cloud_options);
+
+    // Phase 3: verify no "cloudfeature" manifest objects remain in cloud.
+    std::string tbl_prefix =
+        std::string(cloud_options.cloud_store_path) + "/" +
+        test_tbl_id.ToString();
+    std::vector<std::string> cloud_files =
+        ListCloudFiles(cloud_options, tbl_prefix);
+    for (const auto &f : cloud_files)
+    {
+        REQUIRE(f.find("cloudfeature") == std::string::npos);
+    }
+
+    CleanupStore(cloud_options);
+}
+
+// ---------------------------------------------------------------------------
+// G6: End-to-end delete across real Raft terms (cloud mode).
+//     Writes real data on the branch across term=1 and term=3, then deletes.
+//     Verifies that manifest_branchname_0, _1, _3 and CURRENT_TERM are all
+//     gone from cloud storage.
+// ---------------------------------------------------------------------------
+TEST_CASE(
+    "delete branch removes all term manifests end-to-end across real Raft "
+    "terms",
+    "[branch][cloud]")
+{
+    // Phase 1: clean slate.
+    eloqstore::EloqStore *store = InitStore(cloud_options);
+    store->Stop();
+
+    // Phase 2: main@term=1 — write DS1, fork "multitemp".
+    // Creates manifest_multitemp_0 on cloud.
+    {
+        REQUIRE(store->Start(eloqstore::MainBranchName, 1) ==
+                eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, store);
+        verify.SetValueSize(40960);
+        verify.SetAutoClean(false);
+        verify.SetAutoValidate(false);
+        verify.Upsert(0, 50);  // DS1
+
+        eloqstore::CreateBranchRequest create_req;
+        create_req.SetTableId(test_tbl_id);
+        create_req.branch_name = "multitemp";
+        store->ExecSync(&create_req);
+        REQUIRE(create_req.Error() == eloqstore::KvError::NoError);
+
+        store->Stop();
+        CleanupLocalStore(cloud_options);
+    }
+
+    // Phase 3: multitemp@term=1 — write on the branch.
+    // Creates manifest_multitemp_1 on cloud; CURRENT_TERM.multitemp = 1.
+    {
+        eloqstore::EloqStore br_store(cloud_options);
+        REQUIRE(br_store.Start("multitemp", 1) == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &br_store);
+        verify.SetValueSize(40960);
+        verify.SetAutoClean(false);
+        verify.SetAutoValidate(false);
+        verify.Upsert(50, 100);
+
+        br_store.Stop();
+        CleanupLocalStore(cloud_options);
+    }
+
+    // Phase 4: multitemp@term=3 — write more on the branch.
+    // Creates manifest_multitemp_3 on cloud; CURRENT_TERM.multitemp = 3.
+    {
+        eloqstore::EloqStore br_store(cloud_options);
+        REQUIRE(br_store.Start("multitemp", 3) == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &br_store);
+        verify.SetValueSize(40960);
+        verify.SetAutoClean(false);
+        verify.SetAutoValidate(false);
+        verify.Upsert(100, 150);
+
+        br_store.Stop();
+        CleanupLocalStore(cloud_options);
+    }
+
+    // Phase 5: main@term=5 — delete the branch.
+    {
+        REQUIRE(store->Start(eloqstore::MainBranchName, 5) ==
+                eloqstore::KvError::NoError);
+
+        eloqstore::DeleteBranchRequest delete_req;
+        delete_req.SetTableId(test_tbl_id);
+        delete_req.branch_name = "multitemp";
+        store->ExecSync(&delete_req);
+        REQUIRE(delete_req.Error() == eloqstore::KvError::NoError);
+
+        store->Stop();
+    }
+    CleanupLocalStore(cloud_options);
+
+    // Phase 6: verify all "multitemp" objects are gone from cloud storage.
+    std::string tbl_prefix =
+        std::string(cloud_options.cloud_store_path) + "/" +
+        test_tbl_id.ToString();
+    std::vector<std::string> cloud_files =
+        ListCloudFiles(cloud_options, tbl_prefix);
+    for (const auto &f : cloud_files)
+    {
+        INFO("Unexpected cloud object still present: " << f);
+        REQUIRE(f.find("multitemp") == std::string::npos);
+    }
+
+    CleanupStore(cloud_options);
+}
