@@ -1,6 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
-#include <filesystem>
+#include <filesystem>  // NOLINT(build/c++17)
 #include <functional>
 #include <string>
 #include <utility>
@@ -13,7 +13,8 @@
 
 namespace fs = std::filesystem;
 namespace chrono = std::chrono;
-using namespace std::chrono_literals;
+using std::chrono_literals::operator""ms;
+using std::chrono_literals::operator""s;
 using test_util::CleanupStore;
 using test_util::cloud_archive_opts;
 using test_util::Key;
