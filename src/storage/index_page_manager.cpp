@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "async_io_manager.h"
+#include "eloq_store.h"
 #include "error.h"
 #include "kv_options.h"
 #include "replayer.h"
