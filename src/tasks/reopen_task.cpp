@@ -19,11 +19,13 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
         standby_service = shard->store_->GetStandbyService();
         if (standby_service == nullptr || request_ == nullptr)
         {
+            request_ = nullptr;
             return KvError::InvalidArgs;
         }
         snapshot_ts = request_->SnapshotTimestamp();
         if (snapshot_ts == 0)
         {
+            request_ = nullptr;
             return KvError::InvalidArgs;
         }
         KvTask *current_task = ThdTask();
