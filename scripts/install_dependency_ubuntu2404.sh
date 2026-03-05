@@ -46,7 +46,7 @@ fi
 DEBIAN_FRONTEND=noninteractive sudo apt-get update
 DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
     sudo curl ca-certificates gdb ccache rsync git \
-    build-essential gcc g++ make cmake ninja-build pkg-config \
+    build-essential cmake pkg-config \
     libcurl4-openssl-dev libssl-dev libgflags-dev libzstd-dev \
     libboost-context-dev libc-ares-dev libprotobuf-dev libprotoc-dev protobuf-compiler \
     libjsoncpp-dev libleveldb-dev libsnappy-dev zlib1g-dev lcov
