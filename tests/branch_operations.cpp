@@ -768,3 +768,179 @@ TEST_CASE("sequential forks capture correct snapshot", "[branch][isolation]")
 
     CleanupStore(default_opts);
 }
+
+TEST_CASE(
+    "sibling branches forked from same parent at different Raft terms inherit "
+    "correct snapshots and are isolated",
+    "[branch][cloud]")
+{
+    // Phase 1: clean slate — InitStore wipes local + cloud, starts at term=0,
+    // then we stop immediately so we can restart at explicit terms.
+    eloqstore::EloqStore *store = InitStore(cloud_options);
+    store->Stop();
+
+    // Phase 2: main at term=1 — write DS1 (keys [0,100)), fork "feature1".
+    // feature1's snapshot contains only DS1.
+    {
+        REQUIRE(store->Start(eloqstore::MainBranchName, 1) ==
+                eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, store);
+        verify.SetValueSize(40960);
+        verify.SetAutoClean(false);
+        verify.SetAutoValidate(false);
+        verify.Upsert(0, 100);  // DS1
+
+        eloqstore::CreateBranchRequest req;
+        req.SetTableId(test_tbl_id);
+        req.SetArgs("feature1");
+        store->ExecSync(&req);
+        REQUIRE(req.Error() == eloqstore::KvError::NoError);
+
+        store->Stop();
+        CleanupLocalStore(cloud_options);
+    }
+
+    // Phase 3: main at term=3 — write DS2 (keys [100,200)), fork "feature2".
+    // feature2's snapshot contains DS1+DS2.
+    {
+        REQUIRE(store->Start(eloqstore::MainBranchName, 3) ==
+                eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, store);
+        verify.SetValueSize(40960);
+        verify.SetAutoClean(false);
+        verify.SetAutoValidate(false);
+        verify.Upsert(100, 200);  // DS2
+
+        eloqstore::CreateBranchRequest req;
+        req.SetTableId(test_tbl_id);
+        req.SetArgs("feature2");
+        store->ExecSync(&req);
+        REQUIRE(req.Error() == eloqstore::KvError::NoError);
+
+        store->Stop();
+        CleanupLocalStore(cloud_options);
+    }
+
+    // Phase 4: main at term=5 — write DS3 (keys [200,300)).
+    // DS3 is written after both forks; it must NOT appear in either branch.
+    {
+        REQUIRE(store->Start(eloqstore::MainBranchName, 5) ==
+                eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, store);
+        verify.SetValueSize(40960);
+        verify.SetAutoClean(false);
+        verify.SetAutoValidate(false);
+        verify.Upsert(200, 300);  // DS3
+
+        store->Stop();
+        CleanupLocalStore(cloud_options);
+    }
+
+    // Phase 5: feature1 — verify snapshot (DS1 only), then write DS4
+    // (keys [300,400)).
+    {
+        eloqstore::EloqStore f1_store(cloud_options);
+        REQUIRE(f1_store.Start("feature1", 0) == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &f1_store);
+        verify.SetValueSize(40960);
+        verify.SetAutoClean(false);
+        verify.SetAutoValidate(false);
+
+        // DS1 must be visible.
+        REQUIRE(verify.CheckKey(0) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(99) == eloqstore::KvError::NoError);
+        // DS2 written after this branch's fork must not be visible.
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NotFound);
+        // DS3 written after both forks must not be visible.
+        REQUIRE(verify.CheckKey(200) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(299) == eloqstore::KvError::NotFound);
+
+        // Write DS4 — branch-local data.
+        verify.Upsert(300, 400);  // DS4
+
+        f1_store.Stop();
+        CleanupLocalStore(cloud_options);
+    }
+
+    // Phase 6: feature2 — verify snapshot (DS1+DS2), then write DS5
+    // (keys [400,500)).
+    {
+        eloqstore::EloqStore f2_store(cloud_options);
+        REQUIRE(f2_store.Start("feature2", 0) == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &f2_store);
+        verify.SetValueSize(40960);
+        verify.SetAutoClean(false);
+        verify.SetAutoValidate(false);
+
+        // DS1+DS2 must be visible.
+        REQUIRE(verify.CheckKey(0) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(99) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NoError);
+        // DS3 written after both forks must not be visible.
+        REQUIRE(verify.CheckKey(200) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(299) == eloqstore::KvError::NotFound);
+        // DS4 written on feature1 must not bleed into feature2.
+        REQUIRE(verify.CheckKey(300) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(399) == eloqstore::KvError::NotFound);
+
+        // Write DS5 — branch-local data.
+        verify.Upsert(400, 500);  // DS5
+
+        f2_store.Stop();
+        CleanupLocalStore(cloud_options);
+    }
+
+    // Phase 7: restart feature1 — verify DS1+DS4 visible; DS2, DS3, DS5 absent.
+    {
+        eloqstore::EloqStore f1_r_store(cloud_options);
+        REQUIRE(f1_r_store.Start("feature1", 0) == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &f1_r_store);
+        verify.SetValueSize(40960);
+        verify.SetAutoClean(false);
+
+        REQUIRE(verify.CheckKey(0) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(99) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(300) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(399) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(400) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(499) == eloqstore::KvError::NotFound);
+
+        f1_r_store.Stop();
+        CleanupLocalStore(cloud_options);
+    }
+
+    // Phase 8: restart feature2 — verify DS1+DS2+DS5 visible; DS3, DS4 absent.
+    {
+        eloqstore::EloqStore f2_r_store(cloud_options);
+        REQUIRE(f2_r_store.Start("feature2", 0) == eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &f2_r_store);
+        verify.SetValueSize(40960);
+        verify.SetAutoClean(false);
+
+        REQUIRE(verify.CheckKey(0) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(99) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(100) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(199) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(400) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(499) == eloqstore::KvError::NoError);
+        REQUIRE(verify.CheckKey(200) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(299) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(300) == eloqstore::KvError::NotFound);
+        REQUIRE(verify.CheckKey(399) == eloqstore::KvError::NotFound);
+
+        f2_r_store.Stop();
+    }
+
+    CleanupStore(cloud_options);
+}
