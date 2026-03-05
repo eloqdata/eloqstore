@@ -1117,7 +1117,30 @@ TEST_CASE("delete branch in cloud mode removes all cloud objects",
         REQUIRE(create_req.Error() == eloqstore::KvError::NoError);
     }
 
-    // Phase 2: delete the branch while still on main.
+    store->Stop();
+    CleanupLocalStore(cloud_options);
+
+    // Phase 2: write data to cloudfeature@term=1.
+    // 50 keys × 40KB = 2MB → ~2 data_*_cloudfeature_1 files on cloud.
+    {
+        eloqstore::EloqStore br_store(cloud_options);
+        REQUIRE(br_store.Start("cloudfeature", 1) ==
+                eloqstore::KvError::NoError);
+
+        MapVerifier verify(test_tbl_id, &br_store);
+        verify.SetValueSize(40960);
+        verify.SetAutoClean(false);
+        verify.SetAutoValidate(false);
+        verify.Upsert(50, 100);
+
+        br_store.Stop();
+        CleanupLocalStore(cloud_options);
+    }
+
+    // Phase 3: back on main@term=2, delete the cloudfeature branch.
+    REQUIRE(store->Start(eloqstore::MainBranchName, 2) ==
+            eloqstore::KvError::NoError);
+
     eloqstore::DeleteBranchRequest delete_req;
     delete_req.SetTableId(test_tbl_id);
     delete_req.branch_name = "cloudfeature";
@@ -1125,10 +1148,10 @@ TEST_CASE("delete branch in cloud mode removes all cloud objects",
     REQUIRE(delete_req.Error() == eloqstore::KvError::NoError);
 
     store->Stop();
-    // Remove local cache so the next inspection goes to cloud only.
     CleanupLocalStore(cloud_options);
 
-    // Phase 3: verify no "cloudfeature" manifest objects remain in cloud.
+    // Phase 4: verify no "cloudfeature" objects remain in cloud (manifests,
+    // CURRENT_TERM, and data files all deleted).
     std::string tbl_prefix =
         std::string(cloud_options.cloud_store_path) + "/" +
         test_tbl_id.ToString();
@@ -1136,6 +1159,7 @@ TEST_CASE("delete branch in cloud mode removes all cloud objects",
         ListCloudFiles(cloud_options, tbl_prefix);
     for (const auto &f : cloud_files)
     {
+        INFO("Unexpected cloud object still present: " << f);
         REQUIRE(f.find("cloudfeature") == std::string::npos);
     }
 
