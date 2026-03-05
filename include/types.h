@@ -40,7 +40,7 @@ struct BranchFileRange
 {
     std::string branch_name;  // branch identifier (e.g., "main", "feature")
     uint64_t term;            // term when this file_id range was allocated
-    FileId max_file_id;      // highest file_id allocated in this branch
+    FileId max_file_id;       // highest file_id allocated in this branch
 
     // For sorting by max_file_id (required for binary search)
     bool operator<(const BranchFileRange &other) const
@@ -63,9 +63,18 @@ using BranchFileMapping = std::vector<BranchFileRange>;
 // Stored in manifest to identify branch and track file ranges
 struct BranchManifestMetadata
 {
-    std::string branch_name;     // unique branch identifier (e.g., "main", "feature")
-    uint64_t term;              // current term for this branch
-    BranchFileMapping file_ranges;  // per-branch file ranges (sorted by max_file_id)
+    // TODO(githubzilla): we may face the issue caused by branch name reuse
+    // after deletion. For example, if a branch "feature" is created in term 1,
+    // then deleted, and another branch with the same name "feature" is created
+    // in term 2, the manifest metadata file name will be the same for both branches,
+    // which may cause confusion in GC and replay. To address this issue, we can
+    // consider adding a unique branch ID (e.g., UUID) to the manifest metadata
+    // to distinguish different branches even if they have the same name.
+    std::string
+        branch_name;  // unique branch identifier (e.g., "main", "feature")
+    uint64_t term;    // current term for this branch
+    BranchFileMapping
+        file_ranges;  // per-branch file ranges (sorted by max_file_id)
 };
 
 namespace fs = std::filesystem;
@@ -82,7 +91,7 @@ struct TableIdent
 
     TableIdent() = default;
     TableIdent(std::string tbl_name, uint32_t id)
-        : tbl_name_(std::move(tbl_name)), partition_id_(id) {};
+        : tbl_name_(std::move(tbl_name)), partition_id_(id){};
     std::string ToString() const;
     static TableIdent FromString(const std::string &str);
     size_t StorePathIndex(size_t num_paths,
