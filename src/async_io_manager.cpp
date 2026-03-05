@@ -4585,6 +4585,13 @@ std::pair<ManifestFilePtr, KvError> StandbyStoreMgr::RefreshManifest(
                    << strerror(-rename_res);
         return {nullptr, ToKvError(rename_res)};
     }
+    int sync_res = Fdatasync(dir_fd.FdPair());
+    if (sync_res < 0)
+    {
+        LOG(ERROR) << "StandbyStoreMgr: fsync directory failed: "
+                   << strerror(-sync_res);
+        return {nullptr, ToKvError(sync_res)};
+    }
 
     return IouringMgr::GetManifest(tbl_id);
 }

@@ -43,6 +43,26 @@ KvError FromErrno(int err)
     return ToKvError(-err);
 }
 
+std::string QuoteForPosixShell(std::string_view value)
+{
+    std::string quoted;
+    quoted.reserve(value.size() + 2);
+    quoted.push_back('\'');
+    for (char c : value)
+    {
+        if (c == '\'')
+        {
+            quoted.append("'\"'\"'");
+        }
+        else
+        {
+            quoted.push_back(c);
+        }
+    }
+    quoted.push_back('\'');
+    return quoted;
+}
+
 }  // namespace
 
 StandbyService::StandbyService(EloqStore *store) : store_(store)
@@ -329,7 +349,7 @@ KvError StandbyService::RunListPartitionsJob(const ListPartitionsJob &job)
         }
         else
         {
-            std::string cmd = "ls -1 -- '" + store_path + "'";
+            std::string cmd = "ls -1 -- " + QuoteForPosixShell(store_path);
             std::vector<const char *> argv = {
                 "ssh", remote_addr_.c_str(), cmd.c_str(), nullptr};
             err = RunCommandCapture(argv, &output);

@@ -15,8 +15,6 @@ namespace fs = std::filesystem;
 namespace chrono = std::chrono;
 using std::chrono_literals::operator""ms;
 using std::chrono_literals::operator""s;
-using test_util::CleanupStore;
-using test_util::cloud_archive_opts;
 using test_util::Key;
 using test_util::Scan;
 using test_util::Value;
