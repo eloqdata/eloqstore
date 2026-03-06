@@ -423,8 +423,15 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
                 uint64_t term = IoMgr()
                                     ->GetFileIdTerm(tbl_ident, max_file_id)
                                     .value_or(IoMgr()->ProcessTerm());
-                KvError sync_err =
-                    cloud_mgr->DownloadFile(tbl_ident, max_file_id, term, true);
+                std::string branch_name;
+                uint64_t branch_term = term;
+                if (!IoMgr()->GetBranchNameAndTerm(
+                        tbl_ident, max_file_id, branch_name, branch_term))
+                {
+                    branch_name = MainBranchName;
+                }
+                KvError sync_err = cloud_mgr->DownloadFile(
+                    tbl_ident, max_file_id, branch_term, branch_name);
                 if (sync_err != KvError::NoError &&
                     sync_err != KvError::NotFound)
                 {
@@ -478,10 +485,11 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
 
     UpdateRoot(tbl_ident, std::move(cow_meta));
 
-    replayer.file_id_term_mapping_->insert_or_assign(
-        IouringMgr::LruFD::kManifest, IoMgr()->ProcessTerm());
-    IoMgr()->SetFileIdTermMapping(entry->tbl_id_,
-                                  replayer.file_id_term_mapping_);
+    if (!replayer.branch_metadata_.file_ranges.empty())
+    {
+        IoMgr()->SetBranchFileMapping(entry->tbl_id_,
+                                      replayer.branch_metadata_.file_ranges);
+    }
 
     return KvError::NoError;
 }

@@ -2265,7 +2265,8 @@ KvError IouringMgr::BranchBaseNameExists(const TableIdent &tbl_id,
     // unsalted base name matches base_name.  This detects both old unsalted
     // branches ("CURRENT_TERM.feature") and new salted ones
     // ("CURRENT_TERM.feature-a3f7b2c1").
-    fs::path dir_path = tbl_id.StorePath(options_->store_path);
+    fs::path dir_path =
+        tbl_id.StorePath(options_->store_path, options_->store_path_lut);
     std::error_code ec;
     if (!fs::exists(dir_path, ec) || !fs::is_directory(dir_path, ec))
     {
@@ -3270,8 +3271,9 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
         if (is_data_file)
         {
             FileId file_id = 0;
+            std::string_view branch_name_out;
             uint64_t term = 0;
-            if (!ParseDataFileSuffix(suffix, file_id, term))
+            if (!ParseDataFileSuffix(suffix, file_id, branch_name_out, term))
             {
                 LOG(ERROR) << "Invalid data file name " << info.path
                            << " encountered during cache restore";
@@ -3920,7 +3922,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
     auto download_to_buffer = [&](uint64_t term) -> KvError
     {
         KvTask *current_task = ThdTask();
-        std::string filename = ToFilename(LruFD::kManifest, term);
+        std::string filename = BranchManifestFileName(GetActiveBranch(), term);
         ObjectStore::DownloadTask download_task(&tbl_id, filename);
         download_task.SetKvTask(current_task);
         download_task.response_data_ =
@@ -3997,9 +3999,15 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
 
         for (const std::string &name : cloud_files)
         {
+            auto [type, suffix] = ParseFileName(name);
+            if (type != FileNameManifest)
+            {
+                continue;
+            }
             uint64_t term = 0;
+            std::string_view branch_name;
             std::optional<uint64_t> ts;
-            if (!ParseManifestFileSuffix(name, term, ts))
+            if (!ParseManifestFileSuffix(suffix, branch_name, term, ts))
             {
                 LOG(FATAL) << "CloudStoreMgr::RefreshManifest: failed to "
                               "parse manifest file suffix: "
@@ -4039,7 +4047,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
         return {nullptr, replay_err};
     }
 
-    std::string tmp_name = ManifestFileName(selected_term) + ".tmp";
+    std::string tmp_name = BranchManifestFileName(GetActiveBranch(), selected_term) + ".tmp";
     uint64_t flags = O_WRONLY | O_CREAT | O_DIRECT | O_NOATIME | O_TRUNC;
     KvError write_err = WriteFile(tbl_id, tmp_name, buffer, flags);
     RecycleBuffer(std::move(buffer));
@@ -4054,7 +4062,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
         return {nullptr, dir_err};
     }
 
-    std::string manifest_name = ManifestFileName(selected_term);
+    std::string manifest_name = BranchManifestFileName(GetActiveBranch(), selected_term);
     int res = Rename(dir_fd.FdPair(), tmp_name.c_str(), manifest_name.c_str());
     if (res < 0)
     {
@@ -4068,7 +4076,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
 
     if (selected_term != process_term)
     {
-        std::string promoted_name = ManifestFileName(process_term);
+        std::string promoted_name = BranchManifestFileName(GetActiveBranch(), process_term);
         res = Rename(
             dir_fd.FdPair(), manifest_name.c_str(), promoted_name.c_str());
         if (res < 0)
@@ -4995,7 +5003,10 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
         return download_task.error_;
     }
 
-    KvError err = WriteFile(tbl_id, filename, download_task.response_data_);
+    KvError err = WriteFile(tbl_id,
+                            filename,
+                            download_task.response_data_,
+                            O_WRONLY | O_CREAT | O_DIRECT | O_NOATIME);
     ReleaseCloudBuffer(std::move(download_task.response_data_));
     CHECK_KV_ERR(err);
 
@@ -5749,7 +5760,7 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
                                  uint64_t flags)
 {
     auto [dir_fd, dir_err] =
-        OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, 0);
+        OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, "", 0);
     if (dir_err != KvError::NoError)
     {
         return dir_err;
