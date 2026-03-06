@@ -580,7 +580,10 @@ int main(int argc, char *argv[])
     }
 
     eloqstore::EloqStore store(options);
-    store.Start();
+    if (auto err = store.Start("main", 0); err != eloqstore::KvError::NoError)
+    {
+        LOG(FATAL) << "Failed to start store: " << eloqstore::ErrorString(err);
+    }
 
     if (FLAGS_workload == "load")
     {

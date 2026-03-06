@@ -23,14 +23,19 @@ namespace eloqstore
 {
 // For Manifest snapshot, the structure is:
 // Header :  [ Checksum(8B) | Root(4B) | TTL Root(4B) | Payload Len(4B) ]
-// Body   :  [ MaxFpId(8B) | DictLen(4B) | dict_bytes(bytes) |
+// Body   :  [ MaxFpId(varint64) | DictLen(varint32) | dict_bytes(bytes) |
 //             mapping_bytes_len(4B) | mapping_tbl(varint64...) |
-//             Serialized FileIdTermMapping bytes(4B|varint64...) ]
-
+//             BranchManifestMetadata:
+//               branch_name_len(4B) | branch_name(bytes) | term(8B) |
+//               BranchFileMapping:
+//                 num_entries(8B) |
+//                 per entry: name_len(4B) | name(bytes) | term(8B) |
+//                 max_file_id(8B) ]
+//
 // For appended Manifest log, the structure is:
 // Header  :  [ Checksum(8B) | Root(4B) | TTL Root(4B) | Payload Len(4B) ]
 // LogBody :  [ mapping_bytes_len(4B) | mapping_bytes(varint64...) |
-//              | Serialized FileIdTermMapping bytes(4B|varint64...) ]
+//              BranchManifestMetadata (same layout as above) ]
 class PageMapper;
 struct MappingSnapshot;
 class IndexPageManager;
@@ -42,16 +47,16 @@ public:
     void UpdateMapping(PageId page_id, FilePageId file_page_id);
     void DeleteMapping(PageId page_id);
     /*
-     * @brief Update the mapping_bytes_len and append file_term_mapping to
-     *         buff_.
+     * @brief Update the mapping_bytes_len and append serialized
+     *        BranchManifestMetadata to buff_.
      */
-    void AppendFileIdTermMapping(std::string_view file_term_mapping);
+    void AppendBranchManifestMetadata(std::string_view branch_metadata);
     std::string_view Snapshot(PageId root_id,
                               PageId ttl_root,
                               const MappingSnapshot *mapping,
                               FilePageId max_fp_id,
                               std::string_view dict_bytes,
-                              std::string_view file_term_mapping);
+                              const BranchManifestMetadata &branch_metadata);
 
     std::string_view Finalize(PageId new_root, PageId ttl_root);
     static bool ValidateChecksum(std::string_view record);

@@ -29,6 +29,8 @@ enum struct KvError : uint8_t
     IoFail,         // Unclassified local I/O error.
     ExpiredTerm,    // Cloud term file indicates stale process term.
     OssInsufficientStorage,  // Object storage out of capacity (HTTP 507).
+    AlreadyExists,  // Branch or table already exists (e.g., HTTP 409 or
+                    // EEXIST).
 
 };
 
@@ -70,6 +72,8 @@ constexpr const char *ErrorString(KvError err)
         return "Expired term";
     case KvError::OssInsufficientStorage:
         return "Object storage insufficient storage";
+    case KvError::AlreadyExists:
+        return "Resource already exists";
     }
     return "Unknown error";
 }

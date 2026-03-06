@@ -149,7 +149,7 @@ void RunStressTest(int argc, char **argv)
     eloqstore::KillPoint::GetInstance().kill_odds_ = FLAGS_kill_odds;
 
     eloqstore::EloqStore store(opts);
-    eloqstore::KvError err = store.Start();
+    eloqstore::KvError err = store.Start("main", 0);
     CHECK(err == eloqstore::KvError::NoError);
 
     std::vector<std::unique_ptr<StressTest>> stress(FLAGS_n_tables);

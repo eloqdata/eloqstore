@@ -29,7 +29,7 @@ public:
     uint64_t file_size_before_corrupted_log_;
     uint64_t file_size_;
     std::string dict_bytes_;
-    std::shared_ptr<FileIdTermMapping> file_id_term_mapping_;
+    BranchManifestMetadata branch_metadata_;  // branch-specific metadata
 
 private:
     KvError ParseNextRecord(ManifestFile *file);

@@ -19,6 +19,7 @@ pub enum KvError {
     IoFail,
     ExpiredTerm,
     OssInsufficientStorage,
+    AlreadyExists,
     Unknown,
 }
 
@@ -42,6 +43,7 @@ impl From<CEloqStoreStatus> for KvError {
             14 => KvError::IoFail,
             15 => KvError::ExpiredTerm,
             16 => KvError::OssInsufficientStorage,
+            17 => KvError::AlreadyExists,
             _ => KvError::Unknown,
         }
     }
@@ -67,6 +69,7 @@ impl std::fmt::Display for KvError {
             KvError::IoFail => write!(f, "I/O failure"),
             KvError::ExpiredTerm => write!(f, "expired term"),
             KvError::OssInsufficientStorage => write!(f, "object storage insufficient storage"),
+            KvError::AlreadyExists => write!(f, "resource already exists"),
             KvError::Unknown => write!(f, "unknown error"),
         }
     }
@@ -95,6 +98,7 @@ impl std::convert::From<KvError> for std::io::Error {
             KvError::IoFail => Self::new(Other, "I/O failure"),
             KvError::ExpiredTerm => Self::new(Other, "expired term"),
             KvError::OssInsufficientStorage => Self::new(StorageFull, "object storage insufficient storage"),
+            KvError::AlreadyExists => Self::new(AlreadyExists, "resource already exists"),
             KvError::Unknown => Self::new(Other, "unknown error"),
         }
     }

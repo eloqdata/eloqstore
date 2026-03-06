@@ -103,10 +103,6 @@ protected:
     void FlushAppendWrites();
     std::pair<FileId, uint32_t> ConvFilePageId(FilePageId file_page_id) const;
 
-    // Track whether FileIdTermMapping changed in this write task.
-    // If it changed, we must force a full snapshot (WAL append doesn't include
-    // FileIdTermMapping).
-    bool file_id_term_mapping_dirty_{false};
     std::optional<FileId> last_append_file_id_;
     WriteBufferAggregator append_aggregator_{0};
     UploadState upload_state_;

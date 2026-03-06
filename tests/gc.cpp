@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
@@ -29,6 +30,7 @@ const eloqstore::KvOptions cloud_gc_opts = {
     .local_space_limit = 200 << 20,  // 200MB
     .store_path = {"/tmp/test-gc-cloud"},
     .cloud_store_path = "eloqstore/gc-test",
+    .cloud_endpoint = "http://store-1:9000",
     .pages_per_file_shift = 8,  // 1MB per datafile
     .data_append_mode = true,
 };
@@ -43,6 +45,7 @@ const eloqstore::KvOptions archive_gc_opts = {
     .local_space_limit = 200 << 20,  // 200MB
     .store_path = {"/tmp/test-gc-archive"},
     .cloud_store_path = "eloqstore/gc-archive-test",
+    .cloud_endpoint = "http://store-1:9000",
     .pages_per_file_shift = 8,
     .data_append_mode = true,
 };
@@ -80,13 +83,17 @@ bool CheckCloudPartitionExists(const eloqstore::KvOptions &opts,
     {
         LOG(INFO) << "CheckCloudPartitionExists, cloud_file: " << file;
     }
-    // return !cloud_files.empty();
-    // Exclude CURRENT_TERM file, because it never be deleted during GC.
-    if (cloud_files.size() == 1)
-    {
-        REQUIRE(cloud_files[0] == eloqstore::CurrentTermFileName);
-    }
-    return cloud_files.size() > 1;
+    // Exclude CURRENT_TERM.<branch> files, because they are never deleted
+    // during GC.
+    std::string_view branch_name;
+    cloud_files.erase(
+        std::remove_if(
+            cloud_files.begin(),
+            cloud_files.end(),
+            [&branch_name](const std::string &file)
+            { return eloqstore::ParseCurrentTermFilename(file, branch_name); }),
+        cloud_files.end());
+    return !cloud_files.empty();
 }
 
 // Helper function to wait for GC to complete

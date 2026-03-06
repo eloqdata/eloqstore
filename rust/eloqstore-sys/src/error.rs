@@ -20,6 +20,7 @@ pub enum KvError {
     IoFail = 14,
     ExpiredTerm = 15,
     OssInsufficientStorage = 16,
+    AlreadyExists = 17,
     Unknown = 255,
 }
 
@@ -43,6 +44,7 @@ impl KvError {
             14 => KvError::IoFail,
             15 => KvError::ExpiredTerm,
             16 => KvError::OssInsufficientStorage,
+            17 => KvError::AlreadyExists,
             _ => {
                 #[cfg(debug_assertions)]
                 eprintln!("Unknown error code from C API: {}", err);
@@ -79,6 +81,7 @@ impl std::fmt::Display for KvError {
             KvError::NoPermission => "Operation not permitted",
             KvError::ExpiredTerm => "Expired term",
             KvError::OssInsufficientStorage => "Object storage insufficient storage",
+            KvError::AlreadyExists => "Resource already exists",
             KvError::Unknown => "Unknown error",
         };
         write!(f, "{}", msg)
