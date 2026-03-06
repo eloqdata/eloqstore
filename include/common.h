@@ -184,6 +184,34 @@ inline bool IsValidBranchName(std::string_view branch_name)
     return true;  // All characters valid and not empty
 }
 
+// UnsaltBranchName: strip the 8-hex salt suffix added by GlobalCreateBranch.
+// "feature-a3f7b2c1" -> "feature"
+// "my-feature-a3f7b2c1" -> "my-feature"
+// "feature" (no salt) -> "feature"  (backward-compatible with old branches)
+inline std::string_view UnsaltBranchName(std::string_view name)
+{
+    // A salted name has the form "<base>-<8 lowercase hex digits>".
+    // Minimum: 1 char base + '-' + 8 hex = 10 chars.
+    if (name.size() < 10)
+    {
+        return name;
+    }
+    auto suffix = name.substr(name.size() - 9);  // "-xxxxxxxx"
+    if (suffix[0] != '-')
+    {
+        return name;
+    }
+    for (size_t i = 1; i <= 8; ++i)
+    {
+        char c = suffix[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')))
+        {
+            return name;
+        }
+    }
+    return name.substr(0, name.size() - 9);
+}
+
 // ParseDataFileSuffix: parses suffix from data file name
 // Input suffix formats:
 //   "123_main_5" -> file_id=123, branch_name="main", term=5

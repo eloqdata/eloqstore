@@ -513,6 +513,11 @@ public:
     const std::string& GetBranchName() const { return branch_name_; }
     const std::string& GetParentBranch() const { return parent_branch_; }
 
+    // The salted internal branch name chosen by HandleGlobalCreateBranchRequest.
+    // Callers should use this after a successful ExecSync to refer to the new
+    // branch in subsequent operations (delete, read, etc.).
+    std::string result_branch;
+
 private:
     std::string branch_name_;
     std::string parent_branch_;

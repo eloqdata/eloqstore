@@ -134,6 +134,12 @@ public:
     // canonical "branch fully created" marker.
     virtual KvError BranchCurrentTermExists(const TableIdent &tbl_id,
                                             std::string_view branch_name) = 0;
+    // Returns NoError if any branch whose unsalted base name equals base_name
+    // exists (i.e. a CURRENT_TERM.<base_name>-<salt> or CURRENT_TERM.<base_name>
+    // file is present).  Returns NotFound if none.
+    // Used by CreateBranch to detect same-name reuse after deletion.
+    virtual KvError BranchBaseNameExists(const TableIdent &tbl_id,
+                                         std::string_view base_name) = 0;
     virtual KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                            std::string_view branch_name,
                                            uint64_t term) = 0;
@@ -440,7 +446,9 @@ public:
                                  std::string_view branch_name,
                                  uint64_t term) override;
     KvError BranchCurrentTermExists(const TableIdent &tbl_id,
-                                    std::string_view branch_name) override;
+                                     std::string_view branch_name) override;
+    KvError BranchBaseNameExists(const TableIdent &tbl_id,
+                                 std::string_view base_name) override;
     KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                    std::string_view branch_name,
                                    uint64_t term) override;
@@ -851,7 +859,9 @@ public:
                                  std::string_view branch_name,
                                  uint64_t term) override;
     KvError BranchCurrentTermExists(const TableIdent &tbl_id,
-                                    std::string_view branch_name) override;
+                                     std::string_view branch_name) override;
+    KvError BranchBaseNameExists(const TableIdent &tbl_id,
+                                 std::string_view base_name) override;
     KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                    std::string_view branch_name,
                                    uint64_t term) override;
@@ -1164,7 +1174,9 @@ public:
                                  std::string_view branch_name,
                                  uint64_t term) override;
     KvError BranchCurrentTermExists(const TableIdent &tbl_id,
-                                    std::string_view branch_name) override;
+                                     std::string_view branch_name) override;
+    KvError BranchBaseNameExists(const TableIdent &tbl_id,
+                                 std::string_view base_name) override;
     KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                    std::string_view branch_name,
                                    uint64_t term) override;

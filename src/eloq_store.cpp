@@ -6,6 +6,8 @@
 #include <atomic>
 #include <cassert>
 #include <cstddef>
+#include <cstdio>
+#include <chrono>
 #include <filesystem>
 #include <limits>
 #include <memory>
@@ -768,7 +770,30 @@ void EloqStore::HandleGlobalCreateBranchRequest(GlobalCreateBranchRequest *req)
     req->pending_.store(0, std::memory_order_relaxed);
     req->branch_reqs_.clear();
 
-    LOG(INFO) << "Creating global branch " << req->GetBranchName();
+    // Early validation and salt generation.
+    // The per-partition CreateBranch will normalize again, but we do it here
+    // to validate up front and to build the salted internal name.
+    std::string normalized = NormalizeBranchName(req->branch_name_);
+    if (normalized.empty())
+    {
+        req->SetDone(KvError::InvalidArgs);
+        return;
+    }
+
+    // Generate an 8-hex-char salt from the lower 32 bits of the nanosecond
+    // timestamp.  This makes the internal filename unique even when the user
+    // reuses a branch name after deletion.
+    auto now_ns = std::chrono::high_resolution_clock::now()
+                      .time_since_epoch()
+                      .count();
+    char salt_buf[9];
+    std::snprintf(salt_buf, sizeof(salt_buf), "%08x",
+                  static_cast<uint32_t>(now_ns));
+    std::string internal_name = normalized + "-" + salt_buf;
+    req->result_branch = internal_name;
+
+    LOG(INFO) << "Creating global branch " << req->GetBranchName()
+              << " (internal: " << internal_name << ")";
 
     // Enumerate all partitions — mirrors HandleGlobalArchiveRequest.
     std::vector<TableIdent> all_partitions;
@@ -913,7 +938,7 @@ void EloqStore::HandleGlobalCreateBranchRequest(GlobalCreateBranchRequest *req)
     {
         auto branch_req = std::make_unique<CreateBranchRequest>();
         branch_req->SetTableId(partition);
-        branch_req->SetArgs(req->branch_name_);
+        branch_req->SetArgs(internal_name);
         CreateBranchRequest *ptr = branch_req.get();
         req->branch_reqs_.push_back(std::move(branch_req));
         if (!ExecAsyn(ptr, 0, on_branch_done))

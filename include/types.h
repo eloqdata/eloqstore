@@ -63,15 +63,8 @@ using BranchFileMapping = std::vector<BranchFileRange>;
 // Stored in manifest to identify branch and track file ranges
 struct BranchManifestMetadata
 {
-    // TODO(githubzilla): we may face the issue caused by branch name reuse
-    // after deletion. For example, if a branch "feature" is created in term 1,
-    // then deleted, and another branch with the same name "feature" is created
-    // in term 2, the manifest metadata file name will be the same for both branches,
-    // which may cause confusion in GC and replay. To address this issue, we can
-    // consider adding a unique branch ID (e.g., UUID) to the manifest metadata
-    // to distinguish different branches even if they have the same name.
     std::string
-        branch_name;  // unique branch identifier (e.g., "main", "feature")
+        branch_name;  // unique branch identifier (e.g., "main", "feature-a3f7b2c1")
     uint64_t term;    // current term for this branch
     BranchFileMapping
         file_ranges;  // per-branch file ranges (sorted by max_file_id)

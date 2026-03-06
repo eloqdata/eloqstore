@@ -2253,6 +2253,44 @@ KvError IouringMgr::BranchCurrentTermExists(const TableIdent &tbl_id,
     return ToKvError(res);         // I/O error
 }
 
+KvError IouringMgr::BranchBaseNameExists(const TableIdent &tbl_id,
+                                          std::string_view base_name)
+{
+    // Scan the partition directory for any CURRENT_TERM.<name> file whose
+    // unsalted base name matches base_name.  This detects both old unsalted
+    // branches ("CURRENT_TERM.feature") and new salted ones
+    // ("CURRENT_TERM.feature-a3f7b2c1").
+    fs::path dir_path = tbl_id.StorePath(options_->store_path);
+    std::error_code ec;
+    if (!fs::exists(dir_path, ec) || !fs::is_directory(dir_path, ec))
+    {
+        return KvError::NotFound;
+    }
+
+    fs::directory_iterator it(dir_path, ec);
+    if (ec)
+    {
+        LOG(WARNING) << "BranchBaseNameExists: failed to iterate "
+                     << dir_path << ": " << ec.message();
+        return KvError::NotFound;
+    }
+
+    for (; it != fs::directory_iterator(); ++it)
+    {
+        const std::string filename = it->path().filename().string();
+        std::string_view found_branch;
+        if (!ParseCurrentTermFilename(filename, found_branch))
+        {
+            continue;
+        }
+        if (UnsaltBranchName(found_branch) == base_name)
+        {
+            return KvError::NoError;
+        }
+    }
+    return KvError::NotFound;
+}
+
 KvError IouringMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                             std::string_view branch_name,
                                             uint64_t term)
@@ -4080,6 +4118,54 @@ KvError CloudStoreMgr::BranchCurrentTermExists(const TableIdent &tbl_id,
     return download_task.error_;   // I/O error
 }
 
+KvError CloudStoreMgr::BranchBaseNameExists(const TableIdent &tbl_id,
+                                             std::string_view base_name)
+{
+    // Fast path: check local cache by scanning for any CURRENT_TERM file whose
+    // unsalted base name matches.
+    KvError local = IouringMgr::BranchBaseNameExists(tbl_id, base_name);
+    if (local != KvError::NotFound)
+    {
+        return local;  // found locally, or a hard I/O error
+    }
+
+    // Not cached locally — list cloud objects with the expected prefix.
+    // A salted branch produces "CURRENT_TERM.<base_name>-<8hex>"; an unsalted
+    // legacy branch produces "CURRENT_TERM.<base_name>".  We list with the
+    // prefix "CURRENT_TERM.<base_name>" which covers both cases.
+    std::string prefix = tbl_id.ToString() + "/" +
+                         std::string(CurrentTermFileName) +
+                         std::string(1, CurrentTermFileNameSeparator) +
+                         std::string(base_name);
+
+    KvTask *current_task = ThdTask();
+    ObjectStore::ListTask list_task(prefix, false);
+    list_task.SetRecursive(false);
+    list_task.SetKvTask(current_task);
+    AcquireCloudSlot(current_task);
+    obj_store_.SubmitTask(&list_task, shard);
+    current_task->WaitIo();
+
+    if (list_task.error_ != KvError::NoError)
+    {
+        LOG(WARNING) << "BranchBaseNameExists: list failed for prefix "
+                     << prefix << ": " << ErrorString(list_task.error_);
+        return KvError::NotFound;
+    }
+
+    std::vector<std::string> found_files;
+    std::string next_token;
+    if (!obj_store_.ParseListObjectsResponse(list_task.response_data_.view(),
+                                              list_task.json_data_,
+                                              &found_files,
+                                              nullptr,
+                                              &next_token))
+    {
+        return KvError::NotFound;
+    }
+    return found_files.empty() ? KvError::NotFound : KvError::NoError;
+}
+
 KvError CloudStoreMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                                std::string_view branch_name,
                                                uint64_t term)
@@ -5236,6 +5322,25 @@ KvError MemStoreMgr::BranchCurrentTermExists(const TableIdent &tbl_id,
     return it->second.count(std::string(branch_name)) > 0
                ? KvError::NoError
                : KvError::NotFound;
+}
+
+KvError MemStoreMgr::BranchBaseNameExists(const TableIdent &tbl_id,
+                                           std::string_view base_name)
+{
+    std::lock_guard lock(manifest_mutex_);
+    auto it = branch_terms_.find(tbl_id);
+    if (it == branch_terms_.end())
+    {
+        return KvError::NotFound;
+    }
+    for (const auto &[key, _] : it->second)
+    {
+        if (UnsaltBranchName(key) == base_name)
+        {
+            return KvError::NoError;
+        }
+    }
+    return KvError::NotFound;
 }
 
 KvError MemStoreMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
