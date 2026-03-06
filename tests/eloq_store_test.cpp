@@ -157,7 +157,7 @@ TEST_CASE("EloqStore Start validates local store paths", "[eloq_store]")
     // test safe path
     {
         eloqstore::EloqStore store(options);
-        auto err = store.Start();
+        auto err = store.Start("main", 0);
         REQUIRE(err == eloqstore::KvError::NoError);
         store.Stop();
     }
@@ -168,7 +168,7 @@ TEST_CASE("EloqStore Start validates local store paths", "[eloq_store]")
     options.store_path = {nonexistent_path};
     {
         eloqstore::EloqStore store(options);
-        auto err = store.Start();
+        auto err = store.Start("main", 0);
         REQUIRE(err == eloqstore::KvError::NoError);
         REQUIRE(fs::exists(nonexistent_path));
         REQUIRE(fs::is_directory(nonexistent_path));
@@ -182,7 +182,7 @@ TEST_CASE("EloqStore Start validates local store paths", "[eloq_store]")
     options.store_path = {file_path};
     {
         eloqstore::EloqStore store(options);
-        auto err = store.Start();
+        auto err = store.Start("main", 0);
         REQUIRE(err == eloqstore::KvError::InvalidArgs);
         store.Stop();
     }
@@ -196,7 +196,7 @@ TEST_CASE("EloqStore Start validates local store paths", "[eloq_store]")
     options.store_path = {test_dir_with_file};
     {
         eloqstore::EloqStore store(options);
-        auto err = store.Start();
+        auto err = store.Start("main", 0);
         REQUIRE(err == eloqstore::KvError::InvalidArgs);
         store.Stop();
     }
@@ -215,7 +215,7 @@ TEST_CASE("EloqStore basic lifecycle management", "[eloq_store]")
 
     REQUIRE(store.IsStopped());
 
-    auto err = store.Start();
+    auto err = store.Start("main", 0);
     REQUIRE(err == eloqstore::KvError::NoError);
     REQUIRE_FALSE(store.IsStopped());
 
@@ -233,12 +233,12 @@ TEST_CASE("EloqStore handles multiple start calls", "[eloq_store]")
     eloqstore::EloqStore store(options);
 
     // first start
-    auto err1 = store.Start();
+    auto err1 = store.Start("main", 0);
     REQUIRE(err1 == eloqstore::KvError::NoError);
     REQUIRE_FALSE(store.IsStopped());
 
     // the second should be safe
-    auto err2 = store.Start();
+    auto err2 = store.Start("main", 0);
 
     store.Stop();
     CleanupTestDir(test_dir);
@@ -251,7 +251,7 @@ TEST_CASE("EloqStore handles multiple stop calls", "[eloq_store]")
     auto options = CreateValidOptions(test_dir);
     eloqstore::EloqStore store(options);
 
-    auto err = store.Start();
+    auto err = store.Start("main", 0);
     REQUIRE(err == eloqstore::KvError::NoError);
 
     // first stop

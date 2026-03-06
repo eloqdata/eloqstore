@@ -11,22 +11,23 @@ TEST_CASE("ParseFileName - basic parsing", "[filename]")
     REQUIRE(type1 == "data");
     REQUIRE(suffix1 == "123");
 
-    auto [type2, suffix2] = eloqstore::ParseFileName("data_123_5");
+    auto [type2, suffix2] = eloqstore::ParseFileName("data_123_main_5");
     REQUIRE(type2 == "data");
-    REQUIRE(suffix2 == "123_5");
+    REQUIRE(suffix2 == "123_main_5");
 
     // Test manifest files
     auto [type3, suffix3] = eloqstore::ParseFileName("manifest");
     REQUIRE(type3 == "manifest");
     REQUIRE(suffix3 == "");
 
-    auto [type4, suffix4] = eloqstore::ParseFileName("manifest_5");
+    auto [type4, suffix4] = eloqstore::ParseFileName("manifest_main_5");
     REQUIRE(type4 == "manifest");
-    REQUIRE(suffix4 == "5");
+    REQUIRE(suffix4 == "main_5");
 
-    auto [type5, suffix5] = eloqstore::ParseFileName("manifest_5_123456789");
+    auto [type5, suffix5] =
+        eloqstore::ParseFileName("manifest_main_5_123456789");
     REQUIRE(type5 == "manifest");
-    REQUIRE(suffix5 == "5_123456789");
+    REQUIRE(suffix5 == "main_5_123456789");
 }
 
 TEST_CASE("ParseFileName - edge cases", "[filename]")
@@ -47,253 +48,278 @@ TEST_CASE("ParseFileName - edge cases", "[filename]")
     REQUIRE(suffix3 == "1_2_3");
 }
 
-TEST_CASE("ParseDataFileSuffix - legacy format rejected", "[filename]")
+TEST_CASE("ParseDataFileSuffix - old format rejected", "[filename]")
 {
-    // Legacy format: just file_id (no term) is no longer supported
+    // Old format (no branch): just file_id is rejected
     eloqstore::FileId file_id = 0;
+    std::string_view branch;
     uint64_t term = 0;
-    REQUIRE_FALSE(eloqstore::ParseDataFileSuffix("123", file_id, term));
-    REQUIRE_FALSE(eloqstore::ParseDataFileSuffix("0", file_id, term));
-    REQUIRE_FALSE(eloqstore::ParseDataFileSuffix("999999", file_id, term));
+    REQUIRE_FALSE(eloqstore::ParseDataFileSuffix("123", file_id, branch, term));
+    REQUIRE_FALSE(eloqstore::ParseDataFileSuffix("0", file_id, branch, term));
+
+    // Old two-part format file_id_term (no branch) is also rejected
+    REQUIRE_FALSE(
+        eloqstore::ParseDataFileSuffix("123_5", file_id, branch, term));
+    REQUIRE_FALSE(eloqstore::ParseDataFileSuffix("0_1", file_id, branch, term));
 }
 
-TEST_CASE("ParseDataFileSuffix - term-aware format", "[filename]")
+TEST_CASE("ParseDataFileSuffix - branch-aware format", "[filename]")
 {
-    // Term-aware format: file_id_term
+    // Branch-aware format: file_id_branch_term
     eloqstore::FileId file_id = 0;
+    std::string_view branch;
     uint64_t term = 0;
-    REQUIRE(eloqstore::ParseDataFileSuffix("123_5", file_id, term));
+    REQUIRE(
+        eloqstore::ParseDataFileSuffix("123_main_5", file_id, branch, term));
     REQUIRE(file_id == 123);
+    REQUIRE(branch == "main");
     REQUIRE(term == 5);
 
     eloqstore::FileId file_id2 = 0;
+    std::string_view branch2;
     uint64_t term2 = 0;
-    REQUIRE(eloqstore::ParseDataFileSuffix("0_1", file_id2, term2));
+    REQUIRE(eloqstore::ParseDataFileSuffix(
+        "0_feature_1", file_id2, branch2, term2));
     REQUIRE(file_id2 == 0);
+    REQUIRE(branch2 == "feature");
     REQUIRE(term2 == 1);
 
     eloqstore::FileId file_id3 = 0;
+    std::string_view branch3;
     uint64_t term3 = 0;
-    REQUIRE(eloqstore::ParseDataFileSuffix("999_12345", file_id3, term3));
+    REQUIRE(eloqstore::ParseDataFileSuffix(
+        "999_dev-branch_12345", file_id3, branch3, term3));
     REQUIRE(file_id3 == 999);
+    REQUIRE(branch3 == "dev-branch");
     REQUIRE(term3 == 12345);
 }
 
 TEST_CASE("ParseDataFileSuffix - edge cases", "[filename]")
 {
+    eloqstore::FileId file_id = 0;
+    std::string_view branch;
+    uint64_t term = 0;
+
     // Empty suffix
-    eloqstore::FileId file_id1 = 0;
-    uint64_t term1 = 0;
-    REQUIRE_FALSE(eloqstore::ParseDataFileSuffix("", file_id1, term1));
+    REQUIRE_FALSE(eloqstore::ParseDataFileSuffix("", file_id, branch, term));
 
-    // Invalid format (non-numeric)
-    eloqstore::FileId file_id2 = 0;
-    uint64_t term2 = 0;
-    REQUIRE_FALSE(eloqstore::ParseDataFileSuffix("abc", file_id2, term2));
+    // Non-numeric file_id
+    REQUIRE_FALSE(
+        eloqstore::ParseDataFileSuffix("abc_main_5", file_id, branch, term));
 
-    // Invalid format (non-numeric term)
-    eloqstore::FileId file_id3 = 0;
-    uint64_t term3 = 0;
-    REQUIRE_FALSE(eloqstore::ParseDataFileSuffix("123_abc", file_id3, term3));
+    // Non-numeric term
+    REQUIRE_FALSE(
+        eloqstore::ParseDataFileSuffix("123_main_abc", file_id, branch, term));
 
-    // Invalid format (non-numeric file_id)
-    eloqstore::FileId file_id4 = 0;
-    uint64_t term4 = 0;
-    REQUIRE_FALSE(eloqstore::ParseDataFileSuffix("abc_5", file_id4, term4));
+    // Missing term (only two parts)
+    REQUIRE_FALSE(
+        eloqstore::ParseDataFileSuffix("123_main", file_id, branch, term));
 }
 
-TEST_CASE("ParseManifestFileSuffix - legacy format rejected", "[filename]")
+TEST_CASE("ParseManifestFileSuffix - old format rejected", "[filename]")
 {
-    // Legacy format: empty suffix (just "manifest") is no longer supported
+    std::string_view branch;
     uint64_t term = 0;
     std::optional<std::string> timestamp;
-    REQUIRE_FALSE(eloqstore::ParseManifestFileSuffix("", term, timestamp));
+
+    // Empty suffix
+    REQUIRE_FALSE(
+        eloqstore::ParseManifestFileSuffix("", branch, term, timestamp));
+
+    // Old format: purely numeric term with no branch (e.g. "5", "12345")
+    REQUIRE_FALSE(
+        eloqstore::ParseManifestFileSuffix("5", branch, term, timestamp));
+    REQUIRE_FALSE(
+        eloqstore::ParseManifestFileSuffix("12345", branch, term, timestamp));
+
+    // Old archive format: term_ts with no branch (e.g. "5_123456789")
+    REQUIRE_FALSE(eloqstore::ParseManifestFileSuffix(
+        "5_123456789", branch, term, timestamp));
 }
 
-TEST_CASE("ParseManifestFileSuffix - term-only format", "[filename]")
+TEST_CASE("ParseManifestFileSuffix - branch-aware manifest format",
+          "[filename]")
 {
-    // Term-only format: "manifest_<term>"
+    // Branch-aware format: branch_term
+    std::string_view branch;
     uint64_t term = 0;
     std::optional<std::string> timestamp;
-    REQUIRE(eloqstore::ParseManifestFileSuffix("5", term, timestamp));
+
+    REQUIRE(
+        eloqstore::ParseManifestFileSuffix("main_5", branch, term, timestamp));
+    REQUIRE(branch == "main");
     REQUIRE(term == 5);
     REQUIRE(!timestamp.has_value());
 
+    std::string_view branch2;
     uint64_t term2 = 0;
     std::optional<std::string> timestamp2;
-    REQUIRE(eloqstore::ParseManifestFileSuffix("0", term2, timestamp2));
+    REQUIRE(eloqstore::ParseManifestFileSuffix(
+        "feature_0", branch2, term2, timestamp2));
+    REQUIRE(branch2 == "feature");
     REQUIRE(term2 == 0);
     REQUIRE(!timestamp2.has_value());
 
+    std::string_view branch3;
     uint64_t term3 = 0;
     std::optional<std::string> timestamp3;
-    REQUIRE(eloqstore::ParseManifestFileSuffix("12345", term3, timestamp3));
+    REQUIRE(eloqstore::ParseManifestFileSuffix(
+        "dev-branch_12345", branch3, term3, timestamp3));
+    REQUIRE(branch3 == "dev-branch");
     REQUIRE(term3 == 12345);
     REQUIRE(!timestamp3.has_value());
 }
 
-TEST_CASE("ParseManifestFileSuffix - term-aware archive format", "[filename]")
+TEST_CASE("ParseManifestFileSuffix - branch-aware archive format", "[filename]")
 {
-    // Term-aware archive format: "manifest_<term>_<timestamp>"
+    // Branch-aware archive format: branch_term_timestamp
+    std::string_view branch;
     uint64_t term = 0;
     std::optional<std::string> timestamp;
-    REQUIRE(eloqstore::ParseManifestFileSuffix("5_123456789", term, timestamp));
+
+    REQUIRE(eloqstore::ParseManifestFileSuffix(
+        "main_5_123456789", branch, term, timestamp));
+    REQUIRE(branch == "main");
     REQUIRE(term == 5);
     REQUIRE(timestamp.has_value());
     REQUIRE(timestamp.value() == "123456789");
 
+    std::string_view branch2;
     uint64_t term2 = 0;
     std::optional<std::string> timestamp2;
-    REQUIRE(
-        eloqstore::ParseManifestFileSuffix("0_999999999", term2, timestamp2));
+    REQUIRE(eloqstore::ParseManifestFileSuffix(
+        "feature_0_999999999", branch2, term2, timestamp2));
+    REQUIRE(branch2 == "feature");
     REQUIRE(term2 == 0);
     REQUIRE(timestamp2.has_value());
     REQUIRE(timestamp2.value() == "999999999");
-
-    uint64_t term3 = 0;
-    std::optional<std::string> timestamp3;
-    REQUIRE(
-        eloqstore::ParseManifestFileSuffix("123_456789012", term3, timestamp3));
-    REQUIRE(term3 == 123);
-    REQUIRE(timestamp3.has_value());
-    REQUIRE(timestamp3.value() == "456789012");
 }
 
 TEST_CASE("ParseManifestFileSuffix - edge cases", "[filename]")
 {
-    // Invalid format (non-numeric term)
-    uint64_t term1 = 0;
-    std::optional<std::string> timestamp1;
-    REQUIRE_FALSE(eloqstore::ParseManifestFileSuffix("abc", term1, timestamp1));
+    std::string_view branch;
+    uint64_t term = 0;
+    std::optional<std::string> timestamp;
 
-    // Invalid format (non-numeric term in archive)
-    uint64_t term2 = 0;
-    std::optional<std::string> timestamp2;
+    // Invalid branch name (starts with digit — would be mistaken for old
+    // format)
     REQUIRE_FALSE(
-        eloqstore::ParseManifestFileSuffix("abc_123456789", term2, timestamp2));
+        eloqstore::ParseManifestFileSuffix("123_5", branch, term, timestamp));
 
-    // Tag can be non-numeric.
-    uint64_t term3 = 0;
-    std::optional<std::string> timestamp3;
-    REQUIRE(eloqstore::ParseManifestFileSuffix("5_abc", term3, timestamp3));
-    REQUIRE(term3 == 5);
-    REQUIRE(timestamp3.has_value());
-    REQUIRE(timestamp3.value() == "abc");
+    // Non-numeric term
+    REQUIRE_FALSE(eloqstore::ParseManifestFileSuffix(
+        "main_abc", branch, term, timestamp));
+
+    // Tag can be non-numeric (HEAD's string tags).
+    REQUIRE(eloqstore::ParseManifestFileSuffix(
+        "main_5_abc", branch, term, timestamp));
+    REQUIRE(branch == "main");
+    REQUIRE(term == 5);
+    REQUIRE(timestamp.has_value());
+    REQUIRE(timestamp.value() == "abc");
 }
 
-TEST_CASE("DataFileName - term-aware format", "[filename]")
+TEST_CASE("BranchDataFileName - generate branch-aware data filenames",
+          "[filename]")
 {
-    // Term-aware format: data_<id>_<term>
-    std::string name1 = eloqstore::DataFileName(123, 5);
-    REQUIRE(name1 == "data_123_5");
-
-    std::string name2 = eloqstore::DataFileName(0, 1);
-    REQUIRE(name2 == "data_0_1");
-
-    std::string name3 = eloqstore::DataFileName(999, 12345);
-    REQUIRE(name3 == "data_999_12345");
-
-    // term=0 should also include explicit suffix
-    std::string name4 = eloqstore::DataFileName(123, 0);
-    REQUIRE(name4 == "data_123_0");
+    REQUIRE(eloqstore::BranchDataFileName(123, "main", 5) == "data_123_main_5");
+    REQUIRE(eloqstore::BranchDataFileName(0, "feature", 1) ==
+            "data_0_feature_1");
+    REQUIRE(eloqstore::BranchDataFileName(999, "dev-branch", 12345) ==
+            "data_999_dev-branch_12345");
+    REQUIRE(eloqstore::BranchDataFileName(123, "main", 0) == "data_123_main_0");
 }
 
-TEST_CASE("ManifestFileName - term-aware format", "[filename]")
+TEST_CASE("BranchManifestFileName - generate branch-aware manifest filenames",
+          "[filename]")
 {
-    // Term-aware format: manifest_<term>
-    std::string name1 = eloqstore::ManifestFileName(5);
-    REQUIRE(name1 == "manifest_5");
-
-    std::string name2 = eloqstore::ManifestFileName(12345);
-    REQUIRE(name2 == "manifest_12345");
-
-    std::string name3 = eloqstore::ManifestFileName(1);
-    REQUIRE(name3 == "manifest_1");
-
-    // term=0 should also include explicit suffix
-    std::string name4 = eloqstore::ManifestFileName(0);
-    REQUIRE(name4 == "manifest_0");
+    REQUIRE(eloqstore::BranchManifestFileName("main", 5) == "manifest_main_5");
+    REQUIRE(eloqstore::BranchManifestFileName("feature", 0) ==
+            "manifest_feature_0");
+    REQUIRE(eloqstore::BranchManifestFileName("dev-branch", 12345) ==
+            "manifest_dev-branch_12345");
 }
 
-TEST_CASE("ArchiveName - term-aware format", "[filename]")
+TEST_CASE("BranchArchiveName - generate branch-aware archive filenames",
+          "[filename]")
 {
-    // Term-aware format: manifest_<term>_<ts>
-    std::string name1 = eloqstore::ArchiveName(5, 123456789);
-    REQUIRE(name1 == "manifest_5_123456789");
-
-    std::string name2 = eloqstore::ArchiveName(0, 999999999);
-    REQUIRE(name2 == "manifest_0_999999999");
-
-    std::string name3 = eloqstore::ArchiveName(123, 456789012);
-    REQUIRE(name3 == "manifest_123_456789012");
+    REQUIRE(eloqstore::BranchArchiveName("main", 5, "123456789") ==
+            "manifest_main_5_123456789");
+    REQUIRE(eloqstore::BranchArchiveName("feature", 0, "999999999") ==
+            "manifest_feature_0_999999999");
+    REQUIRE(eloqstore::BranchArchiveName("dev-branch", 123, "456789012") ==
+            "manifest_dev-branch_123_456789012");
 }
 
-TEST_CASE("Roundtrip - DataFileName generate and parse", "[filename]")
+TEST_CASE("Roundtrip - BranchDataFileName generate and parse", "[filename]")
 {
-    // Test legacy format roundtrip
-    std::string name = eloqstore::DataFileName(123, 0);
+    std::string name = eloqstore::BranchDataFileName(123, "main", 5);
     auto [type, suffix] = eloqstore::ParseFileName(name);
     REQUIRE(type == "data");
-    eloqstore::FileId file_id = 0;
-    uint64_t term = 0;
-    REQUIRE(eloqstore::ParseDataFileSuffix(suffix, file_id, term));
-    REQUIRE(file_id == 123);
-    REQUIRE(term == 0);  // No term in legacy format
 
-    // Test term-aware format roundtrip
-    std::string name2 = eloqstore::DataFileName(456, 7);
+    eloqstore::FileId file_id = 0;
+    std::string_view branch;
+    uint64_t term = 0;
+    REQUIRE(eloqstore::ParseDataFileSuffix(suffix, file_id, branch, term));
+    REQUIRE(file_id == 123);
+    REQUIRE(branch == "main");
+    REQUIRE(term == 5);
+
+    // Different branch and term
+    std::string name2 = eloqstore::BranchDataFileName(456, "feature", 7);
     auto [type2, suffix2] = eloqstore::ParseFileName(name2);
     REQUIRE(type2 == "data");
     eloqstore::FileId file_id2 = 0;
+    std::string_view branch2;
     uint64_t term2 = 0;
-    REQUIRE(eloqstore::ParseDataFileSuffix(suffix2, file_id2, term2));
+    REQUIRE(eloqstore::ParseDataFileSuffix(suffix2, file_id2, branch2, term2));
     REQUIRE(file_id2 == 456);
+    REQUIRE(branch2 == "feature");
     REQUIRE(term2 == 7);
 }
 
-TEST_CASE("Roundtrip - ManifestFileName generate and parse", "[filename]")
+TEST_CASE("Roundtrip - BranchManifestFileName generate and parse", "[filename]")
 {
-    // Test term=0 format roundtrip
-    std::string name = eloqstore::ManifestFileName(0);
+    std::string name = eloqstore::BranchManifestFileName("main", 5);
     auto [type, suffix] = eloqstore::ParseFileName(name);
     REQUIRE(type == "manifest");
+
+    std::string_view branch;
     uint64_t term = 0;
     std::optional<std::string> timestamp;
-    REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, term, timestamp));
-    REQUIRE(term == 0);  // No term in legacy format
+    REQUIRE(
+        eloqstore::ParseManifestFileSuffix(suffix, branch, term, timestamp));
+    REQUIRE(branch == "main");
+    REQUIRE(term == 5);
     REQUIRE(!timestamp.has_value());
-
-    // Test term-aware format roundtrip
-    std::string name2 = eloqstore::ManifestFileName(5);
-    auto [type2, suffix2] = eloqstore::ParseFileName(name2);
-    REQUIRE(type2 == "manifest");
-    uint64_t term2 = 0;
-    std::optional<std::string> timestamp2;
-    REQUIRE(eloqstore::ParseManifestFileSuffix(suffix2, term2, timestamp2));
-    REQUIRE(term2 == 5);
-    REQUIRE(!timestamp2.has_value());
 }
 
-TEST_CASE("Roundtrip - ArchiveName generate and parse", "[filename]")
+TEST_CASE("Roundtrip - BranchArchiveName generate and parse", "[filename]")
 {
-    // Test term-aware archive format roundtrip
-    std::string name = eloqstore::ArchiveName(5, 123456789);
+    std::string name = eloqstore::BranchArchiveName("main", 5, "123456789");
     auto [type, suffix] = eloqstore::ParseFileName(name);
     REQUIRE(type == "manifest");
+
+    std::string_view branch;
     uint64_t term = 0;
     std::optional<std::string> timestamp;
-    REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, term, timestamp));
+    REQUIRE(
+        eloqstore::ParseManifestFileSuffix(suffix, branch, term, timestamp));
+    REQUIRE(branch == "main");
     REQUIRE(term == 5);
     REQUIRE(timestamp.has_value());
     REQUIRE(timestamp.value() == "123456789");
 
-    // Test with term=0
-    std::string name2 = eloqstore::ArchiveName(0, 999999999);
+    // With term=0
+    std::string name2 = eloqstore::BranchArchiveName("feature", 0, "999999999");
     auto [type2, suffix2] = eloqstore::ParseFileName(name2);
     REQUIRE(type2 == "manifest");
+    std::string_view branch2;
     uint64_t term2 = 0;
     std::optional<std::string> timestamp2;
-    REQUIRE(eloqstore::ParseManifestFileSuffix(suffix2, term2, timestamp2));
+    REQUIRE(eloqstore::ParseManifestFileSuffix(
+        suffix2, branch2, term2, timestamp2));
+    REQUIRE(branch2 == "feature");
     REQUIRE(term2 == 0);
     REQUIRE(timestamp2.has_value());
     REQUIRE(timestamp2.value() == "999999999");
@@ -321,65 +347,68 @@ TEST_CASE("ParseUint64 - invalid inputs", "[filename]")
 {
     uint64_t result = 0;
 
-    // Empty string
     REQUIRE(!eloqstore::ParseUint64("", result));
-
-    // Non-numeric
     REQUIRE(!eloqstore::ParseUint64("abc", result));
     REQUIRE(!eloqstore::ParseUint64("123abc", result));
     REQUIRE(!eloqstore::ParseUint64("abc123", result));
-
-    // Overflow (this would overflow, but our check catches it)
-    // Note: UINT64_MAX is 18446744073709551615
-    // We can't easily test overflow without a very long number
 }
 
-TEST_CASE("Integration - complete filename workflow", "[filename]")
+TEST_CASE("Integration - complete branch-aware filename workflow", "[filename]")
 {
-    // Simulate creating a data file with term
+    // Data file: create → parse
     eloqstore::FileId file_id = 123;
+    std::string branch_str = "main";
     uint64_t term = 5;
-    std::string filename = eloqstore::DataFileName(file_id, term);
+    std::string filename =
+        eloqstore::BranchDataFileName(file_id, branch_str, term);
+    REQUIRE(filename == "data_123_main_5");
 
-    // Parse it back
     auto [type, suffix] = eloqstore::ParseFileName(filename);
     REQUIRE(type == "data");
     eloqstore::FileId parsed_file_id = 0;
+    std::string_view parsed_branch;
     uint64_t parsed_term = 0;
-    REQUIRE(
-        eloqstore::ParseDataFileSuffix(suffix, parsed_file_id, parsed_term));
+    REQUIRE(eloqstore::ParseDataFileSuffix(
+        suffix, parsed_file_id, parsed_branch, parsed_term));
     REQUIRE(parsed_file_id == file_id);
+    REQUIRE(parsed_branch == branch_str);
     REQUIRE(parsed_term == term);
 
-    // Simulate creating a manifest with term
-    uint64_t manifest_term = 7;
-    std::string manifest_name = eloqstore::ManifestFileName(manifest_term);
+    // Manifest: create → parse
+    std::string manifest_name = eloqstore::BranchManifestFileName("main", 7);
+    REQUIRE(manifest_name == "manifest_main_7");
 
-    // Parse it back
     auto [manifest_type, manifest_suffix] =
         eloqstore::ParseFileName(manifest_name);
     REQUIRE(manifest_type == "manifest");
+    std::string_view parsed_manifest_branch;
     uint64_t parsed_manifest_term = 0;
     std::optional<std::string> parsed_ts;
-    REQUIRE(eloqstore::ParseManifestFileSuffix(
-        manifest_suffix, parsed_manifest_term, parsed_ts));
-    REQUIRE(parsed_manifest_term == manifest_term);
+    REQUIRE(eloqstore::ParseManifestFileSuffix(manifest_suffix,
+                                               parsed_manifest_branch,
+                                               parsed_manifest_term,
+                                               parsed_ts));
+    REQUIRE(parsed_manifest_branch == "main");
+    REQUIRE(parsed_manifest_term == 7);
     REQUIRE(!parsed_ts.has_value());
 
-    // Simulate creating an archive
-    uint64_t archive_term = 9;
-    uint64_t timestamp = 1234567890;
-    std::string archive_name = eloqstore::ArchiveName(archive_term, timestamp);
+    // Archive: create → parse
+    std::string archive_name =
+        eloqstore::BranchArchiveName("main", 9, "1234567890");
+    REQUIRE(archive_name == "manifest_main_9_1234567890");
 
-    // Parse it back
     auto [archive_type, archive_suffix] =
         eloqstore::ParseFileName(archive_name);
     REQUIRE(archive_type == "manifest");
+    std::string_view parsed_archive_branch;
     uint64_t parsed_archive_term = 0;
     std::optional<std::string> parsed_archive_ts;
-    REQUIRE(eloqstore::ParseManifestFileSuffix(
-        archive_suffix, parsed_archive_term, parsed_archive_ts));
-    REQUIRE(parsed_archive_term == archive_term);
+    REQUIRE(eloqstore::ParseManifestFileSuffix(archive_suffix,
+                                               parsed_archive_branch,
+                                               parsed_archive_term,
+                                               parsed_archive_ts));
+    REQUIRE(parsed_archive_branch == "main");
+    REQUIRE(parsed_archive_term == 9);
     REQUIRE(parsed_archive_ts.has_value());
-    REQUIRE(parsed_archive_ts.value() == std::to_string(timestamp));
+    REQUIRE(parsed_archive_ts.value() == "1234567890");
 }

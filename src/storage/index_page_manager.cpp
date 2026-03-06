@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -203,10 +204,69 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
             // ensuring the next write operation will trigger a TTL check.
             meta->next_expire_ts_ = 1;
         }
-        replayer.file_id_term_mapping_->insert_or_assign(
-            IouringMgr::LruFD::kManifest, IoMgr()->ProcessTerm());
-        IoMgr()->SetFileIdTermMapping(entry_tbl,
-                                      replayer.file_id_term_mapping_);
+        // Restore the branch file mapping from the manifest so that read paths
+        // can look up branch_name and term for pre-existing file IDs.
+#ifndef NDEBUG
+        if (!replayer.branch_metadata_.file_ranges.empty())
+        {
+            const auto &ranges = replayer.branch_metadata_.file_ranges;
+            // Validate invariants restored from the manifest:
+            //   1. max_file_id is strictly ascending across all entries.
+            //   2. All entries for the same branch_name are contiguous
+            //      (no other branch's entries interleaved within a branch's
+            //      block).
+            //   3. For each branch, term is non-decreasing in max_file_id
+            //      order.
+            std::unordered_map<std::string, uint64_t> branch_last_term;
+            std::string last_branch_name;
+            for (size_t i = 0; i < ranges.size(); ++i)
+            {
+                if (i > 0 && ranges[i].max_file_id <= ranges[i - 1].max_file_id)
+                {
+                    LOG(ERROR)
+                        << "branch_metadata file_ranges: max_file_id not "
+                           "strictly ascending at index "
+                        << i << " (prev=" << ranges[i - 1].max_file_id
+                        << ", cur=" << ranges[i].max_file_id << ")";
+                    return KvError::Corrupted;
+                }
+                const std::string &bn = ranges[i].branch_name;
+                auto it = branch_last_term.find(bn);
+                if (it != branch_last_term.end())
+                {
+                    // Branch seen before — entries must be contiguous.
+                    if (bn != last_branch_name)
+                    {
+                        LOG(ERROR)
+                            << "branch_metadata file_ranges: non-adjacent "
+                               "entries for branch '"
+                            << bn << "' at index " << i << " (last branch was '"
+                            << last_branch_name << "')";
+                        return KvError::Corrupted;
+                    }
+                    // Term must not decrease within the branch's block.
+                    if (ranges[i].term < it->second)
+                    {
+                        LOG(ERROR)
+                            << "branch_metadata file_ranges: term decreases "
+                               "for branch '"
+                            << bn << "' at index " << i
+                            << " (prev_term=" << it->second
+                            << ", cur_term=" << ranges[i].term << ")";
+                        return KvError::Corrupted;
+                    }
+                    it->second = ranges[i].term;
+                }
+                else
+                {
+                    branch_last_term.emplace(bn, ranges[i].term);
+                }
+                last_branch_name = bn;
+            }
+        }
+#endif
+        IoMgr()->SetBranchFileMapping(entry_tbl,
+                                      replayer.branch_metadata_.file_ranges);
         return KvError::NoError;
     };
 
@@ -369,11 +429,16 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
                 max_file_id <= IouringMgr::LruFD::kMaxDataFile)
             {
                 auto *cloud_mgr = static_cast<CloudStoreMgr *>(IoMgr());
-                uint64_t term = IoMgr()
-                                    ->GetFileIdTerm(tbl_ident, max_file_id)
-                                    .value_or(IoMgr()->ProcessTerm());
-                KvError sync_err =
-                    cloud_mgr->DownloadFile(tbl_ident, max_file_id, term, true);
+                std::string branch_name;
+                uint64_t term;
+                if (!IoMgr()->GetBranchNameAndTerm(
+                        tbl_ident, max_file_id, branch_name, term))
+                {
+                    branch_name = IoMgr()->GetActiveBranch();
+                    term = IoMgr()->ProcessTerm();
+                }
+                KvError sync_err = cloud_mgr->DownloadFile(
+                    tbl_ident, max_file_id, branch_name, term, true);
                 if (sync_err != KvError::NoError &&
                     sync_err != KvError::NotFound)
                 {
@@ -455,10 +520,8 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
 
     UpdateRoot(tbl_ident, std::move(cow_meta));
 
-    replayer.file_id_term_mapping_->insert_or_assign(
-        IouringMgr::LruFD::kManifest, IoMgr()->ProcessTerm());
-    IoMgr()->SetFileIdTermMapping(entry->tbl_id_,
-                                  replayer.file_id_term_mapping_);
+    IoMgr()->SetBranchFileMapping(entry->tbl_id_,
+                                  replayer.branch_metadata_.file_ranges);
 
     DLOG(INFO) << "InstallExternalSnapshot finish, table " << tbl_ident
                << ", tag " << reopen_tag << ", root_id " << replayer.root_

@@ -136,7 +136,10 @@ int main(int argc, char *argv[])
     }
 
     eloqstore::EloqStore store(options);
-    store.Start();
+    if (auto err = store.Start("main", 0); err != eloqstore::KvError::NoError)
+    {
+        LOG(FATAL) << "Failed to start store: " << eloqstore::ErrorString(err);
+    }
 
     std::vector<Writer> writers;
     for (uint32_t i = 0; i < FLAGS_partitions; i++)

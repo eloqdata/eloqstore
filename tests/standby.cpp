@@ -120,7 +120,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
 
     {
         eloqstore::EloqStore master(master_opts);
-        REQUIRE(master.Start(1) == eloqstore::KvError::NoError);
+        REQUIRE(master.Start("main", 1) == eloqstore::KvError::NoError);
         upsert_range(master, 0, 5000);
         verify_range(master, 0, 5000, true);
 
@@ -134,7 +134,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
 
     {
         eloqstore::EloqStore standby(standby_opts);
-        REQUIRE(standby.Start(1) == eloqstore::KvError::NoError);
+        REQUIRE(standby.Start("main", 1) == eloqstore::KvError::NoError);
 
         // load manifest and index pages into memory to test online reopen
         Scan(&standby, tbl_id, 0, 10000);
@@ -151,7 +151,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
 
     {
         eloqstore::EloqStore master(master_opts);
-        REQUIRE(master.Start(1) == eloqstore::KvError::NoError);
+        REQUIRE(master.Start("main", 1) == eloqstore::KvError::NoError);
 
         delete_range(master, 0, 5000);
         verify_range(master, 0, 5000, false);
@@ -166,7 +166,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
 
     {
         eloqstore::EloqStore standby(standby_opts);
-        REQUIRE(standby.Start(1) == eloqstore::KvError::NoError);
+        REQUIRE(standby.Start("main", 1) == eloqstore::KvError::NoError);
 
         // load manifest and index pages into memory to test online reopen
         Scan(&standby, tbl_id, 0, 10000);
@@ -225,7 +225,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
 
     {
         eloqstore::EloqStore master(master_opts);
-        REQUIRE(master.Start(1) == eloqstore::KvError::NoError);
+        REQUIRE(master.Start("main", 1) == eloqstore::KvError::NoError);
         upsert_range(master, 0, 5000);
         verify_range(master, 0, 5000, true);
 
@@ -239,7 +239,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
 
     {
         eloqstore::EloqStore standby(standby_opts);
-        REQUIRE(standby.Start(1) == eloqstore::KvError::NoError);
+        REQUIRE(standby.Start("main", 1) == eloqstore::KvError::NoError);
 
         // load manifest and index pages into memory to test online reopen
         Scan(&standby, tbl_id, 0, 10000);
@@ -256,7 +256,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
 
     {
         eloqstore::EloqStore new_master(new_master_opts);
-        REQUIRE(new_master.Start(2) == eloqstore::KvError::NoError);
+        REQUIRE(new_master.Start("main", 2) == eloqstore::KvError::NoError);
         upsert_range(new_master, 5001, 10000);
         eloqstore::GlobalArchiveRequest archive_req;
         archive_req.SetTag(std::to_string(2002));
@@ -269,7 +269,7 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
     {
         standby_opts.standby_master_store_paths = {new_master_dir.string()};
         eloqstore::EloqStore standby(standby_opts);
-        REQUIRE(standby.Start(2) == eloqstore::KvError::NoError);
+        REQUIRE(standby.Start("main", 2) == eloqstore::KvError::NoError);
 
         Scan(&standby, tbl_id, 0, 10000);
 
@@ -309,9 +309,10 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
                     if (type == eloqstore::FileNameData)
                     {
                         eloqstore::FileId file_id = 0;
+                        std::string_view branch_name;
                         uint64_t term = 0;
                         if (!eloqstore::ParseDataFileSuffix(
-                                parsed.second, file_id, term) ||
+                                parsed.second, file_id, branch_name, term) ||
                             term != 2)
                         {
                             return false;
@@ -415,7 +416,7 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
 
     {
         eloqstore::EloqStore master(master_opts);
-        REQUIRE(master.Start(1) == eloqstore::KvError::NoError);
+        REQUIRE(master.Start("main", 1) == eloqstore::KvError::NoError);
         upsert_range(master, 0, 5000);
         verify_range(master, 0, 5000, true);
 
@@ -433,7 +434,7 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
     {
         CleanupLocalStore(standby_opts);
         eloqstore::EloqStore standby(standby_opts);
-        REQUIRE(standby.Start(1) == eloqstore::KvError::NoError);
+        REQUIRE(standby.Start("main", 1) == eloqstore::KvError::NoError);
 
         // Load the latest cloud state into memory before reopening to the
         // archived snapshot.
@@ -451,7 +452,7 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
 
     {
         eloqstore::EloqStore master(master_opts);
-        REQUIRE(master.Start(1) == eloqstore::KvError::NoError);
+        REQUIRE(master.Start("main", 1) == eloqstore::KvError::NoError);
 
         delete_range(master, 0, 5000);
         verify_range(master, 0, 5000, false);
@@ -467,7 +468,7 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
     {
         CleanupLocalStore(standby_opts);
         eloqstore::EloqStore standby(standby_opts);
-        REQUIRE(standby.Start(1) == eloqstore::KvError::NoError);
+        REQUIRE(standby.Start("main", 1) == eloqstore::KvError::NoError);
 
         verify_range(standby, 0, 5000, false);
 
@@ -524,7 +525,7 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
 
     {
         eloqstore::EloqStore new_master(new_master_opts);
-        REQUIRE(new_master.Start(2) == eloqstore::KvError::NoError);
+        REQUIRE(new_master.Start("main", 2) == eloqstore::KvError::NoError);
         upsert_range(new_master, 5001, 10000);
         eloqstore::GlobalArchiveRequest archive_req;
         archive_req.SetTag(std::to_string(2002));
@@ -541,7 +542,7 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
         standby_opts.standby_master_store_paths = {new_master_dir.string()};
         CleanupLocalStore(standby_opts);
         eloqstore::EloqStore standby(standby_opts);
-        REQUIRE(standby.Start(2) == eloqstore::KvError::NoError);
+        REQUIRE(standby.Start("main", 2) == eloqstore::KvError::NoError);
 
         verify_range(standby, 0, 5000, false);
         verify_range(standby, 5001, 10000, false);
@@ -582,9 +583,10 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
                     if (type == eloqstore::FileNameData)
                     {
                         eloqstore::FileId file_id = 0;
+                        std::string_view branch_name;
                         uint64_t term = 0;
                         if (eloqstore::ParseDataFileSuffix(
-                                parsed.second, file_id, term) &&
+                                parsed.second, file_id, branch_name, term) &&
                             term == 1)
                         {
                             return false;

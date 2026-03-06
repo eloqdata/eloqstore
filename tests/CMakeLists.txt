@@ -19,13 +19,14 @@ set(UTEST_SOURCES
     gc.cpp
     chore.cpp
     eloq_store_test.cpp
-    filename_parsing.cpp
-    fileid_term_mapping.cpp
-    manifest_payload.cpp
     replayer_term.cpp
     store_path_lut.cpp
     write_task.cpp
     standby.cpp
+    branch_filename_parsing.cpp
+    branch_operations.cpp
+    branch_gc.cpp
+    manifest_payload.cpp
 )
 
 string( REPLACE ".cpp" "" BASENAMES_UTEST "${UTEST_SOURCES}" )

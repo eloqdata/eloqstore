@@ -22,7 +22,7 @@ int main()
     eloqstore::TableIdent tbl_id("t1", 1);
 
     eloqstore::EloqStore store(opts);
-    eloqstore::KvError err = store.Start();
+    eloqstore::KvError err = store.Start("main", 0);
     assert(err == eloqstore::KvError::NoError);
 
     {

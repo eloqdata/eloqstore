@@ -39,9 +39,11 @@ std::vector<std::string> CollectArchiveTags(const fs::path &partition_path)
             continue;
         }
         auto [type, suffix] = eloqstore::ParseFileName(filename);
+        std::string_view branch_name;
         uint64_t term = 0;
         std::optional<std::string> tag;
-        REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, term, tag));
+        REQUIRE(
+            eloqstore::ParseManifestFileSuffix(suffix, branch_name, term, tag));
         REQUIRE(tag.has_value());
         tags.push_back(*tag);
     }
@@ -311,7 +313,9 @@ TEST_CASE("easy rollback to archive", "[archive]")
     const fs::path partition_path =
         fs::path(test_path) / test_tbl_id.ToString();
     std::string manifest_path =
-        (partition_path / eloqstore::ManifestFileName(0)).string();
+        (partition_path /
+         eloqstore::BranchManifestFileName(eloqstore::MainBranchName, 0))
+            .string();
 
     for (const auto &entry : fs::directory_iterator(partition_path))
     {
@@ -336,7 +340,8 @@ TEST_CASE("easy rollback to archive", "[archive]")
         archive_file, manifest_path, fs::copy_options::overwrite_existing);
 
     LOG(INFO) << "roll back to archive: " << archive_file;
-    store->Start();
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
 
     tester.SwitchDataSet(old_dataset);
     tester.Validate();
@@ -349,7 +354,8 @@ TEST_CASE("easy rollback to archive", "[archive]")
     fs::remove(backup_manifest);
 
     LOG(INFO) << "roll back to full dataset";
-    store->Start();
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
 
     tester.SwitchDataSet(full_dataset);
     tester.Validate();
@@ -411,7 +417,9 @@ TEST_CASE("enhanced rollback with mix operations", "[archive]")
     const fs::path partition_path =
         fs::path(test_path) / test_tbl_id.ToString();
     std::string manifest_path =
-        (partition_path / eloqstore::ManifestFileName(0)).string();
+        (partition_path /
+         eloqstore::BranchManifestFileName(eloqstore::MainBranchName, 0))
+            .string();
 
     for (const auto &entry : fs::directory_iterator(partition_path))
     {
@@ -433,7 +441,8 @@ TEST_CASE("enhanced rollback with mix operations", "[archive]")
         archive_file, manifest_path, fs::copy_options::overwrite_existing);
 
     LOG(INFO) << "Rollback to archive: " << archive_file;
-    store->Start();
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
 
     // Verify rollback to phase 1 state
     tester.SwitchDataSet(phase1_dataset);
@@ -445,7 +454,8 @@ TEST_CASE("enhanced rollback with mix operations", "[archive]")
     fs::copy_file(
         backup_manifest, manifest_path, fs::copy_options::overwrite_existing);
     fs::remove(backup_manifest);
-    store->Start();
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
 
     tester.SwitchDataSet(phase2_dataset);
     tester.Validate();

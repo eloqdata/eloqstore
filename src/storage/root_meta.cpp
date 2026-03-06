@@ -55,8 +55,8 @@ void ManifestBuilder::DeleteMapping(PageId page_id)
     buff_.AppendVarint64(MappingSnapshot::InvalidValue);
 }
 
-void ManifestBuilder::AppendFileIdTermMapping(
-    std::string_view file_term_mapping)
+void ManifestBuilder::AppendBranchManifestMetadata(
+    std::string_view branch_metadata)
 {
     CHECK(resized_for_mapping_bytes_len_ || buff_.size() == header_bytes);
     if (!resized_for_mapping_bytes_len_)
@@ -68,25 +68,31 @@ void ManifestBuilder::AppendFileIdTermMapping(
     uint32_t mapping_len =
         static_cast<uint32_t>(buff_.size() - header_bytes - 4);
     EncodeFixed32(buff_.data() + header_bytes, mapping_len);
-    // append the serialized file_term_mapping
-    buff_.append(file_term_mapping);
+    // append the serialized branch_metadata
+    buff_.append(branch_metadata);
 }
 
-std::string_view ManifestBuilder::Snapshot(PageId root_id,
-                                           PageId ttl_root,
-                                           const MappingSnapshot *mapping,
-                                           FilePageId max_fp_id,
-                                           std::string_view dict_bytes,
-                                           std::string_view file_term_mapping)
+std::string_view ManifestBuilder::Snapshot(
+    PageId root_id,
+    PageId ttl_root,
+    const MappingSnapshot *mapping,
+    FilePageId max_fp_id,
+    std::string_view dict_bytes,
+    const BranchManifestMetadata &branch_metadata)
 {
     // For snapshot, the structure is:
     // Checksum(8B) | Root(4B) | TTL Root(4B) | Payload Len(4B) |
     // MaxFpId(8B) | DictLen(4B) | dict_bytes(bytes) | mapping_len(4B) |
-    // mapping_tbl(varint64...) | file_term_mapping_len(4B) |
-    // file_term_mapping(varint64...)
+    // mapping_tbl(varint64...) | branch_metadata
+    //
+    // branch_metadata = branch_name_len(4B) + branch_name + term(8B) +
+    // BranchFileMapping
+    std::string branch_metadata_str =
+        SerializeBranchManifestMetadata(branch_metadata);
+
     Reset();
     buff_.reserve(4 + 8 * (mapping->mapping_tbl_.size() + 1) + 4 +
-                  file_term_mapping.size());
+                  branch_metadata_str.size());
     buff_.AppendVarint64(max_fp_id);
     buff_.AppendVarint32(dict_bytes.size());
     buff_.append(dict_bytes.data(), dict_bytes.size());
@@ -99,8 +105,8 @@ std::string_view ManifestBuilder::Snapshot(PageId root_id,
     uint32_t mapping_bytes_len =
         static_cast<uint32_t>(buff_.size() - mapping_bytes_len_offset - 4);
     EncodeFixed32(buff_.data() + mapping_bytes_len_offset, mapping_bytes_len);
-    // file_term_mapping
-    buff_.append(file_term_mapping);
+    // branch_metadata
+    buff_.append(branch_metadata_str);
     return Finalize(root_id, ttl_root);
 }
 

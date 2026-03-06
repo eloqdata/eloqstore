@@ -11,6 +11,7 @@
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <limits>
@@ -131,7 +132,7 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
     if (!opts.cloud_store_path.empty())
     {
         LOG(ERROR) << "cloud mode already support standby, reset "
-                      "standby_local_standby to false";
+                      "enable_local_standby to false";
         opts.enable_local_standby = false;
         opts.standby_master_addr.clear();
         opts.standby_master_store_paths.clear();
@@ -509,9 +510,14 @@ void EloqStore::CleanupRuntime(size_t started_shards)
     }
 }
 
-KvError EloqStore::Start(uint64_t term, PartitonGroupId partition_group_id)
+KvError EloqStore::Start(std::string_view branch, uint64_t term, PartitonGroupId partition_group_id)
 {
+    LOG(INFO) << "===Start eloqstore, branch: " << branch << ", term: " << term;
     if (!ValidateOptions(options_))
+    {
+        return KvError::InvalidArgs;
+    }
+    if (!IsStopped())
     {
         return KvError::InvalidArgs;
     }
@@ -623,6 +629,7 @@ KvError EloqStore::Start(uint64_t term, PartitonGroupId partition_group_id)
     // local mode, set term to 0
     term_ = mode == StoreMode::Local ? 0 : term;
     partition_group_id_ = mode == StoreMode::Cloud ? partition_group_id : 0;
+    branch_ = std::string(branch);
 
     // There are files opened at very early stage like stdin/stdout/stderr, glog
     // file, and root directories of data.
@@ -1712,8 +1719,9 @@ void EloqStore::HandleGlobalListArchiveTagsRequest(
                 }
 
                 uint64_t term = 0;
+                std::string_view branch_name;
                 std::optional<std::string> tag;
-                if (!ParseManifestFileSuffix(suffix, term, tag) ||
+                if (!ParseManifestFileSuffix(suffix, branch_name, term, tag) ||
                     !tag.has_value())
                 {
                     continue;
@@ -1748,6 +1756,194 @@ void EloqStore::HandleGlobalListArchiveTagsRequest(
                     { return lhs.term == rhs.term && lhs.tag == rhs.tag; }),
         req->entries_.end());
     req->SetDone(KvError::NoError);
+}
+
+void EloqStore::HandleGlobalCreateBranchRequest(GlobalCreateBranchRequest *req)
+{
+    req->first_error_.store(static_cast<uint8_t>(KvError::NoError),
+                            std::memory_order_relaxed);
+    req->pending_.store(0, std::memory_order_relaxed);
+    req->branch_reqs_.clear();
+
+    // Early validation and salt generation.
+    // The per-partition CreateBranch will normalize again, but we do it here
+    // to validate up front and to build the salted internal name.
+    std::string normalized = NormalizeBranchName(req->branch_name_);
+    if (normalized.empty())
+    {
+        req->SetDone(KvError::InvalidArgs);
+        return;
+    }
+
+    // Generate an 8-hex-char salt from the lower 32 bits of a timestamp.
+    // If the caller supplied a salt timestamp (e.g. a backup_ts), use that so
+    // the internal filename is deterministic and correlated with the backup.
+    // Otherwise fall back to the live system clock.
+    uint64_t salt_val =
+        req->GetSaltTimestamp() != 0
+            ? req->GetSaltTimestamp()
+            : static_cast<uint64_t>(
+                  std::chrono::system_clock::now().time_since_epoch().count());
+    char salt_buf[9];
+    std::snprintf(
+        salt_buf, sizeof(salt_buf), "%08x", static_cast<uint32_t>(salt_val));
+    std::string internal_name = normalized + "-" + salt_buf;
+    req->result_branch = internal_name;
+
+    LOG(INFO) << "Creating global branch " << req->GetBranchName()
+              << " (internal: " << internal_name << ")";
+
+    // Enumerate all partitions — mirrors HandleGlobalArchiveRequest.
+    std::vector<TableIdent> all_partitions;
+    if (options_.cloud_store_path.empty())
+    {
+        std::error_code ec;
+        for (const fs::path root : options_.store_path)
+        {
+            const fs::path db_path(root);
+            fs::directory_iterator dir_it(db_path, ec);
+            if (ec)
+            {
+                req->SetDone(ToKvError(-ec.value()));
+                return;
+            }
+            fs::directory_iterator end;
+            for (; dir_it != end; dir_it.increment(ec))
+            {
+                if (ec)
+                {
+                    req->SetDone(ToKvError(-ec.value()));
+                    return;
+                }
+                const fs::directory_entry &ent = *dir_it;
+                const fs::path ent_path = ent.path();
+                bool is_dir = fs::is_directory(ent_path, ec);
+                if (ec)
+                {
+                    req->SetDone(ToKvError(-ec.value()));
+                    return;
+                }
+                if (!is_dir)
+                {
+                    continue;
+                }
+
+                TableIdent tbl_id = TableIdent::FromString(ent_path.filename());
+                if (tbl_id.tbl_name_.empty())
+                {
+                    LOG(WARNING) << "unexpected partition " << ent.path();
+                    continue;
+                }
+
+                if (options_.partition_filter &&
+                    !options_.partition_filter(tbl_id))
+                {
+                    continue;
+                }
+
+                all_partitions.emplace_back(std::move(tbl_id));
+            }
+        }
+    }
+    else
+    {
+        std::vector<std::string> objects;
+        ListObjectRequest list_request(&objects);
+        list_request.SetRemotePath(std::string{});
+        list_request.SetRecursive(false);
+        do
+        {
+            objects.clear();
+            ExecSync(&list_request);
+
+            if (list_request.Error() != KvError::NoError)
+            {
+                LOG(ERROR) << "Failed to list cloud objects for global branch "
+                              "creation: "
+                           << static_cast<int>(list_request.Error());
+                req->SetDone(list_request.Error());
+                return;
+            }
+
+            if (all_partitions.empty())
+            {
+                all_partitions.reserve(objects.size());
+            }
+
+            for (auto &name : objects)
+            {
+                TableIdent tbl_id = TableIdent::FromString(name);
+                if (!tbl_id.IsValid())
+                {
+                    continue;
+                }
+
+                if (options_.partition_filter &&
+                    !options_.partition_filter(tbl_id))
+                {
+                    continue;
+                }
+
+                all_partitions.emplace_back(std::move(tbl_id));
+            }
+
+            if (list_request.HasMoreResults())
+            {
+                list_request.SetContinuationToken(
+                    *list_request.GetNextContinuationToken());
+            }
+        } while (list_request.HasMoreResults());
+    }
+
+    if (all_partitions.empty())
+    {
+        LOG(INFO) << "No partitions to branch (all filtered out or none exist)";
+        req->SetDone(KvError::NoError);
+        return;
+    }
+
+    LOG(INFO) << "Creating branch " << req->GetBranchName() << " on "
+              << all_partitions.size() << " partitions";
+
+    req->branch_reqs_.reserve(all_partitions.size());
+    req->pending_.store(static_cast<uint32_t>(all_partitions.size()),
+                        std::memory_order_relaxed);
+
+    auto on_branch_done = [req](KvRequest *sub_req)
+    {
+        KvError sub_err = sub_req->Error();
+        if (sub_err != KvError::NoError)
+        {
+            uint8_t expected = static_cast<uint8_t>(KvError::NoError);
+            uint8_t desired = static_cast<uint8_t>(sub_err);
+            req->first_error_.compare_exchange_strong(
+                expected,
+                desired,
+                std::memory_order_relaxed,
+                std::memory_order_relaxed);
+        }
+        if (req->pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        {
+            KvError final_err = static_cast<KvError>(
+                req->first_error_.load(std::memory_order_relaxed));
+            req->SetDone(final_err);
+        }
+    };
+
+    for (const TableIdent &partition : all_partitions)
+    {
+        auto branch_req = std::make_unique<CreateBranchRequest>();
+        branch_req->SetTableId(partition);
+        branch_req->SetArgs(internal_name);
+        CreateBranchRequest *ptr = branch_req.get();
+        req->branch_reqs_.push_back(std::move(branch_req));
+        if (!ExecAsyn(ptr, 0, on_branch_done))
+        {
+            LOG(ERROR) << "Handle global create branch request, enqueue "
+                          "create branch request fail";
+            ptr->SetDone(KvError::NotRunning);
+        }
+    }
 }
 
 bool EloqStore::SendRequest(KvRequest *req)
@@ -1789,6 +1985,14 @@ bool EloqStore::SendRequest(KvRequest *req)
             static_cast<GlobalListArchiveTagsRequest *>(req));
         return true;
     }
+
+    if (req->Type() == RequestType::GlobalCreateBranch)
+    {
+        HandleGlobalCreateBranchRequest(
+            static_cast<GlobalCreateBranchRequest *>(req));
+        return true;
+    }
+
     Shard *shard = shards_[req->TableId().ShardIndex(shards_.size())].get();
     return shard->AddKvRequest(req);
 }

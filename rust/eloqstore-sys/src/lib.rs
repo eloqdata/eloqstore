@@ -129,6 +129,7 @@ mod ffi {
         IoFail,
         ExpiredTerm,
         OssInsufficientStorage,
+        AlreadyExists,
     }
 
     #[repr(u8)]

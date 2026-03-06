@@ -21,7 +21,7 @@ eloqstore::EloqStore *InitStore(const eloqstore::KvOptions &opts)
     CleanupStore(opts);
     // Recreate to ensure latest options are applied
     eloq_store = std::make_unique<eloqstore::EloqStore>(opts);
-    eloqstore::KvError err = eloq_store->Start();
+    eloqstore::KvError err = eloq_store->Start(eloqstore::MainBranchName, 0);
     CHECK(err == eloqstore::KvError::NoError);
     return eloq_store.get();
 }

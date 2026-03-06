@@ -622,7 +622,7 @@ std::string StandbyService::RemoteArchiveManifestPath(
         return {};
     }
     remote_path.push_back('/');
-    remote_path.append(ArchiveName(store_->Term(), archive_tag));
+    remote_path.append(BranchArchiveName(MainBranchName, store_->Term(), archive_tag));
     return remote_path;
 }
 
@@ -845,8 +845,9 @@ KvError StandbyService::RunPrepareManifestJob(const PrepareManifestJob &job)
             continue;
         }
         uint64_t term = 0;
+        std::string_view branch_name;
         std::optional<std::string> tag;
-        if (!ParseManifestFileSuffix(suffix, term, tag))
+        if (!ParseManifestFileSuffix(suffix, branch_name, term, tag))
         {
             continue;
         }
@@ -878,8 +879,8 @@ KvError StandbyService::RunPrepareManifestJob(const PrepareManifestJob &job)
     bool mutated = false;
     if (selected_term != job.target_term)
     {
-        const fs::path src = table_dir / ManifestFileName(selected_term);
-        const fs::path dst = table_dir / ManifestFileName(job.target_term);
+        const fs::path src = table_dir / BranchManifestFileName(MainBranchName, selected_term);
+        const fs::path dst = table_dir / BranchManifestFileName(MainBranchName, job.target_term);
         if (fs::exists(dst, ec))
         {
             if (ec)
@@ -922,8 +923,9 @@ KvError StandbyService::RunPrepareManifestJob(const PrepareManifestJob &job)
             continue;
         }
         uint64_t term = 0;
+        std::string_view branch_name;
         std::optional<std::string> tag;
-        if (!ParseManifestFileSuffix(suffix, term, tag))
+        if (!ParseManifestFileSuffix(suffix, branch_name, term, tag))
         {
             continue;
         }

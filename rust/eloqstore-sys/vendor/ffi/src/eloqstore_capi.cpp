@@ -91,6 +91,8 @@ static CEloqStoreStatus kv_error_to_c(KvError err)
         return CEloqStoreStatus_ExpiredTerm;
     case KvError::OssInsufficientStorage:
         return CEloqStoreStatus_OssInsufficientStorage;
+    case KvError::AlreadyExists:
+        return CEloqStoreStatus_AlreadyExists;
     default:
         return CEloqStoreStatus_InvalidArgs;
     }
@@ -297,7 +299,8 @@ extern "C"
         }
         try
         {
-            auto err = reinterpret_cast<EloqStore *>(store)->Start();
+            auto err = reinterpret_cast<EloqStore *>(store)->Start(
+                eloqstore::MainBranchName, 0);
             if (err != KvError::NoError)
             {
                 set_last_error("Failed to start store");

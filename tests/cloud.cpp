@@ -183,7 +183,8 @@ TEST_CASE("cloud prewarm downloads while shards idle", "[cloud][prewarm]")
     store->Stop();
     CleanupLocalStore(options);
 
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
     writer.SetStore(store);
 
     const fs::path partition_path =
@@ -238,7 +239,8 @@ TEST_CASE("cloud prewarm supports writes after restart", "[cloud][prewarm]")
     store->Stop();
     CleanupLocalStore(options);
 
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
     writer.SetStore(store);
 
     const fs::path partition_path =
@@ -384,7 +386,8 @@ TEST_CASE("cloud prewarm respects cache budget", "[cloud][prewarm]")
 
     CleanupLocalStore(options);
 
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
     writer.SetStore(store);
 
     const auto partition_path =
@@ -442,7 +445,8 @@ TEST_CASE("cloud reuse cache enforces budgets across restarts",
     CleanupStore(options);
 
     auto store = std::make_unique<eloqstore::EloqStore>(options);
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
 
     eloqstore::TableIdent tbl_id{"reuse-cache", 0};
     MapVerifier writer(tbl_id, store.get());
@@ -466,7 +470,8 @@ TEST_CASE("cloud reuse cache enforces budgets across restarts",
     // Restart with the same budget and ensure writing more data never exceeds
     // the 40MB limit.
     store->Stop();
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
     writer.SetStore(store.get());
 
     WriteBatches(writer, next_key, entries_per_batch, batches_per_phase);
@@ -484,7 +489,7 @@ TEST_CASE("cloud reuse cache enforces budgets across restarts",
     // future writes respect the new limit.
     options.local_space_limit = 20ULL << 20;
     auto trimmed_store = std::make_unique<eloqstore::EloqStore>(options);
-    REQUIRE(trimmed_store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(trimmed_store->Start("main", 0) == eloqstore::KvError::NoError);
     writer.SetStore(trimmed_store.get());
 
     WriteBatches(writer, next_key, entries_per_batch, batches_per_phase / 2);
@@ -667,7 +672,8 @@ TEST_CASE("cloud prewarm honors partition filter", "[cloud][prewarm]")
 
     store->Stop();
     CleanupLocalStore(options);
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
 
     REQUIRE(WaitForCondition(
         12s,
@@ -741,7 +747,8 @@ TEST_CASE("cloud prewarm handles pagination with 2000+ files",
     CleanupLocalStore(options);
 
     // Restart with prewarm enabled
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
     writer.SetStore(store);
 
     const fs::path partition_path =
@@ -832,7 +839,8 @@ TEST_CASE("cloud prewarm queue management with producer blocking",
     // Enable debug logging if available
     // export GLOG_v=1 before running to see queue state logs
 
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
     writer.SetStore(store);
 
     const fs::path partition_path =
@@ -935,7 +943,8 @@ TEST_CASE("cloud prewarm aborts gracefully when disk fills",
     CleanupLocalStore(options);
 
     // Restart with prewarm - should abort due to disk full
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
     writer.SetStore(store);
 
     const fs::path partition_path =
@@ -1031,7 +1040,7 @@ TEST_CASE("cloud gc preserves archived data after truncate",
     store->Stop();
     CleanupLocalStore(cloud_archive_opts);
 
-    store->Start();
+    REQUIRE(store->Start("main", 0) == eloqstore::KvError::NoError);
     tester.Validate();
 
     tester.Upsert(0, 200);
@@ -1052,46 +1061,49 @@ TEST_CASE("cloud gc preserves archived data after truncate",
     store->Stop();
 
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
-    // Use ArchiveName to generate a valid archive-like filename. This ensures
-    // it won't be treated as a current manifest during selection.
-    std::string backup_name = eloqstore::ArchiveName(0, backup_ts);
+    std::string backup_name =
+        eloqstore::BranchArchiveName(eloqstore::MainBranchName, 0, std::to_string(backup_ts));
 
-    bool backup_ok = MoveCloudFile(cloud_archive_opts,
-                                   partition_remote,
-                                   eloqstore::ManifestFileName(0),
-                                   backup_name);
+    bool backup_ok = MoveCloudFile(
+        cloud_archive_opts,
+        partition_remote,
+        eloqstore::BranchManifestFileName(eloqstore::MainBranchName, 0),
+        backup_name);
     REQUIRE(backup_ok);
 
-    bool rollback_ok = MoveCloudFile(cloud_archive_opts,
-                                     partition_remote,
-                                     archive_name,
-                                     eloqstore::ManifestFileName(0));
+    bool rollback_ok = MoveCloudFile(
+        cloud_archive_opts,
+        partition_remote,
+        archive_name,
+        eloqstore::BranchManifestFileName(eloqstore::MainBranchName, 0));
     REQUIRE(rollback_ok);
 
     CleanupLocalStore(cloud_archive_opts);
 
     tester.SwitchDataSet(baseline_dataset);
-    store->Start();
+    REQUIRE(store->Start("main", 0) == eloqstore::KvError::NoError);
     tester.Validate();
     store->Stop();
 
-    bool restore_archive = MoveCloudFile(cloud_archive_opts,
-                                         partition_remote,
-                                         eloqstore::ManifestFileName(0),
-                                         archive_name);
+    bool restore_archive = MoveCloudFile(
+        cloud_archive_opts,
+        partition_remote,
+        eloqstore::BranchManifestFileName(eloqstore::MainBranchName, 0),
+        archive_name);
     REQUIRE(restore_archive);
 
-    bool restore_manifest = MoveCloudFile(cloud_archive_opts,
-                                          partition_remote,
-                                          backup_name,
-                                          eloqstore::ManifestFileName(0));
+    bool restore_manifest = MoveCloudFile(
+        cloud_archive_opts,
+        partition_remote,
+        backup_name,
+        eloqstore::BranchManifestFileName(eloqstore::MainBranchName, 0));
     REQUIRE(restore_manifest);
 
     CleanupLocalStore(cloud_archive_opts);
 
     const std::map<std::string, eloqstore::KvEntry> empty_dataset;
     tester.SwitchDataSet(empty_dataset);
-    store->Start();
+    REQUIRE(store->Start("main", 0) == eloqstore::KvError::NoError);
     tester.Validate();
     store->Stop();
 }
@@ -1124,7 +1136,7 @@ TEST_CASE("cloud archive create is idempotent for an existing tag",
                        cloud_archive_opts.cloud_store_path,
                        test_tbl_id.ToString());
     const std::string expected_archive =
-        eloqstore::ArchiveName(store->Term(), kArchiveTag);
+        eloqstore::BranchArchiveName(eloqstore::MainBranchName, store->Term(), kArchiveTag);
     REQUIRE(std::count(
                 cloud_files.begin(), cloud_files.end(), expected_archive) == 1);
 
@@ -1241,8 +1253,10 @@ TEST_CASE("cloud global archive shares timestamp and filters partitions",
             }
             auto [type, suffix] = eloqstore::ParseFileName(filename);
             uint64_t term = 0;
+            std::string_view branch_name;
             std::optional<std::string> tag;
-            REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, term, tag));
+            REQUIRE(eloqstore::ParseManifestFileSuffix(
+                suffix, branch_name, term, tag));
             REQUIRE(tag.has_value());
             tags.push_back(*tag);
         }
@@ -1305,7 +1319,8 @@ TEST_CASE("cloud store with restart", "[cloud]")
         }
         store->Stop();
         CleanupLocalStore(cloud_options);
-        store->Start();
+        REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+                eloqstore::KvError::NoError);
         for (auto &part : partitions)
         {
             part->Validate();
@@ -1375,7 +1390,8 @@ TEST_CASE("cloud reopen refreshes manifest via archive swap", "[cloud][reopen]")
     REQUIRE(term >= 0);
 
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
-    std::string backup_manifest = eloqstore::ArchiveName(term, backup_ts);
+    std::string backup_manifest = eloqstore::BranchArchiveName(
+        eloqstore::MainBranchName, term, std::to_string(backup_ts));
 
     // Move current manifest aside, then promote archive manifest.
     REQUIRE(MoveCloudFile(
@@ -1421,7 +1437,8 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
     store->Stop();
 
     const std::string backup_root = "/tmp/test-data-reopen-local-backup";
-    const std::string manifest_name = eloqstore::ManifestFileName(0);
+    const std::string manifest_name =
+        eloqstore::BranchManifestFileName(eloqstore::MainBranchName, 0);
     uint64_t v1_manifest_size = 0;
     std::filesystem::remove_all(backup_root);
     std::filesystem::create_directories(backup_root);
@@ -1447,7 +1464,8 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
     }
 
     // Restart to write version 2 data (remote is newer).
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
 
     // Version 2 data (remote is newer).
     verifier.Upsert(100, 120);
@@ -1505,7 +1523,8 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
     clear_data_files(tbl_id);
 
     // Restart without prewarm so it doesn't auto-download.
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
     REQUIRE(WaitForCondition(std::chrono::seconds(5),
                              std::chrono::milliseconds(10),
                              [&]() { return store->Inited(); }));
@@ -1589,7 +1608,8 @@ TEST_CASE("cloud reopen triggers prewarm to download newer remote data files",
         fs::path(backup_root) / fs::path(options.store_path.front()).filename(),
         fs::copy_options::recursive | fs::copy_options::overwrite_existing);
 
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
     writer.SetStore(store);
     writer.SetValueSize(8 << 10);
     writer.Upsert(2000, 2600);
@@ -1636,7 +1656,8 @@ TEST_CASE("cloud reopen triggers prewarm to download newer remote data files",
         }
     }
 
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
     writer.SetStore(store);
     const fs::path local_target =
         fs::path(options.store_path.front()) / partition / target_new_data_file;
@@ -1717,7 +1738,8 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
     }
 
     const std::string backup_root = "/tmp/test-data-reopen-global-backup";
-    const std::string manifest_name = eloqstore::ManifestFileName(0);
+    const std::string manifest_name =
+        eloqstore::BranchManifestFileName(eloqstore::MainBranchName, 0);
     std::filesystem::remove_all(backup_root);
     std::filesystem::create_directories(backup_root);
     for (const auto &path : options.store_path)
@@ -1744,7 +1766,8 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
     }
 
     // Restart to write version 2 data (remote is newer).
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
 
     // Version 2 data (remote is newer).
     std::vector<std::map<std::string, eloqstore::KvEntry>> v2_datasets;
@@ -1780,7 +1803,8 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
                 std::filesystem::copy_options::overwrite_existing);
     }
 
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
     REQUIRE(WaitForCondition(std::chrono::seconds(5),
                              std::chrono::milliseconds(10),
                              [&]() { return store->Inited(); }));
@@ -1926,15 +1950,16 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
     // Stop the store
     store->Stop();
 
-    // Create backup with timestamp
+    // Create backup with timestamp.
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
-    std::string backup_name = eloqstore::ArchiveName(0, backup_ts);
+    std::string backup_name =
+        eloqstore::BranchArchiveName(eloqstore::MainBranchName, 0, std::to_string(backup_ts));
 
     // Move current manifest to backup
     bool backup_success = MoveCloudFile(
         cloud_archive_opts,
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString(),
-        eloqstore::ManifestFileName(0),
+        eloqstore::BranchManifestFileName(eloqstore::MainBranchName, 0),
         backup_name);
     REQUIRE(backup_success);
 
@@ -1943,14 +1968,14 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
         cloud_archive_opts,
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString(),
         archive_name,
-        eloqstore::ManifestFileName(0));
+        eloqstore::BranchManifestFileName(eloqstore::MainBranchName, 0));
     REQUIRE(rollback_success);
 
     // Clean local cache and restart store
     CleanupLocalStore(cloud_archive_opts);
 
     tester.SwitchDataSet(old_dataset);
-    store->Start();
+    REQUIRE(store->Start("main", 0) == eloqstore::KvError::NoError);
 
     // Validate old dataset (should only have data from 0-99)
 
@@ -1963,12 +1988,12 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
         cloud_archive_opts,
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString(),
         backup_name,
-        eloqstore::ManifestFileName(0));
+        eloqstore::BranchManifestFileName(eloqstore::MainBranchName, 0));
     REQUIRE(restore_success);
 
     CleanupLocalStore(cloud_archive_opts);
     tester.SwitchDataSet(full_dataset);
-    store->Start();
+    REQUIRE(store->Start("main", 0) == eloqstore::KvError::NoError);
 
     // Validate full dataset
     tester.Validate();
@@ -2030,15 +2055,17 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
     const std::string cloud_path =
         cloud_archive_opts.cloud_store_path + "/" + test_tbl_id.ToString();
 
-    // Create backup with timestamp
+    // Create backup with timestamp.
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
-    std::string backup_name = eloqstore::ArchiveName(0, backup_ts);
+    std::string backup_name =
+        eloqstore::BranchArchiveName(eloqstore::MainBranchName, 0, std::to_string(backup_ts));
 
     // Backup current manifest
-    bool backup_ok = MoveCloudFile(cloud_archive_opts,
-                                   cloud_path,
-                                   eloqstore::ManifestFileName(0),
-                                   backup_name);
+    bool backup_ok = MoveCloudFile(
+        cloud_archive_opts,
+        cloud_path,
+        eloqstore::BranchManifestFileName(eloqstore::MainBranchName, 0),
+        backup_name);
     REQUIRE(backup_ok);
 
     // List cloud files to find the archive file
@@ -2060,17 +2087,18 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
     bool rollback_ok = false;
     if (!archive_name.empty())
     {
-        rollback_ok = MoveCloudFile(cloud_archive_opts,
-                                    cloud_path,
-                                    archive_name,
-                                    eloqstore::ManifestFileName(0));
+        rollback_ok = MoveCloudFile(
+            cloud_archive_opts,
+            cloud_path,
+            archive_name,
+            eloqstore::BranchManifestFileName(eloqstore::MainBranchName, 0));
     }
 
     // Clean up local store
     CleanupLocalStore(cloud_archive_opts);
 
     LOG(INFO) << "Attempting enhanced rollback to archive in cloud storage";
-    store->Start();
+    REQUIRE(store->Start("main", 0) == eloqstore::KvError::NoError);
 
     if (rollback_ok)
     {
@@ -2081,15 +2109,17 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
         store->Stop();
 
         // Restore backup to get back to phase 2 dataset
-        bool restore_ok = MoveCloudFile(cloud_archive_opts,
-                                        cloud_path,
-                                        backup_name,
-                                        eloqstore::ManifestFileName(0));
+        bool restore_ok = MoveCloudFile(
+            cloud_archive_opts,
+            cloud_path,
+            backup_name,
+            eloqstore::BranchManifestFileName(eloqstore::MainBranchName, 0));
         REQUIRE(restore_ok);
 
         CleanupLocalStore(cloud_archive_opts);
 
-        store->Start();
+        REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+                eloqstore::KvError::NoError);
 
         tester.SwitchDataSet(phase2_dataset);
         tester.Validate();
@@ -2142,7 +2172,8 @@ TEST_CASE("archive triggers with cloud-only partitions", "[cloud][archive]")
 
     store->Stop();
     CleanupLocalStore(options);
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+            eloqstore::KvError::NoError);
 
     std::unordered_set<uint32_t> pending;
     for (uint32_t pid = 0; pid < kPartitionCount; ++pid)

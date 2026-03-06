@@ -128,10 +128,6 @@ protected:
     virtual DirectIoBuffer AcquireUploadStateBuffer();
     virtual void ReleaseUploadStateBuffer(DirectIoBuffer buffer);
 
-    // Track whether FileIdTermMapping changed in this write task.
-    // If it changed, we must force a full snapshot (WAL append doesn't include
-    // FileIdTermMapping).
-    bool file_id_term_mapping_dirty_{false};
     std::optional<FileId> last_append_file_id_;
     WriteBufferAggregator append_aggregator_{0};
     UploadState upload_state_;

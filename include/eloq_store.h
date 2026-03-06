@@ -51,7 +51,10 @@ enum class RequestType : uint8_t
     CleanExpired,
     GlobalArchive,
     GlobalReopen,
-    GlobalListArchiveTags
+    GlobalListArchiveTags,
+    CreateBranch,
+    DeleteBranch,
+    GlobalCreateBranch
 };
 
 inline const char *RequestTypeToString(RequestType type)
@@ -90,6 +93,12 @@ inline const char *RequestTypeToString(RequestType type)
         return "global_reopen";
     case RequestType::GlobalListArchiveTags:
         return "global_list_archive_tags";
+    case RequestType::CreateBranch:
+        return "create_branch";
+    case RequestType::DeleteBranch:
+        return "delete_branch";
+    case RequestType::GlobalCreateBranch:
+        return "global_create_branch";
     default:
         return "unknown";
     }
@@ -644,6 +653,89 @@ public:
     }
 };
 
+class BranchRequest : public WriteRequest
+{
+public:
+    std::string branch_name;
+    std::string result_branch;
+};
+
+class CreateBranchRequest : public BranchRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::CreateBranch;
+    }
+
+    void SetArgs(std::string branch_name_val)
+    {
+        branch_name = std::move(branch_name_val);
+    }
+};
+
+class DeleteBranchRequest : public BranchRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::DeleteBranch;
+    }
+
+    void SetArgs(std::string branch_name_val)
+    {
+        branch_name = std::move(branch_name_val);
+    }
+};
+
+class GlobalCreateBranchRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::GlobalCreateBranch;
+    }
+
+    void SetArgs(std::string branch_name)
+    {
+        branch_name_ = std::move(branch_name);
+    }
+
+    const std::string &GetBranchName() const
+    {
+        return branch_name_;
+    }
+
+    // Optional caller-supplied salt timestamp.  When non-zero,
+    // HandleGlobalCreateBranchRequest uses the lower 32 bits of this value
+    // (formatted as %08x) as the salt instead of the live clock.  This makes
+    // the internal filename deterministic and correlated with a known timestamp
+    // (e.g. a backup_ts).
+    void SetSaltTimestamp(uint64_t ts)
+    {
+        salt_ts_ = ts;
+    }
+    uint64_t GetSaltTimestamp() const
+    {
+        return salt_ts_;
+    }
+
+    // The salted internal branch name chosen by
+    // HandleGlobalCreateBranchRequest. Callers should use this after a
+    // successful ExecSync to refer to the new branch in subsequent operations
+    // (delete, read, etc.).
+    std::string result_branch;
+
+private:
+    std::string branch_name_;
+    uint64_t salt_ts_{0};
+    std::vector<std::unique_ptr<CreateBranchRequest>> branch_reqs_;
+    std::atomic<uint32_t> pending_{0};
+    std::atomic<uint8_t> first_error_{static_cast<uint8_t>(KvError::NoError)};
+
+    friend class EloqStore;
+};
+
 class ArchiveCrond;
 class ObjectStore;
 class EloqStoreModule;
@@ -666,11 +758,21 @@ public:
     EloqStore(const EloqStore &) = delete;
     EloqStore(EloqStore &&) = delete;
     ~EloqStore();
-    KvError Start(uint64_t term = 0, PartitonGroupId partition_group_id = 0);
+    KvError Start(std::string_view branch = MainBranchName, uint64_t term = 0, PartitonGroupId partition_group_id = 0);
     void Stop();
     bool IsStopped() const;
     bool Inited() const;
     const KvOptions &Options() const;
+
+    /**
+     * @brief Validate KvOptions configuration.
+     * @param opts The options to validate
+     * This routine may adjust some cloud-mode options to safe defaults instead
+     * of failing validation.
+     * @return true if options are valid, false otherwise
+     */
+    static bool ValidateOptions(KvOptions &opts);
+
     CloudStorageService *CloudService() const
     {
         return cloud_service_.get();
@@ -708,14 +810,8 @@ public:
                                           std::vector<uint64_t> weights);
     KvError UpdateStandbyMasterAddr(std::string standby_master_addr);
 
-    /**
-     * @brief Validate KvOptions configuration.
-     * @param opts The options to validate
-     * This routine may adjust some cloud-mode options to safe defaults instead
-     * of failing validation.
-     * @return true if options are valid, false otherwise
-     */
-    static bool ValidateOptions(KvOptions &opts);
+    bool ExecAsyn(KvRequest *req);
+    void ExecSync(KvRequest *req);
 
     template <typename F>
     bool ExecAsyn(KvRequest *req, uint64_t data, F callback)
@@ -724,13 +820,15 @@ public:
         req->callback_ = std::move(callback);
         return SendRequest(req);
     }
-    bool ExecAsyn(KvRequest *req);
-    void ExecSync(KvRequest *req);
+
+    std::string_view Branch() const
+    {
+        return branch_;
+    }
 
 #ifdef ELOQSTORE_WITH_TXSERVICE
     void InitializeMetrics(metrics::MetricsRegistry *metrics_registry,
                            const metrics::CommonLabels &common_labels);
-
     /**
      * @brief Get the metrics meter for a specific shard.
      * @param shard_id The shard ID.
@@ -751,6 +849,7 @@ private:
     void HandleGlobalArchiveRequest(GlobalArchiveRequest *req);
     void HandleGlobalReopenRequest(GlobalReopenRequest *req);
     void HandleGlobalListArchiveTagsRequest(GlobalListArchiveTagsRequest *req);
+    void HandleGlobalCreateBranchRequest(GlobalCreateBranchRequest *req);
     KvError CollectTablePartitions(const std::string &table_name,
                                    std::vector<TableIdent> &partitions) const;
     KvError InitStoreSpace();
@@ -769,6 +868,7 @@ private:
     std::atomic<Status> status_{Status::Stopped};
     uint64_t term_{0};
     PartitonGroupId partition_group_id_{0};
+    std::string branch_{MainBranchName};
     std::unique_ptr<ArchiveCrond> archive_crond_{nullptr};
     std::unique_ptr<PrewarmService> prewarm_service_{nullptr};
     std::unique_ptr<StandbyService> standby_service_{nullptr};

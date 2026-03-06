@@ -56,24 +56,7 @@ KvError BuildRetainedFiles(const TableIdent &tbl_id,
         ThdTask()->YieldToLowPQ();
     }
 
-    retained_files.clear();
-    retained_files.reserve(file_ids.size());
-    auto *io_mgr = static_cast<IouringMgr *>(shard->IoManager());
-    for (FileId file_id : file_ids)
-    {
-        uint64_t term = 0;
-        if (std::optional<uint64_t> file_term =
-                io_mgr->GetFileIdTerm(tbl_id, file_id))
-        {
-            term = *file_term;
-        }
-        else
-        {
-            LOG(WARNING) << "BuildRetainedFiles: missing term for file_id "
-                         << file_id << " in table " << tbl_id;
-        }
-        retained_files.emplace(file_id, term);
-    }
+    retained_files = std::move(file_ids);
     return KvError::NoError;
 }
 }  // namespace
@@ -182,7 +165,6 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     need_wait_dir_eviction_ = IoMgr()->IsDirEvicting(tbl_ident_);
     write_err_ = KvError::NoError;
     wal_builder_.Reset();
-    file_id_term_mapping_dirty_ = false;
     last_append_file_id_.reset();
     cow_meta_ = CowRootMeta();
     size_t buf_size = Options()->write_buffer_size;
@@ -491,19 +473,22 @@ std::pair<PageId, FilePageId> WriteTask::AllocatePage(PageId page_id)
     FilePageId file_page_id = cow_meta_.mapper_->FilePgAllocator()->Allocate();
     FileId file_id_after_allocate =
         cow_meta_.mapper_->FilePgAllocator()->CurrentFileId();
-    if (!IoMgr()
-             ->GetFileIdTerm(tbl_ident_, file_id_before_allocate)
-             .has_value())
+    std::string unused_branch;
+    uint64_t unused_term;
+    if (!IoMgr()->GetBranchNameAndTerm(
+            tbl_ident_, file_id_before_allocate, unused_branch, unused_term))
     {
-        IoMgr()->SetFileIdTerm(
-            tbl_ident_, file_id_before_allocate, IoMgr()->ProcessTerm());
-        file_id_term_mapping_dirty_ = true;
+        IoMgr()->SetBranchFileIdTerm(tbl_ident_,
+                                     file_id_before_allocate,
+                                     IoMgr()->GetActiveBranch(),
+                                     IoMgr()->ProcessTerm());
     }
     if (file_id_before_allocate != file_id_after_allocate)
     {
-        IoMgr()->SetFileIdTerm(
-            tbl_ident_, file_id_after_allocate, IoMgr()->ProcessTerm());
-        file_id_term_mapping_dirty_ = true;
+        IoMgr()->SetBranchFileIdTerm(tbl_ident_,
+                                     file_id_after_allocate,
+                                     IoMgr()->GetActiveBranch(),
+                                     IoMgr()->ProcessTerm());
     }
 
     cow_meta_.mapper_->UpdateMapping(page_id, file_page_id);
@@ -553,13 +538,11 @@ KvError WriteTask::FlushManifest()
     }
     const bool dict_dirty = cow_meta_.compression_->Dirty();
 
-    // Serialize FileIdTermMapping for this table.
-    std::string term_buf;
-    std::shared_ptr<FileIdTermMapping> file_term_mapping =
-        IoMgr()->GetOrCreateFileIdTermMapping(tbl_ident_);
-    file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
-                                        IoMgr()->ProcessTerm());
-    SerializeFileIdTermMapping(*file_term_mapping, term_buf);
+    // Create BranchManifestMetadata for this table
+    BranchManifestMetadata branch_metadata;
+    branch_metadata.branch_name = IoMgr()->GetActiveBranch();
+    branch_metadata.term = IoMgr()->ProcessTerm();
+    branch_metadata.file_ranges = IoMgr()->GetBranchFileMapping(tbl_ident_);
     YieldToLowPQ();
 
     if (need_empty_snapshot)
@@ -574,7 +557,7 @@ KvError WriteTask::FlushManifest()
                                   mapping,
                                   max_fp_id,
                                   dict_bytes,
-                                  term_buf);
+                                  branch_metadata);
         err = IoMgr()->SwitchManifest(tbl_ident_, snapshot);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
@@ -583,19 +566,31 @@ KvError WriteTask::FlushManifest()
     }
 
     const size_t alignment = page_align;
+
+    // Serialize branch metadata first so its size is included in both the
+    // limit guard and the manifest_size_ update.
+    std::string branch_metadata_str =
+        SerializeBranchManifestMetadata(branch_metadata);
+    // CurrentSize() already accounts for the 4-byte mapping_len field
+    // (resized_for_mapping_bytes_len_ is always true here because Empty()
+    // returned false above, meaning at least one mapping entry was appended).
     const uint64_t log_physical_size =
-        (wal_builder_.CurrentSize() + term_buf.size() + alignment - 1) &
+        (wal_builder_.CurrentSize() + branch_metadata_str.size() + alignment -
+         1) &
         ~(alignment - 1);
 
     if (!dict_dirty && manifest_size > 0 &&
         manifest_size + log_physical_size <= opts->manifest_limit)
     {
-        wal_builder_.AppendFileIdTermMapping(term_buf);
+        // Append branch metadata to manifest log
+        wal_builder_.AppendBranchManifestMetadata(branch_metadata_str);
         std::string_view blob =
             wal_builder_.Finalize(cow_meta_.root_id_, cow_meta_.ttl_root_id_);
         err = IoMgr()->AppendManifest(tbl_ident_, blob, manifest_size);
         CHECK_KV_ERR(err);
-        cow_meta_.manifest_size_ += log_physical_size;
+        // Use the actual blob size (aligned) to keep manifest_size_ accurate.
+        cow_meta_.manifest_size_ +=
+            (blob.size() + alignment - 1) & ~(alignment - 1);
     }
     else
     {
@@ -608,19 +603,19 @@ KvError WriteTask::FlushManifest()
                                   mapping,
                                   max_fp_id,
                                   dict_bytes,
-                                  term_buf);
+                                  branch_metadata);
         err = IoMgr()->SwitchManifest(tbl_ident_, snapshot);
         CHECK_KV_ERR(err);
         cow_meta_.manifest_size_ = snapshot.size();
         cow_meta_.compression_->ClearDirty();
-        file_id_term_mapping_dirty_ = false;
     }
     return KvError::NoError;
 }
 
 KvError WriteTask::DeleteArchive(uint64_t term, std::string_view tag)
 {
-    return IoMgr()->DeleteArchive(tbl_ident_, term, tag);
+    return IoMgr()->DeleteArchive(
+        tbl_ident_, IoMgr()->GetActiveBranch(), term, tag);
 }
 
 KvError WriteTask::UpdateMeta()

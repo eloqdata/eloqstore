@@ -166,11 +166,12 @@ void Prewarmer::Run()
 
         DLOG(INFO) << "Prewarm downloading: " << file.tbl_id.ToString() << "/"
                    << (file.is_manifest
-                           ? "manifest"
-                           : "data_" + std::to_string(file.file_id))
-                   << "_" + std::to_string(file.term);
-        auto [fd_ref, err] =
-            io_mgr_->OpenFD(file.tbl_id, file.file_id, true, file.term);
+                           ? BranchManifestFileName(file.branch_name, file.term)
+                           : BranchDataFileName(
+                                 file.file_id, file.branch_name, file.term))
+                   << ", size: " << file.file_size << " bytes)";
+        auto [fd_ref, err] = io_mgr_->OpenFD(
+            file.tbl_id, file.file_id, true, file.branch_name, file.term);
         if (err == KvError::NoError)
         {
             fd_ref = nullptr;
@@ -504,25 +505,34 @@ void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
             auto [file_type, suffix] = ParseFileName(filename);
             if (file_type == FileNameManifest)
             {
+                std::string_view branch_name;
                 uint64_t term = 0;
                 std::optional<std::string> tag;
-                if (!ParseManifestFileSuffix(suffix, term, tag) ||
+                if (!ParseManifestFileSuffix(suffix, branch_name, term, tag) ||
                     tag.has_value())
                 {
+                    DLOG(INFO)
+                        << "ParseManifestFileSuffix failed, suffix: " << suffix;
                     total_files_skipped++;
                     continue;
                 }
                 file.file_id = IouringMgr::LruFD::kManifest;
                 file.term = term;
+                file.branch_name = std::string(branch_name);
                 file.is_manifest = true;
             }
             else if (file_type == FileNameData)
             {
-                if (!ParseDataFileSuffix(suffix, file.file_id, file.term))
+                std::string_view branch_name;
+                if (!ParseDataFileSuffix(
+                        suffix, file.file_id, branch_name, file.term))
                 {
+                    DLOG(INFO)
+                        << "ParseDataFileSuffix failed, suffix: " << suffix;
                     total_files_skipped++;
                     continue;
                 }
+                file.branch_name = std::string(branch_name);
                 file.is_manifest = false;
             }
             else

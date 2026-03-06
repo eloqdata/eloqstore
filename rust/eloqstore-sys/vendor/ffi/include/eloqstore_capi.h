@@ -31,6 +31,7 @@ extern "C"
         CEloqStoreStatus_IoFail,
         CEloqStoreStatus_ExpiredTerm,
         CEloqStoreStatus_OssInsufficientStorage,
+        CEloqStoreStatus_AlreadyExists,
     } CEloqStoreStatus;
 
     // ============================================================

@@ -319,15 +319,14 @@ KvError BackgroundWrite::CreateArchive(std::string_view tag)
     {
         dict_bytes = meta->compression_->DictionaryBytes();
     }
-    // Archive snapshot should also carry FileIdTermMapping for this table
-    std::string term_buf;
-    std::shared_ptr<FileIdTermMapping> file_term_mapping =
-        shard->IoManager()->GetOrCreateFileIdTermMapping(tbl_ident_);
-    file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
-                                        IoMgr()->ProcessTerm());
-    SerializeFileIdTermMapping(*file_term_mapping, term_buf);
+    // Archive snapshot should also carry BranchManifestMetadata for this table
+    BranchManifestMetadata branch_metadata;
+    branch_metadata.branch_name = std::string(IoMgr()->GetActiveBranch());
+    branch_metadata.term = IoMgr()->ProcessTerm();
+    branch_metadata.file_ranges = IoMgr()->GetBranchFileMapping(tbl_ident_);
+
     std::string_view snapshot = wal_builder_.Snapshot(
-        root, ttl_root, mapping, max_fp_id, dict_bytes, term_buf);
+        root, ttl_root, mapping, max_fp_id, dict_bytes, branch_metadata);
 
     const std::string generated_tag =
         tag.empty() ? std::to_string(utils::UnixTs<chrono::microseconds>())
@@ -342,18 +341,153 @@ KvError BackgroundWrite::CreateArchive(std::string_view tag)
                << ", root=" << root << ", ttl_root=" << ttl_root
                << ", max_fp_id=" << max_fp_id
                << ", snapshot_bytes=" << snapshot.size();
-    err = IoMgr()->CreateArchive(tbl_ident_, snapshot, tag);
+    err = IoMgr()->CreateArchive(tbl_ident_,
+                                 branch_metadata.branch_name,
+                                 branch_metadata.term,
+                                 snapshot,
+                                 tag);
     CHECK_KV_ERR(err);
     DLOG(INFO) << "CreateArchive done, table=" << tbl_ident_
                << ", term=" << IoMgr()->ProcessTerm() << ", tag=" << tag;
 
-    // Update the cached max file id.
-    FileId max_file_id =
-        static_cast<FileId>(max_fp_id >> Options()->pages_per_file_shift);
-    IoMgr()->least_not_archived_file_ids_[tbl_ident_] = max_file_id + 1;
-
     LOG(INFO) << "created archive for partition " << tbl_ident_ << " with tag "
-              << tag << ", updated cached max file id to " << max_file_id + 1;
+              << tag;
+
+    return KvError::NoError;
+}
+
+KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
+{
+    std::string normalized_branch = NormalizeBranchName(branch_name);
+    if (normalized_branch.empty())
+    {
+        return KvError::InvalidArgs;
+    }
+
+    // Compact before snapshotting so the branch inherits a dense mapping
+    // and does not carry over fragmented files from the parent.
+    // CompactDataFile() requires data_append_mode; in-place update mode
+    // does not fragment files, so compaction is unnecessary.
+    if (Options()->data_append_mode)
+    {
+        KvError compact_err = CompactDataFile();
+        if (compact_err == KvError::NotFound)
+        {
+            // Partition has no manifest (e.g. only term files).
+            // No branch manifest needed — treat as success.
+            return KvError::NoError;
+        }
+        CHECK_KV_ERR(compact_err);
+    }
+
+    BranchManifestMetadata branch_metadata;
+    branch_metadata.branch_name = normalized_branch;
+    branch_metadata.term = 0;
+    branch_metadata.file_ranges = IoMgr()->GetBranchFileMapping(tbl_ident_);
+
+    wal_builder_.Reset();
+    auto [root_handle, root_err] = shard->IndexManager()->FindRoot(tbl_ident_);
+    if (root_err == KvError::NotFound)
+    {
+        // Partition has no manifest yet (empty/unwritten partition).
+        // No branch manifest needed — treat as success.
+        return KvError::NoError;
+    }
+    if (root_err != KvError::NoError)
+    {
+        return root_err;
+    }
+    RootMeta *meta = root_handle.Get();
+    if (!meta || !meta->mapper_)
+    {
+        // Mapper is null — partition exists as a stub but has no data.
+        // Treat as empty partition; no branch manifest needed.
+        return KvError::NoError;
+    }
+
+    // new branch jump to use the next file id to avoid any collision with
+    // parent branch
+    FileId parent_branch_max_file_id =
+        meta->mapper_->FilePgAllocator()->CurrentFileId();
+    FilePageId new_max_fp_id =
+        static_cast<FilePageId>(parent_branch_max_file_id + 1)
+        << Options()->pages_per_file_shift;
+
+    PageId root = meta->root_id_;
+    PageId ttl_root = meta->ttl_root_id_;
+    MappingSnapshot *mapping = meta->mapper_->GetMapping();
+    std::string_view dict_bytes;
+    if (meta->compression_->HasDictionary())
+    {
+        dict_bytes = meta->compression_->DictionaryBytes();
+    }
+
+    std::string_view snapshot = wal_builder_.Snapshot(
+        root, ttl_root, mapping, new_max_fp_id, dict_bytes, branch_metadata);
+
+    KvError err = IoMgr()->WriteBranchManifest(
+        tbl_ident_, normalized_branch, 0, snapshot);
+    if (err != KvError::NoError)
+    {
+        return err;
+    }
+
+    err = IoMgr()->WriteBranchCurrentTerm(tbl_ident_, normalized_branch, 0);
+    if (err != KvError::NoError)
+    {
+        // Rollback: remove the manifest we just wrote so we don't leave
+        // a half-created branch.
+        KvError rollback_err =
+            IoMgr()->DeleteBranchFiles(tbl_ident_, normalized_branch, 0);
+        if (rollback_err != KvError::NoError &&
+            rollback_err != KvError::NotFound)
+        {
+            LOG(ERROR) << "CreateBranch: rollback failed for branch "
+                       << normalized_branch << ": "
+                       << ErrorString(rollback_err);
+        }
+        return err;
+    }
+
+    return KvError::NoError;
+}
+
+KvError BackgroundWrite::DeleteBranch(std::string_view branch_name)
+{
+    std::string normalized_branch = NormalizeBranchName(branch_name);
+    if (normalized_branch.empty())
+    {
+        return KvError::InvalidArgs;
+    }
+
+    if (normalized_branch == MainBranchName)
+    {
+        LOG(ERROR) << "Cannot delete main branch";
+        return KvError::InvalidArgs;
+    }
+
+    if (normalized_branch == IoMgr()->GetActiveBranch())
+    {
+        LOG(ERROR) << "Cannot delete the currently active branch: "
+                   << normalized_branch;
+        return KvError::InvalidArgs;
+    }
+
+    LOG(INFO) << "Deleting branch " << normalized_branch;
+
+    // Delete all manifest files for this branch (all terms) plus CURRENT_TERM.
+    // The term argument is ignored; DeleteBranchFiles reads CURRENT_TERM
+    // itself.
+    KvError del_err =
+        IoMgr()->DeleteBranchFiles(tbl_ident_, normalized_branch, 0);
+    if (del_err != KvError::NoError && del_err != KvError::NotFound)
+    {
+        LOG(ERROR) << "DeleteBranch: failed to remove files for branch "
+                   << normalized_branch << ": " << ErrorString(del_err);
+        return del_err;
+    }
+
+    LOG(INFO) << "Successfully deleted branch " << normalized_branch;
     return KvError::NoError;
 }
 
