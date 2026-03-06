@@ -62,26 +62,6 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
         {
             shard->AddPendingLocalGc(tbl_id);
         }
-        if (mode == StoreMode::StandbyReplica && standby_service != nullptr &&
-            !tag.empty())
-        {
-            KvTask *current_task = ThdTask();
-            CHECK(current_task != nullptr);
-            KvError cleanup_enqueue_err =
-                standby_service->CleanupLocalManifest(tbl_id);
-            if (cleanup_enqueue_err == KvError::NoError)
-            {
-                current_task->WaitIo();
-                KvError cleanup_err =
-                    static_cast<KvError>(current_task->io_res_);
-                if (cleanup_err != KvError::NoError)
-                {
-                    LOG(WARNING) << "StandbyService cleanup failed for "
-                                 << tbl_id << " tag " << tag
-                                 << ": " << ErrorString(cleanup_err);
-                }
-            }
-        }
     }
     request_ = nullptr;
     return err;

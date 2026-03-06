@@ -1070,22 +1070,11 @@ public:
     std::pair<ManifestFilePtr, KvError> RefreshManifest(
         const TableIdent &tbl_id);
 
-    void SetProcessTerm(uint64_t term)
-    {
-        process_term_ = term;
-    }
-
-    uint64_t ProcessTerm() const override
-    {
-        return process_term_;
-    }
-
 private:
     void WaitForStandbyTasksToDrain();
     std::string BuildRemoteFilePath(const TableIdent &tbl_id,
                                     std::string_view filename) const;
     int RunRsync(const std::string &remote, const std::string &dst);
-    uint64_t process_term_{0};
     std::atomic<size_t> inflight_standby_tasks_{0};
 
     std::string remote_addr_;

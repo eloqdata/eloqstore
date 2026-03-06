@@ -70,26 +70,10 @@ StandbyService::StandbyService(EloqStore *store) : store_(store)
     const KvOptions &options = store_->Options();
     shard_count_ = options.num_threads;
     ready_queues_.resize(shard_count_);
+    UpdateRemoteStorePaths(options.standby_master_store_paths);
     if (!options.standby_master_addr.empty())
     {
-        remote_addr_ = options.standby_master_addr;
-        remote_store_paths_.clear();
-        remote_store_paths_.reserve(options.standby_master_store_paths.size());
-        for (const std::string &root : options.standby_master_store_paths)
-        {
-            remote_store_paths_.push_back(root);
-            while (remote_store_paths_.back().size() > 1 &&
-                   remote_store_paths_.back().back() == '/')
-            {
-                remote_store_paths_.back().pop_back();
-            }
-            if (remote_store_paths_.back().empty() ||
-                remote_store_paths_.back().front() != '/')
-            {
-                remote_store_paths_.back().insert(
-                    remote_store_paths_.back().begin(), '/');
-            }
-        }
+        UpdateRemoteAddr(options.standby_master_addr);
     }
 }
 
@@ -135,6 +119,34 @@ void StandbyService::Stop()
     }
 }
 
+void StandbyService::UpdateRemoteAddr(const std::string &remote_addr)
+{
+    std::lock_guard<std::mutex> lk(remote_mutex_);
+    remote_addr_ = remote_addr;
+}
+
+void StandbyService::UpdateRemoteStorePaths(
+    const std::vector<std::string> &store_paths)
+{
+    std::vector<std::string> normalized;
+    normalized.reserve(store_paths.size());
+    for (const std::string &root : store_paths)
+    {
+        normalized.push_back(root);
+        while (normalized.back().size() > 1 && normalized.back().back() == '/')
+        {
+            normalized.back().pop_back();
+        }
+        if (normalized.back().empty() || normalized.back().front() != '/')
+        {
+            normalized.back().insert(normalized.back().begin(), '/');
+        }
+    }
+
+    std::lock_guard<std::mutex> lk(remote_mutex_);
+    remote_store_paths_ = std::move(normalized);
+}
+
 KvError StandbyService::RsyncPartition(const TableIdent &tbl_id,
                                        std::string archive_tag)
 {
@@ -142,19 +154,6 @@ KvError StandbyService::RsyncPartition(const TableIdent &tbl_id,
     auto &rsync = job.payload.emplace<RsyncJob>();
     rsync.tbl_id = tbl_id;
     rsync.archive_tag = std::move(archive_tag);
-    CHECK(shard != nullptr);
-    KvTask *task = ThdTask();
-    CHECK(task != nullptr);
-    job.context.shard_id = shard->shard_id_;
-    job.context.task = task;
-    return SubmitJob(std::move(job));
-}
-
-KvError StandbyService::CleanupLocalManifest(const TableIdent &tbl_id)
-{
-    Job job;
-    auto &cleanup = job.payload.emplace<CleanupJob>();
-    cleanup.tbl_id = tbl_id;
     CHECK(shard != nullptr);
     KvTask *task = ThdTask();
     CHECK(task != nullptr);
@@ -223,10 +222,6 @@ void StandbyService::WorkerLoop()
         {
             result = RunRsyncJob(*rsync);
         }
-        else if (const auto *cleanup = std::get_if<CleanupJob>(&job.payload))
-        {
-            result = RunCleanupJob(*cleanup);
-        }
         else if (const auto *list =
                      std::get_if<ListPartitionsJob>(&job.payload))
         {
@@ -277,14 +272,19 @@ fs::path StandbyService::TablePath(const TableIdent &tbl_id) const
 std::string StandbyService::RemotePartitionPath(const TableIdent &tbl_id) const
 {
     const KvOptions &options = store_->Options();
+    std::vector<std::string> remote_store_paths;
+    {
+        std::lock_guard<std::mutex> lk(remote_mutex_);
+        remote_store_paths = remote_store_paths_;
+    }
     size_t remote_path_idx =
         tbl_id.StorePathIndex(options.standby_master_store_paths.size(),
                               options.standby_master_store_path_lut);
-    if (remote_path_idx >= remote_store_paths_.size())
+    if (remote_path_idx >= remote_store_paths.size())
     {
         return {};
     }
-    std::string remote_path = remote_store_paths_[remote_path_idx];
+    std::string remote_path = remote_store_paths[remote_path_idx];
     if (!remote_path.empty() && remote_path.back() != '/')
     {
         remote_path.push_back('/');
@@ -302,7 +302,12 @@ std::string StandbyService::RemoteArchiveManifestPath(const TableIdent &tbl_id,
         return {};
     }
     remote_path.push_back('/');
-    remote_path.append(ArchiveName(store_->Term(), archive_tag));
+    // Match archive manifest by tag across any term.
+    remote_path.append(FileNameManifest);
+    remote_path.push_back(FileNameSeparator);
+    remote_path.push_back('*');
+    remote_path.push_back(FileNameSeparator);
+    remote_path.append(archive_tag);
     return remote_path;
 }
 
@@ -314,11 +319,16 @@ std::string StandbyService::RemoteSpec(const std::string &path,
     {
         spec.push_back('/');
     }
-    if (remote_addr_.empty() || remote_addr_ == "local")
+    std::string remote_addr;
+    {
+        std::lock_guard<std::mutex> lk(remote_mutex_);
+        remote_addr = remote_addr_;
+    }
+    if (remote_addr.empty() || remote_addr == "local")
     {
         return spec;
     }
-    std::string remote = remote_addr_;
+    std::string remote = std::move(remote_addr);
     remote.push_back(':');
     remote.append(spec);
     return remote;
@@ -332,7 +342,14 @@ KvError StandbyService::RunListPartitionsJob(const ListPartitionsJob &job)
     }
 
     std::set<std::string> partitions;
-    for (const std::string &store_path : remote_store_paths_)
+    std::vector<std::string> remote_store_paths;
+    std::string remote_addr;
+    {
+        std::lock_guard<std::mutex> lk(remote_mutex_);
+        remote_store_paths = remote_store_paths_;
+        remote_addr = remote_addr_;
+    }
+    for (const std::string &store_path : remote_store_paths)
     {
         if (store_path.empty())
         {
@@ -341,7 +358,7 @@ KvError StandbyService::RunListPartitionsJob(const ListPartitionsJob &job)
 
         std::string output;
         KvError err = KvError::NoError;
-        if (remote_addr_.empty() || remote_addr_ == "local")
+        if (remote_addr.empty() || remote_addr == "local")
         {
             std::vector<const char *> argv = {
                 "ls", "-1", "--", store_path.c_str(), nullptr};
@@ -351,7 +368,7 @@ KvError StandbyService::RunListPartitionsJob(const ListPartitionsJob &job)
         {
             std::string cmd = "ls -1 -- " + QuoteForPosixShell(store_path);
             std::vector<const char *> argv = {
-                "ssh", remote_addr_.c_str(), cmd.c_str(), nullptr};
+                "ssh", remote_addr.c_str(), cmd.c_str(), nullptr};
             err = RunCommandCapture(argv, &output);
         }
         if (err != KvError::NoError)
@@ -457,19 +474,6 @@ KvError StandbyService::RunRsyncJob(const RsyncJob &job)
         LOG(ERROR) << "StandbyService: manifest.tmp missing after rsync: "
                    << manifest_tmp;
         return KvError::NotFound;
-    }
-    return KvError::NoError;
-}
-
-KvError StandbyService::RunCleanupJob(const CleanupJob &job)
-{
-    fs::path manifest_tmp = TablePath(job.tbl_id) / kManifestTmp;
-    std::error_code ec;
-    fs::remove(manifest_tmp, ec);
-    if (ec)
-    {
-        LOG(WARNING) << "StandbyService: local cleanup failed for "
-                     << manifest_tmp << ": " << ec.message();
     }
     return KvError::NoError;
 }

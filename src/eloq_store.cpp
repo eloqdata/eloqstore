@@ -353,6 +353,29 @@ KvError EloqStore::UpdateStandbyMasterStorePaths(std::vector<std::string> paths,
         LOG(ERROR) << "Failed to compute standby master store path LUT";
         return KvError::InvalidArgs;
     }
+    if (standby_service_ != nullptr)
+    {
+        standby_service_->UpdateRemoteStorePaths(
+            options_.standby_master_store_paths);
+    }
+    return KvError::NoError;
+}
+
+KvError EloqStore::UpdateStandbyMasterAddr(std::string standby_master_addr)
+{
+    if (!standby_master_addr.empty() && standby_master_addr != "local" &&
+        standby_master_addr.find('@') == std::string::npos)
+    {
+        LOG(ERROR) << "standby_master_addr must be 'local' or "
+                   << "'username@addr'";
+        return KvError::InvalidArgs;
+    }
+    options_.standby_master_addr = std::move(standby_master_addr);
+    options_.enable_local_standby = !options_.standby_master_addr.empty();
+    if (standby_service_ != nullptr)
+    {
+        standby_service_->UpdateRemoteAddr(options_.standby_master_addr);
+    }
     return KvError::NoError;
 }
 
@@ -372,13 +395,14 @@ EloqStore::EloqStore(const KvOptions &opts) : options_(opts)
                                                store_path_list.c_str());
     }
 #endif
-    store_mode_ = DetermineStoreMode(options_);
-    if (store_mode_ == StoreMode::Cloud)
+    const StoreMode mode = DetermineStoreMode(options_);
+    store_mode_.store(mode, std::memory_order_release);
+    if (mode == StoreMode::Cloud)
     {
         cloud_service_ = std::make_unique<CloudStorageService>(this);
     }
-    else if (store_mode_ == StoreMode::StandbyMaster ||
-             store_mode_ == StoreMode::StandbyReplica)
+    else if (mode == StoreMode::StandbyMaster ||
+             mode == StoreMode::StandbyReplica)
     {
         standby_service_ = std::make_unique<StandbyService>(this);
     }
@@ -473,7 +497,7 @@ KvError EloqStore::Start(uint64_t term)
     module_ = std::make_unique<EloqStoreModule>(&shards_);
     eloq::register_module(module_.get());
 #endif
-    if (options_.prewarm_cloud_cache && store_mode_ == StoreMode::Cloud)
+    if (options_.prewarm_cloud_cache && Mode() == StoreMode::Cloud)
     {
         if (prewarm_service_ == nullptr)
         {

@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -31,9 +32,10 @@ public:
 
     void Start();
     void Stop();
+    void UpdateRemoteAddr(const std::string &remote_addr);
+    void UpdateRemoteStorePaths(const std::vector<std::string> &store_paths);
 
     KvError RsyncPartition(const TableIdent &tbl_id, std::string archive_tag);
-    KvError CleanupLocalManifest(const TableIdent &tbl_id);
     KvError ListRemotePartitions(std::vector<std::string> *partitions);
     void ProcessReadyTasks(size_t shard_id);
 
@@ -42,11 +44,6 @@ private:
     {
         TableIdent tbl_id;
         std::string archive_tag;
-    };
-
-    struct CleanupJob
-    {
-        TableIdent tbl_id;
     };
 
     struct ListPartitionsJob
@@ -63,7 +60,7 @@ private:
     struct Job
     {
         using Payload = std::
-            variant<std::monostate, RsyncJob, CleanupJob, ListPartitionsJob>;
+            variant<std::monostate, RsyncJob, ListPartitionsJob>;
 
         Payload payload;
         TaskContext context;
@@ -80,7 +77,6 @@ private:
     void WorkerLoop();
 
     KvError RunRsyncJob(const RsyncJob &job);
-    KvError RunCleanupJob(const CleanupJob &job);
     KvError RunListPartitionsJob(const ListPartitionsJob &job);
 
     static KvError RunRsyncCommand(const std::vector<const char *> &args,
@@ -106,6 +102,7 @@ private:
     std::vector<moodycamel::ConcurrentQueue<Completion>> ready_queues_;
 
     // replica mode remote info
+    mutable std::mutex remote_mutex_;
     std::string remote_addr_;
     std::vector<std::string> remote_store_paths_;
 };

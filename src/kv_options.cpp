@@ -231,11 +231,6 @@ int KvOptions::LoadFromIni(const char *path)
         allow_reuse_local_caches =
             reader.GetBoolean(sec_run, "allow_reuse_local_caches", false);
     }
-    if (reader.HasValue(sec_run, "enable_local_standby"))
-    {
-        enable_local_standby =
-            reader.GetBoolean(sec_run, "enable_local_standby", false);
-    }
     if (reader.HasValue(sec_run, "prewarm_cloud_cache"))
     {
         prewarm_cloud_cache =
@@ -403,7 +398,6 @@ bool KvOptions::operator==(const KvOptions &other) const
            non_page_io_batch_size == other.non_page_io_batch_size &&
            write_buffer_ratio == other.write_buffer_ratio &&
            allow_reuse_local_caches == other.allow_reuse_local_caches &&
-           enable_local_standby == other.enable_local_standby &&
            prewarm_cloud_cache == other.prewarm_cloud_cache &&
            prewarm_task_count == other.prewarm_task_count &&
            store_path == other.store_path &&

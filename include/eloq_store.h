@@ -622,7 +622,7 @@ public:
 
     StoreMode Mode() const
     {
-        return store_mode_;
+        return store_mode_.load(std::memory_order_acquire);
     }
 
     uint64_t Term() const
@@ -632,6 +632,7 @@ public:
 
     KvError UpdateStandbyMasterStorePaths(
         std::vector<std::string> paths, std::vector<uint64_t> weights);
+    KvError UpdateStandbyMasterAddr(std::string standby_master_addr);
 
     /**
      * @brief Validate KvOptions configuration.
@@ -699,7 +700,7 @@ private:
 #endif
 
     bool enable_eloqstore_metrics_{false};
-    StoreMode store_mode_{StoreMode::Local};
+    std::atomic<StoreMode> store_mode_{StoreMode::Local};
 
     friend class Shard;
     friend class AsyncIoManager;
