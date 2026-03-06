@@ -24,6 +24,10 @@ public:
 
     KvError RunLocalFileGc();
 
+    KvError CreateBranch(std::string_view branch_name);
+
+    KvError DeleteBranch(std::string_view branch_name);
+
 private:
     void HeapSortFpIdsWithYield(
         std::vector<std::pair<FilePageId, PageId>> &fp_ids);

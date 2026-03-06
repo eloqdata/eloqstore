@@ -1,13 +1,15 @@
 #include <catch2/catch_test_macros.hpp>
+#include <cstdint>
+#include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <vector>
 
-#include "../include/async_io_manager.h"
-#include "../include/coding.h"
-#include "../include/kv_options.h"
+#include "../include/common.h"
 #include "../include/storage/index_page_manager.h"
+#include "../include/storage/root_meta.h"
+#include "../include/types.h"
 #include "../include/storage/page_mapper.h"
 #include "../include/storage/root_meta.h"
 
@@ -35,24 +37,20 @@ TEST_CASE(
     eloqstore::MappingSnapshot mapping_snapshot(
         &idx_mgr, &tbl_id, std::move(mapping_tbl));
 
-    // Prepare FileIdTermMapping with a few entries.
-    eloqstore::FileIdTermMapping file_id_term;
-    file_id_term[1] = 10;
-    file_id_term[5] = 20;
-
     // Dict bytes and max_fp_id to embed into snapshot payload.
     const std::string dict_bytes = "DICT_BYTES";
     const eloqstore::FilePageId max_fp_id = 123456;
 
-    std::string file_term_mapping_str;
-    eloqstore::SerializeFileIdTermMapping(file_id_term, file_term_mapping_str);
     eloqstore::ManifestBuilder builder;
+    eloqstore::BranchManifestMetadata branch_metadata;
+    branch_metadata.branch_name = eloqstore::MainBranchName;
+    branch_metadata.term = 42;
     std::string_view manifest = builder.Snapshot(/*root_id=*/1,
                                                  /*ttl_root=*/2,
                                                  &mapping_snapshot,
                                                  max_fp_id,
                                                  dict_bytes,
-                                                 file_term_mapping_str);
+                                                 branch_metadata);
     REQUIRE(manifest.size() > eloqstore::ManifestBuilder::header_bytes);
 
     // Strip manifest header; inspect the payload layout:
@@ -94,16 +92,12 @@ TEST_CASE(
     }
     REQUIRE(parsed_tbl == mapping_snapshot.mapping_tbl_);
 
-    // 5) file_term_mapping
-    std::string_view file_term_mapping_view = payload.substr(mapping_len);
-    eloqstore::FileIdTermMapping parsed_mapping;
-    REQUIRE(eloqstore::DeserializeFileIdTermMapping(file_term_mapping_view,
-                                                    parsed_mapping));
-    REQUIRE(parsed_mapping.size() == file_id_term.size());
-    for (const auto &[fid, term] : file_id_term)
-    {
-        REQUIRE(parsed_mapping.at(fid) == term);
-    }
+    // 5) BranchManifestMetadata after the mapping table
+    std::string_view branch_meta_view = payload.substr(mapping_len);
+    auto parsed_meta =
+        eloqstore::DeserializeBranchManifestMetadata(branch_meta_view);
+    REQUIRE(parsed_meta.branch_name == eloqstore::MainBranchName);
+    REQUIRE(parsed_meta.term == 42);
 
     mapping_snapshot.mapping_tbl_.clear();
 }
@@ -127,16 +121,15 @@ TEST_CASE(
     const eloqstore::FilePageId max_fp_id = 7;
 
     eloqstore::ManifestBuilder builder;
-    // Pass empty FileIdTermMapping: should still write a count=0.
-    eloqstore::FileIdTermMapping empty_mapping;
-    std::string file_term_mapping_str;
-    eloqstore::SerializeFileIdTermMapping(empty_mapping, file_term_mapping_str);
+    eloqstore::BranchManifestMetadata branch_metadata;
+    branch_metadata.branch_name = eloqstore::MainBranchName;
+    branch_metadata.term = 0;
     std::string_view manifest = builder.Snapshot(/*root_id=*/3,
                                                  /*ttl_root=*/4,
                                                  &mapping_snapshot,
                                                  max_fp_id,
                                                  dict_bytes,
-                                                 file_term_mapping_str);
+                                                 branch_metadata);
 
     REQUIRE(manifest.size() > eloqstore::ManifestBuilder::header_bytes);
     // Strip manifest header; inspect the payload layout:
@@ -180,12 +173,12 @@ TEST_CASE(
     REQUIRE(parsed_tbl[0] == MockEncodeFilePageId(42));
     REQUIRE(parsed_tbl[1] == MockEncodeFilePageId(43));
 
-    // 5) file_term_mapping
-    std::string_view file_term_mapping_view = payload.substr(mapping_len);
-    eloqstore::FileIdTermMapping parsed_mapping;
-    REQUIRE(eloqstore::DeserializeFileIdTermMapping(file_term_mapping_view,
-                                                    parsed_mapping));
-    REQUIRE(parsed_mapping.empty());
+    // 5) BranchManifestMetadata after the mapping table
+    std::string_view branch_meta_view = payload.substr(mapping_len);
+    auto parsed_meta =
+        eloqstore::DeserializeBranchManifestMetadata(branch_meta_view);
+    REQUIRE(parsed_meta.branch_name == eloqstore::MainBranchName);
+    REQUIRE(parsed_meta.term == 0);
 
     mapping_snapshot.mapping_tbl_.clear();
     builder.Reset();

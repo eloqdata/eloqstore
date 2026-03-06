@@ -263,6 +263,9 @@ public:
     FilePageId MaxFilePageId() const;
     uint32_t PagesPerFile() const;
 
+    // Set initial file_id to continue from (used when opening a branch)
+    void SetCurrentFileId(FileId file_id);
+
 protected:
     const uint8_t pages_per_file_shift_;
     /**

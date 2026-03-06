@@ -57,11 +57,14 @@ Shard::Shard(const EloqStore *store, size_t shard_id, uint32_t fd_limit)
 
 KvError Shard::Init()
 {
-    // Inject process term into IO manager before any file operations.
-    // Only CloudStoreMgr needs term support; IouringMgr always uses term=0.
+    // Inject process term and active branch into IO manager before any file
+    // operations. All IouringMgr instances support SetActiveBranch; only
+    // CloudStoreMgr additionally needs SetProcessTerm (local mode uses term=0).
     if (io_mgr_ != nullptr)
     {
         uint64_t term = store_ != nullptr ? store_->Term() : 0;
+        std::string_view branch = store_ != nullptr ? store_->Branch() : MainBranchName;
+        io_mgr_->SetActiveBranch(branch);
         if (auto *cloud_mgr = dynamic_cast<CloudStoreMgr *>(io_mgr_.get());
             cloud_mgr != nullptr)
         {
@@ -352,6 +355,11 @@ void Shard::OnReceivedReq(KvRequest *req)
 {
     if (!req->ReadOnly())
     {
+        if (req->Type() == RequestType::CreateBranch || req->Type() == RequestType::DeleteBranch)
+        {
+            ProcessReq(req);
+            return;
+        }
         auto *wreq = reinterpret_cast<WriteRequest *>(req);
         auto [it, inserted] = pending_queues_.try_emplace(req->tbl_id_);
         if (inserted)
@@ -363,7 +371,7 @@ void Shard::OnReceivedReq(KvRequest *req)
         return;
     }
 
-    (void) ProcessReq(req);
+    ProcessReq(req);
 }
 
 void Shard::TryStartPendingWrite(const TableIdent &tbl_id)
@@ -512,20 +520,16 @@ bool Shard::ProcessReq(KvRequest *req)
         {
             return false;
         }
-        auto lbd = [task, req]() -> KvError
+        auto write_req = static_cast<BatchWriteRequest *>(req);
+        task->Reset(req->TableId());
+        if (!write_req->batch_.empty())
         {
-            auto write_req = static_cast<BatchWriteRequest *>(req);
-            if (write_req->batch_.empty())
-            {
-                return KvError::NoError;
-            }
             if (!task->SetBatch(write_req->batch_))
             {
-                return KvError::InvalidArgs;
+                return false;
             }
-            return task->Apply();
-        };
-        StartTask(task, req, lbd);
+            StartTask(task, req, [task]() { return task->Apply(); });
+        }
         return true;
     }
     case RequestType::Truncate:
@@ -608,6 +612,42 @@ bool Shard::ProcessReq(KvRequest *req)
         StartTask(task, req, lbd);
         return true;
     }
+    case RequestType::CreateBranch:
+    {
+        auto *branch_req = static_cast<CreateBranchRequest *>(req);
+        BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());
+        if (task == nullptr)
+        {
+            return false;
+        }
+        auto lbd = [task, branch_req]() -> KvError
+        {
+            return task->CreateBranch(branch_req->branch_name);
+        };
+        StartTask(task, req, lbd);
+        return true;
+    }
+    case RequestType::DeleteBranch:
+    {
+        auto *branch_req = static_cast<DeleteBranchRequest *>(req);
+        BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());
+        if (task == nullptr)
+        {
+            return false;
+        }
+        auto lbd = [task, branch_req]() -> KvError
+        {
+            return task->DeleteBranch(branch_req->branch_name);
+        };
+        StartTask(task, req, lbd);
+        return true;
+    }
+    case RequestType::GlobalCreateBranch:
+    {
+        LOG(ERROR) << "GlobalCreateBranch request routed to shard unexpectedly";
+        req->SetDone(KvError::InvalidArgs);
+        return true;
+    }
     }
     return true;
 }
@@ -666,7 +706,11 @@ void Shard::OnTaskFinished(KvTask *task)
     {
         auto wtask = reinterpret_cast<WriteTask *>(task);
         auto it = pending_queues_.find(wtask->TableId());
-        assert(it != pending_queues_.end());
+        if (it == pending_queues_.end())
+        {
+            task_mgr_.FreeTask(task);
+            return;
+        }
         PendingWriteQueue &pending_q = it->second;
         pending_q.running_ = false;
         task_mgr_.FreeTask(task);

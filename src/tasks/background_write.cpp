@@ -1,11 +1,10 @@
-#include "tasks/background_write.h"
-
 #include <algorithm>
 #include <memory>  // for std::shared_ptr
 #include <string>
 
 #include "storage/mem_index_page.h"
 #include "storage/shard.h"
+#include "tasks/background_write.h"
 #include "utils.h"
 
 namespace eloqstore
@@ -321,29 +320,145 @@ KvError BackgroundWrite::CreateArchive(uint64_t provided_ts)
     {
         dict_bytes = meta->compression_->DictionaryBytes();
     }
-    // Archive snapshot should also carry FileIdTermMapping for this table
-    std::string term_buf;
-    std::shared_ptr<FileIdTermMapping> file_term_mapping =
-        shard->IoManager()->GetOrCreateFileIdTermMapping(tbl_ident_);
-    file_term_mapping->insert_or_assign(IouringMgr::LruFD::kManifest,
-                                        IoMgr()->ProcessTerm());
-    SerializeFileIdTermMapping(*file_term_mapping, term_buf);
+    // Archive snapshot should also carry BranchManifestMetadata for this table
+    BranchManifestMetadata branch_metadata;
+    branch_metadata.branch_name = std::string(IoMgr()->GetActiveBranch());
+    branch_metadata.term = IoMgr()->ProcessTerm();
+    branch_metadata.file_ranges = IoMgr()->GetBranchFileMapping(tbl_ident_);
+
     std::string_view snapshot = wal_builder_.Snapshot(
-        root, ttl_root, mapping, max_fp_id, dict_bytes, term_buf);
+        root, ttl_root, mapping, max_fp_id, dict_bytes, branch_metadata);
 
     uint64_t current_ts =
         provided_ts != 0 ? provided_ts : utils::UnixTs<chrono::microseconds>();
-    err = IoMgr()->CreateArchive(tbl_ident_, snapshot, current_ts);
+    err = IoMgr()->CreateArchive(
+        tbl_ident_, snapshot, current_ts, branch_metadata.branch_name);
     CHECK_KV_ERR(err);
 
-    // Update the cached max file id.
-    FileId max_file_id =
-        static_cast<FileId>(max_fp_id >> Options()->pages_per_file_shift);
-    IoMgr()->least_not_archived_file_ids_[tbl_ident_] = max_file_id + 1;
-
     LOG(INFO) << "created archive for partition " << tbl_ident_ << " at "
-              << current_ts << ", updated cached max file id to "
-              << max_file_id + 1;
+              << current_ts;
+    return KvError::NoError;
+}
+
+KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
+{
+    std::string normalized_branch = NormalizeBranchName(branch_name);
+    if (normalized_branch.empty())
+    {
+        return KvError::InvalidArgs;
+    }
+
+    // Guard against silent overwrite of an existing branch.
+    // Use BranchBaseNameExists to detect any existing branch with the same
+    // user-visible (unsalted) base name, regardless of salt suffix.
+    // This correctly handles the case where an old branch was deleted and a new
+    // one is being created with the same name (they will have different salts,
+    // so BranchCurrentTermExists would miss the old one if it somehow survived).
+    KvError exists_err =
+        IoMgr()->BranchBaseNameExists(tbl_ident_,
+                                      UnsaltBranchName(normalized_branch));
+    if (exists_err == KvError::NoError)
+    {
+        LOG(ERROR) << "CreateBranch: branch already exists: "
+                   << normalized_branch;
+        return KvError::AlreadyExists;
+    }
+    if (exists_err != KvError::NotFound)
+    {
+        return exists_err;
+    }
+
+    BranchManifestMetadata branch_metadata;
+    branch_metadata.branch_name = normalized_branch;
+    branch_metadata.term = 0;
+    branch_metadata.file_ranges = IoMgr()->GetBranchFileMapping(tbl_ident_);
+
+    // Initialize file allocator to continue from parent's max + 1
+    wal_builder_.Reset();
+    auto [root_handle, root_err] = shard->IndexManager()->FindRoot(tbl_ident_);
+    if (root_err != KvError::NoError)
+    {
+        return root_err;
+    }
+    RootMeta *meta = root_handle.Get();
+    if (!meta)
+    {
+        return KvError::NotFound;
+    }
+
+    // new branch jump to use the next file id to avoid any collision with
+    // parent branch
+    FileId parent_branch_max_file_id =
+        meta->mapper_->FilePgAllocator()->CurrentFileId();
+    FilePageId new_max_fp_id =
+        static_cast<FilePageId>(parent_branch_max_file_id + 1)
+        << Options()->pages_per_file_shift;
+
+    PageId root = meta->root_id_;
+    PageId ttl_root = meta->ttl_root_id_;
+    MappingSnapshot *mapping = meta->mapper_->GetMapping();
+    std::string_view dict_bytes;
+    if (meta->compression_->HasDictionary())
+    {
+        dict_bytes = meta->compression_->DictionaryBytes();
+    }
+
+    std::string_view snapshot = wal_builder_.Snapshot(
+        root, ttl_root, mapping, new_max_fp_id, dict_bytes, branch_metadata);
+
+    KvError err = IoMgr()->WriteBranchManifest(
+        tbl_ident_, normalized_branch, 0, snapshot);
+    if (err != KvError::NoError)
+    {
+        return err;
+    }
+
+    err = IoMgr()->WriteBranchCurrentTerm(tbl_ident_, normalized_branch, 0);
+    if (err != KvError::NoError)
+    {
+        return err;
+    }
+
+    return KvError::NoError;
+}
+
+KvError BackgroundWrite::DeleteBranch(std::string_view branch_name)
+{
+    std::string normalized_branch = NormalizeBranchName(branch_name);
+    if (normalized_branch.empty())
+    {
+        return KvError::InvalidArgs;
+    }
+
+    if (normalized_branch == MainBranchName)
+    {
+        LOG(ERROR) << "Cannot delete main branch";
+        return KvError::InvalidArgs;
+    }
+
+    if (normalized_branch == IoMgr()->GetActiveBranch())
+    {
+        LOG(ERROR) << "Cannot delete the currently active branch: "
+                   << normalized_branch;
+        return KvError::InvalidArgs;
+    }
+
+    LOG(INFO) << "Deleting branch " << normalized_branch;
+
+    // Delete all manifest files for this branch (all terms) plus CURRENT_TERM.
+    // The term argument is ignored; DeleteBranchFiles reads CURRENT_TERM
+    // itself.
+    KvError del_err =
+        IoMgr()->DeleteBranchFiles(tbl_ident_, normalized_branch, 0);
+    if (del_err != KvError::NoError && del_err != KvError::NotFound)
+    {
+        LOG(ERROR) << "DeleteBranch: failed to remove files for branch "
+                   << normalized_branch << ": " << ErrorString(del_err);
+        return del_err;
+    }
+
+    LOG(INFO) << "Successfully deleted branch " << normalized_branch;
+
     return KvError::NoError;
 }
 

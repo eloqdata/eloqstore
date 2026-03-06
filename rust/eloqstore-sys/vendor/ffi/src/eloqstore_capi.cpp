@@ -297,7 +297,7 @@ extern "C"
         }
         try
         {
-            auto err = reinterpret_cast<EloqStore *>(store)->Start();
+            auto err = reinterpret_cast<EloqStore *>(store)->Start(eloqstore::MainBranchName, 0);
             if (err != KvError::NoError)
             {
                 set_last_error("Failed to start store");
