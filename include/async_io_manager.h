@@ -964,8 +964,7 @@ public:
         const TableIdent &tbl_id);
     KvError DownloadFile(const TableIdent &tbl_id,
                          FileId file_id,
-                         uint64_t term,
-                         bool download_to_exist = false,
+                         uint64_t term = 0,
                          std::string_view branch_name = MainBranchName);
     // Read term file from cloud, returns {term_value, etag, error}
     // If file doesn't exist (404), returns {0, "", NotFound}

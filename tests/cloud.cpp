@@ -1066,7 +1066,7 @@ TEST_CASE("cloud reopen refreshes manifest via archive swap", "[cloud][reopen]")
     REQUIRE(term >= 0);
 
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
-    std::string backup_manifest = eloqstore::ArchiveName(term, backup_ts);
+    std::string backup_manifest = eloqstore::BranchArchiveName(eloqstore::MainBranchName, term, backup_ts);
 
     // Move current manifest aside, then promote archive manifest.
     REQUIRE(MoveCloudFile(
@@ -1112,7 +1112,7 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
     store->Stop();
 
     const std::string backup_root = "/tmp/test-data-reopen-local-backup";
-    const std::string manifest_name = eloqstore::ManifestFileName(0);
+    const std::string manifest_name = eloqstore::BranchManifestFileName(eloqstore::MainBranchName, 0);
     uint64_t v1_manifest_size = 0;
     std::filesystem::remove_all(backup_root);
     std::filesystem::create_directories(backup_root);
@@ -1138,7 +1138,7 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
     }
 
     // Restart to write version 2 data (remote is newer).
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
 
     // Version 2 data (remote is newer).
     verifier.Upsert(100, 120);
@@ -1196,7 +1196,7 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
     clear_data_files(tbl_id);
 
     // Restart without prewarm so it doesn't auto-download.
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
     {
         std::filesystem::path restored_manifest =
             std::filesystem::path(options.store_path.front()) /
@@ -1278,7 +1278,7 @@ TEST_CASE("cloud reopen triggers prewarm to download newer remote data files",
         fs::path(backup_root) / fs::path(options.store_path.front()).filename(),
         fs::copy_options::recursive | fs::copy_options::overwrite_existing);
 
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
     writer.SetStore(store);
     writer.SetValueSize(8 << 10);
     writer.Upsert(2000, 2600);
@@ -1325,7 +1325,7 @@ TEST_CASE("cloud reopen triggers prewarm to download newer remote data files",
         }
     }
 
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
     writer.SetStore(store);
     const fs::path local_target =
         fs::path(options.store_path.front()) / partition / target_new_data_file;
@@ -1386,7 +1386,7 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
     store->Stop();
 
     const std::string backup_root = "/tmp/test-data-reopen-global-backup";
-    const std::string manifest_name = eloqstore::ManifestFileName(0);
+    const std::string manifest_name = eloqstore::BranchManifestFileName(eloqstore::MainBranchName, 0);
     std::filesystem::remove_all(backup_root);
     std::filesystem::create_directories(backup_root);
     for (const auto &path : options.store_path)
@@ -1413,7 +1413,7 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
     }
 
     // Restart to write version 2 data (remote is newer).
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
 
     // Version 2 data (remote is newer).
     std::vector<std::map<std::string, eloqstore::KvEntry>> v2_datasets;
@@ -1479,7 +1479,7 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
         clear_partition_data_files(tbl_id);
     }
 
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
     for (size_t i = 0; i < tbl_ids.size(); ++i)
     {
         std::filesystem::path restored_manifest =

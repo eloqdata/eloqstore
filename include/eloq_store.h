@@ -48,7 +48,7 @@ enum class RequestType : uint8_t
     LocalGc,
     CleanExpired,
     GlobalArchive,
-    GlobalReopen
+    GlobalReopen,
     CreateBranch,
     DeleteBranch,
     GlobalCreateBranch
