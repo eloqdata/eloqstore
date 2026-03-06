@@ -780,15 +780,19 @@ void EloqStore::HandleGlobalCreateBranchRequest(GlobalCreateBranchRequest *req)
         return;
     }
 
-    // Generate an 8-hex-char salt from the lower 32 bits of the nanosecond
-    // timestamp.  This makes the internal filename unique even when the user
-    // reuses a branch name after deletion.
-    auto now_ns = std::chrono::high_resolution_clock::now()
-                      .time_since_epoch()
-                      .count();
+    // Generate an 8-hex-char salt from the lower 32 bits of a timestamp.
+    // If the caller supplied a salt timestamp (e.g. a backup_ts), use that so
+    // the internal filename is deterministic and correlated with the backup.
+    // Otherwise fall back to the live high-resolution clock.
+    uint64_t salt_val = req->GetSaltTimestamp() != 0
+        ? req->GetSaltTimestamp()
+        : static_cast<uint64_t>(
+              std::chrono::high_resolution_clock::now()
+                  .time_since_epoch()
+                  .count());
     char salt_buf[9];
     std::snprintf(salt_buf, sizeof(salt_buf), "%08x",
-                  static_cast<uint32_t>(now_ns));
+                  static_cast<uint32_t>(salt_val));
     std::string internal_name = normalized + "-" + salt_buf;
     req->result_branch = internal_name;
 

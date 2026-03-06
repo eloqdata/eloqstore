@@ -513,6 +513,14 @@ public:
     const std::string& GetBranchName() const { return branch_name_; }
     const std::string& GetParentBranch() const { return parent_branch_; }
 
+    // Optional caller-supplied salt timestamp.  When non-zero,
+    // HandleGlobalCreateBranchRequest uses the lower 32 bits of this value
+    // (formatted as %08x) as the salt instead of the live clock.  This makes
+    // the internal filename deterministic and correlated with a known timestamp
+    // (e.g. a backup_ts).
+    void SetSaltTimestamp(uint64_t ts) { salt_ts_ = ts; }
+    uint64_t GetSaltTimestamp() const  { return salt_ts_; }
+
     // The salted internal branch name chosen by HandleGlobalCreateBranchRequest.
     // Callers should use this after a successful ExecSync to refer to the new
     // branch in subsequent operations (delete, read, etc.).
@@ -521,6 +529,7 @@ public:
 private:
     std::string branch_name_;
     std::string parent_branch_;
+    uint64_t salt_ts_{0};
     std::vector<std::unique_ptr<CreateBranchRequest>> branch_reqs_;
     std::atomic<uint32_t> pending_{0};
     std::atomic<uint8_t> first_error_{static_cast<uint8_t>(KvError::NoError)};
