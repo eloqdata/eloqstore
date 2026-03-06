@@ -354,11 +354,14 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
     }
 
     // Guard against silent overwrite of an existing branch.
-    // Use CURRENT_TERM.<branch> as the canonical "branch fully created"
-    // marker — it is written after manifest_<branch>_0 in CreateBranch, so
-    // its presence reliably means the branch already exists.
+    // Use BranchBaseNameExists to detect any existing branch with the same
+    // user-visible (unsalted) base name, regardless of salt suffix.
+    // This correctly handles the case where an old branch was deleted and a new
+    // one is being created with the same name (they will have different salts,
+    // so BranchCurrentTermExists would miss the old one if it somehow survived).
     KvError exists_err =
-        IoMgr()->BranchCurrentTermExists(tbl_ident_, normalized_branch);
+        IoMgr()->BranchBaseNameExists(tbl_ident_,
+                                      UnsaltBranchName(normalized_branch));
     if (exists_err == KvError::NoError)
     {
         LOG(ERROR) << "CreateBranch: branch already exists: "

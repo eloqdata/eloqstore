@@ -224,8 +224,8 @@ TEST_CASE("global create branch - creates manifest on single partition",
     REQUIRE(req.Error() == eloqstore::KvError::NoError);
 
     fs::path table_path = fs::path(test_path) / test_tbl_id.ToString();
-    REQUIRE(fs::exists(table_path / "manifest_feature1_0"));
-    REQUIRE(fs::exists(table_path / "CURRENT_TERM.feature1"));
+    REQUIRE(fs::exists(table_path / ("manifest_" + req.result_branch + "_0")));
+    REQUIRE(fs::exists(table_path / ("CURRENT_TERM." + req.result_branch)));
 
     store->Stop();
 }
@@ -295,8 +295,8 @@ TEST_CASE("global create branch - creates manifests on all partitions",
             {
                 // Local mode: check filesystem
                 fs::path table_path = fs::path(test_path) / tbl_id.ToString();
-                REQUIRE(fs::exists(table_path / "manifest_feature1_0"));
-                REQUIRE(fs::exists(table_path / "CURRENT_TERM.feature1"));
+                REQUIRE(fs::exists(table_path / ("manifest_" + req.result_branch + "_0")));
+                REQUIRE(fs::exists(table_path / ("CURRENT_TERM." + req.result_branch)));
             }
             else
             {
@@ -311,9 +311,9 @@ TEST_CASE("global create branch - creates manifests on all partitions",
                 bool found_current_term = false;
                 for (const auto &f : cloud_files)
                 {
-                    if (f.find("manifest_feature1_0") != std::string::npos)
+                    if (f.find("manifest_" + req.result_branch + "_0") != std::string::npos)
                         found_manifest = true;
-                    if (f.find("CURRENT_TERM.feature1") != std::string::npos)
+                    if (f.find("CURRENT_TERM." + req.result_branch) != std::string::npos)
                         found_current_term = true;
                 }
                 INFO("Partition " << tbl_id.ToString() << " cloud files checked");
