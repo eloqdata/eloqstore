@@ -376,6 +376,12 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
     // Initialize file allocator to continue from parent's max + 1
     wal_builder_.Reset();
     auto [root_handle, root_err] = shard->IndexManager()->FindRoot(tbl_ident_);
+    if (root_err == KvError::NotFound)
+    {
+        // Partition has no manifest yet (empty/unwritten partition).
+        // No branch manifest needed — treat as success.
+        return KvError::NoError;
+    }
     if (root_err != KvError::NoError)
     {
         return root_err;
@@ -383,7 +389,9 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
     RootMeta *meta = root_handle.Get();
     if (!meta)
     {
-        return KvError::NotFound;
+        // Mapper is null — partition exists as a stub but has no data.
+        // Treat as empty partition; no branch manifest needed.
+        return KvError::NoError;
     }
 
     // new branch jump to use the next file id to avoid any collision with
