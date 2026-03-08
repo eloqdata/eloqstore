@@ -846,7 +846,8 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
 {
     // Check term file before proceeding
     uint64_t process_term = cloud_mgr->ProcessTerm();
-    auto [term_file_term, etag, err] = cloud_mgr->ReadTermFile(tbl_id);
+    auto [term_file_term, etag, err] =
+        cloud_mgr->ReadTermFile(tbl_id, cloud_mgr->GetActiveBranch());
 
     if (err == KvError::NotFound)
     {

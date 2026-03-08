@@ -3672,7 +3672,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     std::string active_br = std::string(GetActiveBranch());
 
     // Check and update term file
-    KvError term_err = UpsertTermFile(tbl_id, process_term);
+    KvError term_err = UpsertTermFile(tbl_id, process_term, active_br);
     if (term_err != KvError::NoError)
     {
         return {nullptr, term_err};
@@ -4099,12 +4099,14 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
 }
 
 std::tuple<uint64_t, std::string, KvError> CloudStoreMgr::ReadTermFile(
-    const TableIdent &tbl_id)
+    const TableIdent &tbl_id,
+    std::string_view branch_name)
 {
     KvTask *current_task = ThdTask();
 
-    // Download CURRENT_TERM file
-    ObjectStore::DownloadTask download_task(&tbl_id, CurrentTermFileName);
+    // Download CURRENT_TERM.<branch> file
+    std::string term_filename = BranchCurrentTermFileName(branch_name);
+    ObjectStore::DownloadTask download_task(&tbl_id, term_filename);
     download_task.SetKvTask(current_task);
     AcquireCloudSlot(current_task);
     obj_store_.SubmitTask(&download_task, shard);
@@ -4149,14 +4151,15 @@ std::tuple<uint64_t, std::string, KvError> CloudStoreMgr::ReadTermFile(
 }
 
 KvError CloudStoreMgr::UpsertTermFile(const TableIdent &tbl_id,
-                                      uint64_t process_term)
+                                      uint64_t process_term,
+                                      std::string_view branch_name)
 {
     constexpr uint64_t kMaxAttempts = 10;
     uint64_t attempt = 0;
     while (attempt < kMaxAttempts)
     {
         // 1. Read term file (get current_term and ETag)
-        auto [current_term, etag, read_err] = ReadTermFile(tbl_id);
+        auto [current_term, etag, read_err] = ReadTermFile(tbl_id, branch_name);
 
         if (read_err == KvError::NotFound)
         {
@@ -4166,7 +4169,7 @@ KvError CloudStoreMgr::UpsertTermFile(const TableIdent &tbl_id,
                        << process_term;
             // Legacy table - create term file with current process_term
             auto [create_err, response_code] =
-                CasCreateTermFile(tbl_id, process_term);
+                CasCreateTermFile(tbl_id, process_term, branch_name);
             if (create_err == KvError::NoError)
             {
                 // Successfully created, no update needed
@@ -4190,7 +4193,7 @@ KvError CloudStoreMgr::UpsertTermFile(const TableIdent &tbl_id,
 
             // Non-CAS error - try read again to see if file was created by
             // another instance
-            std::tie(current_term, etag, read_err) = ReadTermFile(tbl_id);
+            std::tie(current_term, etag, read_err) = ReadTermFile(tbl_id, branch_name);
             if (read_err != KvError::NoError)
             {
                 LOG(WARNING)
@@ -4226,7 +4229,7 @@ KvError CloudStoreMgr::UpsertTermFile(const TableIdent &tbl_id,
 
         // 3. Attempt CAS update with If-Match: etag
         auto [err, response_code] =
-            CasUpdateTermFileWithEtag(tbl_id, process_term, etag);
+            CasUpdateTermFileWithEtag(tbl_id, process_term, etag, branch_name);
 
         if (err == KvError::NoError)
         {
@@ -4264,12 +4267,15 @@ KvError CloudStoreMgr::UpsertTermFile(const TableIdent &tbl_id,
 }
 
 std::pair<KvError, int64_t> CloudStoreMgr::CasCreateTermFile(
-    const TableIdent &tbl_id, uint64_t process_term)
+    const TableIdent &tbl_id,
+    uint64_t process_term,
+    std::string_view branch_name)
 {
     KvTask *current_task = ThdTask();
     std::string term_str = std::to_string(process_term);
 
-    ObjectStore::UploadTask upload_task(&tbl_id, CurrentTermFileName);
+    const std::string term_filename = BranchCurrentTermFileName(branch_name);
+    ObjectStore::UploadTask upload_task(&tbl_id, term_filename);
     upload_task.data_buffer_.append(term_str);
     upload_task.if_none_match_ = "*";  // Only create if doesn't exist
     upload_task.SetKvTask(current_task);
@@ -4282,12 +4288,16 @@ std::pair<KvError, int64_t> CloudStoreMgr::CasCreateTermFile(
 }
 
 std::pair<KvError, int64_t> CloudStoreMgr::CasUpdateTermFileWithEtag(
-    const TableIdent &tbl_id, uint64_t process_term, const std::string &etag)
+    const TableIdent &tbl_id,
+    uint64_t process_term,
+    const std::string &etag,
+    std::string_view branch_name)
 {
     KvTask *current_task = ThdTask();
     std::string term_str = std::to_string(process_term);
 
-    ObjectStore::UploadTask upload_task(&tbl_id, CurrentTermFileName);
+    const std::string term_filename = BranchCurrentTermFileName(branch_name);
+    ObjectStore::UploadTask upload_task(&tbl_id, term_filename);
     upload_task.data_buffer_.append(term_str);
     upload_task.if_match_ = etag;  // Only update if ETag matches
     upload_task.SetKvTask(current_task);

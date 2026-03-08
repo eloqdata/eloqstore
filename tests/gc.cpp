@@ -83,10 +83,11 @@ bool CheckCloudPartitionExists(const eloqstore::KvOptions &opts,
         LOG(INFO) << "CheckCloudPartitionExists, cloud_file: " << file;
     }
     // return !cloud_files.empty();
-    // Exclude CURRENT_TERM file, because it never be deleted during GC.
+    // Exclude CURRENT_TERM.<branch> file, because it is never deleted during GC.
     if (cloud_files.size() == 1)
     {
-        REQUIRE(cloud_files[0] == eloqstore::CurrentTermFileName);
+        REQUIRE(cloud_files[0] ==
+                eloqstore::BranchCurrentTermFileName(eloqstore::MainBranchName));
     }
     return cloud_files.size() > 1;
 }
