@@ -355,9 +355,19 @@ void Shard::OnReceivedReq(KvRequest *req)
 {
     if (!req->ReadOnly())
     {
-        if (req->Type() == RequestType::CreateBranch || req->Type() == RequestType::DeleteBranch)
+        if (req->Type() == RequestType::CreateBranch ||
+            req->Type() == RequestType::DeleteBranch)
         {
-            ProcessReq(req);
+            if (!ProcessReq(req))
+            {
+                // Task pool exhausted (max_write_concurrency reached).
+                // Re-enqueue so the request is retried on the next round
+                // rather than being silently dropped.
+                requests_.enqueue(req);
+#ifdef ELOQ_MODULE_ENABLED
+                req_queue_size_.fetch_add(1, std::memory_order_relaxed);
+#endif
+            }
             return;
         }
         auto *wreq = reinterpret_cast<WriteRequest *>(req);
