@@ -1138,7 +1138,7 @@ void EloqStore::HandleGlobalCreateBranchRequest(GlobalCreateBranchRequest *req)
         // Idempotency: AlreadyExists means the branch was already created,
         // which is fine for a retry scenario. Only treat actual errors as
         // failures.
-        if (sub_err != KvError::NoError && sub_err != KvError::AlreadyExists)
+        if (sub_err != KvError::NoError)
         {
             uint8_t expected = static_cast<uint8_t>(KvError::NoError);
             uint8_t desired = static_cast<uint8_t>(sub_err);
