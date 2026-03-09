@@ -2970,6 +2970,11 @@ KvError CloudStoreMgr::OnDataFileSealed(const TableIdent &tbl_id,
     uint64_t term;
     if (!GetBranchNameAndTerm(tbl_id, file_id, branch, term))
     {
+        // Fallback to active branch if file_id mapping not found.
+        // This ensures the upload filename matches the branch that was
+        // active when the data was written (consistent with the upload
+        // state buffer tracking in OnFileRangeWritePrepared).
+        branch = std::string(GetActiveBranch());
         term = ProcessTerm();
     }
     std::string filename = BranchDataFileName(file_id, branch, term);
