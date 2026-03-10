@@ -4295,10 +4295,12 @@ int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
     if (skip_cloud_lookup && file_id <= LruFD::kMaxDataFile)
     {
         // This file id was just allocated by the local append allocator, so
-        // treat a local miss as create-on-write instead of paying a cloud
-        // NotFound round-trip.
+        // skip the cloud NotFound probe. Still preserve the existing local
+        // create flow by probing locally without O_CREAT and letting
+        // OpenOrCreateFD fall back to CreateFile on ENOENT.
+        uint64_t local_flags = flags & ~static_cast<uint64_t>(O_CREAT);
         return IouringMgr::OpenFile(
-            tbl_id, file_id, flags, mode, term, skip_cloud_lookup);
+            tbl_id, file_id, local_flags, 0, term, skip_cloud_lookup);
     }
 
     // File not exists locally, try to download it from cloud.
