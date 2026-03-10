@@ -3310,6 +3310,26 @@ void CloudStoreMgr::ProcessCloudReadyTasks(Shard *shard)
 
     for (size_t i = 0; i < nready; ++i)
     {
+        KvTask *task = ready_tasks[i];
+        if (task != nullptr &&
+            (task->Type() == TaskType::BatchWrite ||
+             task->Type() == TaskType::BackgroundWrite))
+        {
+            auto *write_task = static_cast<WriteTask *>(task);
+            if (write_task->HasPendingUploadTasks())
+            {
+                write_task->OnPendingUploadTaskCompleted();
+                if (inflight_async_data_file_uploads_ > 0)
+                {
+                    --inflight_async_data_file_uploads_;
+                }
+                LOG(INFO) << "Shard observed async data file upload "
+                             "completion, shard="
+                          << shard_id_
+                          << " upload_file_concurrency="
+                          << inflight_async_data_file_uploads_;
+            }
+        }
         ready_tasks[i]->FinishIo();
     }
 
@@ -4828,6 +4848,13 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
     }
 
     owner->AddPendingUploadTask(std::move(pending_upload_task));
+    ++inflight_async_data_file_uploads_;
+    LOG(INFO) << "Submitted async data file upload, table=" << tbl_id
+              << " filename=" << upload_task->filename_
+              << " shard=" << shard_id_
+              << " upload_file_concurrency="
+              << inflight_async_data_file_uploads_
+              << " shared_cloud_slots=" << inflight_cloud_slots_;
     return KvError::NoError;
 }
 

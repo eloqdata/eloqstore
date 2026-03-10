@@ -65,6 +65,11 @@ public:
         return upload_state_;
     }
     void AddPendingUploadTask(std::unique_ptr<ObjectStore::UploadTask> task);
+    void OnPendingUploadTaskCompleted();
+    bool HasPendingUploadTasks() const
+    {
+        return !pending_upload_tasks_.empty();
+    }
     KvError ConsumePendingUploadResults();
     void ClearPendingUploadTasks();
 
@@ -116,6 +121,7 @@ protected:
     std::optional<FileId> last_append_file_id_;
     WriteBufferAggregator append_aggregator_{0};
     UploadState upload_state_;
+    size_t active_async_upload_tasks_{0};
     std::vector<std::unique_ptr<ObjectStore::UploadTask>> pending_upload_tasks_;
 };
 

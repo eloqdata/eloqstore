@@ -109,6 +109,7 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     append_aggregator_ = WriteBufferAggregator(buf_size);
     append_aggregator_.Reset();
     upload_state_.ResetMetadata();
+    active_async_upload_tasks_ = 0;
     pending_upload_tasks_.clear();
     if (!Options()->cloud_store_path.empty())
     {
@@ -136,6 +137,7 @@ void WriteTask::Abort()
     cow_meta_ = CowRootMeta();
     last_append_file_id_.reset();
     upload_state_.ResetMetadata();
+    active_async_upload_tasks_ = 0;
     pending_upload_tasks_.clear();
 }
 
@@ -145,7 +147,25 @@ void WriteTask::AddPendingUploadTask(
     if (task != nullptr)
     {
         pending_upload_tasks_.emplace_back(std::move(task));
+        ++active_async_upload_tasks_;
+        LOG(INFO) << "Queued async upload task, table=" << tbl_ident_
+                  << " filename="
+                  << pending_upload_tasks_.back()->filename_
+                  << " pending_upload_tasks=" << pending_upload_tasks_.size()
+                  << " active_async_uploads=" << active_async_upload_tasks_;
     }
+}
+
+void WriteTask::OnPendingUploadTaskCompleted()
+{
+    if (active_async_upload_tasks_ == 0)
+    {
+        return;
+    }
+    --active_async_upload_tasks_;
+    LOG(INFO) << "Observed async upload completion, table=" << tbl_ident_
+              << " active_async_uploads=" << active_async_upload_tasks_
+              << " pending_upload_tasks=" << pending_upload_tasks_.size();
 }
 
 KvError WriteTask::ConsumePendingUploadResults()
@@ -159,12 +179,14 @@ KvError WriteTask::ConsumePendingUploadResults()
             first_err = task->error_;
         }
     }
+    active_async_upload_tasks_ = 0;
     pending_upload_tasks_.clear();
     return first_err;
 }
 
 void WriteTask::ClearPendingUploadTasks()
 {
+    active_async_upload_tasks_ = 0;
     pending_upload_tasks_.clear();
 }
 
@@ -263,6 +285,14 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
             // convergence point.
             KvError err = IoMgr()->OnDataFileSealed(tbl_ident_, sealed_file_id);
             CHECK_KV_ERR(err);
+            LOG(INFO)
+                << "Sealed data file upload dispatched; continuing local "
+                   "writes on next file without waiting for upload "
+                   "completion, table="
+                << tbl_ident_ << " sealed_file=" << sealed_file_id
+                << " next_file=" << file_id
+                << " pending_upload_tasks=" << pending_upload_tasks_.size()
+                << " active_async_uploads=" << active_async_upload_tasks_;
         }
         uint16_t buf_index = 0;
         char *buf = IoMgr()->AcquireWriteBuffer(buf_index);
@@ -381,6 +411,13 @@ KvError WriteTask::WaitWrite()
     if (Options()->data_append_mode && IoMgr()->HasWriteBufferPool())
     {
         FlushAppendWrites();
+    }
+    if (!pending_upload_tasks_.empty())
+    {
+        LOG(INFO) << "WaitWrite joining pending async uploads, table="
+                  << tbl_ident_
+                  << " pending_upload_tasks=" << pending_upload_tasks_.size()
+                  << " active_async_uploads=" << active_async_upload_tasks_;
     }
     WaitIo();
     KvError err = write_err_;

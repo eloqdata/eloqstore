@@ -1010,6 +1010,7 @@ private:
     uint64_t process_term_{0};
 
     size_t inflight_cloud_slots_{0};
+    size_t inflight_async_data_file_uploads_{0};
     WaitingZone cloud_slot_waiting_;
     size_t inflight_cloud_buffers_{0};
     WaitingZone cloud_buffer_waiting_;
