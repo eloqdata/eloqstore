@@ -42,7 +42,8 @@ std::vector<uint64_t> CollectArchiveTimestamps(const fs::path &partition_path)
         std::string_view branch_name;
         uint64_t term = 0;
         std::optional<uint64_t> ts;
-        REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, branch_name, term, ts));
+        REQUIRE(
+            eloqstore::ParseManifestFileSuffix(suffix, branch_name, term, ts));
         REQUIRE(ts.has_value());
         timestamps.push_back(*ts);
     }

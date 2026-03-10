@@ -29,7 +29,8 @@ eloqstore::KvOptions MakeOpts(bool cloud_mode, uint8_t shift)
     return opts;
 }
 
-// Variant with explicit append_mode control (for non-append / pooled-pages tests)
+// Variant with explicit append_mode control (for non-append / pooled-pages
+// tests)
 eloqstore::KvOptions MakeOpts(bool cloud_mode, uint8_t shift, bool append_mode)
 {
     eloqstore::KvOptions opts = MakeOpts(cloud_mode, shift);
@@ -228,8 +229,7 @@ TEST_CASE("Replayer replay with multi appended mapping table log",
     eloqstore::BranchManifestMetadata meta20;
     meta20.branch_name = eloqstore::MainBranchName;
     meta20.term = 20;
-    std::string meta20_str =
-        eloqstore::SerializeBranchManifestMetadata(meta20);
+    std::string meta20_str = eloqstore::SerializeBranchManifestMetadata(meta20);
     builder1.AppendBranchManifestMetadata(meta20_str);
     std::string_view append_log1 = builder1.Finalize(10, 10);
 
@@ -246,8 +246,7 @@ TEST_CASE("Replayer replay with multi appended mapping table log",
     eloqstore::BranchManifestMetadata meta30;
     meta30.branch_name = eloqstore::MainBranchName;
     meta30.term = 30;
-    std::string meta30_str =
-        eloqstore::SerializeBranchManifestMetadata(meta30);
+    std::string meta30_str = eloqstore::SerializeBranchManifestMetadata(meta30);
     builder2.AppendBranchManifestMetadata(meta30_str);
     std::string_view append_log2 = builder2.Finalize(30, 30);
 
@@ -281,15 +280,16 @@ TEST_CASE(
     "chained fork",
     "[replayer][branch]")
 {
-    // Local (non-cloud) mode, non-append (pooled) mode, 16 pages per file (shift=4).
-    // Simulates a 3-level fork chain: main -> feature1 -> sub1.
+    // Local (non-cloud) mode, non-append (pooled) mode, 16 pages per file
+    // (shift=4). Simulates a 3-level fork chain: main -> feature1 -> sub1.
     //   file 0 (fp_ids 0-15)  belongs to "main"
     //   file 1 (fp_ids 16-31) belongs to "feature1"
     //   file 2 (fp_ids 32-47) belongs to "sub1"
     // After GetMapper for "sub1", the free list must contain only pages from
     // file 2 (pages not already in use), never from files 0 or 1.
-    eloqstore::KvOptions opts = MakeOpts(
-        false /*cloud_mode*/, 4 /*pages_per_file_shift*/, false /*append_mode*/);
+    eloqstore::KvOptions opts = MakeOpts(false /*cloud_mode*/,
+                                         4 /*pages_per_file_shift*/,
+                                         false /*append_mode*/);
 
     eloqstore::IouringMgr io_mgr(&opts, 1000);
     eloqstore::IndexPageManager idx_mgr(&io_mgr);
@@ -297,10 +297,15 @@ TEST_CASE(
 
     // Build mapping: one page in each of the three files.
     eloqstore::MappingSnapshot::MappingTbl mapping_tbl;
-    mapping_tbl.Set(0, eloqstore::MappingSnapshot::EncodeFilePageId(0));   // file 0 (main)
-    mapping_tbl.Set(1, eloqstore::MappingSnapshot::EncodeFilePageId(16));  // file 1 (feature1)
-    mapping_tbl.Set(2, eloqstore::MappingSnapshot::EncodeFilePageId(32));  // file 2 (sub1)
-    eloqstore::MappingSnapshot mapping(&idx_mgr, &tbl_id, std::move(mapping_tbl));
+    mapping_tbl.Set(
+        0, eloqstore::MappingSnapshot::EncodeFilePageId(0));  // file 0 (main)
+    mapping_tbl.Set(
+        1,
+        eloqstore::MappingSnapshot::EncodeFilePageId(16));  // file 1 (feature1)
+    mapping_tbl.Set(
+        2, eloqstore::MappingSnapshot::EncodeFilePageId(32));  // file 2 (sub1)
+    eloqstore::MappingSnapshot mapping(
+        &idx_mgr, &tbl_id, std::move(mapping_tbl));
 
     // 3 files x 16 pages each => max_fp_id = 48
     const eloqstore::FilePageId max_fp_id = 48;
@@ -310,9 +315,9 @@ TEST_CASE(
     branch_meta.branch_name = "sub1";
     branch_meta.term = 0;
     branch_meta.file_ranges = {
-        {"main",     0, 0},  // file 0 belongs to "main"
+        {"main", 0, 0},      // file 0 belongs to "main"
         {"feature1", 0, 1},  // file 1 belongs to "feature1"
-        {"sub1",     0, 2},  // file 2 belongs to "sub1"
+        {"sub1", 0, 2},      // file 2 belongs to "sub1"
     };
 
     eloqstore::ManifestBuilder builder;
@@ -370,19 +375,24 @@ TEST_CASE(
 
     // --- Snapshot at term=5 ---
     eloqstore::MappingSnapshot::MappingTbl mapping_tbl;
-    mapping_tbl.Set(0, eloqstore::MappingSnapshot::EncodeFilePageId(0));   // main, file 0
-    mapping_tbl.Set(1, eloqstore::MappingSnapshot::EncodeFilePageId(16));  // feature1, file 1
-    mapping_tbl.Set(2, eloqstore::MappingSnapshot::EncodeFilePageId(32));  // sub1, file 2
-    eloqstore::MappingSnapshot mapping(&idx_mgr, &tbl_id, std::move(mapping_tbl));
+    mapping_tbl.Set(
+        0, eloqstore::MappingSnapshot::EncodeFilePageId(0));  // main, file 0
+    mapping_tbl.Set(
+        1,
+        eloqstore::MappingSnapshot::EncodeFilePageId(16));  // feature1, file 1
+    mapping_tbl.Set(
+        2, eloqstore::MappingSnapshot::EncodeFilePageId(32));  // sub1, file 2
+    eloqstore::MappingSnapshot mapping(
+        &idx_mgr, &tbl_id, std::move(mapping_tbl));
     const eloqstore::FilePageId snap_max_fp_id = 48;  // 3 files
 
     eloqstore::BranchManifestMetadata meta5;
     meta5.branch_name = "sub1";
     meta5.term = 5;
     meta5.file_ranges = {
-        {"main",     0, 0},
+        {"main", 0, 0},
         {"feature1", 0, 1},
-        {"sub1",     5, 2},
+        {"sub1", 5, 2},
     };
 
     eloqstore::ManifestBuilder builder;
@@ -405,16 +415,16 @@ TEST_CASE(
     meta10.branch_name = "sub1";
     meta10.term = 10;
     meta10.file_ranges = {
-        {"main",     0,  0},
-        {"feature1", 0,  1},
-        {"sub1",     10, 3},  // sub1 now covers up to file 3 at term=10
+        {"main", 0, 0},
+        {"feature1", 0, 1},
+        {"sub1", 10, 3},  // sub1 now covers up to file 3 at term=10
     };
     std::string meta10_str = eloqstore::SerializeBranchManifestMetadata(meta10);
     builder1.AppendBranchManifestMetadata(meta10_str);
 
     // max_fp_id after writing to file 3 = 4 files * 16 = 64
-    std::string_view append_log = builder1.Finalize(eloqstore::MaxPageId,
-                                                    eloqstore::MaxPageId);
+    std::string_view append_log =
+        builder1.Finalize(eloqstore::MaxPageId, eloqstore::MaxPageId);
     manifest_buf.append(append_log);
 
     // --- Replay ---

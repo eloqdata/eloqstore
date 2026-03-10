@@ -8,10 +8,9 @@
 
 #include "../include/common.h"
 #include "../include/storage/index_page_manager.h"
-#include "../include/storage/root_meta.h"
-#include "../include/types.h"
 #include "../include/storage/page_mapper.h"
 #include "../include/storage/root_meta.h"
+#include "../include/types.h"
 
 uint64_t MockEncodeFilePageId(eloqstore::FilePageId file_page_id)
 {

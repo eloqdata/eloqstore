@@ -232,8 +232,9 @@ TEST_CASE("detect corrupted page", "[persist][checksum]")
     }
 
     // corrupt it
-    std::string datafile = std::string(test_path) + '/' + tbl_id.ToString() +
-                           '/' + eloqstore::BranchDataFileName(0, eloqstore::MainBranchName, 0);
+    std::string datafile =
+        std::string(test_path) + '/' + tbl_id.ToString() + '/' +
+        eloqstore::BranchDataFileName(0, eloqstore::MainBranchName, 0);
     std::fstream file(datafile,
                       std::ios::binary | std::ios::out | std::ios::in);
     REQUIRE(file);
@@ -439,7 +440,8 @@ TEST_CASE("append mode survives compression toggles across restarts",
         eloqstore::KvOptions opts = base_opts;
         opts.enable_compression = enable_compression;
         auto new_store = std::make_unique<eloqstore::EloqStore>(opts);
-        REQUIRE(new_store->Start(eloqstore::MainBranchName, 0) == eloqstore::KvError::NoError);
+        REQUIRE(new_store->Start(eloqstore::MainBranchName, 0) ==
+                eloqstore::KvError::NoError);
         return new_store;
     };
 

@@ -40,8 +40,7 @@ static void WaitForGC(int seconds = 2)
 static size_t CountDataFiles(const eloqstore::KvOptions &opts,
                              const eloqstore::TableIdent &tbl_id)
 {
-    fs::path dir =
-        fs::path(opts.store_path[0]) / tbl_id.ToString();
+    fs::path dir = fs::path(opts.store_path[0]) / tbl_id.ToString();
     if (!fs::exists(dir))
     {
         return 0;
@@ -258,8 +257,7 @@ TEST_CASE("gc branch protection: one deleted branch, one live still protects",
 // manifest that cannot be replayed and must still protect files held by a
 // valid sibling branch manifest.
 // ---------------------------------------------------------------------------
-TEST_CASE("gc corrupt manifest: warn-and-skip keeps store alive",
-          "[branch-gc]")
+TEST_CASE("gc corrupt manifest: warn-and-skip keeps store alive", "[branch-gc]")
 {
     CleanupLocalStore(branch_gc_opts);
     eloqstore::EloqStore *store = InitStore(branch_gc_opts);

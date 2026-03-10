@@ -234,7 +234,8 @@ TEST_CASE("global create branch - creates manifests on all partitions",
           "[branch][global]")
 {
     // Test both local and cloud mode with many partitions
-    auto test_impl = [](const eloqstore::KvOptions &opts, const char *mode_name,
+    auto test_impl = [](const eloqstore::KvOptions &opts,
+                        const char *mode_name,
                         int num_partitions)
     {
         INFO("Testing mode: " << mode_name << " with " << num_partitions
@@ -277,11 +278,12 @@ TEST_CASE("global create branch - creates manifests on all partitions",
             // Cloud mode: verify sample (first 5 + last 5)
             for (int p = 0; p < std::min(5, num_partitions); ++p)
                 partitions_to_verify.push_back(p);
-            for (int p = std::max(0, num_partitions - 5); p < num_partitions; ++p)
+            for (int p = std::max(0, num_partitions - 5); p < num_partitions;
+                 ++p)
             {
                 if (std::find(partitions_to_verify.begin(),
-                              partitions_to_verify.end(), p) ==
-                    partitions_to_verify.end())
+                              partitions_to_verify.end(),
+                              p) == partitions_to_verify.end())
                 {
                     partitions_to_verify.push_back(p);
                 }
@@ -295,15 +297,16 @@ TEST_CASE("global create branch - creates manifests on all partitions",
             {
                 // Local mode: check filesystem
                 fs::path table_path = fs::path(test_path) / tbl_id.ToString();
-                REQUIRE(fs::exists(table_path / ("manifest_" + req.result_branch + "_0")));
-                REQUIRE(fs::exists(table_path / ("CURRENT_TERM." + req.result_branch)));
+                REQUIRE(fs::exists(table_path /
+                                   ("manifest_" + req.result_branch + "_0")));
+                REQUIRE(fs::exists(table_path /
+                                   ("CURRENT_TERM." + req.result_branch)));
             }
             else
             {
                 // Cloud mode: verify manifest objects exist in cloud storage
-                std::string tbl_prefix =
-                    std::string(opts.cloud_store_path) + "/" +
-                    tbl_id.ToString();
+                std::string tbl_prefix = std::string(opts.cloud_store_path) +
+                                         "/" + tbl_id.ToString();
                 std::vector<std::string> cloud_files =
                     ListCloudFiles(opts, tbl_prefix);
 
@@ -311,12 +314,15 @@ TEST_CASE("global create branch - creates manifests on all partitions",
                 bool found_current_term = false;
                 for (const auto &f : cloud_files)
                 {
-                    if (f.find("manifest_" + req.result_branch + "_0") != std::string::npos)
+                    if (f.find("manifest_" + req.result_branch + "_0") !=
+                        std::string::npos)
                         found_manifest = true;
-                    if (f.find("CURRENT_TERM." + req.result_branch) != std::string::npos)
+                    if (f.find("CURRENT_TERM." + req.result_branch) !=
+                        std::string::npos)
                         found_current_term = true;
                 }
-                INFO("Partition " << tbl_id.ToString() << " cloud files checked");
+                INFO("Partition " << tbl_id.ToString()
+                                  << " cloud files checked");
                 REQUIRE(found_manifest);
                 REQUIRE(found_current_term);
             }
@@ -333,9 +339,10 @@ TEST_CASE("global create branch - creates manifests on all partitions",
 
     SECTION("cloud mode - 20 partitions")
     {
-        // Create custom cloud options with higher fd_limit to support 20 partitions.
-        // Cloud mode requires more file descriptors and takes longer due to network I/O,
-        // so we test with 20 partitions (10x the original test) instead of 100.
+        // Create custom cloud options with higher fd_limit to support 20
+        // partitions. Cloud mode requires more file descriptors and takes
+        // longer due to network I/O, so we test with 20 partitions (10x the
+        // original test) instead of 100.
         eloqstore::KvOptions cloud_opts_high_fd = cloud_options;
         cloud_opts_high_fd.fd_limit = 100 + eloqstore::num_reserved_fd;
         test_impl(cloud_opts_high_fd, "cloud", 20);
@@ -352,7 +359,8 @@ TEST_CASE("global create branch - invalid branch name returns InvalidArgs",
     verify.Upsert(0, 100);
 
     eloqstore::GlobalCreateBranchRequest req;
-    req.SetArgs("bad_name", eloqstore::MainBranchName);  // underscore not allowed
+    req.SetArgs("bad_name",
+                eloqstore::MainBranchName);  // underscore not allowed
     store->ExecSync(&req);
 
     REQUIRE(req.Error() == eloqstore::KvError::InvalidArgs);
@@ -445,8 +453,8 @@ TEST_CASE("delete branch removes all term manifests", "[branch]")
     // ALL manifests (terms 0–3) and CURRENT_TERM must be gone.
     for (int t = 0; t <= 3; ++t)
     {
-        REQUIRE(!fs::exists(
-            table_path / ("manifest_feature_" + std::to_string(t))));
+        REQUIRE(!fs::exists(table_path /
+                            ("manifest_feature_" + std::to_string(t))));
     }
     REQUIRE(!fs::exists(table_path / "CURRENT_TERM.feature"));
 
@@ -475,7 +483,8 @@ TEST_CASE("branch files persist after restart", "[branch][persist]")
     {
         // Restart without cleaning up to verify files persist across restarts.
         eloqstore::EloqStore fresh_store(default_opts);
-        eloqstore::KvError err = fresh_store.Start(eloqstore::MainBranchName, 0);
+        eloqstore::KvError err =
+            fresh_store.Start(eloqstore::MainBranchName, 0);
         REQUIRE(err == eloqstore::KvError::NoError);
 
         fs::path table_path = fs::path(test_path) / test_tbl_id.ToString();
@@ -505,7 +514,8 @@ TEST_CASE("branch data isolation: bidirectional fork", "[branch][isolation]")
         store->Stop();
     }
 
-    // Phase 2: open on feature1, verify DS1 inherited, write DS2 (keys 100-199).
+    // Phase 2: open on feature1, verify DS1 inherited, write DS2 (keys
+    // 100-199).
     {
         eloqstore::EloqStore feature1_store(default_opts);
         eloqstore::KvError err = feature1_store.Start("feature1", 0);
@@ -560,7 +570,8 @@ TEST_CASE("branch data isolation: bidirectional fork", "[branch][isolation]")
     }
 
     // Phase 4: open on feature1 again, verify DS1+DS2 present and DS3 NOT
-    //          visible (main's writes after the fork must not leak into feature1).
+    //          visible (main's writes after the fork must not leak into
+    //          feature1).
     {
         eloqstore::EloqStore feature1_store(default_opts);
         eloqstore::KvError err = feature1_store.Start("feature1", 0);
@@ -679,7 +690,8 @@ TEST_CASE("chained fork: fork from feature branch", "[branch][isolation]")
     CleanupStore(default_opts);
 }
 
-TEST_CASE("sibling branches are isolated from each other", "[branch][isolation]")
+TEST_CASE("sibling branches are isolated from each other",
+          "[branch][isolation]")
 {
     // Phase 1: main → write DS1, fork both feature1 and feature2.
     {
@@ -1038,7 +1050,8 @@ TEST_CASE(
         eloqstore::EloqStore *store = InitStore(default_opts);
         MapVerifier verify(test_tbl_id, store, false);
         verify.SetAutoClean(false);
-        verify.Upsert(0, 100);  // write key 0 so it would be readable if manifest exists
+        verify.Upsert(
+            0, 100);  // write key 0 so it would be readable if manifest exists
 
         eloqstore::CreateBranchRequest create_req;
         create_req.SetTableId(test_tbl_id);
@@ -1231,9 +1244,8 @@ TEST_CASE("delete branch in cloud mode removes all cloud objects",
 
     // Phase 4: verify no "cloudfeature" objects remain in cloud (manifests,
     // CURRENT_TERM, and data files all deleted).
-    std::string tbl_prefix =
-        std::string(cloud_options.cloud_store_path) + "/" +
-        test_tbl_id.ToString();
+    std::string tbl_prefix = std::string(cloud_options.cloud_store_path) + "/" +
+                             test_tbl_id.ToString();
     std::vector<std::string> cloud_files =
         ListCloudFiles(cloud_options, tbl_prefix);
     for (const auto &f : cloud_files)
@@ -1330,9 +1342,8 @@ TEST_CASE(
     CleanupLocalStore(cloud_options);
 
     // Phase 6: verify all "multitemp" objects are gone from cloud storage.
-    std::string tbl_prefix =
-        std::string(cloud_options.cloud_store_path) + "/" +
-        test_tbl_id.ToString();
+    std::string tbl_prefix = std::string(cloud_options.cloud_store_path) + "/" +
+                             test_tbl_id.ToString();
     std::vector<std::string> cloud_files =
         ListCloudFiles(cloud_options, tbl_prefix);
     for (const auto &f : cloud_files)
