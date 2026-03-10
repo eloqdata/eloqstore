@@ -9,6 +9,7 @@
 #include <ostream>
 #include <string>
 #include <utility>  // NOLINT(build/include_order)
+#include <vector>
 
 #include "external/span.hpp"
 
