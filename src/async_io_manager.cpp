@@ -1,3 +1,5 @@
+#include "async_io_manager.h"
+
 #include <dirent.h>
 #include <fcntl.h>
 #include <glog/logging.h>
@@ -30,7 +32,6 @@
 #include <utility>
 #include <vector>
 
-#include "async_io_manager.h"
 #include "error.h"
 #include "replayer.h"
 #include "utils.h"
@@ -543,7 +544,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               offset_(offset),
               fd_ref_(std::move(fd)),
-              page_(true){};
+              page_(true) {};
 
         bool done_{false};
         uint32_t offset_;
@@ -1584,7 +1585,7 @@ KvError IouringMgr::FdatasyncFiles(const TableIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)){};
+            : BaseReq(task), fd_ref_(std::move(fd)) {};
         LruFD::Ref fd_ref_;
     };
 
@@ -1641,7 +1642,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     struct CloseReq : BaseReq
     {
         CloseReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)){};
+            : BaseReq(task), fd_ref_(std::move(fd)) {};
         LruFD::Ref fd_ref_;
         int reg_idx_{-1};
         int fd_{LruFD::FdEmpty};
@@ -5570,7 +5571,7 @@ void CloudStoreMgr::FileCleaner::Shutdown()
     coro_ = coro_.resume();
 }
 
-MemStoreMgr::MemStoreMgr(const KvOptions *opts) : AsyncIoManager(opts){};
+MemStoreMgr::MemStoreMgr(const KvOptions *opts) : AsyncIoManager(opts) {};
 
 KvError MemStoreMgr::Init(Shard *shard)
 {

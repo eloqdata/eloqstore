@@ -18,8 +18,7 @@
 namespace eloqstore
 {
 
-Replayer::Replayer(const KvOptions *opts)
-    : opts_(opts)
+Replayer::Replayer(const KvOptions *opts) : opts_(opts)
 {
     log_buf_.resize(ManifestBuilder::header_bytes);
 }
@@ -189,7 +188,8 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
     branch_metadata_ = DeserializeBranchManifestMetadata(branch_metadata_view);
     if (branch_metadata_.branch_name.empty())
     {
-        LOG(FATAL) << "Failed to deserialize BranchManifestMetadata from snapshot.";
+        LOG(FATAL)
+            << "Failed to deserialize BranchManifestMetadata from snapshot.";
     }
 }
 
@@ -221,7 +221,8 @@ void Replayer::ReplayLog()
     }
 
     // Deserialize BranchManifestMetadata section
-    branch_metadata_ = DeserializeBranchManifestMetadata(file_term_mapping_view);
+    branch_metadata_ =
+        DeserializeBranchManifestMetadata(file_term_mapping_view);
     if (branch_metadata_.branch_name.empty())
     {
         LOG(FATAL) << "Failed to deserialize BranchManifestMetadata from log.";

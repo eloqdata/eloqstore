@@ -1025,7 +1025,7 @@ void ManifestVerifier::Snapshot()
     branch_metadata.branch_name = eloqstore::MainBranchName;
     branch_metadata.term = 0;
     // file_ranges will be populated from term_mapping_ in future
-    
+
     std::string_view sv = builder_.Snapshot(root_id_,
                                             eloqstore::MaxPageId,
                                             answer_.GetMapping(),

@@ -132,8 +132,8 @@ public:
     virtual KvError BranchCurrentTermExists(const TableIdent &tbl_id,
                                             std::string_view branch_name) = 0;
     // Returns NoError if any branch whose unsalted base name equals base_name
-    // exists (i.e. a CURRENT_TERM.<base_name>-<salt> or CURRENT_TERM.<base_name>
-    // file is present).  Returns NotFound if none.
+    // exists (i.e. a CURRENT_TERM.<base_name>-<salt> or
+    // CURRENT_TERM.<base_name> file is present).  Returns NotFound if none.
     // Used by CreateBranch to detect same-name reuse after deletion.
     virtual KvError BranchBaseNameExists(const TableIdent &tbl_id,
                                          std::string_view base_name) = 0;
@@ -443,7 +443,7 @@ public:
                                  std::string_view branch_name,
                                  uint64_t term) override;
     KvError BranchCurrentTermExists(const TableIdent &tbl_id,
-                                     std::string_view branch_name) override;
+                                    std::string_view branch_name) override;
     KvError BranchBaseNameExists(const TableIdent &tbl_id,
                                  std::string_view base_name) override;
     KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
@@ -599,7 +599,7 @@ public:
 
     struct BaseReq
     {
-        explicit BaseReq(KvTask *task = nullptr) : task_(task){};
+        explicit BaseReq(KvTask *task = nullptr) : task_(task) {};
         KvTask *task_;
         int res_{0};
         uint32_t flags_{0};
@@ -857,7 +857,7 @@ public:
                                  std::string_view branch_name,
                                  uint64_t term) override;
     KvError BranchCurrentTermExists(const TableIdent &tbl_id,
-                                     std::string_view branch_name) override;
+                                    std::string_view branch_name) override;
     KvError BranchBaseNameExists(const TableIdent &tbl_id,
                                  std::string_view base_name) override;
     KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
@@ -1181,7 +1181,7 @@ public:
                                  std::string_view branch_name,
                                  uint64_t term) override;
     KvError BranchCurrentTermExists(const TableIdent &tbl_id,
-                                     std::string_view branch_name) override;
+                                    std::string_view branch_name) override;
     KvError BranchBaseNameExists(const TableIdent &tbl_id,
                                  std::string_view base_name) override;
     KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
@@ -1218,7 +1218,7 @@ public:
     class Manifest : public ManifestFile
     {
     public:
-        explicit Manifest(std::string_view content) : content_(content){};
+        explicit Manifest(std::string_view content) : content_(content) {};
         KvError Read(char *dst, size_t n) override;
         KvError SkipPadding(size_t n) override;
 

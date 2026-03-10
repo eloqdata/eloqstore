@@ -1,10 +1,11 @@
+#include "tasks/background_write.h"
+
 #include <algorithm>
 #include <memory>  // for std::shared_ptr
 #include <string>
 
 #include "storage/mem_index_page.h"
 #include "storage/shard.h"
-#include "tasks/background_write.h"
 #include "utils.h"
 
 namespace eloqstore
@@ -353,10 +354,10 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
     // user-visible (unsalted) base name, regardless of salt suffix.
     // This correctly handles the case where an old branch was deleted and a new
     // one is being created with the same name (they will have different salts,
-    // so BranchCurrentTermExists would miss the old one if it somehow survived).
-    KvError exists_err =
-        IoMgr()->BranchBaseNameExists(tbl_ident_,
-                                      UnsaltBranchName(normalized_branch));
+    // so BranchCurrentTermExists would miss the old one if it somehow
+    // survived).
+    KvError exists_err = IoMgr()->BranchBaseNameExists(
+        tbl_ident_, UnsaltBranchName(normalized_branch));
     if (exists_err == KvError::NoError)
     {
         LOG(ERROR) << "CreateBranch: branch already exists: "

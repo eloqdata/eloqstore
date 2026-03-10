@@ -72,21 +72,24 @@ void ManifestBuilder::AppendBranchManifestMetadata(
     buff_.append(branch_metadata);
 }
 
-std::string_view ManifestBuilder::Snapshot(PageId root_id,
-                                           PageId ttl_root,
-                                           const MappingSnapshot *mapping,
-                                           FilePageId max_fp_id,
-                                           std::string_view dict_bytes,
-                                           const BranchManifestMetadata &branch_metadata)
+std::string_view ManifestBuilder::Snapshot(
+    PageId root_id,
+    PageId ttl_root,
+    const MappingSnapshot *mapping,
+    FilePageId max_fp_id,
+    std::string_view dict_bytes,
+    const BranchManifestMetadata &branch_metadata)
 {
     // For snapshot, the structure is:
     // Checksum(8B) | Root(4B) | TTL Root(4B) | Payload Len(4B) |
     // MaxFpId(8B) | DictLen(4B) | dict_bytes(bytes) | mapping_len(4B) |
     // mapping_tbl(varint64...) | branch_metadata
     //
-    // branch_metadata = branch_name_len(4B) + branch_name + term(8B) + BranchFileMapping
-    std::string branch_metadata_str = SerializeBranchManifestMetadata(branch_metadata);
-    
+    // branch_metadata = branch_name_len(4B) + branch_name + term(8B) +
+    // BranchFileMapping
+    std::string branch_metadata_str =
+        SerializeBranchManifestMetadata(branch_metadata);
+
     Reset();
     buff_.reserve(4 + 8 * (mapping->mapping_tbl_.size() + 1) + 4 +
                   branch_metadata_str.size());

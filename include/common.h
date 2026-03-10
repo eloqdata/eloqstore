@@ -1,5 +1,7 @@
 #pragma once
 
+#include <glog/logging.h>
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -8,8 +10,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-
-#include <glog/logging.h>
 
 #include "absl/container/flat_hash_map.h"
 #include "coding.h"
@@ -148,7 +148,8 @@ inline std::string NormalizeBranchName(std::string_view branch_name)
         }
         else
         {
-            // Invalid character (including underscore which is reserved as separator)
+            // Invalid character (including underscore which is reserved as
+            // separator)
             LOG(WARNING) << "Invalid character in branch name: '" << branch_name
                          << "' (contains '" << c << "')";
             return "";
@@ -232,8 +233,8 @@ inline bool ParseDataFileSuffix(std::string_view suffix,
     }
 
     // Format: <file_id>_<branch_name>_<term>
-    // Since underscore is reserved as separator, branch_name cannot contain underscores
-    // Simple left-to-right parsing: find first two separators
+    // Since underscore is reserved as separator, branch_name cannot contain
+    // underscores Simple left-to-right parsing: find first two separators
 
     // Find first separator (after file_id)
     size_t first_sep = suffix.find(FileNameSeparator);
@@ -251,7 +252,8 @@ inline bool ParseDataFileSuffix(std::string_view suffix,
 
     // Extract components
     std::string_view file_id_str = suffix.substr(0, first_sep);
-    std::string_view branch_str = suffix.substr(first_sep + 1, second_sep - first_sep - 1);
+    std::string_view branch_str =
+        suffix.substr(first_sep + 1, second_sep - first_sep - 1);
     std::string_view term_str = suffix.substr(second_sep + 1);
 
     // Validate and parse file_id
@@ -302,8 +304,8 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
     }
 
     // Format: <branch_name>_<term> or <branch_name>_<term>_<timestamp>
-    // Since underscore is reserved as separator, branch_name cannot contain underscores
-    // Simple left-to-right parsing
+    // Since underscore is reserved as separator, branch_name cannot contain
+    // underscores Simple left-to-right parsing
 
     // Find first separator (after branch_name)
     size_t first_sep = suffix.find(FileNameSeparator);
@@ -319,7 +321,7 @@ inline bool ParseManifestFileSuffix(std::string_view suffix,
     {
         return false;  // Invalid branch name
     }
-    
+
     // Reject old format: If branch_str is purely numeric, it's old format
     uint64_t dummy = 0;
     if (ParseUint64(branch_str, dummy))
@@ -398,8 +400,6 @@ inline std::string DataFileName(FileId file_id, uint64_t term)
     return name;
 }
 
-
-
 inline bool IsArchiveFile(std::string_view filename)
 {
     auto [type, suffix] = ParseFileName(filename);
@@ -442,7 +442,7 @@ inline bool ParseCurrentTermFilename(std::string_view filename,
 
     // Extract branch name after separator
     std::string_view branch_str = filename.substr(prefix.size() + 1);
-    
+
     // Validate branch_name - files contain already-normalized names
     if (!IsValidBranchName(branch_str))
     {
@@ -463,7 +463,7 @@ inline std::string BranchDataFileName(FileId file_id,
     {
         return "";  // Invalid branch name
     }
-    
+
     std::string name;
     name.reserve(std::size(FileNameData) + normalized_branch.size() + 32);
     name.append(FileNameData);
@@ -485,7 +485,7 @@ inline std::string BranchManifestFileName(std::string_view branch_name,
     {
         return "";  // Invalid branch name
     }
-    
+
     std::string name;
     name.reserve(std::size(FileNameManifest) + normalized_branch.size() + 16);
     name.append(FileNameManifest);
@@ -506,7 +506,7 @@ inline std::string BranchArchiveName(std::string_view branch_name,
     {
         return "";  // Invalid branch name
     }
-    
+
     std::string name;
     name.reserve(std::size(FileNameManifest) + normalized_branch.size() + 32);
     name.append(FileNameManifest);
@@ -527,7 +527,7 @@ inline std::string BranchCurrentTermFileName(std::string_view branch_name)
     {
         return "";  // Invalid branch name
     }
-    
+
     std::string name;
     name.reserve(std::size(CurrentTermFileName) + normalized_branch.size() + 1);
     name.append(CurrentTermFileName);
@@ -620,8 +620,7 @@ inline bool IsBranchDataFile(std::string_view filename)
 // Returns iterator to the branch range, or end() if not found
 // Uses std::lower_bound to find first range where max_file_id >= file_id
 inline BranchFileMapping::const_iterator FindBranchRange(
-    const BranchFileMapping &mapping,
-    FileId file_id)
+    const BranchFileMapping &mapping, FileId file_id)
 {
     BranchFileRange target;
     target.max_file_id = file_id;
@@ -630,10 +629,9 @@ inline BranchFileMapping::const_iterator FindBranchRange(
 
 // Check if file_id belongs to a specific branch
 // Returns true if file_id is within the branch's range
-inline bool FileIdInBranch(
-    const BranchFileMapping &mapping,
-    FileId file_id,
-    std::string_view branch_name)
+inline bool FileIdInBranch(const BranchFileMapping &mapping,
+                           FileId file_id,
+                           std::string_view branch_name)
 {
     auto it = FindBranchRange(mapping, file_id);
     if (it == mapping.end())
@@ -646,11 +644,10 @@ inline bool FileIdInBranch(
 // Get branch_name and term for a given file_id in one lookup
 // Returns true if file_id found in any branch range
 // Uses single binary search for efficiency
-inline bool GetBranchNameAndTerm(
-    const BranchFileMapping &mapping,
-    FileId file_id,
-    std::string &branch_name,
-    uint64_t &term)
+inline bool GetBranchNameAndTerm(const BranchFileMapping &mapping,
+                                 FileId file_id,
+                                 std::string &branch_name,
+                                 uint64_t &term)
 {
     auto it = FindBranchRange(mapping, file_id);
     if (it == mapping.end())
@@ -663,33 +660,37 @@ inline bool GetBranchNameAndTerm(
 }
 
 // Serialize BranchFileMapping to string
-// Format: [num_entries][branch_name_len][branch_name][term(8B)][max_file_id(8B)]...
+// Format:
+// [num_entries][branch_name_len][branch_name][term(8B)][max_file_id(8B)]...
 inline std::string SerializeBranchFileMapping(const BranchFileMapping &mapping)
 {
     std::string result;
-    
+
     // Number of entries (fixed 8 bytes)
     uint64_t num_entries = static_cast<uint64_t>(mapping.size());
-    result.append(reinterpret_cast<const char *>(&num_entries), sizeof(uint64_t));
-    
+    result.append(reinterpret_cast<const char *>(&num_entries),
+                  sizeof(uint64_t));
+
     for (const auto &range : mapping)
     {
         // Branch name length (4 bytes)
         uint32_t name_len = static_cast<uint32_t>(range.branch_name.size());
-        result.append(reinterpret_cast<const char *>(&name_len), sizeof(uint32_t));
-        
+        result.append(reinterpret_cast<const char *>(&name_len),
+                      sizeof(uint32_t));
+
         // Branch name
         result.append(range.branch_name);
-        
+
         // Term (8 bytes)
         uint64_t term = range.term;
         result.append(reinterpret_cast<const char *>(&term), sizeof(uint64_t));
-        
+
         // Max file_id (8 bytes)
         uint64_t max_file_id = range.max_file_id;
-        result.append(reinterpret_cast<const char *>(&max_file_id), sizeof(uint64_t));
+        result.append(reinterpret_cast<const char *>(&max_file_id),
+                      sizeof(uint64_t));
     }
-    
+
     return result;
 }
 
@@ -698,45 +699,45 @@ inline std::string SerializeBranchFileMapping(const BranchFileMapping &mapping)
 inline BranchFileMapping DeserializeBranchFileMapping(std::string_view data)
 {
     BranchFileMapping mapping;
-    
+
     if (data.size() < sizeof(uint64_t))
     {
         return mapping;
     }
-    
+
     uint64_t num_entries = 0;
     std::memcpy(&num_entries, data.data(), sizeof(uint64_t));
     data = data.substr(sizeof(uint64_t));
-    
+
     for (uint64_t i = 0; i < num_entries; ++i)
     {
         if (data.size() < sizeof(uint32_t))
         {
             return BranchFileMapping{};  // Error: invalid data
         }
-        
+
         uint32_t name_len = 0;
         std::memcpy(&name_len, data.data(), sizeof(uint32_t));
         data = data.substr(sizeof(uint32_t));
-        
+
         if (data.size() < name_len + sizeof(uint64_t) * 2)
         {
             return BranchFileMapping{};  // Error: invalid data
         }
-        
+
         BranchFileRange range;
         range.branch_name = std::string(data.substr(0, name_len));
         data = data.substr(name_len);
-        
+
         std::memcpy(&range.term, data.data(), sizeof(uint64_t));
         data = data.substr(sizeof(uint64_t));
-        
+
         std::memcpy(&range.max_file_id, data.data(), sizeof(uint64_t));
         data = data.substr(sizeof(uint64_t));
-        
+
         mapping.push_back(std::move(range));
     }
-    
+
     return mapping;
 }
 
@@ -749,60 +750,62 @@ inline BranchFileMapping DeserializeBranchFileMapping(std::string_view data)
 //
 // Serialize BranchManifestMetadata to string
 // Format: [branch_name_len(4B)][branch_name][term(8B)][BranchFileMapping]
-inline std::string SerializeBranchManifestMetadata(const BranchManifestMetadata &metadata)
+inline std::string SerializeBranchManifestMetadata(
+    const BranchManifestMetadata &metadata)
 {
     std::string result;
-    
+
     // Branch name length (4 bytes)
     uint32_t name_len = static_cast<uint32_t>(metadata.branch_name.size());
     result.append(reinterpret_cast<const char *>(&name_len), sizeof(uint32_t));
-    
+
     // Branch name
     result.append(metadata.branch_name);
-    
+
     // Term (8 bytes)
     uint64_t term = metadata.term;
     result.append(reinterpret_cast<const char *>(&term), sizeof(uint64_t));
-    
+
     // BranchFileMapping
     std::string mapping_str = SerializeBranchFileMapping(metadata.file_ranges);
     result.append(mapping_str);
-    
+
     return result;
 }
 
 // Deserialize BranchManifestMetadata from string_view
 // Returns metadata with empty fields on error
-inline BranchManifestMetadata DeserializeBranchManifestMetadata(std::string_view data)
+inline BranchManifestMetadata DeserializeBranchManifestMetadata(
+    std::string_view data)
 {
     BranchManifestMetadata metadata;
-    
+
     if (data.size() < sizeof(uint32_t))
     {
         return metadata;  // Error: invalid data
     }
-    
+
     // Branch name length
     uint32_t name_len = 0;
     std::memcpy(&name_len, data.data(), sizeof(uint32_t));
     data = data.substr(sizeof(uint32_t));
-    
+
     if (data.size() < name_len + sizeof(uint64_t))
     {
         return metadata;  // Error: invalid data
     }
-    
+
     // Branch name
     metadata.branch_name = std::string(data.substr(0, name_len));
     data = data.substr(name_len);
-    
+
     // Term
     std::memcpy(&metadata.term, data.data(), sizeof(uint64_t));
     data = data.substr(sizeof(uint64_t));
-    
+
     // BranchFileMapping
     metadata.file_ranges = DeserializeBranchFileMapping(data);
-    
+
     return metadata;
 }
 

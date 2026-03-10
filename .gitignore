@@ -47,3 +47,4 @@ test-data
 target
 tmp
 compile_commands.json
+.pre-commit-config.yaml

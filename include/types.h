@@ -64,9 +64,9 @@ using BranchFileMapping = std::vector<BranchFileRange>;
 // Stored in manifest to identify branch and track file ranges
 struct BranchManifestMetadata
 {
-    std::string
-        branch_name;  // unique branch identifier (e.g., "main", "feature-a3f7b2c1")
-    uint64_t term;    // current term for this branch
+    std::string branch_name;  // unique branch identifier (e.g., "main",
+                              // "feature-a3f7b2c1")
+    uint64_t term;            // current term for this branch
     BranchFileMapping
         file_ranges;  // per-branch file ranges (sorted by max_file_id)
 };
@@ -85,7 +85,7 @@ struct TableIdent
 
     TableIdent() = default;
     TableIdent(std::string tbl_name, uint32_t id)
-        : tbl_name_(std::move(tbl_name)), partition_id_(id){};
+        : tbl_name_(std::move(tbl_name)), partition_id_(id) {};
     std::string ToString() const;
     static TableIdent FromString(const std::string &str);
     size_t StorePathIndex(size_t num_paths,

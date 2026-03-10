@@ -29,7 +29,8 @@ namespace eloqstore
 //               branch_name_len(4B) | branch_name(bytes) | term(8B) |
 //               BranchFileMapping:
 //                 num_entries(8B) |
-//                 per entry: name_len(4B) | name(bytes) | term(8B) | max_file_id(8B) ]
+//                 per entry: name_len(4B) | name(bytes) | term(8B) |
+//                 max_file_id(8B) ]
 //
 // For appended Manifest log, the structure is:
 // Header  :  [ Checksum(8B) | Root(4B) | TTL Root(4B) | Payload Len(4B) ]

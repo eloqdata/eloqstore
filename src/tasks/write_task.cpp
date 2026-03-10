@@ -380,14 +380,18 @@ std::pair<PageId, FilePageId> WriteTask::AllocatePage(PageId page_id)
              ->GetFileIdTerm(tbl_ident_, file_id_before_allocate)
              .has_value())
     {
-        IoMgr()->SetBranchFileIdTerm(
-            tbl_ident_, file_id_before_allocate, IoMgr()->GetActiveBranch(), IoMgr()->ProcessTerm());
+        IoMgr()->SetBranchFileIdTerm(tbl_ident_,
+                                     file_id_before_allocate,
+                                     IoMgr()->GetActiveBranch(),
+                                     IoMgr()->ProcessTerm());
         file_id_term_mapping_dirty_ = true;
     }
     if (file_id_before_allocate != file_id_after_allocate)
     {
-        IoMgr()->SetBranchFileIdTerm(
-            tbl_ident_, file_id_after_allocate, IoMgr()->GetActiveBranch(), IoMgr()->ProcessTerm());
+        IoMgr()->SetBranchFileIdTerm(tbl_ident_,
+                                     file_id_after_allocate,
+                                     IoMgr()->GetActiveBranch(),
+                                     IoMgr()->ProcessTerm());
         file_id_term_mapping_dirty_ = true;
     }
 
@@ -475,8 +479,8 @@ KvError WriteTask::FlushManifest()
     // (resized_for_mapping_bytes_len_ is always true here because Empty()
     // returned false above, meaning at least one mapping entry was appended).
     const uint64_t log_physical_size =
-        (wal_builder_.CurrentSize() + branch_metadata_str.size() +
-         alignment - 1) &
+        (wal_builder_.CurrentSize() + branch_metadata_str.size() + alignment -
+         1) &
         ~(alignment - 1);
 
     if (!dict_dirty && manifest_size > 0 &&

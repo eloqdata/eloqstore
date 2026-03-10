@@ -29,7 +29,8 @@ enum struct KvError : uint8_t
     IoFail,         // Unclassified local I/O error.
     ExpiredTerm,    // Cloud term file indicates stale process term.
     OssInsufficientStorage,  // Object storage out of capacity (HTTP 507).
-    AlreadyExists, // Branch or table already exists (e.g., HTTP 409 or EEXIST).
+    AlreadyExists,  // Branch or table already exists (e.g., HTTP 409 or
+                    // EEXIST).
 
 };
 

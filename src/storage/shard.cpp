@@ -63,7 +63,8 @@ KvError Shard::Init()
     if (io_mgr_ != nullptr)
     {
         uint64_t term = store_ != nullptr ? store_->Term() : 0;
-        std::string_view branch = store_ != nullptr ? store_->Branch() : MainBranchName;
+        std::string_view branch =
+            store_ != nullptr ? store_->Branch() : MainBranchName;
         io_mgr_->SetActiveBranch(branch);
         if (auto *cloud_mgr = dynamic_cast<CloudStoreMgr *>(io_mgr_.get());
             cloud_mgr != nullptr)
@@ -631,9 +632,7 @@ bool Shard::ProcessReq(KvRequest *req)
             return false;
         }
         auto lbd = [task, branch_req]() -> KvError
-        {
-            return task->CreateBranch(branch_req->branch_name);
-        };
+        { return task->CreateBranch(branch_req->branch_name); };
         StartTask(task, req, lbd);
         return true;
     }
@@ -646,9 +645,7 @@ bool Shard::ProcessReq(KvRequest *req)
             return false;
         }
         auto lbd = [task, branch_req]() -> KvError
-        {
-            return task->DeleteBranch(branch_req->branch_name);
-        };
+        { return task->DeleteBranch(branch_req->branch_name); };
         StartTask(task, req, lbd);
         return true;
     }

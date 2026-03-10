@@ -169,8 +169,8 @@ void Prewarmer::Run()
                            ? "manifest"
                            : "data_" + std::to_string(file.file_id))
                    << "_" + std::to_string(file.term);
-        auto [fd_ref, err] =
-            io_mgr_->OpenFD(file.tbl_id, file.file_id, true, file.branch_name, file.term);
+        auto [fd_ref, err] = io_mgr_->OpenFD(
+            file.tbl_id, file.file_id, true, file.branch_name, file.term);
         if (err == KvError::NoError)
         {
             fd_ref = nullptr;
@@ -521,7 +521,8 @@ void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
             else if (file_type == FileNameData)
             {
                 std::string_view branch_name;
-                if (!ParseDataFileSuffix(suffix, file.file_id, branch_name, file.term))
+                if (!ParseDataFileSuffix(
+                        suffix, file.file_id, branch_name, file.term))
                 {
                     total_files_skipped++;
                     continue;

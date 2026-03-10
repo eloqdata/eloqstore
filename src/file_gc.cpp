@@ -2,8 +2,8 @@
 
 #include <jsoncpp/json/json.h>
 
-#include <boost/algorithm/string/predicate.hpp>
 #include <algorithm>
+#include <boost/algorithm/string/predicate.hpp>
 #include <filesystem>
 #include <iterator>
 #include <memory>
@@ -95,15 +95,16 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
     // on disk; also build max_file_id_per_branch_term map.
     auto all_retained = retained_files;
     absl::flat_hash_map<std::string, FileId> max_file_id_per_branch_term;
-    AugmentRetainedFilesFromBranchManifests(tbl_id,
-                                            manifest_branch_names,
-                                            manifest_terms,
-                                            archive_files,
-                                            archive_branch_names,
-                                            all_retained,
-                                            max_file_id_per_branch_term,
-                                            io_mgr->options_->pages_per_file_shift,
-                                            io_mgr);
+    AugmentRetainedFilesFromBranchManifests(
+        tbl_id,
+        manifest_branch_names,
+        manifest_terms,
+        archive_files,
+        archive_branch_names,
+        all_retained,
+        max_file_id_per_branch_term,
+        io_mgr->options_->pages_per_file_shift,
+        io_mgr);
 
     // 3. delete unreferenced data files (uses map instead of floor).
     err = DeleteUnreferencedLocalFiles(
@@ -129,9 +130,8 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
                             io_mgr);
     if (err != KvError::NoError)
     {
-        LOG(ERROR)
-            << "ExecuteLocalGC: DeleteOldArchives failed, error="
-            << static_cast<int>(err);
+        LOG(ERROR) << "ExecuteLocalGC: DeleteOldArchives failed, error="
+                   << static_cast<int>(err);
         return err;
     }
 
@@ -250,7 +250,8 @@ void ClassifyFiles(const std::vector<std::string> &files,
             std::string_view branch_name;
             uint64_t term = 0;
             std::optional<uint64_t> timestamp;
-            if (!ParseManifestFileSuffix(ret.second, branch_name, term, timestamp))
+            if (!ParseManifestFileSuffix(
+                    ret.second, branch_name, term, timestamp))
             {
                 continue;
             }
@@ -356,13 +357,13 @@ static void ProcessOneManifest(
         return;
     }
 
-    GetRetainedFiles(retained_files, replayer.mapping_tbl_, pages_per_file_shift);
+    GetRetainedFiles(
+        retained_files, replayer.mapping_tbl_, pages_per_file_shift);
 
     // Update max_file_id_per_branch_term from all file_ranges in this manifest.
     for (const BranchFileRange &range : replayer.branch_metadata_.file_ranges)
     {
-        std::string key =
-            range.branch_name + "_" + std::to_string(range.term);
+        std::string key = range.branch_name + "_" + std::to_string(range.term);
         auto it = max_file_id_per_branch_term.find(key);
         if (it == max_file_id_per_branch_term.end() ||
             range.max_file_id > it->second)
@@ -457,8 +458,8 @@ KvError AugmentRetainedFilesFromBranchManifests(
                 << "AugmentRetainedFilesFromBranchManifests: failed to read "
                    "archive "
                 << filename << " for branch " << archive_branch_names[i]
-                << " term " << term
-                << ", error=" << static_cast<int>(err) << "; skipping";
+                << " term " << term << ", error=" << static_cast<int>(err)
+                << "; skipping";
             continue;
         }
 
@@ -473,13 +474,12 @@ KvError AugmentRetainedFilesFromBranchManifests(
     return KvError::NoError;
 }
 
-KvError DeleteOldArchives(
-    const TableIdent &tbl_id,
-    const std::vector<std::string> &archive_files,
-    const std::vector<uint64_t> &archive_timestamps,
-    const std::vector<std::string> &archive_branch_names,
-    uint32_t num_retained_archives,
-    IouringMgr *io_mgr)
+KvError DeleteOldArchives(const TableIdent &tbl_id,
+                          const std::vector<std::string> &archive_files,
+                          const std::vector<uint64_t> &archive_timestamps,
+                          const std::vector<std::string> &archive_branch_names,
+                          uint32_t num_retained_archives,
+                          IouringMgr *io_mgr)
 {
     assert(archive_files.size() == archive_timestamps.size());
     assert(archive_files.size() == archive_branch_names.size());
@@ -496,7 +496,8 @@ KvError DeleteOldArchives(
         branch_indices[archive_branch_names[i]].push_back(i);
     }
 
-    // For each branch, sort by timestamp descending and collect excess archives.
+    // For each branch, sort by timestamp descending and collect excess
+    // archives.
     std::vector<std::string> to_delete;
     for (auto &[branch, indices] : branch_indices)
     {
@@ -658,8 +659,7 @@ KvError DeleteUnreferencedCloudFiles(
         {
             LOG(WARNING)
                 << "ExecuteLocalGC: no manifest found for process_term="
-                << process_term
-                << " in tbl=" << tbl_id.ToString()
+                << process_term << " in tbl=" << tbl_id.ToString()
                 << "; skipping current-manifest deletion";
         }
         else
@@ -675,7 +675,8 @@ KvError DeleteUnreferencedCloudFiles(
     // to prune. Manifests for OTHER branches are managed by DeleteBranch and
     // must not be deleted here.
     {
-        // Identify the active branch (the one whose manifest carries process_term).
+        // Identify the active branch (the one whose manifest carries
+        // process_term).
         bool found_active = false;
         std::string_view active_branch;
         for (size_t i = 0; i < manifest_terms.size(); ++i)
@@ -691,8 +692,7 @@ KvError DeleteUnreferencedCloudFiles(
         {
             LOG(WARNING)
                 << "ExecuteLocalGC: no active branch found for process_term="
-                << process_term
-                << " in tbl=" << tbl_id.ToString()
+                << process_term << " in tbl=" << tbl_id.ToString()
                 << "; skipping superseded-manifest pruning";
         }
         else
@@ -795,8 +795,8 @@ KvError DeleteUnreferencedLocalFiles(
         {
             // file_id beyond known max → in-flight write, preserve.
             DLOG(INFO) << "ExecuteLocalGC: keep file " << file_name
-                       << " (file_id=" << file_id << " > max_known="
-                       << it->second << ", in-flight)";
+                       << " (file_id=" << file_id
+                       << " > max_known=" << it->second << ", in-flight)";
             continue;
         }
 
@@ -805,8 +805,8 @@ KvError DeleteUnreferencedLocalFiles(
         fs::path file_path = dir_path / file_name;
         files_to_delete.push_back(file_path.string());
         file_ids_to_close.push_back(file_id);
-        DLOG(INFO) << "ExecuteLocalGC: marking file for deletion: "
-                   << file_name << " (file_id=" << file_id << ")";
+        DLOG(INFO) << "ExecuteLocalGC: marking file for deletion: " << file_name
+                   << " (file_id=" << file_id << ")";
     }
 
     DLOG(INFO) << "ExecuteLocalGC: total files to delete: "

@@ -9,10 +9,10 @@
 #include <atomic>
 #include <cassert>
 #include <cerrno>
-#include <cstddef>
-#include <cstring>
-#include <cstdio>
 #include <chrono>
+#include <cstddef>
+#include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <limits>
 #include <memory>
@@ -998,18 +998,17 @@ void EloqStore::HandleGlobalCreateBranchRequest(GlobalCreateBranchRequest *req)
     // If the caller supplied a salt timestamp (e.g. a backup_ts), use that so
     // the internal filename is deterministic and correlated with the backup.
     // Otherwise fall back to the live high-resolution clock.
-    uint64_t salt_val = req->GetSaltTimestamp() != 0
-        ? req->GetSaltTimestamp()
-        : static_cast<uint64_t>(
-              std::chrono::high_resolution_clock::now()
-                  .time_since_epoch()
-                  .count());
+    uint64_t salt_val =
+        req->GetSaltTimestamp() != 0
+            ? req->GetSaltTimestamp()
+            : static_cast<uint64_t>(std::chrono::high_resolution_clock::now()
+                                        .time_since_epoch()
+                                        .count());
     char salt_buf[9];
-    std::snprintf(salt_buf, sizeof(salt_buf), "%08x",
-                  static_cast<uint32_t>(salt_val));
+    std::snprintf(
+        salt_buf, sizeof(salt_buf), "%08x", static_cast<uint32_t>(salt_val));
     std::string internal_name = normalized + "-" + salt_buf;
     req->result_branch = internal_name;
-
 
     LOG(INFO) << "Creating global branch " << req->GetBranchName()
               << " (internal: " << internal_name << ")";
@@ -1049,8 +1048,7 @@ void EloqStore::HandleGlobalCreateBranchRequest(GlobalCreateBranchRequest *req)
                     continue;
                 }
 
-                TableIdent tbl_id =
-                    TableIdent::FromString(ent_path.filename());
+                TableIdent tbl_id = TableIdent::FromString(ent_path.filename());
                 if (tbl_id.tbl_name_.empty())
                 {
                     LOG(WARNING) << "unexpected partition " << ent.path();
@@ -1080,10 +1078,9 @@ void EloqStore::HandleGlobalCreateBranchRequest(GlobalCreateBranchRequest *req)
 
             if (list_request.Error() != KvError::NoError)
             {
-                LOG(ERROR)
-                    << "Failed to list cloud objects for global branch "
-                       "creation: "
-                    << static_cast<int>(list_request.Error());
+                LOG(ERROR) << "Failed to list cloud objects for global branch "
+                              "creation: "
+                           << static_cast<int>(list_request.Error());
                 req->SetDone(list_request.Error());
                 return;
             }

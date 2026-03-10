@@ -217,8 +217,7 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
             std::string last_branch_name;
             for (size_t i = 0; i < ranges.size(); ++i)
             {
-                if (i > 0 &&
-                    ranges[i].max_file_id <= ranges[i - 1].max_file_id)
+                if (i > 0 && ranges[i].max_file_id <= ranges[i - 1].max_file_id)
                 {
                     LOG(ERROR)
                         << "branch_metadata file_ranges: max_file_id not "
@@ -237,9 +236,8 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
                         LOG(ERROR)
                             << "branch_metadata file_ranges: non-adjacent "
                                "entries for branch '"
-                            << bn << "' at index " << i
-                            << " (last branch was '" << last_branch_name
-                            << "')";
+                            << bn << "' at index " << i << " (last branch was '"
+                            << last_branch_name << "')";
                         return KvError::Corrupted;
                     }
                     // Term must not decrease within the branch's block.
@@ -262,8 +260,8 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
                 last_branch_name = bn;
             }
 #endif
-            IoMgr()->SetBranchFileMapping(entry_tbl,
-                                          replayer.branch_metadata_.file_ranges);
+            IoMgr()->SetBranchFileMapping(
+                entry_tbl, replayer.branch_metadata_.file_ranges);
         }
         return KvError::NoError;
     };
