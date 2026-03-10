@@ -344,6 +344,11 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
             slot->next = write_buf_free_;
             write_buf_free_ = slot;
         }
+        LOG(INFO) << "Initialized append write buffer pool, shard="
+                  << shard->shard_id_
+                  << " write_buffer_size=" << write_buf_size_
+                  << " write_buffer_pool_size=" << write_buf_pool_size_
+                  << " write_buffer_count=" << write_buf_count_;
     }
 
     if (!iovecs.empty())
@@ -414,14 +419,45 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
 
 char *IouringMgr::AcquireWriteBuffer(uint16_t &buf_index)
 {
+    bool waited = false;
     while (write_buf_free_ == nullptr)
     {
+        if (!waited)
+        {
+            if (WriteTask *task = CurrentWriteTask(); task != nullptr)
+            {
+                LOG(INFO)
+                    << "AcquireWriteBuffer waiting for free write buffer, "
+                    << "table=" << task->TableId()
+                    << " write_buffer_count=" << write_buf_count_;
+            }
+            else
+            {
+                LOG(INFO)
+                    << "AcquireWriteBuffer waiting for free write buffer, "
+                    << "write_buffer_count=" << write_buf_count_;
+            }
+            waited = true;
+        }
         write_buf_waiting_.Wait(ThdTask());
     }
     WriteBufSlot *slot = write_buf_free_;
     write_buf_free_ = slot->next;
     buf_index = static_cast<uint16_t>(write_buf_index_base_ + slot->index);
     char *ptr = write_buf_.get() + (slot->index * write_buf_size_);
+    if (waited)
+    {
+        if (WriteTask *task = CurrentWriteTask(); task != nullptr)
+        {
+            LOG(INFO) << "AcquireWriteBuffer resumed, table=" << task->TableId()
+                      << " local_buffer_index=" << slot->index;
+        }
+        else
+        {
+            LOG(INFO) << "AcquireWriteBuffer resumed, local_buffer_index="
+                      << slot->index;
+        }
+    }
     return ptr;
 }
 
@@ -437,7 +473,13 @@ void IouringMgr::ReleaseWriteBuffer(char *ptr, uint16_t buf_index)
     WriteBufSlot *slot = &write_buf_slots_[local_index];
     slot->next = write_buf_free_;
     write_buf_free_ = slot;
+    const bool wake_waiter = !write_buf_waiting_.Empty();
     write_buf_waiting_.WakeOne();
+    if (wake_waiter)
+    {
+        LOG(INFO) << "ReleaseWriteBuffer waking blocked writer, "
+                  << "local_buffer_index=" << local_index;
+    }
     (void) ptr;
 }
 
@@ -3275,11 +3317,36 @@ void CloudStoreMgr::AcquireCloudSlot(KvTask *task)
     {
         return;
     }
+    bool waited = false;
     while (inflight_cloud_slots_ >= Options()->max_cloud_concurrency)
     {
+        if (!waited)
+        {
+            if (WriteTask *write_task = CurrentWriteTask(); write_task != nullptr)
+            {
+                LOG(INFO) << "AcquireCloudSlot waiting, table="
+                          << write_task->TableId() << " shard=" << shard_id_
+                          << " inflight_cloud_slots=" << inflight_cloud_slots_
+                          << " max_cloud_concurrency="
+                          << Options()->max_cloud_concurrency;
+            }
+            else
+            {
+                LOG(INFO) << "AcquireCloudSlot waiting, shard=" << shard_id_
+                          << " inflight_cloud_slots=" << inflight_cloud_slots_
+                          << " max_cloud_concurrency="
+                          << Options()->max_cloud_concurrency;
+            }
+            waited = true;
+        }
         cloud_slot_waiting_.Wait(task);
     }
     ++inflight_cloud_slots_;
+    if (waited)
+    {
+        LOG(INFO) << "AcquireCloudSlot resumed, shard=" << shard_id_
+                  << " inflight_cloud_slots=" << inflight_cloud_slots_;
+    }
 }
 
 void CloudStoreMgr::ReleaseCloudSlot(size_t count)
