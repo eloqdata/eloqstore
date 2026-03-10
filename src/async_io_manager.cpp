@@ -2917,12 +2917,14 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
         bool is_data_file;
         size_t expected_size;
         FileId file_id;
+        uint64_t term;
     };
 
     std::vector<CachedFileInfo> cached_files;
     cached_files.reserve(64);
 
     bool has_max_data_file = false;
+    uint64_t max_term = 0;
     FileId max_file_id = 0;
     size_t max_data_file_idx = 0;
 
@@ -2997,6 +2999,7 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
                             file_it->path(),
                             is_data_file,
                             EstimateFileSize(filename),
+                            0,
                             0};
 
         if (is_data_file)
@@ -3010,9 +3013,12 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
                 return KvError::InvalidArgs;
             }
             info.file_id = file_id;
-            if (!has_max_data_file || file_id > max_file_id)
+            info.term = term;
+            if (!has_max_data_file || term > max_term ||
+                (term == max_term && file_id > max_file_id))
             {
                 has_max_data_file = true;
+                max_term = term;
                 max_file_id = file_id;
                 max_data_file_idx = cached_files.size();
             }
