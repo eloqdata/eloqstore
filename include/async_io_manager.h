@@ -160,7 +160,8 @@ public:
                                       std::vector<VarPage> &pages,
                                       std::vector<char *> &release_ptrs,
                                       std::vector<uint16_t> &release_indices,
-                                      bool use_fixed)
+                                      bool use_fixed,
+                                      bool skip_cloud_lookup = false)
     {
         (void) tbl_id;
         (void) file_id;
@@ -172,6 +173,7 @@ public:
         (void) release_ptrs;
         (void) release_indices;
         (void) use_fixed;
+        (void) skip_cloud_lookup;
         return KvError::InvalidArgs;
     }
     /**
@@ -357,7 +359,8 @@ public:
                               std::vector<VarPage> &pages,
                               std::vector<char *> &release_ptrs,
                               std::vector<uint16_t> &release_indices,
-                              bool use_fixed) override;
+                              bool use_fixed,
+                              bool skip_cloud_lookup = false) override;
     void InitBackgroundJob() override;
 
     std::pair<Page, KvError> ReadPage(const TableIdent &tbl_id,
@@ -612,7 +615,8 @@ public:
                          FileId file_id,
                          uint64_t flags,
                          uint64_t mode,
-                         uint64_t term = 0);
+                         uint64_t term = 0,
+                         bool skip_cloud_lookup = false);
     virtual KvError SyncFile(LruFD::Ref fd);
     virtual KvError SyncFiles(const TableIdent &tbl_id,
                               std::span<LruFD::Ref> fds);
@@ -641,11 +645,13 @@ public:
      * Only data file is opened with O_DIRECT by default. Set `direct` to true
      * to open manifest with O_DIRECT.
      */
-    std::pair<LruFD::Ref, KvError> OpenOrCreateFD(const TableIdent &tbl_id,
-                                                  FileId file_id,
-                                                  bool direct = false,
-                                                  bool create = true,
-                                                  uint64_t term = 0);
+    std::pair<LruFD::Ref, KvError> OpenOrCreateFD(
+        const TableIdent &tbl_id,
+        FileId file_id,
+        bool direct = false,
+        bool create = true,
+        uint64_t term = 0,
+        bool skip_cloud_lookup = false);
     bool EvictFD();
 
     class WriteReqPool
@@ -879,7 +885,8 @@ private:
                  FileId file_id,
                  uint64_t flags,
                  uint64_t mode,
-                 uint64_t term = 0) override;
+                 uint64_t term = 0,
+                 bool skip_cloud_lookup = false) override;
     KvError SyncFile(LruFD::Ref fd) override;
     KvError SyncFiles(const TableIdent &tbl_id,
                       std::span<LruFD::Ref> fds) override;

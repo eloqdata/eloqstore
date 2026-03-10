@@ -107,6 +107,7 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     wal_builder_.Reset();
     file_id_term_mapping_dirty_ = false;
     last_append_file_id_.reset();
+    pending_new_append_file_id_.reset();
     cow_meta_ = CowRootMeta();
     size_t buf_size = Options()->write_buffer_size;
     if (buf_size == 0)
@@ -138,6 +139,7 @@ void WriteTask::Abort()
     }
     cow_meta_ = CowRootMeta();
     last_append_file_id_.reset();
+    pending_new_append_file_id_.reset();
     pending_upload_tasks_.clear();
     ResetUploadState();
 }
@@ -319,6 +321,9 @@ void WriteTask::FlushAppendWrites()
     }
 
     const int64_t submit_begin_us = butil::gettimeofday_us();
+    const bool skip_cloud_lookup =
+        pending_new_append_file_id_.has_value() &&
+        pending_new_append_file_id_.value() == batch.file_id;
     KvError err = IoMgr()->SubmitMergedWrite(tbl_ident_,
                                              batch.file_id,
                                              batch.start_offset,
@@ -328,7 +333,8 @@ void WriteTask::FlushAppendWrites()
                                              batch.pages,
                                              batch.release_ptrs,
                                              batch.release_indices,
-                                             batch.use_fixed);
+                                             batch.use_fixed,
+                                             skip_cloud_lookup);
     const int64_t submit_us = butil::gettimeofday_us() - submit_begin_us;
     LOG_IF(INFO, submit_us >= kSlowWritePathLogUs)
         << "Slow FlushAppendWrites submit table=" << tbl_ident_.ToString()
@@ -336,6 +342,7 @@ void WriteTask::FlushAppendWrites()
         << " start_offset=" << batch.start_offset << " bytes=" << batch.bytes
         << " pages=" << batch.pages.size()
         << " release_buffers=" << batch.release_ptrs.size()
+        << " skip_cloud_lookup=" << skip_cloud_lookup
         << " submit_us=" << submit_us;
     if (err != KvError::NoError)
     {
@@ -353,6 +360,10 @@ void WriteTask::FlushAppendWrites()
             }
         }
         write_err_ = err;
+    }
+    else if (skip_cloud_lookup)
+    {
+        pending_new_append_file_id_.reset();
     }
 }
 
@@ -482,6 +493,7 @@ std::pair<PageId, FilePageId> WriteTask::AllocatePage(PageId page_id)
         IoMgr()->SetFileIdTerm(
             tbl_ident_, file_id_after_allocate, IoMgr()->ProcessTerm());
         file_id_term_mapping_dirty_ = true;
+        pending_new_append_file_id_ = file_id_after_allocate;
     }
 
     cow_meta_.mapper_->UpdateMapping(page_id, file_page_id);

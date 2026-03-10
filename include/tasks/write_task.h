@@ -121,6 +121,7 @@ protected:
     // FileIdTermMapping).
     bool file_id_term_mapping_dirty_{false};
     std::optional<FileId> last_append_file_id_;
+    std::optional<FileId> pending_new_append_file_id_;
     WriteBufferAggregator append_aggregator_{0};
     UploadState upload_state_;
     std::vector<std::unique_ptr<ObjectStore::UploadTask>> pending_upload_tasks_;

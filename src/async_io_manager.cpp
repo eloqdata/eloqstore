@@ -764,7 +764,8 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
                                       std::vector<VarPage> &pages,
                                       std::vector<char *> &release_ptrs,
                                       std::vector<uint16_t> &release_indices,
-                                      bool use_fixed)
+                                      bool use_fixed,
+                                      bool skip_cloud_lookup)
 {
     const int64_t submit_begin_us = butil::gettimeofday_us();
     uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
@@ -773,7 +774,8 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
         tbl_id, file_id, term, offset, std::string_view(buf_ptr, bytes));
     const int64_t capture_us = butil::gettimeofday_us() - capture_begin_us;
     const int64_t open_begin_us = butil::gettimeofday_us();
-    auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id, true, true, term);
+    auto [fd_ref, err] =
+        OpenOrCreateFD(tbl_id, file_id, true, true, term, skip_cloud_lookup);
     const int64_t open_fd_us = butil::gettimeofday_us() - open_begin_us;
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;
@@ -821,6 +823,7 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
     LOG_IF(INFO, total_submit_us >= kSlowCloudPathLogUs)
         << "Slow SubmitMergedWrite path table=" << tbl_id.ToString()
         << " file_id=" << file_id << " offset=" << offset << " bytes=" << bytes
+        << " skip_cloud_lookup=" << skip_cloud_lookup
         << " capture_us=" << capture_us << " open_fd_us=" << open_fd_us
         << " alloc_req_us=" << alloc_req_us << " sqe_us=" << sqe_us
         << " total_us=" << total_submit_us;
@@ -1074,7 +1077,8 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     FileId file_id,
     bool direct,
     bool create,
-    uint64_t term)
+    uint64_t term,
+    bool skip_cloud_lookup)
 {
     const int64_t open_fd_begin_us = butil::gettimeofday_us();
     auto [it_tbl, inserted] = tables_.try_emplace(tbl_id);
@@ -1159,7 +1163,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
             O_RDWR | (direct ? O_DIRECT : 0) | (create ? O_CREAT : 0);
         uint64_t mode = create ? 0644 : 0;
         const int64_t file_open_begin_us = butil::gettimeofday_us();
-        fd = OpenFile(tbl_id, file_id, flags, mode, term);
+        fd = OpenFile(tbl_id, file_id, flags, mode, term, skip_cloud_lookup);
         open_file_us = butil::gettimeofday_us() - file_open_begin_us;
         if (fd == -ENOENT && create)
         {
@@ -1181,11 +1185,13 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
         }
     }
 
-    const int64_t total_open_fd_us = butil::gettimeofday_us() - open_fd_begin_us;
+    const int64_t total_open_fd_us =
+        butil::gettimeofday_us() - open_fd_begin_us;
     LOG_IF(INFO, total_open_fd_us >= kSlowCloudPathLogUs)
         << "Slow OpenOrCreateFD table=" << tbl_id.ToString()
-        << " file_id=" << file_id << " create=" << create << " direct="
-        << direct << " term=" << term << " lock_us=" << lock_us
+        << " file_id=" << file_id << " create=" << create
+        << " direct=" << direct << " term=" << term
+        << " skip_cloud_lookup=" << skip_cloud_lookup << " lock_us=" << lock_us
         << " open_file_us=" << open_file_us << " open_dir_us=" << open_dir_us
         << " create_file_us=" << create_file_us
         << " total_us=" << total_open_fd_us;
@@ -1514,8 +1520,10 @@ int IouringMgr::OpenFile(const TableIdent &tbl_id,
                          FileId file_id,
                          uint64_t flags,
                          uint64_t mode,
-                         uint64_t term)
+                         uint64_t term,
+                         bool skip_cloud_lookup)
 {
+    (void) skip_cloud_lookup;
     fs::path path = tbl_id.ToString();
     if (file_id == LruFD::kManifest)
     {
@@ -4269,7 +4277,8 @@ int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
                             FileId file_id,
                             uint64_t flags,
                             uint64_t mode,
-                            uint64_t term)
+                            uint64_t term,
+                            bool skip_cloud_lookup)
 {
     FileKey key = FileKey(tbl_id, ToFilename(file_id, term));
     if (DequeClosedFile(key))
@@ -4281,6 +4290,15 @@ int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
             EnqueClosedFile(std::move(key));
         }
         return res;
+    }
+
+    if (skip_cloud_lookup && file_id <= LruFD::kMaxDataFile)
+    {
+        // This file id was just allocated by the local append allocator, so
+        // treat a local miss as create-on-write instead of paying a cloud
+        // NotFound round-trip.
+        return IouringMgr::OpenFile(
+            tbl_id, file_id, flags, mode, term, skip_cloud_lookup);
     }
 
     // File not exists locally, try to download it from cloud.
