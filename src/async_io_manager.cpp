@@ -1076,6 +1076,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     bool create,
     uint64_t term)
 {
+    const int64_t open_fd_begin_us = butil::gettimeofday_us();
     auto [it_tbl, inserted] = tables_.try_emplace(tbl_id);
     if (inserted)
     {
@@ -1087,7 +1088,9 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
 
     // Avoid multiple coroutines from concurrently opening or closing the same
     // file duplicately.
+    const int64_t lock_begin_us = butil::gettimeofday_us();
     lru_fd.Get()->mu_.Lock();
+    const int64_t lock_us = butil::gettimeofday_us() - lock_begin_us;
     if (file_id == LruFD::kDirectory)
     {
         if (lru_fd.Get()->fd_ != LruFD::FdEmpty)
@@ -1133,14 +1136,21 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
 
     int fd;
     KvError error = KvError::NoError;
+    int64_t open_file_us = 0;
+    int64_t open_dir_us = 0;
+    int64_t create_file_us = 0;
     if (file_id == LruFD::kDirectory)
     {
         FdIdx root_fd = GetRootFD(tbl_id);
         std::string dirname = tbl_id.ToString();
+        const int64_t dir_open_begin_us = butil::gettimeofday_us();
         fd = OpenAt(root_fd, dirname.c_str(), oflags_dir, 0, false);
+        open_file_us = butil::gettimeofday_us() - dir_open_begin_us;
         if (fd == -ENOENT && create)
         {
+            const int64_t mkdir_begin_us = butil::gettimeofday_us();
             fd = MakeDir(root_fd, dirname.c_str());
+            create_file_us = butil::gettimeofday_us() - mkdir_begin_us;
         }
     }
     else
@@ -1148,22 +1158,37 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
         uint64_t flags =
             O_RDWR | (direct ? O_DIRECT : 0) | (create ? O_CREAT : 0);
         uint64_t mode = create ? 0644 : 0;
+        const int64_t file_open_begin_us = butil::gettimeofday_us();
         fd = OpenFile(tbl_id, file_id, flags, mode, term);
+        open_file_us = butil::gettimeofday_us() - file_open_begin_us;
         if (fd == -ENOENT && create)
         {
             // This must be data file because manifest should always be
             // created by call WriteSnapshot.
             assert(file_id <= LruFD::kMaxDataFile);
+            const int64_t open_dir_begin_us = butil::gettimeofday_us();
             auto [dfd_ref, err] =
                 OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, 0);
+            open_dir_us = butil::gettimeofday_us() - open_dir_begin_us;
             error = err;
             if (dfd_ref != nullptr)
             {
                 TEST_KILL_POINT_WEIGHT("OpenOrCreateFD:CreateFile", 100)
+                const int64_t create_begin_us = butil::gettimeofday_us();
                 fd = CreateFile(std::move(dfd_ref), file_id, term);
+                create_file_us = butil::gettimeofday_us() - create_begin_us;
             }
         }
     }
+
+    const int64_t total_open_fd_us = butil::gettimeofday_us() - open_fd_begin_us;
+    LOG_IF(INFO, total_open_fd_us >= kSlowCloudPathLogUs)
+        << "Slow OpenOrCreateFD table=" << tbl_id.ToString()
+        << " file_id=" << file_id << " create=" << create << " direct="
+        << direct << " term=" << term << " lock_us=" << lock_us
+        << " open_file_us=" << open_file_us << " open_dir_us=" << open_dir_us
+        << " create_file_us=" << create_file_us
+        << " total_us=" << total_open_fd_us;
 
     if (fd < 0)
     {
