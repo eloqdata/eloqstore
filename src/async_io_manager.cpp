@@ -766,13 +766,19 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
                                       std::vector<uint16_t> &release_indices,
                                       bool use_fixed)
 {
+    const int64_t submit_begin_us = butil::gettimeofday_us();
     uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
+    const int64_t capture_begin_us = butil::gettimeofday_us();
     OnFileRangeWritePrepared(
         tbl_id, file_id, term, offset, std::string_view(buf_ptr, bytes));
+    const int64_t capture_us = butil::gettimeofday_us() - capture_begin_us;
+    const int64_t open_begin_us = butil::gettimeofday_us();
     auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id, true, true, term);
+    const int64_t open_fd_us = butil::gettimeofday_us() - open_begin_us;
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;
 
+    const int64_t alloc_begin_us = butil::gettimeofday_us();
     auto *req =
         merged_write_req_pool_->Alloc(static_cast<WriteTask *>(ThdTask()),
                                       std::move(fd_ref),
@@ -781,6 +787,7 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
                                       bytes,
                                       offset,
                                       std::move(pages));
+    const int64_t alloc_req_us = butil::gettimeofday_us() - alloc_begin_us;
     req->release_ptrs_ = std::move(release_ptrs);
     req->release_indices_ = std::move(release_indices);
     req->use_fixed_ = use_fixed;
@@ -792,7 +799,9 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
             static_cast<uint32_t>(req->pages_.size() - 1);
     }
 
+    const int64_t sqe_begin_us = butil::gettimeofday_us();
     io_uring_sqe *sqe = GetSQE(UserDataType::MergedWriteReq, req);
+    const int64_t sqe_us = butil::gettimeofday_us() - sqe_begin_us;
     auto [fd, registered] = req->fd_ref_.FdPair();
     if (registered)
     {
@@ -808,6 +817,13 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
         io_uring_prep_write(
             sqe, fd, buf_ptr, bytes, static_cast<off_t>(offset));
     }
+    const int64_t total_submit_us = butil::gettimeofday_us() - submit_begin_us;
+    LOG_IF(INFO, total_submit_us >= kSlowCloudPathLogUs)
+        << "Slow SubmitMergedWrite path table=" << tbl_id.ToString()
+        << " file_id=" << file_id << " offset=" << offset << " bytes=" << bytes
+        << " capture_us=" << capture_us << " open_fd_us=" << open_fd_us
+        << " alloc_req_us=" << alloc_req_us << " sqe_us=" << sqe_us
+        << " total_us=" << total_submit_us;
     return KvError::NoError;
 }
 

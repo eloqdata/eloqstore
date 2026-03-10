@@ -318,6 +318,7 @@ void WriteTask::FlushAppendWrites()
         return;
     }
 
+    const int64_t submit_begin_us = butil::gettimeofday_us();
     KvError err = IoMgr()->SubmitMergedWrite(tbl_ident_,
                                              batch.file_id,
                                              batch.start_offset,
@@ -328,6 +329,14 @@ void WriteTask::FlushAppendWrites()
                                              batch.release_ptrs,
                                              batch.release_indices,
                                              batch.use_fixed);
+    const int64_t submit_us = butil::gettimeofday_us() - submit_begin_us;
+    LOG_IF(INFO, submit_us >= kSlowWritePathLogUs)
+        << "Slow FlushAppendWrites submit table=" << tbl_ident_.ToString()
+        << " file_id=" << batch.file_id
+        << " start_offset=" << batch.start_offset << " bytes=" << batch.bytes
+        << " pages=" << batch.pages.size()
+        << " release_buffers=" << batch.release_ptrs.size()
+        << " submit_us=" << submit_us;
     if (err != KvError::NoError)
     {
         for (VarPage &page : batch.pages)
@@ -402,9 +411,12 @@ void WriteTask::WritePageCallback(VarPage page, KvError err)
 KvError WriteTask::WaitWrite()
 {
     const int64_t wait_begin_us = butil::gettimeofday_us();
+    int64_t flush_submit_us = 0;
     if (Options()->data_append_mode && IoMgr()->HasWriteBufferPool())
     {
+        const int64_t flush_begin_us = butil::gettimeofday_us();
         FlushAppendWrites();
+        flush_submit_us = butil::gettimeofday_us() - flush_begin_us;
     }
     const size_t pending_uploads = pending_upload_tasks_.size();
     const int64_t io_wait_begin_us = butil::gettimeofday_us();
@@ -424,6 +436,7 @@ KvError WriteTask::WaitWrite()
     const int64_t total_wait_us = butil::gettimeofday_us() - wait_begin_us;
     LOG_IF(INFO, total_wait_us >= kSlowWritePathLogUs)
         << "Slow WaitWrite table=" << tbl_ident_.ToString()
+        << " flush_submit_us=" << flush_submit_us
         << " io_wait_us=" << io_wait_us << " upload_join_us=" << upload_join_us
         << " pending_uploads=" << pending_uploads
         << " write_err=" << ErrorString(local_write_err)
