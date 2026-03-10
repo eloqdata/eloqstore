@@ -1454,9 +1454,13 @@ int IouringMgr::MakeDir(FdIdx dir_fd, const char *path)
 int IouringMgr::CreateFile(LruFD::Ref dir_fd, FileId file_id, uint64_t term)
 {
     assert(file_id <= LruFD::kMaxDataFile);
+    const int64_t create_begin_us = butil::gettimeofday_us();
     uint64_t flags = O_CREAT | O_RDWR | O_DIRECT;
     std::string filename = DataFileName(file_id, term);
+    const int64_t open_begin_us = butil::gettimeofday_us();
     int fd = OpenAt(dir_fd.FdPair(), filename.c_str(), flags, 0644);
+    const int64_t open_us = butil::gettimeofday_us() - open_begin_us;
+    int64_t fallocate_us = 0;
     if (fd >= 0)
     {
         // Multiple data files may be created in one
@@ -1468,9 +1472,16 @@ int IouringMgr::CreateFile(LruFD::Ref dir_fd, FileId file_id, uint64_t term)
         {
             // Avoid update metadata (file size) of file frequently in append
             // write mode.
+            const int64_t fallocate_begin_us = butil::gettimeofday_us();
             Fallocate({fd, true}, options_->DataFileSize());
+            fallocate_us = butil::gettimeofday_us() - fallocate_begin_us;
         }
     }
+    const int64_t total_create_us = butil::gettimeofday_us() - create_begin_us;
+    LOG_IF(INFO, total_create_us >= kSlowCloudPathLogUs)
+        << "Slow CreateFile table=" << dir_fd.Get()->tbl_->tbl_id_->ToString()
+        << " file_id=" << file_id << " term=" << term << " open_us=" << open_us
+        << " fallocate_us=" << fallocate_us << " total_us=" << total_create_us;
     return fd;
 }
 
@@ -1502,7 +1513,10 @@ int IouringMgr::OpenAt(FdIdx dir_fd,
                        uint64_t mode,
                        bool fixed_target)
 {
+    const int64_t open_begin_us = butil::gettimeofday_us();
+    const int64_t evict_begin_us = butil::gettimeofday_us();
     EvictFD();
+    const int64_t evict_us = butil::gettimeofday_us() - evict_begin_us;
     uint64_t open_flags = flags;
     if ((open_flags & O_DIRECTORY) == 0)
     {
@@ -1519,7 +1533,14 @@ int IouringMgr::OpenAt(FdIdx dir_fd,
         }
         io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
         io_uring_prep_openat2_direct(sqe, dir_fd.first, path, &how, idx);
+        const int64_t wait_begin_us = butil::gettimeofday_us();
         int res = ThdTask()->WaitIoResult();
+        const int64_t wait_us = butil::gettimeofday_us() - wait_begin_us;
+        const int64_t total_open_us = butil::gettimeofday_us() - open_begin_us;
+        LOG_IF(INFO, total_open_us >= kSlowCloudPathLogUs)
+            << "Slow OpenAt path=" << path << " fixed_target=" << fixed_target
+            << " flags=" << open_flags << " evict_us=" << evict_us
+            << " wait_us=" << wait_us << " total_us=" << total_open_us;
         if (res < 0)
         {
             FreeRegisterIndex(idx);
@@ -1531,7 +1552,14 @@ int IouringMgr::OpenAt(FdIdx dir_fd,
 
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
     io_uring_prep_openat2(sqe, dir_fd.first, path, &how);
+    const int64_t wait_begin_us = butil::gettimeofday_us();
     int fd = ThdTask()->WaitIoResult();
+    const int64_t wait_us = butil::gettimeofday_us() - wait_begin_us;
+    const int64_t total_open_us = butil::gettimeofday_us() - open_begin_us;
+    LOG_IF(INFO, total_open_us >= kSlowCloudPathLogUs)
+        << "Slow OpenAt path=" << path << " fixed_target=" << fixed_target
+        << " flags=" << open_flags << " evict_us=" << evict_us
+        << " wait_us=" << wait_us << " total_us=" << total_open_us;
     if (fd < 0)
     {
         return fd;
