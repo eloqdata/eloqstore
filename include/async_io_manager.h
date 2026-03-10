@@ -886,7 +886,8 @@ private:
     KvError UploadFile(const TableIdent &tbl_id,
                        std::string filename,
                        WriteTask *owner,
-                       std::string_view payload = {});
+                       std::string_view payload = {},
+                       bool wait_for_completion = true);
     KvError UploadFiles(const TableIdent &tbl_id,
                         std::vector<std::string> filenames);
     /**

@@ -2,10 +2,12 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 #include <utility>
 
 #include "direct_io_buffer.h"
 #include "error.h"
+#include "storage/object_store.h"
 #include "storage/data_page.h"
 #include "storage/index_page_manager.h"
 #include "storage/page_mapper.h"
@@ -40,6 +42,7 @@ public:
     };
 
     WriteTask() = default;
+    virtual ~WriteTask();
     WriteTask(const WriteTask &) = delete;
 
     void Abort() override;
@@ -61,6 +64,9 @@ public:
     {
         return upload_state_;
     }
+    void AddPendingUploadTask(std::unique_ptr<ObjectStore::UploadTask> task);
+    KvError ConsumePendingUploadResults();
+    void ClearPendingUploadTasks();
 
     KvError WaitWrite();
     // write_err_ record the result of the last failed write
@@ -110,6 +116,7 @@ protected:
     std::optional<FileId> last_append_file_id_;
     WriteBufferAggregator append_aggregator_{0};
     UploadState upload_state_;
+    std::vector<std::unique_ptr<ObjectStore::UploadTask>> pending_upload_tasks_;
 };
 
 }  // namespace eloqstore

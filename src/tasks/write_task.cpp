@@ -57,6 +57,12 @@ KvError BuildRetainedFiles(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 }  // namespace
+
+WriteTask::~WriteTask()
+{
+    pending_upload_tasks_.clear();
+}
+
 std::string_view WriteTask::TaskTypeName() const
 {
     switch (Type())
@@ -103,6 +109,7 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     append_aggregator_ = WriteBufferAggregator(buf_size);
     append_aggregator_.Reset();
     upload_state_.ResetMetadata();
+    pending_upload_tasks_.clear();
     if (!Options()->cloud_store_path.empty())
     {
         upload_state_.buffer.EnsureDefaultReserve();
@@ -129,6 +136,36 @@ void WriteTask::Abort()
     cow_meta_ = CowRootMeta();
     last_append_file_id_.reset();
     upload_state_.ResetMetadata();
+    pending_upload_tasks_.clear();
+}
+
+void WriteTask::AddPendingUploadTask(
+    std::unique_ptr<ObjectStore::UploadTask> task)
+{
+    if (task != nullptr)
+    {
+        pending_upload_tasks_.emplace_back(std::move(task));
+    }
+}
+
+KvError WriteTask::ConsumePendingUploadResults()
+{
+    KvError first_err = KvError::NoError;
+    for (const auto &task : pending_upload_tasks_)
+    {
+        if (task != nullptr && task->error_ != KvError::NoError &&
+            first_err == KvError::NoError)
+        {
+            first_err = task->error_;
+        }
+    }
+    pending_upload_tasks_.clear();
+    return first_err;
+}
+
+void WriteTask::ClearPendingUploadTasks()
+{
+    pending_upload_tasks_.clear();
 }
 
 KvError WriteTask::WritePage(DataPage &&page)
@@ -220,11 +257,11 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
         // This ensures sealed data files are uploaded promptly
         if (file_switched)
         {
-            // Wait for flush to complete before uploading
-            KvError err = WaitWrite();
-            CHECK_KV_ERR(err);
-            // Trigger upload of the sealed file (may use in-memory segments)
-            err = IoMgr()->OnDataFileSealed(tbl_ident_, sealed_file_id);
+            // Trigger async upload for the sealed file.
+            // Backpressure is still enforced by cloud slot acquisition.
+            // The completion will be joined by WaitWrite() at the task
+            // convergence point.
+            KvError err = IoMgr()->OnDataFileSealed(tbl_ident_, sealed_file_id);
             CHECK_KV_ERR(err);
         }
         uint16_t buf_index = 0;
@@ -347,6 +384,11 @@ KvError WriteTask::WaitWrite()
     }
     WaitIo();
     KvError err = write_err_;
+    KvError upload_err = ConsumePendingUploadResults();
+    if (err == KvError::NoError)
+    {
+        err = upload_err;
+    }
     write_err_ = KvError::NoError;
     return err;
 }
