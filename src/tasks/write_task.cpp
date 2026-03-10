@@ -1,5 +1,7 @@
 #include "tasks/write_task.h"
 
+#include <butil/time.h>
+
 #include <cassert>
 #include <cstdint>
 #include <cstring>
@@ -26,6 +28,8 @@ namespace eloqstore
 {
 namespace
 {
+constexpr int64_t kSlowWritePathLogUs = 50 * 1000;
+
 KvError BuildRetainedFiles(const TableIdent &tbl_id,
                            absl::flat_hash_set<FileId> &retained_files,
                            std::vector<MappingSnapshot::Ref> &snapshot_array)
@@ -216,13 +220,19 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
     if (!append_aggregator_.HasBuffer() ||
         !append_aggregator_.CanAppend(file_id, offset, page_size))
     {
+        const int64_t switch_begin_us = butil::gettimeofday_us();
         const bool file_switched = cloud_append_mode &&
                                    last_append_file_id_.has_value() &&
                                    last_append_file_id_.value() != file_id;
         const FileId sealed_file_id =
             file_switched ? last_append_file_id_.value() : file_id;
+        int64_t flush_submit_us = 0;
+        int64_t seal_submit_us = 0;
+        int64_t acquire_buffer_us = 0;
         // Flush any pending writes in the aggregator
+        int64_t step_begin_us = butil::gettimeofday_us();
         FlushAppendWrites();
+        flush_submit_us = butil::gettimeofday_us() - step_begin_us;
         if (write_err_ != KvError::NoError)
         {
             return write_err_;
@@ -231,11 +241,15 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
         // without waiting for cloud completion.
         if (file_switched)
         {
+            step_begin_us = butil::gettimeofday_us();
             KvError err = IoMgr()->OnDataFileSealed(tbl_ident_, sealed_file_id);
+            seal_submit_us = butil::gettimeofday_us() - step_begin_us;
             CHECK_KV_ERR(err);
         }
         uint16_t buf_index = 0;
+        step_begin_us = butil::gettimeofday_us();
         char *buf = IoMgr()->AcquireWriteBuffer(buf_index);
+        acquire_buffer_us = butil::gettimeofday_us() - step_begin_us;
         if (buf == nullptr)
         {
             return KvError::OutOfMem;
@@ -243,6 +257,30 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
         bool use_fixed = IoMgr()->WriteBufferUseFixed();
         append_aggregator_.SetBuffer(
             buf, buf_index, file_id, offset, use_fixed);
+        const int64_t switch_total_us =
+            butil::gettimeofday_us() - switch_begin_us;
+        if (file_switched)
+        {
+            VLOG(1) << "AppendWritePage switched file table="
+                    << tbl_ident_.ToString()
+                    << " sealed_file=" << sealed_file_id
+                    << " next_file=" << file_id
+                    << " flush_submit_us=" << flush_submit_us
+                    << " seal_submit_us=" << seal_submit_us
+                    << " acquire_buffer_us=" << acquire_buffer_us
+                    << " inflight_io=" << inflight_io_
+                    << " pending_uploads=" << pending_upload_tasks_.size()
+                    << " total_us=" << switch_total_us;
+            LOG_IF(INFO, switch_total_us >= kSlowWritePathLogUs)
+                << "Slow data-file switch table=" << tbl_ident_.ToString()
+                << " sealed_file=" << sealed_file_id << " next_file=" << file_id
+                << " flush_submit_us=" << flush_submit_us
+                << " seal_submit_us=" << seal_submit_us
+                << " acquire_buffer_us=" << acquire_buffer_us
+                << " inflight_io=" << inflight_io_
+                << " pending_uploads=" << pending_upload_tasks_.size()
+                << " total_us=" << switch_total_us;
+        }
     }
 
     char *dst = append_aggregator_.TryReserve(file_id, offset, page_size);
@@ -363,18 +401,33 @@ void WriteTask::WritePageCallback(VarPage page, KvError err)
 
 KvError WriteTask::WaitWrite()
 {
+    const int64_t wait_begin_us = butil::gettimeofday_us();
     if (Options()->data_append_mode && IoMgr()->HasWriteBufferPool())
     {
         FlushAppendWrites();
     }
+    const size_t pending_uploads = pending_upload_tasks_.size();
+    const int64_t io_wait_begin_us = butil::gettimeofday_us();
     WaitIo();
+    const int64_t io_wait_us = butil::gettimeofday_us() - io_wait_begin_us;
+    const int64_t upload_join_begin_us = butil::gettimeofday_us();
     KvError err = write_err_;
+    const KvError local_write_err = write_err_;
     KvError upload_err = ConsumePendingUploadResults();
+    const int64_t upload_join_us =
+        butil::gettimeofday_us() - upload_join_begin_us;
     write_err_ = KvError::NoError;
     if (err == KvError::NoError)
     {
         err = upload_err;
     }
+    const int64_t total_wait_us = butil::gettimeofday_us() - wait_begin_us;
+    LOG_IF(INFO, total_wait_us >= kSlowWritePathLogUs)
+        << "Slow WaitWrite table=" << tbl_ident_.ToString()
+        << " io_wait_us=" << io_wait_us << " upload_join_us=" << upload_join_us
+        << " pending_uploads=" << pending_uploads
+        << " write_err=" << ErrorString(local_write_err)
+        << " final_err=" << ErrorString(err) << " total_us=" << total_wait_us;
     return err;
 }
 

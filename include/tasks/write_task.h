@@ -69,6 +69,10 @@ public:
     {
         pending_upload_tasks_.emplace_back(std::move(task));
     }
+    size_t PendingUploadCount() const
+    {
+        return pending_upload_tasks_.size();
+    }
 
     KvError WaitWrite();
     // write_err_ record the result of the last failed write

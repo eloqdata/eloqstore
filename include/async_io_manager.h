@@ -532,6 +532,7 @@ public:
         bool use_fixed_{true};
         size_t bytes_{0};
         uint64_t offset_{0};
+        int64_t submit_ts_us_{0};
         std::vector<VarPage> pages_;
         std::vector<char *> release_ptrs_;
         std::vector<uint16_t> release_indices_;

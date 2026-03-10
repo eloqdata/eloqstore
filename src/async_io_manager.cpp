@@ -59,6 +59,8 @@ namespace fs = std::filesystem;
 
 namespace
 {
+constexpr int64_t kSlowCloudPathLogUs = 50 * 1000;
+
 WriteTask *CurrentWriteTask()
 {
     KvTask *task = ThdTask();
@@ -414,9 +416,30 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
 
 char *IouringMgr::AcquireWriteBuffer(uint16_t &buf_index)
 {
+    int64_t wait_begin_us = 0;
     while (write_buf_free_ == nullptr)
     {
+        if (wait_begin_us == 0)
+        {
+            wait_begin_us = butil::gettimeofday_us();
+        }
         write_buf_waiting_.Wait(ThdTask());
+    }
+    if (wait_begin_us != 0)
+    {
+        const int64_t wait_us = butil::gettimeofday_us() - wait_begin_us;
+        WriteTask *owner = CurrentWriteTask();
+        LOG(INFO) << "AcquireWriteBuffer waited table="
+                  << (owner == nullptr ? std::string("<none>")
+                                       : owner->TableId().ToString())
+                  << " task_type="
+                  << (owner == nullptr ? -1 : static_cast<int>(owner->Type()))
+                  << " wait_us=" << wait_us
+                  << " write_buf_count=" << write_buf_count_
+                  << " write_buf_size=" << write_buf_size_ << " inflight_io="
+                  << (owner == nullptr ? 0 : owner->inflight_io_)
+                  << " pending_uploads="
+                  << (owner == nullptr ? 0 : owner->PendingUploadCount());
     }
     WriteBufSlot *slot = write_buf_free_;
     write_buf_free_ = slot->next;
@@ -761,6 +784,7 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
     req->release_ptrs_ = std::move(release_ptrs);
     req->release_indices_ = std::move(release_indices);
     req->use_fixed_ = use_fixed;
+    req->submit_ts_us_ = butil::gettimeofday_us();
 
     if (!req->pages_.empty())
     {
@@ -1349,6 +1373,19 @@ void IouringMgr::PollComplete()
             {
                 err = KvError::NoError;
             }
+
+            const int64_t merged_write_us =
+                req->submit_ts_us_ == 0
+                    ? 0
+                    : butil::gettimeofday_us() - req->submit_ts_us_;
+            LOG_IF(INFO, merged_write_us >= kSlowCloudPathLogUs)
+                << "Slow merged local write table="
+                << req->task_->TableId().ToString()
+                << " file_id=" << req->fd_ref_.Get()->file_id_
+                << " offset=" << req->offset_ << " bytes=" << req->bytes_
+                << " pages=" << req->pages_.size()
+                << " err=" << ErrorString(err)
+                << " latency_us=" << merged_write_us;
 
             for (VarPage &page : req->pages_)
             {
@@ -2263,6 +2300,7 @@ void IouringMgr::MergedWriteReqPool::Free(MergedWriteReq *req)
     req->use_fixed_ = true;
     req->bytes_ = 0;
     req->offset_ = 0;
+    req->submit_ts_us_ = 0;
     req->next_ = free_list_;
     free_list_ = req;
     waiting_.WakeOne();
@@ -3269,9 +3307,29 @@ void CloudStoreMgr::AcquireCloudSlot(KvTask *task)
     {
         return;
     }
+    int64_t wait_begin_us = 0;
     while (inflight_cloud_slots_ >= Options()->max_cloud_concurrency)
     {
+        if (wait_begin_us == 0)
+        {
+            wait_begin_us = butil::gettimeofday_us();
+        }
         cloud_slot_waiting_.Wait(task);
+    }
+    if (wait_begin_us != 0)
+    {
+        const int64_t wait_us = butil::gettimeofday_us() - wait_begin_us;
+        WriteTask *owner = CurrentWriteTask();
+        LOG(INFO) << "AcquireCloudSlot waited table="
+                  << (owner == nullptr ? std::string("<none>")
+                                       : owner->TableId().ToString())
+                  << " task_type="
+                  << (owner == nullptr ? -1 : static_cast<int>(owner->Type()))
+                  << " wait_us=" << wait_us
+                  << " inflight_cloud_slots=" << inflight_cloud_slots_
+                  << " max_cloud_concurrency="
+                  << Options()->max_cloud_concurrency << " pending_uploads="
+                  << (owner == nullptr ? 0 : owner->PendingUploadCount());
     }
     ++inflight_cloud_slots_;
 }
@@ -4639,11 +4697,15 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
                                   std::string_view payload,
                                   bool wait_for_completion)
 {
+    const int64_t upload_begin_us = butil::gettimeofday_us();
     KvTask *current_task = ThdTask();
     auto upload_task =
         std::make_unique<ObjectStore::UploadTask>(&tbl_id, std::move(filename));
     upload_task->SetKvTask(current_task);
     const bool async_owner_upload = owner != nullptr && !wait_for_completion;
+    int64_t prefix_read_us = 0;
+    int64_t cloud_slot_us = 0;
+    int64_t submit_us = 0;
 
     auto [prefix, suffix] = ParseFileName(upload_task->filename_);
     const bool is_data_file = (prefix == FileNameData);
@@ -4774,11 +4836,13 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
         upload_buffer->resize(file_size);
         if (start_offset > 0)
         {
+            const int64_t prefix_begin_us = butil::gettimeofday_us();
             KvError err = ReadFilePrefix(tbl_id,
                                          upload_task->filename_,
                                          static_cast<size_t>(start_offset),
                                          *upload_buffer,
                                          0);
+            prefix_read_us = butil::gettimeofday_us() - prefix_begin_us;
             if (err != KvError::NoError)
             {
                 cleanup();
@@ -4794,10 +4858,31 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
         owner->ResetUploadState();
     }
 
+    const int64_t cloud_slot_begin_us = butil::gettimeofday_us();
     AcquireCloudSlot(current_task);
+    cloud_slot_us = butil::gettimeofday_us() - cloud_slot_begin_us;
+    const int64_t submit_begin_us = butil::gettimeofday_us();
     obj_store_.SubmitTask(upload_task.get(), shard);
+    submit_us = butil::gettimeofday_us() - submit_begin_us;
     if (async_owner_upload)
     {
+        const int64_t total_us = butil::gettimeofday_us() - upload_begin_us;
+        VLOG(1) << "Submitted async sealed-file upload table="
+                << tbl_id.ToString() << " filename=" << upload_task->filename_
+                << " file_size=" << upload_task->file_size_
+                << " start_offset=" << start_offset
+                << " end_offset=" << end_offset
+                << " prefix_read_us=" << prefix_read_us
+                << " cloud_slot_us=" << cloud_slot_us
+                << " submit_us=" << submit_us << " total_us=" << total_us;
+        LOG_IF(INFO, total_us >= kSlowCloudPathLogUs)
+            << "Slow async sealed-file upload submission table="
+            << tbl_id.ToString() << " filename=" << upload_task->filename_
+            << " file_size=" << upload_task->file_size_
+            << " start_offset=" << start_offset << " end_offset=" << end_offset
+            << " prefix_read_us=" << prefix_read_us
+            << " cloud_slot_us=" << cloud_slot_us << " submit_us=" << submit_us
+            << " total_us=" << total_us;
         owner->AddPendingUploadTask(std::move(upload_task));
         return KvError::NoError;
     }
