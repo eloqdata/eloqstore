@@ -1,13 +1,16 @@
 #pragma once
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include "direct_io_buffer.h"
 #include "error.h"
 #include "storage/data_page.h"
 #include "storage/index_page_manager.h"
+#include "storage/object_store.h"
 #include "storage/page_mapper.h"
 #include "storage/root_meta.h"
 #include "tasks/task.h"
@@ -61,6 +64,11 @@ public:
     {
         return upload_state_;
     }
+    void ResetUploadState();
+    void AddPendingUploadTask(std::unique_ptr<ObjectStore::UploadTask> task)
+    {
+        pending_upload_tasks_.emplace_back(std::move(task));
+    }
 
     KvError WaitWrite();
     // write_err_ record the result of the last failed write
@@ -101,6 +109,7 @@ protected:
     KvError WritePage(VarPage page, FilePageId file_page_id);
     KvError AppendWritePage(VarPage page, FilePageId file_page_id);
     void FlushAppendWrites();
+    KvError ConsumePendingUploadResults();
     std::pair<FileId, uint32_t> ConvFilePageId(FilePageId file_page_id) const;
 
     // Track whether FileIdTermMapping changed in this write task.
@@ -110,6 +119,7 @@ protected:
     std::optional<FileId> last_append_file_id_;
     WriteBufferAggregator append_aggregator_{0};
     UploadState upload_state_;
+    std::vector<std::unique_ptr<ObjectStore::UploadTask>> pending_upload_tasks_;
 };
 
 }  // namespace eloqstore

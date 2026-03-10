@@ -216,9 +216,10 @@ public:
      * complete and should be uploaded immediately. This enables immediate
      * upload of sealed data files in cloud append mode.
      *
-     * The call is synchronous within the current write task context. Returning
-     * an error will fail the write request and trigger AbortWrite to clean up
-     * any partial state.
+     * The callback itself runs in the current write task context, but cloud
+     * implementations may submit the sealed-file upload asynchronously and
+     * return before the upload completes. Returning an error still fails the
+     * write request and triggers AbortWrite to clean up any partial state.
      *
      * @param tbl_id Table identifier
      * @param file_id The file_id that was just sealed (before switching to
@@ -506,7 +507,7 @@ public:
 
     struct BaseReq
     {
-        explicit BaseReq(KvTask *task = nullptr) : task_(task) {};
+        explicit BaseReq(KvTask *task = nullptr) : task_(task){};
         KvTask *task_;
         int res_{0};
         uint32_t flags_{0};
@@ -886,7 +887,8 @@ private:
     KvError UploadFile(const TableIdent &tbl_id,
                        std::string filename,
                        WriteTask *owner,
-                       std::string_view payload = {});
+                       std::string_view payload = {},
+                       bool wait_for_completion = true);
     KvError UploadFiles(const TableIdent &tbl_id,
                         std::vector<std::string> filenames);
     /**
@@ -1074,7 +1076,7 @@ public:
     class Manifest : public ManifestFile
     {
     public:
-        explicit Manifest(std::string_view content) : content_(content) {};
+        explicit Manifest(std::string_view content) : content_(content){};
         KvError Read(char *dst, size_t n) override;
         KvError SkipPadding(size_t n) override;
 

@@ -5,6 +5,10 @@
 #include <algorithm>
 #include <chrono>
 
+#ifdef ELOQ_MODULE_ENABLED
+#include <bthread/eloq_module.h>
+#endif
+
 #include "async_io_manager.h"
 #include "eloq_store.h"
 #include "storage/shard.h"
@@ -111,6 +115,10 @@ void CloudStorageService::NotifyTaskFinished(ObjectStore::Task *task)
     auto *cloud_mgr =
         reinterpret_cast<CloudStoreMgr *>(task->owner_shard_->IoManager());
     cloud_mgr->EnqueueCloudReadyTask(task->kv_task_);
+#ifdef ELOQ_MODULE_ENABLED
+    eloq::EloqModule::NotifyWorker(
+        static_cast<int>(task->owner_shard_->shard_id_));
+#endif
 }
 
 void CloudStorageService::RunWorker(size_t worker_index)

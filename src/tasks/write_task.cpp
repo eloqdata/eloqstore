@@ -87,6 +87,15 @@ const TableIdent &WriteTask::TableId() const
     return tbl_ident_;
 }
 
+void WriteTask::ResetUploadState()
+{
+    upload_state_.ResetMetadata();
+    if (!Options()->cloud_store_path.empty())
+    {
+        upload_state_.buffer.EnsureDefaultReserve();
+    }
+}
+
 void WriteTask::Reset(const TableIdent &tbl_id)
 {
     tbl_ident_ = tbl_id;
@@ -102,11 +111,8 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     }
     append_aggregator_ = WriteBufferAggregator(buf_size);
     append_aggregator_.Reset();
-    upload_state_.ResetMetadata();
-    if (!Options()->cloud_store_path.empty())
-    {
-        upload_state_.buffer.EnsureDefaultReserve();
-    }
+    pending_upload_tasks_.clear();
+    ResetUploadState();
 }
 
 void WriteTask::Abort()
@@ -128,7 +134,8 @@ void WriteTask::Abort()
     }
     cow_meta_ = CowRootMeta();
     last_append_file_id_.reset();
-    upload_state_.ResetMetadata();
+    pending_upload_tasks_.clear();
+    ResetUploadState();
 }
 
 KvError WriteTask::WritePage(DataPage &&page)
@@ -216,15 +223,15 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
             file_switched ? last_append_file_id_.value() : file_id;
         // Flush any pending writes in the aggregator
         FlushAppendWrites();
+        if (write_err_ != KvError::NoError)
+        {
+            return write_err_;
+        }
         // In cloud append mode, trigger immediate upload of sealed file
-        // This ensures sealed data files are uploaded promptly
+        // without waiting for cloud completion.
         if (file_switched)
         {
-            // Wait for flush to complete before uploading
-            KvError err = WaitWrite();
-            CHECK_KV_ERR(err);
-            // Trigger upload of the sealed file (may use in-memory segments)
-            err = IoMgr()->OnDataFileSealed(tbl_ident_, sealed_file_id);
+            KvError err = IoMgr()->OnDataFileSealed(tbl_ident_, sealed_file_id);
             CHECK_KV_ERR(err);
         }
         uint16_t buf_index = 0;
@@ -302,6 +309,21 @@ void WriteTask::FlushAppendWrites()
     }
 }
 
+KvError WriteTask::ConsumePendingUploadResults()
+{
+    KvError upload_err = KvError::NoError;
+    for (const auto &upload_task : pending_upload_tasks_)
+    {
+        if (upload_task != nullptr && upload_task->error_ != KvError::NoError &&
+            upload_err == KvError::NoError)
+        {
+            upload_err = upload_task->error_;
+        }
+    }
+    pending_upload_tasks_.clear();
+    return upload_err;
+}
+
 void WriteTask::WritePageCallback(VarPage page, KvError err)
 {
     if (err != KvError::NoError)
@@ -347,7 +369,12 @@ KvError WriteTask::WaitWrite()
     }
     WaitIo();
     KvError err = write_err_;
+    KvError upload_err = ConsumePendingUploadResults();
     write_err_ = KvError::NoError;
+    if (err == KvError::NoError)
+    {
+        err = upload_err;
+    }
     return err;
 }
 

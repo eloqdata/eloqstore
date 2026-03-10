@@ -542,7 +542,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               offset_(offset),
               fd_ref_(std::move(fd)),
-              page_(true) {};
+              page_(true){};
 
         bool done_{false};
         uint32_t offset_;
@@ -1525,7 +1525,7 @@ KvError IouringMgr::FdatasyncFiles(const TableIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
     };
 
@@ -1582,7 +1582,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     struct CloseReq : BaseReq
     {
         CloseReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
         int reg_idx_{-1};
         int fd_{LruFD::FdEmpty};
@@ -2695,17 +2695,25 @@ KvError CloudStoreMgr::OnDataFileSealed(const TableIdent &tbl_id,
                                         FileId file_id)
 {
     assert(file_id <= LruFD::kMaxDataFile);
-    // If file is still open, sync it (which will upload via SyncFile)
     LruFD::Ref fd_ref = GetOpenedFD(tbl_id, file_id);
+    WriteTask *owner = CurrentWriteTask();
+    const uint64_t term =
+        fd_ref != nullptr
+            ? fd_ref.Get()->term_
+            : GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
+    KvError err = UploadFile(
+        tbl_id, ToFilename(file_id, term), owner, {}, owner == nullptr);
+    if (err != KvError::NoError)
+    {
+        return err;
+    }
     if (fd_ref != nullptr)
     {
-        return SyncFile(std::move(fd_ref));
+        // This sealed file already has an upload in flight and should not be
+        // re-uploaded again during the final SyncData() pass.
+        fd_ref.Get()->dirty_ = false;
     }
-
-    // File is already closed, upload it directly
-    // This handles the case where file was closed before sealing callback
-    uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
-    return UploadFile(tbl_id, ToFilename(file_id, term), CurrentWriteTask());
+    return KvError::NoError;
 }
 
 KvError CloudStoreMgr::ReadFilePrefix(const TableIdent &tbl_id,
@@ -4628,13 +4636,16 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
 KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
                                   std::string filename,
                                   WriteTask *owner,
-                                  std::string_view payload)
+                                  std::string_view payload,
+                                  bool wait_for_completion)
 {
     KvTask *current_task = ThdTask();
-    ObjectStore::UploadTask upload_task(&tbl_id, std::move(filename));
-    upload_task.SetKvTask(current_task);
+    auto upload_task =
+        std::make_unique<ObjectStore::UploadTask>(&tbl_id, std::move(filename));
+    upload_task->SetKvTask(current_task);
+    const bool async_owner_upload = owner != nullptr && !wait_for_completion;
 
-    auto [prefix, suffix] = ParseFileName(upload_task.filename_);
+    auto [prefix, suffix] = ParseFileName(upload_task->filename_);
     const bool is_data_file = (prefix == FileNameData);
     if (is_data_file)
     {
@@ -4643,13 +4654,13 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
         if (!ParseDataFileSuffix(suffix, file_id, term))
         {
             LOG(ERROR) << "Invalid data filename for upload: "
-                       << upload_task.filename_;
+                       << upload_task->filename_;
             return KvError::InvalidArgs;
         }
     }
     else if (prefix != FileNameManifest)
     {
-        LOG(ERROR) << "Unsupported upload filename: " << upload_task.filename_;
+        LOG(ERROR) << "Unsupported upload filename: " << upload_task->filename_;
         return KvError::InvalidArgs;
     }
 
@@ -4666,15 +4677,15 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
         {
             LOG(ERROR) << "WriteTask upload state is invalid, table=" << tbl_id
                        << " filename=" << state.filename;
-            state.ResetMetadata();
+            owner->ResetUploadState();
             return KvError::InvalidArgs;
         }
-        if (state.initialized && state.filename != upload_task.filename_)
+        if (state.initialized && state.filename != upload_task->filename_)
         {
             LOG(ERROR) << "WriteTask upload state filename mismatch, table="
                        << tbl_id << " state=" << state.filename
-                       << " upload=" << upload_task.filename_;
-            state.ResetMetadata();
+                       << " upload=" << upload_task->filename_;
+            owner->ResetUploadState();
             return KvError::Corrupted;
         }
         upload_buffer = &state.buffer;
@@ -4692,7 +4703,7 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
     {
         if (owner != nullptr)
         {
-            owner->MutableUploadState().ResetMetadata();
+            owner->ResetUploadState();
         }
         else
         {
@@ -4706,7 +4717,7 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
         if (end_offset > std::numeric_limits<size_t>::max())
         {
             LOG(ERROR) << "Buffered upload end offset overflow, table="
-                       << tbl_id << " filename=" << upload_task.filename_
+                       << tbl_id << " filename=" << upload_task->filename_
                        << " end_offset=" << end_offset;
             cleanup();
             return KvError::InvalidArgs;
@@ -4720,7 +4731,7 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
         {
             LOG(ERROR) << "Payload upload should not bind a write-task owner, "
                        << "table=" << tbl_id
-                       << " filename=" << upload_task.filename_;
+                       << " filename=" << upload_task->filename_;
             cleanup();
             return KvError::InvalidArgs;
         }
@@ -4730,7 +4741,7 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
     else
     {
         KvError read_err =
-            ReadFile(tbl_id, upload_task.filename_, *upload_buffer);
+            ReadFile(tbl_id, upload_task->filename_, *upload_buffer);
         if (read_err != KvError::NoError)
         {
             cleanup();
@@ -4744,7 +4755,7 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
         if (start_offset > end_offset || end_offset > file_size)
         {
             LOG(ERROR) << "Invalid buffered upload range, table=" << tbl_id
-                       << " filename=" << upload_task.filename_
+                       << " filename=" << upload_task->filename_
                        << " start_offset=" << start_offset
                        << " end_offset=" << end_offset
                        << " file_size=" << file_size;
@@ -4754,7 +4765,7 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
         if (upload_buffer->size() != static_cast<size_t>(end_offset))
         {
             LOG(ERROR) << "Buffered upload size mismatch, table=" << tbl_id
-                       << " filename=" << upload_task.filename_
+                       << " filename=" << upload_task->filename_
                        << " buffered_size=" << upload_buffer->size()
                        << " end_offset=" << end_offset;
             cleanup();
@@ -4764,7 +4775,7 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
         if (start_offset > 0)
         {
             KvError err = ReadFilePrefix(tbl_id,
-                                         upload_task.filename_,
+                                         upload_task->filename_,
                                          static_cast<size_t>(start_offset),
                                          *upload_buffer,
                                          0);
@@ -4776,16 +4787,33 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
         }
     }
 
-    upload_task.file_size_ = file_size;
-    upload_task.data_buffer_ = std::move(*upload_buffer);
+    upload_task->file_size_ = file_size;
+    upload_task->data_buffer_ = std::move(*upload_buffer);
+    if (owner != nullptr)
+    {
+        owner->ResetUploadState();
+    }
 
     AcquireCloudSlot(current_task);
-    obj_store_.SubmitTask(&upload_task, shard);
-    current_task->WaitIo();
+    obj_store_.SubmitTask(upload_task.get(), shard);
+    if (async_owner_upload)
+    {
+        owner->AddPendingUploadTask(std::move(upload_task));
+        return KvError::NoError;
+    }
 
-    *upload_buffer = std::move(upload_task.data_buffer_);
-    KvError upload_err = upload_task.error_;
-    cleanup();
+    current_task->WaitIo();
+    KvError upload_err = upload_task->error_;
+    if (owner != nullptr)
+    {
+        WriteTask::UploadState &state = owner->MutableUploadState();
+        state.buffer = std::move(upload_task->data_buffer_);
+        owner->ResetUploadState();
+    }
+    else
+    {
+        ReleaseCloudBuffer(std::move(upload_task->data_buffer_));
+    }
     return upload_err;
 }
 
@@ -4939,7 +4967,7 @@ void CloudStoreMgr::FileCleaner::Shutdown()
     coro_ = coro_.resume();
 }
 
-MemStoreMgr::MemStoreMgr(const KvOptions *opts) : AsyncIoManager(opts) {};
+MemStoreMgr::MemStoreMgr(const KvOptions *opts) : AsyncIoManager(opts){};
 
 KvError MemStoreMgr::Init(Shard *shard)
 {
