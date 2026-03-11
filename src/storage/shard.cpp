@@ -619,6 +619,13 @@ bool Shard::ProcessReq(KvRequest *req)
         req->SetDone(KvError::InvalidArgs);
         return true;
     }
+    case RequestType::GlobalListArchiveTags:
+    {
+        LOG(ERROR)
+            << "GlobalListArchiveTags request routed to shard unexpectedly";
+        req->SetDone(KvError::InvalidArgs);
+        return true;
+    }
     case RequestType::Compact:
     {
         BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());

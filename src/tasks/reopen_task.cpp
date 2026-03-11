@@ -11,6 +11,7 @@ namespace eloqstore
 
 KvError ReopenTask::Reopen(const TableIdent &tbl_id)
 {
+    DLOG(INFO) << "Reopen " << tbl_id << " start";
     StoreMode mode = shard->store_->Mode();
     StandbyService *standby_service = nullptr;
     std::string tag;
@@ -64,6 +65,7 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
         }
     }
     request_ = nullptr;
+    DLOG(INFO) << "Reopen " << tbl_id << " finish";
     return err;
 }
 

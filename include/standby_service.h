@@ -75,6 +75,7 @@ private:
     KvError SubmitJob(Job &&job);
     void CompleteJob(const Job &job, KvError result);
     void WorkerLoop();
+    void DrainReadyQueues();
 
     KvError RunRsyncJob(const RsyncJob &job);
     KvError RunListPartitionsJob(const ListPartitionsJob &job);

@@ -386,9 +386,8 @@ EloqStore::EloqStore(const KvOptions &opts) : options_(opts)
         LOG(FATAL) << "Invalid KvOptions configuration";
     }
 #ifdef ELOQSTORE_WITH_TXSERVICE
-    const std::string store_path_list =
-        BuildStorePathListWithWeights(options_.store_path,
-                                      options_.store_path_weights);
+    const std::string store_path_list = BuildStorePathListWithWeights(
+        options_.store_path, options_.store_path_weights);
     if (!store_path_list.empty())
     {
         GFLAGS_NAMESPACE::SetCommandLineOption("eloq_store_data_path_list",
@@ -924,7 +923,7 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
 
     LOG(INFO) << "Handling global archive request action="
               << (action == GlobalArchiveRequest::Action::Create ? "create"
-                                                                  : "delete")
+                                                                 : "delete")
               << " tag=" << tag;
 
     std::vector<TableIdent> all_partitions;
@@ -1055,10 +1054,9 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
     {
         auto archive_req = std::make_unique<ArchiveRequest>();
         archive_req->SetTableId(partition);
-        archive_req->SetAction(
-            action == GlobalArchiveRequest::Action::Create
-                ? ArchiveRequest::Action::Create
-                : ArchiveRequest::Action::Delete);
+        archive_req->SetAction(action == GlobalArchiveRequest::Action::Create
+                                   ? ArchiveRequest::Action::Create
+                                   : ArchiveRequest::Action::Delete);
         archive_req->SetTag(tag);
         req->archive_reqs_.push_back(std::move(archive_req));
     }
@@ -1159,6 +1157,8 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
 
 void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
 {
+    DLOG(INFO) << "HandleGlobalReopenRequest on " << req->TableId()
+               << " of tag " << req->Tag();
     req->first_error_.store(static_cast<uint8_t>(KvError::NoError),
                             std::memory_order_relaxed);
     req->pending_.store(0, std::memory_order_relaxed);
@@ -1303,6 +1303,83 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
     }
 }
 
+void EloqStore::HandleGlobalListArchiveTagsRequest(
+    GlobalListArchiveTagsRequest *req)
+{
+    req->tags_.clear();
+
+    std::unordered_set<std::string> uniq_tags;
+    std::error_code ec;
+    for (const std::string &root : options_.store_path)
+    {
+        fs::directory_iterator part_it(fs::path(root), ec);
+        if (ec)
+        {
+            ec.clear();
+            continue;
+        }
+
+        for (; part_it != fs::directory_iterator{}; part_it.increment(ec))
+        {
+            if (ec)
+            {
+                ec.clear();
+                break;
+            }
+            if (!part_it->is_directory(ec))
+            {
+                ec.clear();
+                continue;
+            }
+
+            fs::directory_iterator file_it(part_it->path(), ec);
+            if (ec)
+            {
+                ec.clear();
+                continue;
+            }
+            for (; file_it != fs::directory_iterator{}; file_it.increment(ec))
+            {
+                if (ec)
+                {
+                    ec.clear();
+                    break;
+                }
+                if (!file_it->is_regular_file(ec))
+                {
+                    ec.clear();
+                    continue;
+                }
+
+                const std::string filename =
+                    file_it->path().filename().string();
+                auto [type, suffix] = ParseFileName(filename);
+                if (type != FileNameManifest)
+                {
+                    continue;
+                }
+
+                uint64_t term = 0;
+                std::optional<std::string> tag;
+                if (!ParseManifestFileSuffix(suffix, term, tag) ||
+                    !tag.has_value())
+                {
+                    continue;
+                }
+                if (!req->prefix_.empty() && tag->rfind(req->prefix_, 0) != 0)
+                {
+                    continue;
+                }
+                uniq_tags.emplace(std::move(*tag));
+            }
+        }
+    }
+
+    req->tags_.assign(uniq_tags.begin(), uniq_tags.end());
+    std::sort(req->tags_.begin(), req->tags_.end());
+    req->SetDone(KvError::NoError);
+}
+
 bool EloqStore::SendRequest(KvRequest *req)
 {
     if (stopped_.load(std::memory_order_relaxed))
@@ -1334,6 +1411,12 @@ bool EloqStore::SendRequest(KvRequest *req)
     if (req->Type() == RequestType::GlobalReopen)
     {
         HandleGlobalReopenRequest(static_cast<GlobalReopenRequest *>(req));
+        return true;
+    }
+    if (req->Type() == RequestType::GlobalListArchiveTags)
+    {
+        HandleGlobalListArchiveTagsRequest(
+            static_cast<GlobalListArchiveTagsRequest *>(req));
         return true;
     }
 

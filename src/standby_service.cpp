@@ -84,6 +84,7 @@ StandbyService::~StandbyService()
 
 void StandbyService::Start()
 {
+    DrainReadyQueues();
     bool expected = false;
     if (!running_.compare_exchange_strong(expected, true))
     {
@@ -117,6 +118,7 @@ void StandbyService::Stop()
     {
         worker_.join();
     }
+    DrainReadyQueues();
 }
 
 void StandbyService::UpdateRemoteAddr(const std::string &remote_addr)
@@ -233,15 +235,32 @@ void StandbyService::WorkerLoop()
 
 void StandbyService::CompleteJob(const Job &job, KvError result)
 {
-    uint64_t previous = pending_jobs_.fetch_sub(1, std::memory_order_acq_rel);
-    CHECK_GT(previous, 0);
+    auto dec_pending_jobs = [this]()
+    {
+        uint64_t previous =
+            pending_jobs_.fetch_sub(1, std::memory_order_acq_rel);
+        CHECK_GT(previous, 0);
+    };
     if (job.context.task == nullptr)
     {
+        dec_pending_jobs();
         return;
     }
     CHECK(!ready_queues_.empty());
     size_t idx = job.context.shard_id % ready_queues_.size();
     ready_queues_[idx].enqueue({job.context.task, result});
+    dec_pending_jobs();
+}
+
+void StandbyService::DrainReadyQueues()
+{
+    Completion completion;
+    for (auto &ready_queue : ready_queues_)
+    {
+        while (ready_queue.try_dequeue(completion))
+        {
+        }
+    }
 }
 
 void StandbyService::ProcessReadyTasks(size_t shard_id)
