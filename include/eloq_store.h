@@ -625,6 +625,13 @@ class StandbyService;
 class EloqStore
 {
 public:
+    enum class RunningStatus : uint8_t
+    {
+        Running = 0,
+        Stopping = 1,
+        Stopped = 2,
+    };
+
     EloqStore(const KvOptions &opts);
     EloqStore(const EloqStore &) = delete;
     EloqStore(EloqStore &&) = delete;
@@ -723,7 +730,8 @@ private:
 #ifdef ELOQSTORE_WITH_TXSERVICE
     std::vector<std::unique_ptr<metrics::Meter>> metrics_meters_;
 #endif
-    std::atomic<bool> stopped_{true};
+    std::atomic<uint8_t> running_status_{
+        static_cast<uint8_t>(RunningStatus::Stopped)};
     uint64_t term_{0};
     std::unique_ptr<ArchiveCrond> archive_crond_{nullptr};
     std::unique_ptr<PrewarmService> prewarm_service_{nullptr};

@@ -277,8 +277,22 @@ void StandbyService::ProcessReadyTasks(size_t shard_id)
         {
             continue;
         }
+        if (completion.task->Type() == TaskType::ListStandbyPartition)
+        {
+            DLOG(INFO) << "StandbyService::ProcessReadyTasks execute "
+                          "ListStandbyPartition task, shard_id="
+                       << shard_id << ", task=" << completion.task
+                       << ", result=" << static_cast<int>(completion.result);
+        }
         completion.task->io_res_ = static_cast<int>(completion.result);
         completion.task->FinishIo();
+        if (completion.task->Type() == TaskType::ListStandbyPartition)
+        {
+            DLOG(INFO) << "StandbyService::ProcessReadyTasks finished "
+                          "ListStandbyPartition task, shard_id="
+                       << shard_id << ", task=" << completion.task
+                       << ", io_res=" << completion.task->io_res_;
+        }
     }
 }
 

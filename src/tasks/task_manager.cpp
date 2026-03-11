@@ -53,19 +53,24 @@ TaskManager::TaskManager(const KvOptions *opts)
 
 void TaskManager::Shutdown()
 {
-    auto abort_unfinished = [](KvTask *task)
+    size_t aborted_tasks = 0;
+    size_t aborted_reqs = 0;
+    auto abort_unfinished = [&](KvTask *task)
     {
         if (task->status_ == TaskStatus::Idle ||
             task->status_ == TaskStatus::Finished)
         {
             return;
         }
+        ++aborted_tasks;
         if (task->req_ != nullptr)
         {
+            ++aborted_reqs;
+            LOG(INFO) << "TaskManager::Shutdown abort request "
+                      << typeid(*task->req_).name();
             task->req_->SetDone(KvError::NotRunning);
             task->req_ = nullptr;
         }
-        task->Abort();
         task->status_ = TaskStatus::Finished;
         task->inflight_io_ = 0;
     };
@@ -74,7 +79,10 @@ void TaskManager::Shutdown()
     read_pool_.ForEachTask(abort_unfinished);
     scan_pool_.ForEachTask(abort_unfinished);
     list_object_pool_.ForEachTask(abort_unfinished);
+    list_standby_partition_pool_.ForEachTask(abort_unfinished);
     reopen_pool_.ForEachTask(abort_unfinished);
+    LOG(INFO) << "TaskManager::Shutdown finished, aborted_tasks="
+              << aborted_tasks << ", aborted_reqs=" << aborted_reqs;
 
     num_active_ = 0;
     num_active_write_ = 0;
