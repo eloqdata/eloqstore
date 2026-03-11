@@ -3722,7 +3722,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     }
 
     KvError dl_err =
-        DownloadFile(tbl_id, LruFD::kManifest, process_term, active_br);
+        DownloadFile(tbl_id, LruFD::kManifest, process_term, false, active_br);
     if (dl_err == KvError::NoError)
     {
         return IouringMgr::GetManifest(tbl_id);
@@ -3851,8 +3851,8 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     }
 
     // Ensure the selected manifest is downloaded locally.
-    dl_err =
-        DownloadFile(tbl_id, LruFD::kManifest, selected_term, selected_branch);
+    dl_err = DownloadFile(
+        tbl_id, LruFD::kManifest, selected_term, false, selected_branch);
     if (dl_err != KvError::NoError)
     {
         LOG(ERROR) << "CloudStoreMgr::GetManifest: failed to download "
@@ -4487,7 +4487,8 @@ KvError CloudStoreMgr::BranchManifestExists(const TableIdent &tbl_id,
     }
 
     // Not cached locally — probe cloud storage by attempting a download.
-    KvError dl_err = DownloadFile(tbl_id, LruFD::kManifest, term, branch_name);
+    KvError dl_err =
+        DownloadFile(tbl_id, LruFD::kManifest, term, false, branch_name);
     if (dl_err == KvError::NoError)
     {
         return KvError::NoError;  // exists in cloud
@@ -4784,7 +4785,7 @@ int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
     {
         return res;
     }
-    KvError err = DownloadFile(tbl_id, file_id, term, branch_name);
+    KvError err = DownloadFile(tbl_id, file_id, term, false, branch_name);
     switch (err)
     {
     case KvError::NoError:
@@ -5056,6 +5057,7 @@ int CloudStoreMgr::ReserveCacheSpace(size_t size)
 KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
                                     FileId file_id,
                                     uint64_t term,
+                                    bool download_to_exist,
                                     std::string_view branch_name)
 {
     KvTask *current_task = ThdTask();
@@ -5079,11 +5081,41 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
         return download_task.error_;
     }
 
+    auto [dir_fd, dir_err] =
+        OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, "", 0);
+    if (dir_err != KvError::NoError)
+    {
+        ReleaseCloudBuffer(std::move(download_task.response_data_));
+        return dir_err;
+    }
+
+    std::string tmp_filename = filename + ".tmp";
+
+    if (download_to_exist)
+    {
+        // Rename the existing file away before overwriting, so readers see
+        // either the old complete file or the new complete file (never a
+        // partial write).  ENOENT is fine — the file may not exist yet.
+        int res =
+            Rename(dir_fd.FdPair(), filename.c_str(), tmp_filename.c_str());
+        if (res != 0 && res != -ENOENT)
+        {
+            ReleaseCloudBuffer(std::move(download_task.response_data_));
+            return ToKvError(res);
+        }
+    }
+
     uint64_t flags = O_WRONLY | O_CREAT | O_DIRECT | O_NOATIME;
     KvError err =
-        WriteFile(tbl_id, filename, download_task.response_data_, flags);
+        WriteFile(tbl_id, tmp_filename, download_task.response_data_, flags);
     ReleaseCloudBuffer(std::move(download_task.response_data_));
     CHECK_KV_ERR(err);
+
+    int res = Rename(dir_fd.FdPair(), tmp_filename.c_str(), filename.c_str());
+    if (res < 0)
+    {
+        return ToKvError(res);
+    }
 
     return KvError::NoError;
 }

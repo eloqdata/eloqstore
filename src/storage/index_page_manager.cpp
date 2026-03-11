@@ -429,7 +429,7 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
                     branch_name = MainBranchName;
                 }
                 KvError sync_err = cloud_mgr->DownloadFile(
-                    tbl_ident, max_file_id, branch_term, branch_name);
+                    tbl_ident, max_file_id, branch_term, true, branch_name);
                 if (sync_err != KvError::NoError &&
                     sync_err != KvError::NotFound)
                 {
