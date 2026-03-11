@@ -3722,7 +3722,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     }
 
     KvError dl_err =
-        DownloadFile(tbl_id, LruFD::kManifest, process_term, false, active_br);
+        DownloadFile(tbl_id, LruFD::kManifest, active_br, process_term, false);
     if (dl_err == KvError::NoError)
     {
         return IouringMgr::GetManifest(tbl_id);
@@ -3852,7 +3852,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
 
     // Ensure the selected manifest is downloaded locally.
     dl_err = DownloadFile(
-        tbl_id, LruFD::kManifest, selected_term, false, selected_branch);
+        tbl_id, LruFD::kManifest, selected_branch, selected_term, false);
     if (dl_err != KvError::NoError)
     {
         LOG(ERROR) << "CloudStoreMgr::GetManifest: failed to download "
@@ -4488,7 +4488,7 @@ KvError CloudStoreMgr::BranchManifestExists(const TableIdent &tbl_id,
 
     // Not cached locally — probe cloud storage by attempting a download.
     KvError dl_err =
-        DownloadFile(tbl_id, LruFD::kManifest, term, false, branch_name);
+        DownloadFile(tbl_id, LruFD::kManifest, branch_name, term, false);
     if (dl_err == KvError::NoError)
     {
         return KvError::NoError;  // exists in cloud
@@ -4785,7 +4785,7 @@ int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
     {
         return res;
     }
-    KvError err = DownloadFile(tbl_id, file_id, term, false, branch_name);
+    KvError err = DownloadFile(tbl_id, file_id, branch_name, term, false);
     switch (err)
     {
     case KvError::NoError:
@@ -5056,9 +5056,9 @@ int CloudStoreMgr::ReserveCacheSpace(size_t size)
 
 KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
                                     FileId file_id,
+                                    std::string_view branch_name,
                                     uint64_t term,
-                                    bool download_to_exist,
-                                    std::string_view branch_name)
+                                    bool download_to_exist)
 {
     KvTask *current_task = ThdTask();
     std::string filename = (file_id == LruFD::kManifest)
