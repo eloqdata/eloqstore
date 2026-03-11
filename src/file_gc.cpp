@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <iterator>
 #include <memory>
+#include <random>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -278,16 +279,34 @@ void ClassifyFiles(const std::vector<std::string> &files,
     }
 }
 
-KvError DownloadArchiveFile(const TableIdent &tbl_id,
-                            const std::string &archive_file,
-                            DirectIoBuffer &content,
-                            CloudStoreMgr *cloud_mgr,
-                            const KvOptions *options)
+// Generate a random string of given length
+static std::string GenerateRandomString(size_t length)
+{
+    static const char alphanum[] =
+        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    static thread_local std::mt19937 rng{std::random_device{}()};
+    static thread_local std::uniform_int_distribution<size_t> dist(
+        0, sizeof(alphanum) - 2);
+
+    std::string result;
+    result.reserve(length);
+    for (size_t i = 0; i < length; ++i)
+    {
+        result += alphanum[dist(rng)];
+    }
+    return result;
+}
+
+KvError ReadCloudFile(const TableIdent &tbl_id,
+                      const std::string &cloud_file,
+                      DirectIoBuffer &content,
+                      CloudStoreMgr *cloud_mgr,
+                      const KvOptions *options)
 {
     KvTask *current_task = ThdTask();
 
-    // Download the archive file.
-    ObjectStore::DownloadTask download_task(&tbl_id, archive_file);
+    // Download the file from cloud.
+    ObjectStore::DownloadTask download_task(&tbl_id, cloud_file);
 
     // Set KvTask pointer and initialize inflight_io_
     download_task.SetKvTask(current_task);
@@ -298,37 +317,50 @@ KvError DownloadArchiveFile(const TableIdent &tbl_id,
 
     if (download_task.error_ != KvError::NoError)
     {
-        LOG(ERROR) << "Failed to download archive file: " << archive_file
+        LOG(ERROR) << "Failed to download cloud file: " << cloud_file
                    << ", error: " << static_cast<int>(download_task.error_);
         return download_task.error_;
     }
 
-    fs::path local_path =
+    // Generate a unique temporary filename to avoid conflicts with existing
+    // files
+    std::string temp_filename = cloud_file + ".tmp_" + GenerateRandomString(8);
+    fs::path temp_local_path =
         tbl_id.StorePath(options->store_path, options->store_path_lut) /
-        archive_file;
+        temp_filename;
 
     uint64_t flags = O_WRONLY | O_CREAT | O_DIRECT | O_NOATIME | O_TRUNC;
     KvError write_err = cloud_mgr->WriteFile(
-        tbl_id, archive_file, download_task.response_data_, flags);
+        tbl_id, temp_filename, download_task.response_data_, flags);
     cloud_mgr->RecycleBuffer(std::move(download_task.response_data_));
     if (write_err != KvError::NoError)
     {
-        LOG(ERROR) << "Failed to persist archive file: " << local_path
+        LOG(ERROR) << "Failed to persist cloud file to temp path: "
+                   << temp_local_path
                    << ", error: " << static_cast<int>(write_err);
         return write_err;
     }
 
-    KvError err =
-        cloud_mgr->ReadArchiveFileAndDelete(tbl_id, archive_file, content);
+    // Read the temp file and then delete it
+    KvError err = cloud_mgr->ReadFile(tbl_id, temp_filename, content);
     if (err != KvError::NoError)
     {
-        LOG(ERROR) << "Failed to read archive file: " << local_path
+        LOG(ERROR) << "Failed to read temp file: " << temp_local_path
                    << ", error: " << static_cast<int>(err);
+        // Try to clean up the temp file even if read failed
+        cloud_mgr->DeleteFiles({temp_local_path.string()});
         return err;
     }
 
-    LOG(INFO) << "Successfully downloaded and read archive file: "
-              << archive_file;
+    // Delete the temp file
+    KvError delete_err = cloud_mgr->DeleteFiles({temp_local_path.string()});
+    if (delete_err != KvError::NoError)
+    {
+        LOG(WARNING) << "Failed to delete temp file: " << temp_local_path
+                     << ", error: " << static_cast<int>(delete_err);
+    }
+
+    DLOG(INFO) << "Successfully downloaded and read cloud file: " << cloud_file;
     return KvError::NoError;
 }
 
@@ -406,7 +438,7 @@ KvError AugmentRetainedFilesFromBranchManifests(
 
         if (is_cloud)
         {
-            err = DownloadArchiveFile(
+            err = ReadCloudFile(
                 tbl_id, filename, buf, cloud_mgr, cloud_mgr->options_);
         }
         else
@@ -444,7 +476,7 @@ KvError AugmentRetainedFilesFromBranchManifests(
 
         if (is_cloud)
         {
-            err = DownloadArchiveFile(
+            err = ReadCloudFile(
                 tbl_id, filename, buf, cloud_mgr, cloud_mgr->options_);
         }
         else

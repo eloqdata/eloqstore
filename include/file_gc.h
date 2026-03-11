@@ -59,11 +59,11 @@ void ClassifyFiles(const std::vector<std::string> &files,
                    std::vector<uint64_t> &manifest_terms,
                    std::vector<std::string> &manifest_branch_names);
 
-KvError DownloadArchiveFile(const TableIdent &tbl_id,
-                            const std::string &archive_file,
-                            DirectIoBuffer &content,
-                            CloudStoreMgr *cloud_mgr,
-                            const KvOptions *options);
+KvError ReadCloudFile(const TableIdent &tbl_id,
+                      const std::string &cloud_file,
+                      DirectIoBuffer &content,
+                      CloudStoreMgr *cloud_mgr,
+                      const KvOptions *options);
 
 KvError DeleteUnreferencedCloudFiles(
     const TableIdent &tbl_id,
