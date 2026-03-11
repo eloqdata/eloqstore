@@ -128,6 +128,20 @@ public:
         __builtin_unreachable();
     }
 
+    virtual bool HasCloudBufferPool() const
+    {
+        return false;
+    }
+    virtual DirectIoBuffer AcquireCloudBuffer(KvTask *task)
+    {
+        (void) task;
+        return {};
+    }
+    virtual void ReleaseCloudBuffer(DirectIoBuffer buffer)
+    {
+        (void) buffer;
+    }
+
     // Append-mode write buffer pool helpers (default no-op).
     virtual char *AcquireWriteBuffer(uint16_t &buf_index)
     {
@@ -817,6 +831,12 @@ public:
     void RecycleBuffers(std::vector<DirectIoBuffer> &buffers);
     void RecycleBuffer(DirectIoBuffer buffer);
     DirectIoBufferPool &GetDirectIoBufferPool();
+    bool HasCloudBufferPool() const override
+    {
+        return true;
+    }
+    DirectIoBuffer AcquireCloudBuffer(KvTask *task) override;
+    void ReleaseCloudBuffer(DirectIoBuffer buffer) override;
     PrewarmStats &GetPrewarmStats()
     {
         return prewarm_stats_;
@@ -916,8 +936,6 @@ private:
                            size_t prefix_len,
                            DirectIoBuffer &buffer,
                            size_t dst_offset);
-    DirectIoBuffer AcquireCloudBuffer(KvTask *task);
-    void ReleaseCloudBuffer(DirectIoBuffer buffer);
 
     bool DequeClosedFile(const FileKey &key);
     void EnqueClosedFile(FileKey key);

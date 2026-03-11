@@ -2693,6 +2693,7 @@ void CloudStoreMgr::OnFileRangeWritePrepared(const TableIdent &tbl_id,
                    << " filename=" << filename << " end_offset=" << new_end;
         return;
     }
+    owner->EnsureUploadStateBuffer();
     state.buffer.resize(static_cast<size_t>(new_end));
     std::memcpy(state.buffer.data() + static_cast<size_t>(offset),
                 data.data(),
@@ -3323,7 +3324,8 @@ void CloudStoreMgr::ProcessCloudReadyTasks(Shard *shard)
             auto *upload_task = static_cast<ObjectStore::UploadTask *>(task);
             if (upload_task->owner_write_task_ != nullptr)
             {
-                upload_task->owner_write_task_->FinishInflightUploadTask();
+                upload_task->owner_write_task_->CompletePendingUploadTask(
+                    upload_task);
                 continue;
             }
         }
@@ -3682,15 +3684,14 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
         std::string filename = ToFilename(LruFD::kManifest, term);
         ObjectStore::DownloadTask download_task(&tbl_id, filename);
         download_task.SetKvTask(current_task);
-        download_task.response_data_ =
-            std::move(direct_io_buffer_pool_.Acquire());
+        download_task.response_data_ = AcquireCloudBuffer(current_task);
         AcquireCloudSlot(current_task);
         obj_store_.SubmitTask(&download_task, shard);
         current_task->WaitIo();
 
         if (download_task.error_ != KvError::NoError)
         {
-            RecycleBuffer(std::move(download_task.response_data_));
+            ReleaseCloudBuffer(std::move(download_task.response_data_));
             return download_task.error_;
         }
         buffer = std::move(download_task.response_data_);
@@ -3794,14 +3795,14 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
     KvError replay_err = replayer.Replay(&buffer_manifest);
     if (replay_err != KvError::NoError)
     {
-        RecycleBuffer(std::move(buffer));
+        ReleaseCloudBuffer(std::move(buffer));
         return {nullptr, replay_err};
     }
 
     std::string tmp_name = ManifestFileName(selected_term) + ".tmp";
     uint64_t flags = O_WRONLY | O_CREAT | O_DIRECT | O_NOATIME | O_TRUNC;
     KvError write_err = WriteFile(tbl_id, tmp_name, buffer, flags);
-    RecycleBuffer(std::move(buffer));
+    ReleaseCloudBuffer(std::move(buffer));
     if (write_err != KvError::NoError)
     {
         return {nullptr, write_err};
@@ -4717,6 +4718,7 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
             owner->ResetUploadState();
             return KvError::Corrupted;
         }
+        owner->EnsureUploadStateBuffer();
         upload_buffer = &state.buffer;
         has_buffered_range = state.initialized;
         start_offset = state.start_offset;
@@ -4837,16 +4839,7 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
 
     current_task->WaitIo();
     KvError upload_err = upload_task->error_;
-    if (owner != nullptr)
-    {
-        WriteTask::UploadState &state = owner->MutableUploadState();
-        state.buffer = std::move(upload_task->data_buffer_);
-        owner->ResetUploadState();
-    }
-    else
-    {
-        ReleaseCloudBuffer(std::move(upload_task->data_buffer_));
-    }
+    ReleaseCloudBuffer(std::move(upload_task->data_buffer_));
     return upload_err;
 }
 

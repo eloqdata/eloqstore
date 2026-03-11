@@ -92,8 +92,40 @@ void WriteTask::AddInflightUploadTask()
     inflight_upload_tasks_++;
 }
 
-void WriteTask::FinishInflightUploadTask()
+DirectIoBuffer WriteTask::AcquireUploadStateBuffer()
 {
+    CHECK(IoMgr()->HasCloudBufferPool());
+    return IoMgr()->AcquireCloudBuffer(this);
+}
+
+void WriteTask::ReleaseUploadStateBuffer(DirectIoBuffer buffer)
+{
+    if (buffer.capacity() == 0)
+    {
+        return;
+    }
+    CHECK(IoMgr()->HasCloudBufferPool());
+    IoMgr()->ReleaseCloudBuffer(std::move(buffer));
+}
+
+void WriteTask::EnsureUploadStateBuffer()
+{
+    if (upload_state_.buffer.capacity() != 0)
+    {
+        return;
+    }
+    upload_state_.buffer = AcquireUploadStateBuffer();
+}
+
+void WriteTask::CompletePendingUploadTask(ObjectStore::UploadTask *task)
+{
+    assert(task != nullptr);
+    assert(task->owner_write_task_ == this);
+    // Once the HTTP upload has completed, the task only needs error/status
+    // fields until commit. Return the payload buffer to the cloud pool now to
+    // keep memory bounded by active cloud concurrency instead of sealed-file
+    // count.
+    ReleaseUploadStateBuffer(std::move(task->data_buffer_));
     assert(inflight_upload_tasks_ > 0);
     inflight_upload_tasks_--;
     if (inflight_upload_tasks_ == 0)
@@ -104,11 +136,8 @@ void WriteTask::FinishInflightUploadTask()
 
 void WriteTask::ResetUploadState()
 {
+    ReleaseUploadStateBuffer(std::move(upload_state_.buffer));
     upload_state_.ResetMetadata();
-    if (!Options()->cloud_store_path.empty())
-    {
-        upload_state_.buffer.EnsureDefaultReserve();
-    }
 }
 
 void WriteTask::Reset(const TableIdent &tbl_id)

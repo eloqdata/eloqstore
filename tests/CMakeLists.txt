@@ -24,6 +24,7 @@ set(UTEST_SOURCES
     manifest_payload.cpp
     replayer_term.cpp
     store_path_lut.cpp
+    write_task.cpp
 )
 
 string( REPLACE ".cpp" "" BASENAMES_UTEST "${UTEST_SOURCES}" )

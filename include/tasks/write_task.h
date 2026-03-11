@@ -65,8 +65,9 @@ public:
         return upload_state_;
     }
     void ResetUploadState();
+    void EnsureUploadStateBuffer();
     void AddInflightUploadTask();
-    void FinishInflightUploadTask();
+    void CompletePendingUploadTask(ObjectStore::UploadTask *task);
     void AddPendingUploadTask(std::unique_ptr<ObjectStore::UploadTask> task)
     {
         pending_upload_tasks_.emplace_back(std::move(task));
@@ -114,6 +115,8 @@ protected:
     KvError WaitPendingUploads();
     KvError ConsumePendingUploadResults();
     std::pair<FileId, uint32_t> ConvFilePageId(FilePageId file_page_id) const;
+    virtual DirectIoBuffer AcquireUploadStateBuffer();
+    virtual void ReleaseUploadStateBuffer(DirectIoBuffer buffer);
 
     // Track whether FileIdTermMapping changed in this write task.
     // If it changed, we must force a full snapshot (WAL append doesn't include
