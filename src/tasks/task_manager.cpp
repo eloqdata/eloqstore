@@ -4,6 +4,7 @@
 #include <cassert>
 #include <limits>
 
+#include "eloq_store.h"
 #include "kv_options.h"
 #include "tasks/list_object_task.h"
 #include "tasks/read_task.h"
@@ -52,6 +53,32 @@ TaskManager::TaskManager(const KvOptions *opts)
 
 void TaskManager::Shutdown()
 {
+    auto abort_unfinished = [](KvTask *task)
+    {
+        if (task->status_ == TaskStatus::Idle ||
+            task->status_ == TaskStatus::Finished)
+        {
+            return;
+        }
+        if (task->req_ != nullptr)
+        {
+            task->req_->SetDone(KvError::NotRunning);
+            task->req_ = nullptr;
+        }
+        task->Abort();
+        task->status_ = TaskStatus::Finished;
+        task->inflight_io_ = 0;
+    };
+    batch_write_pool_.ForEachTask(abort_unfinished);
+    bg_write_pool_.ForEachTask(abort_unfinished);
+    read_pool_.ForEachTask(abort_unfinished);
+    scan_pool_.ForEachTask(abort_unfinished);
+    list_object_pool_.ForEachTask(abort_unfinished);
+    reopen_pool_.ForEachTask(abort_unfinished);
+
+    num_active_ = 0;
+    num_active_write_ = 0;
+
     batch_write_pool_.Clear();
     bg_write_pool_.Clear();
     read_pool_.Clear();

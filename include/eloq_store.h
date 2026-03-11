@@ -131,6 +131,7 @@ protected:
     friend class Shard;
     friend class EloqStore;
     friend class PrewarmService;
+    friend class TaskManager;
 };
 
 class ReadRequest : public KvRequest

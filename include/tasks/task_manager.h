@@ -53,7 +53,7 @@ private:
     {
     public:
         TaskPool(uint32_t size, bool allow_growth = true)
-            : allow_growth_(allow_growth)
+            : init_pool_size_(size), allow_growth_(allow_growth)
         {
             if (size > 0)
             {
@@ -91,6 +91,19 @@ private:
             free_head_ = task;
         }
 
+        template <typename F>
+        void ForEachTask(F &&visitor)
+        {
+            for (uint32_t i = 0; i < init_pool_size_; ++i)
+            {
+                visitor(&init_pool_[i]);
+            }
+            for (auto &task : ext_pool_)
+            {
+                visitor(task.get());
+            }
+        }
+
         void Clear()
         {
             free_head_ = nullptr;
@@ -102,6 +115,7 @@ private:
         std::unique_ptr<T[]> init_pool_{nullptr};
         std::vector<std::unique_ptr<T>> ext_pool_;
         T *free_head_{nullptr};
+        uint32_t init_pool_size_{0};
         bool allow_growth_{true};
     };
 
