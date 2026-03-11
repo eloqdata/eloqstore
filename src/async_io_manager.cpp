@@ -744,9 +744,15 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
                                       bool use_fixed)
 {
     uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
+    // In append mode, offset 0 means this merged write targets a brand-new
+    // data file, so cloud mode can skip the remote not-found probe.
+    const bool skip_cloud_lookup =
+        options_->data_append_mode && !options_->cloud_store_path.empty() &&
+        file_id <= LruFD::kMaxDataFile && offset == 0;
     OnFileRangeWritePrepared(
         tbl_id, file_id, term, offset, std::string_view(buf_ptr, bytes));
-    auto [fd_ref, err] = OpenOrCreateFD(tbl_id, file_id, true, true, term);
+    auto [fd_ref, err] = OpenOrCreateFD(
+        tbl_id, file_id, true, true, term, skip_cloud_lookup);
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;
 
@@ -1034,7 +1040,8 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     FileId file_id,
     bool direct,
     bool create,
-    uint64_t term)
+    uint64_t term,
+    bool skip_cloud_lookup)
 {
     auto [it_tbl, inserted] = tables_.try_emplace(tbl_id);
     if (inserted)
@@ -1108,7 +1115,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
         uint64_t flags =
             O_RDWR | (direct ? O_DIRECT : 0) | (create ? O_CREAT : 0);
         uint64_t mode = create ? 0644 : 0;
-        fd = OpenFile(tbl_id, file_id, flags, mode, term);
+        fd = OpenFile(tbl_id, file_id, flags, mode, term, skip_cloud_lookup);
         if (fd == -ENOENT && create)
         {
             // This must be data file because manifest should always be
@@ -1425,8 +1432,10 @@ int IouringMgr::OpenFile(const TableIdent &tbl_id,
                          FileId file_id,
                          uint64_t flags,
                          uint64_t mode,
-                         uint64_t term)
+                         uint64_t term,
+                         bool skip_cloud_lookup)
 {
+    (void) skip_cloud_lookup;
     fs::path path = tbl_id.ToString();
     if (file_id == LruFD::kManifest)
     {
@@ -3283,7 +3292,7 @@ void CloudStoreMgr::ReleaseCloudSlot(size_t count)
     cloud_slot_waiting_.WakeN(count);
 }
 
-void CloudStoreMgr::EnqueueCloudReadyTask(KvTask *task)
+void CloudStoreMgr::EnqueueCloudReadyTask(ObjectStore::Task *task)
 {
     cloud_ready_tasks_.enqueue(task);
 }
@@ -3294,7 +3303,7 @@ void CloudStoreMgr::ProcessCloudReadyTasks(Shard *shard)
     {
         return;
     }
-    KvTask *ready_tasks[128];
+    ObjectStore::Task *ready_tasks[128];
     size_t nready = cloud_ready_tasks_.try_dequeue_bulk(ready_tasks,
                                                         std::size(ready_tasks));
     if (nready == 0)
@@ -3304,7 +3313,21 @@ void CloudStoreMgr::ProcessCloudReadyTasks(Shard *shard)
 
     for (size_t i = 0; i < nready; ++i)
     {
-        ready_tasks[i]->FinishIo();
+        ObjectStore::Task *task = ready_tasks[i];
+        if (task == nullptr || task->kv_task_ == nullptr)
+        {
+            continue;
+        }
+        if (task->TaskType() == ObjectStore::Task::Type::AsyncUpload)
+        {
+            auto *upload_task = static_cast<ObjectStore::UploadTask *>(task);
+            if (upload_task->owner_write_task_ != nullptr)
+            {
+                upload_task->owner_write_task_->FinishInflightUploadTask();
+                continue;
+            }
+        }
+        task->kv_task_->FinishIo();
     }
 
     ReleaseCloudSlot(nready);
@@ -4142,7 +4165,8 @@ int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
                             FileId file_id,
                             uint64_t flags,
                             uint64_t mode,
-                            uint64_t term)
+                            uint64_t term,
+                            bool skip_cloud_lookup)
 {
     FileKey key = FileKey(tbl_id, ToFilename(file_id, term));
     if (DequeClosedFile(key))
@@ -4154,6 +4178,11 @@ int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
             EnqueClosedFile(std::move(key));
         }
         return res;
+    }
+
+    if (skip_cloud_lookup)
+    {
+        return -ENOENT;
     }
 
     // File not exists locally, try to download it from cloud.
@@ -4795,6 +4824,10 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
     }
 
     AcquireCloudSlot(current_task);
+    if (async_owner_upload)
+    {
+        upload_task->owner_write_task_ = owner;
+    }
     obj_store_.SubmitTask(upload_task.get(), shard);
     if (async_owner_upload)
     {

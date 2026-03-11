@@ -20,6 +20,7 @@
 #include "cloud_storage_service.h"
 #include "storage/shard.h"
 #include "tasks/task.h"
+#include "tasks/write_task.h"
 #include "utils.h"
 
 namespace eloqstore
@@ -161,7 +162,22 @@ void ObjectStore::SubmitTask(ObjectStore::Task *task, Shard *owner_shard)
     CHECK(owner_shard != nullptr);
     task->SetOwnerShard(owner_shard);
     CHECK(task->kv_task_ != nullptr);
-    task->kv_task_->inflight_io_++;
+    if (task->TaskType() == Task::Type::AsyncUpload)
+    {
+        auto *upload_task = static_cast<ObjectStore::UploadTask *>(task);
+        if (upload_task->owner_write_task_ != nullptr)
+        {
+            upload_task->owner_write_task_->AddInflightUploadTask();
+        }
+        else
+        {
+            task->kv_task_->inflight_io_++;
+        }
+    }
+    else
+    {
+        task->kv_task_->inflight_io_++;
+    }
     cloud_service_->Submit(this, task);
 }
 

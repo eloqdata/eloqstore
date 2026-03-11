@@ -87,6 +87,21 @@ const TableIdent &WriteTask::TableId() const
     return tbl_ident_;
 }
 
+void WriteTask::AddInflightUploadTask()
+{
+    inflight_upload_tasks_++;
+}
+
+void WriteTask::FinishInflightUploadTask()
+{
+    assert(inflight_upload_tasks_ > 0);
+    inflight_upload_tasks_--;
+    if (inflight_upload_tasks_ == 0)
+    {
+        upload_waiting_.Wake();
+    }
+}
+
 void WriteTask::ResetUploadState()
 {
     upload_state_.ResetMetadata();
@@ -111,6 +126,7 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     }
     append_aggregator_ = WriteBufferAggregator(buf_size);
     append_aggregator_.Reset();
+    inflight_upload_tasks_ = 0;
     pending_upload_tasks_.clear();
     ResetUploadState();
 }
@@ -118,11 +134,8 @@ void WriteTask::Reset(const TableIdent &tbl_id)
 void WriteTask::Abort()
 {
     LOG(INFO) << "WriteTask to " << tbl_ident_ << " is aborted";
-    if (Options()->data_append_mode)
-    {
-        // Drain pending async writes before task is freed.
-        (void) WaitWrite();
-    }
+    (void) WaitWrite();
+    (void) WaitPendingUploads();
     // Always invoke AbortWrite so CloudStoreMgr can clear per-table upload
     // segments and io manager can reset dirty state.
     IoMgr()->AbortWrite(tbl_ident_);
@@ -324,6 +337,15 @@ KvError WriteTask::ConsumePendingUploadResults()
     return upload_err;
 }
 
+KvError WriteTask::WaitPendingUploads()
+{
+    while (inflight_upload_tasks_ > 0)
+    {
+        upload_waiting_.Wait(this);
+    }
+    return ConsumePendingUploadResults();
+}
+
 void WriteTask::WritePageCallback(VarPage page, KvError err)
 {
     if (err != KvError::NoError)
@@ -369,12 +391,7 @@ KvError WriteTask::WaitWrite()
     }
     WaitIo();
     KvError err = write_err_;
-    KvError upload_err = ConsumePendingUploadResults();
     write_err_ = KvError::NoError;
-    if (err == KvError::NoError)
-    {
-        err = upload_err;
-    }
     return err;
 }
 
@@ -537,6 +554,9 @@ KvError WriteTask::UpdateMeta()
     CHECK_KV_ERR(err);
 
     err = IoMgr()->SyncData(tbl_ident_);
+    CHECK_KV_ERR(err);
+
+    err = WaitPendingUploads();
     CHECK_KV_ERR(err);
 
     // Update meta data in storage and then in memory.

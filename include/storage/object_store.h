@@ -33,6 +33,7 @@ struct CloudObjectInfo;
 namespace eloqstore
 {
 class KvTask;
+class WriteTask;
 class CloudStoreMgr;
 class AsyncHttpManager;
 class AsyncIoManager;
@@ -155,6 +156,7 @@ public:
 
         const TableIdent *tbl_id_;
         std::string filename_;
+        WriteTask *owner_write_task_{nullptr};
         // Total logical object size expected by remote upload.
         size_t file_size_{0};
         // Inline one-buffer upload source.

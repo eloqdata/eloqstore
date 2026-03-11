@@ -65,6 +65,8 @@ public:
         return upload_state_;
     }
     void ResetUploadState();
+    void AddInflightUploadTask();
+    void FinishInflightUploadTask();
     void AddPendingUploadTask(std::unique_ptr<ObjectStore::UploadTask> task)
     {
         pending_upload_tasks_.emplace_back(std::move(task));
@@ -109,6 +111,7 @@ protected:
     KvError WritePage(VarPage page, FilePageId file_page_id);
     KvError AppendWritePage(VarPage page, FilePageId file_page_id);
     void FlushAppendWrites();
+    KvError WaitPendingUploads();
     KvError ConsumePendingUploadResults();
     std::pair<FileId, uint32_t> ConvFilePageId(FilePageId file_page_id) const;
 
@@ -119,6 +122,8 @@ protected:
     std::optional<FileId> last_append_file_id_;
     WriteBufferAggregator append_aggregator_{0};
     UploadState upload_state_;
+    uint32_t inflight_upload_tasks_{0};
+    WaitingSeat upload_waiting_;
     std::vector<std::unique_ptr<ObjectStore::UploadTask>> pending_upload_tasks_;
 };
 

@@ -114,7 +114,7 @@ void CloudStorageService::NotifyTaskFinished(ObjectStore::Task *task)
     CHECK(task->owner_shard_ != nullptr && task->kv_task_ != nullptr);
     auto *cloud_mgr =
         reinterpret_cast<CloudStoreMgr *>(task->owner_shard_->IoManager());
-    cloud_mgr->EnqueueCloudReadyTask(task->kv_task_);
+    cloud_mgr->EnqueueCloudReadyTask(task);
 #ifdef ELOQ_MODULE_ENABLED
     eloq::EloqModule::NotifyWorker(
         static_cast<int>(task->owner_shard_->shard_id_));

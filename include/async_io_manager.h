@@ -611,7 +611,8 @@ public:
                          FileId file_id,
                          uint64_t flags,
                          uint64_t mode,
-                         uint64_t term = 0);
+                         uint64_t term = 0,
+                         bool skip_cloud_lookup = false);
     virtual KvError SyncFile(LruFD::Ref fd);
     virtual KvError SyncFiles(const TableIdent &tbl_id,
                               std::span<LruFD::Ref> fds);
@@ -638,13 +639,16 @@ public:
      * @brief Open file or create it if not exists. This method can be used to
      * open data-file/manifest or create data-file, but not create manifest.
      * Only data file is opened with O_DIRECT by default. Set `direct` to true
-     * to open manifest with O_DIRECT.
+     * to open manifest with O_DIRECT. When `skip_cloud_lookup` is true, cloud
+     * implementations may return ENOENT directly on local miss and let the
+     * caller decide whether to create the file.
      */
     std::pair<LruFD::Ref, KvError> OpenOrCreateFD(const TableIdent &tbl_id,
                                                   FileId file_id,
                                                   bool direct = false,
                                                   bool create = true,
-                                                  uint64_t term = 0);
+                                                  uint64_t term = 0,
+                                                  bool skip_cloud_lookup = false);
     bool EvictFD();
 
     class WriteReqPool
@@ -803,7 +807,7 @@ public:
     void StopAllPrewarmTasks();
     void AcquireCloudSlot(KvTask *task);
     void ReleaseCloudSlot(size_t count = 1);
-    void EnqueueCloudReadyTask(KvTask *task);
+    void EnqueueCloudReadyTask(ObjectStore::Task *task);
     void ProcessCloudReadyTasks(Shard *shard);
     bool AppendPrewarmFiles(std::vector<PrewarmFile> &files);
     size_t GetPrewarmPendingCount() const;
@@ -878,7 +882,8 @@ private:
                  FileId file_id,
                  uint64_t flags,
                  uint64_t mode,
-                 uint64_t term = 0) override;
+                 uint64_t term = 0,
+                 bool skip_cloud_lookup = false) override;
     KvError SyncFile(LruFD::Ref fd) override;
     KvError SyncFiles(const TableIdent &tbl_id,
                       std::span<LruFD::Ref> fds) override;
@@ -988,7 +993,7 @@ private:
     size_t active_prewarm_tasks_{0};
 
     // Prewarm queue management
-    moodycamel::ConcurrentQueue<KvTask *> cloud_ready_tasks_;
+    moodycamel::ConcurrentQueue<ObjectStore::Task *> cloud_ready_tasks_;
     moodycamel::ConcurrentQueue<PrewarmFile> prewarm_queue_;
     static constexpr size_t kMaxPrewarmPendingFiles = 1000;
     std::atomic<bool> prewarm_listing_complete_{false};
