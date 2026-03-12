@@ -266,10 +266,9 @@ std::pair<FileId, uint32_t> WriteTask::ConvFilePageId(
     FilePageId file_page_id) const
 {
     FileId file_id = file_page_id >> Options()->pages_per_file_shift;
-    uint32_t offset =
-        (file_page_id &
-         ((uint32_t{1} << Options()->pages_per_file_shift) - 1)) *
-        Options()->data_page_size;
+    uint32_t offset = (file_page_id &
+                       ((uint32_t{1} << Options()->pages_per_file_shift) - 1)) *
+                      Options()->data_page_size;
     return {file_id, offset};
 }
 
