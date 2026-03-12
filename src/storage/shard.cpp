@@ -64,6 +64,11 @@ KvError Shard::Init()
         {
             static_cast<CloudStoreMgr *>(io_mgr_.get())->SetProcessTerm(term);
         }
+        else if (store_->Mode() == StoreMode::StandbyReplica ||
+                 store_->Mode() == StoreMode::StandbyMaster)
+        {
+            static_cast<StandbyStoreMgr *>(io_mgr_.get())->SetProcessTerm(term);
+        }
     }
     InitializeTscFrequency();
     KvError res = io_mgr_->Init(this);

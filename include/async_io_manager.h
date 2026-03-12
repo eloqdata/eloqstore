@@ -1075,6 +1075,14 @@ class StandbyStoreMgr final : public IouringMgr
 public:
     StandbyStoreMgr(const KvOptions *opts, uint32_t fd_limit);
     void Stop() override;
+    void SetProcessTerm(uint64_t term)
+    {
+        process_term_ = term;
+    }
+    uint64_t ProcessTerm() const override
+    {
+        return process_term_;
+    }
 
     std::pair<ManifestFilePtr, KvError> RefreshManifest(
         const TableIdent &tbl_id);
@@ -1085,6 +1093,7 @@ private:
                                     std::string_view filename) const;
     int RunRsync(const std::string &remote, const std::string &dst);
     std::atomic<size_t> inflight_standby_tasks_{0};
+    uint64_t process_term_{0};
 
     std::string remote_addr_;
 };

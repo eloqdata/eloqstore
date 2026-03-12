@@ -332,12 +332,7 @@ std::string StandbyService::RemoteArchiveManifestPath(
         return {};
     }
     remote_path.push_back('/');
-    // Match archive manifest by tag across any term.
-    remote_path.append(FileNameManifest);
-    remote_path.push_back(FileNameSeparator);
-    remote_path.push_back('*');
-    remote_path.push_back(FileNameSeparator);
-    remote_path.append(archive_tag);
+    remote_path.append(ArchiveName(store_->Term(), archive_tag));
     return remote_path;
 }
 

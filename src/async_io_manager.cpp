@@ -4650,8 +4650,7 @@ std::pair<ManifestFilePtr, KvError> StandbyStoreMgr::RefreshManifest(
         return {nullptr, KvError::NotFound};
     }
 
-    // StandbyStoreMgr always uses term 0 for local standby mode.
-    constexpr uint64_t term = 0;
+    uint64_t term = ProcessTerm();
     fs::path manifest_dst = table_dir / ManifestFileName(term);
     auto [dir_fd, dir_err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
     if (dir_err != KvError::NoError)
@@ -4674,6 +4673,7 @@ std::pair<ManifestFilePtr, KvError> StandbyStoreMgr::RefreshManifest(
         return {nullptr, ToKvError(sync_res)};
     }
 
+    SetFileIdTerm(tbl_id, LruFD::kManifest, term);
     return IouringMgr::GetManifest(tbl_id);
 }
 
