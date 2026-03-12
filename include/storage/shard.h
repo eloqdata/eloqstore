@@ -57,6 +57,7 @@ public:
 
     bool oss_enabled_{false};
     bool io_mgr_and_page_pool_inited_{false};
+    bool startup_restore_finished_{false};
 
 #ifdef ELOQ_MODULE_ENABLED
     // 0 for running, 1 for to stop, 2 for stopped
