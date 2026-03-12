@@ -11,29 +11,39 @@ namespace eloqstore
 
 KvError ReopenTask::Reopen(const TableIdent &tbl_id)
 {
-    DLOG(INFO) << "Reopen " << tbl_id << " start";
+    CHECK(request_ != nullptr);
     StoreMode mode = shard->store_->Mode();
+    DLOG(INFO) << "Reopen " << tbl_id << " start, mode "
+               << static_cast<int>(mode) << ", tag " << request_->Tag();
     StandbyService *standby_service = nullptr;
     std::string tag;
     if (mode == StoreMode::StandbyReplica)
     {
         standby_service = shard->store_->GetStandbyService();
-        if (standby_service == nullptr || request_ == nullptr)
+        if (standby_service == nullptr)
         {
+            LOG(ERROR) << "Reopen " << tbl_id
+                       << " failed: standby_service is null, tag "
+                       << request_->Tag();
             request_ = nullptr;
             return KvError::InvalidArgs;
         }
         tag = request_->Tag();
         if (tag.empty())
         {
+            LOG(ERROR) << "Reopen " << tbl_id << " failed: empty tag";
             request_ = nullptr;
             return KvError::InvalidArgs;
         }
         KvTask *current_task = ThdTask();
         CHECK(current_task != nullptr);
+        DLOG(INFO) << "Reopen " << tbl_id << " rsync begin, tag " << tag;
         KvError enqueue_err = standby_service->RsyncPartition(tbl_id, tag);
         if (enqueue_err != KvError::NoError)
         {
+            LOG(ERROR) << "Reopen " << tbl_id
+                       << " rsync enqueue failed, tag " << tag << ", error "
+                       << static_cast<uint32_t>(enqueue_err);
             request_ = nullptr;
             return enqueue_err;
         }
@@ -41,13 +51,23 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
         KvError sync_err = static_cast<KvError>(current_task->io_res_);
         if (sync_err != KvError::NoError)
         {
+            LOG(ERROR) << "Reopen " << tbl_id << " rsync failed, tag " << tag
+                       << ", error " << static_cast<uint32_t>(sync_err);
             request_ = nullptr;
             return sync_err;
         }
+        DLOG(INFO) << "Reopen " << tbl_id << " rsync finished, tag " << tag;
     }
 
-    KvError err =
-        shard->IndexManager()->InstallExternalSnapshot(tbl_id, cow_meta_);
+    KvError err = shard->IndexManager()->InstallExternalSnapshot(
+        tbl_id, cow_meta_, request_->Tag());
+    if (err != KvError::NoError)
+    {
+        LOG(ERROR) << "Reopen " << tbl_id
+                   << " InstallExternalSnapshot failed, tag "
+                   << request_->Tag() << ", mode " << static_cast<int>(mode)
+                   << ", error " << static_cast<uint32_t>(err);
+    }
     if (err == KvError::NoError && mode != StoreMode::Local)
     {
         if (mode == StoreMode::Cloud && Options()->prewarm_cloud_cache)
@@ -65,7 +85,8 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
         }
     }
     request_ = nullptr;
-    DLOG(INFO) << "Reopen " << tbl_id << " finish";
+    DLOG(INFO) << "Reopen " << tbl_id << " finish, error "
+               << static_cast<uint32_t>(err);
     return err;
 }
 

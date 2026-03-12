@@ -3649,9 +3649,11 @@ private:
 }  // namespace
 
 std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
-    const TableIdent &tbl_id)
+    const TableIdent &tbl_id, std::string_view archive_tag)
 {
-    // Always fetch the latest manifest from cloud, even if local exists.
+    // Reopen flow always targets a tagged archive manifest.
+    CHECK(!archive_tag.empty());
+
     LruFD::Ref old_fd = GetOpenedFD(tbl_id, LruFD::kManifest);
     if (old_fd != nullptr)
     {
@@ -3660,12 +3662,13 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
 
     uint64_t process_term = ProcessTerm();
     uint64_t selected_term = process_term;
+    std::string selected_filename =
+        ArchiveName(selected_term, archive_tag);
     DirectIoBuffer buffer;
-    auto download_to_buffer = [&](uint64_t term) -> KvError
+    auto download_to_buffer = [&](std::string_view filename) -> KvError
     {
         KvTask *current_task = ThdTask();
-        std::string filename = ToFilename(LruFD::kManifest, term);
-        ObjectStore::DownloadTask download_task(&tbl_id, filename);
+        ObjectStore::DownloadTask download_task(&tbl_id, std::string(filename));
         download_task.SetKvTask(current_task);
         download_task.response_data_ = AcquireCloudBuffer(current_task);
         AcquireCloudSlot(current_task);
@@ -3681,93 +3684,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
         return KvError::NoError;
     };
 
-    KvError dl_err = download_to_buffer(process_term);
-    if (dl_err == KvError::NotFound)
-    {
-        // List manifests in cloud and pick the term (ignoring archive files).
-        uint64_t best_term = 0;
-        bool found = false;
-        std::vector<std::string> cloud_files;
-        std::string remote_path =
-            tbl_id.ToString() + "/" + FileNameManifest + FileNameSeparator;
-
-        std::string continuation_token;
-        KvTask *current_task = ThdTask();
-        do
-        {
-            ObjectStore::ListTask list_task(remote_path, false);
-            list_task.SetContinuationToken(continuation_token);
-            list_task.SetKvTask(current_task);
-            AcquireCloudSlot(current_task);
-            obj_store_.SubmitTask(&list_task, shard);
-            current_task->WaitIo();
-
-            if (list_task.error_ != KvError::NoError)
-            {
-                LOG(ERROR)
-                    << "CloudStoreMgr::RefreshManifest: list objects failed "
-                    << "for " << tbl_id << " : "
-                    << ErrorString(list_task.error_);
-                return {nullptr, list_task.error_};
-            }
-
-            std::vector<std::string> batch_files;
-            std::string next_token;
-            if (!obj_store_.ParseListObjectsResponse(
-                    list_task.response_data_.view(),
-                    list_task.json_data_,
-                    &batch_files,
-                    nullptr,
-                    &next_token))
-            {
-                LOG(ERROR) << "CloudStoreMgr::RefreshManifest: parse list "
-                              "response failed for table "
-                           << tbl_id;
-                return {nullptr, KvError::Corrupted};
-            }
-
-            cloud_files.insert(cloud_files.end(),
-                               std::make_move_iterator(batch_files.begin()),
-                               std::make_move_iterator(batch_files.end()));
-            continuation_token = std::move(next_token);
-        } while (!continuation_token.empty());
-
-        if (cloud_files.empty() ||
-            (cloud_files.size() == 1 && cloud_files[0] == CurrentTermFileName))
-        {
-            return {nullptr, KvError::NotFound};
-        }
-
-        for (const std::string &name : cloud_files)
-        {
-            uint64_t term = 0;
-            std::optional<std::string> tag;
-            if (!ParseManifestFileSuffix(name, term, tag))
-            {
-                LOG(FATAL) << "CloudStoreMgr::RefreshManifest: failed to "
-                              "parse manifest file suffix: "
-                           << name;
-                continue;
-            }
-            if (tag.has_value())
-            {
-                continue;
-            }
-            if (term >= best_term)
-            {
-                found = true;
-                best_term = term;
-            }
-        }
-
-        if (!found)
-        {
-            return {nullptr, KvError::NotFound};
-        }
-        selected_term = best_term;
-        dl_err = download_to_buffer(selected_term);
-    }
-
+    KvError dl_err = download_to_buffer(selected_filename);
     if (dl_err != KvError::NoError)
     {
         return {nullptr, dl_err};

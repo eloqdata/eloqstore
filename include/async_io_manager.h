@@ -898,7 +898,7 @@ public:
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
     std::pair<ManifestFilePtr, KvError> RefreshManifest(
-        const TableIdent &tbl_id);
+        const TableIdent &tbl_id, std::string_view archive_tag);
     KvError DownloadFile(const TableIdent &tbl_id,
                          FileId file_id,
                          uint64_t term,

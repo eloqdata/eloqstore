@@ -341,12 +341,19 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
 }
 
 KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
-                                                  CowRootMeta &cow_meta)
+                                                  CowRootMeta &cow_meta,
+                                                  std::string_view reopen_tag)
 {
     CHECK(eloq_store != nullptr);
     const StoreMode mode = eloq_store->Mode();
+    DLOG(INFO) << "InstallExternalSnapshot begin, table " << tbl_ident
+               << ", mode " << static_cast<int>(mode) << ", tag "
+               << reopen_tag;
     if (mode != StoreMode::Cloud && mode != StoreMode::StandbyReplica)
     {
+        LOG(ERROR) << "InstallExternalSnapshot invalid mode, table "
+                   << tbl_ident << ", mode " << static_cast<int>(mode)
+                   << ", tag " << reopen_tag;
         return KvError::InvalidArgs;
     }
 
@@ -382,7 +389,8 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
     if (mode == StoreMode::Cloud)
     {
         auto *cloud_mgr = static_cast<CloudStoreMgr *>(IoMgr());
-        auto [m, cloud_err] = cloud_mgr->RefreshManifest(tbl_ident);
+        auto [m, cloud_err] =
+            cloud_mgr->RefreshManifest(tbl_ident, reopen_tag);
         err = cloud_err;
         manifest = std::move(m);
     }
@@ -393,11 +401,24 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
         err = standby_err;
         manifest = std::move(m);
     }
-    CHECK_KV_ERR(err);
+    if (err != KvError::NoError)
+    {
+        LOG(ERROR) << "InstallExternalSnapshot RefreshManifest failed, table "
+                   << tbl_ident << ", mode " << static_cast<int>(mode)
+                   << ", tag " << reopen_tag << ", error "
+                   << static_cast<uint32_t>(err);
+        return err;
+    }
 
     Replayer replayer(Options());
     err = replayer.Replay(manifest.get());
-    CHECK_KV_ERR(err);
+    if (err != KvError::NoError)
+    {
+        LOG(ERROR) << "InstallExternalSnapshot Replay failed, table "
+                   << tbl_ident << ", tag " << reopen_tag << ", error "
+                   << static_cast<uint32_t>(err);
+        return err;
+    }
 
     auto [entry, inserted] = root_meta_mgr_.GetOrCreate(tbl_ident);
     RootMeta &meta = entry->meta_;
@@ -441,6 +462,9 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
     IoMgr()->SetFileIdTermMapping(entry->tbl_id_,
                                   replayer.file_id_term_mapping_);
 
+    DLOG(INFO) << "InstallExternalSnapshot finish, table " << tbl_ident
+               << ", tag " << reopen_tag << ", root_id " << replayer.root_
+               << ", ttl_root_id " << replayer.ttl_root_;
     return KvError::NoError;
 }
 

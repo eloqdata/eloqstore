@@ -50,23 +50,6 @@ namespace
 {
 constexpr uint64_t kStorePathWeightGranularity = 1ULL << 20;  // 1 MiB
 constexpr size_t kMaxStorePathLutEntries = kDefaultStorePathLutEntries;
-
-StoreMode DetermineStoreMode(const KvOptions &opts)
-{
-    if (opts.enable_local_standby)
-    {
-        if (opts.standby_master_addr.empty())
-        {
-            return StoreMode::StandbyMaster;
-        }
-        return StoreMode::StandbyReplica;
-    }
-    if (!opts.cloud_store_path.empty())
-    {
-        return StoreMode::Cloud;
-    }
-    return StoreMode::Local;
-}
 }  // namespace
 
 bool EloqStore::ValidateOptions(KvOptions &opts)
@@ -308,8 +291,20 @@ KvError EloqStore::UpdateStandbyMasterStorePaths(std::vector<std::string> paths,
 {
     if (paths.empty())
     {
-        LOG(ERROR) << "standby_master_store_paths cannot be empty";
-        return KvError::InvalidArgs;
+        if (!weights.empty())
+        {
+            LOG(ERROR) << "standby_master_store_path_weights must be empty "
+                          "when standby_master_store_paths is empty";
+            return KvError::InvalidArgs;
+        }
+        options_.standby_master_store_paths.clear();
+        options_.standby_master_store_path_weights.clear();
+        options_.standby_master_store_path_lut.clear();
+        if (standby_service_ != nullptr)
+        {
+            standby_service_->UpdateRemoteStorePaths({});
+        }
+        return KvError::NoError;
     }
     for (std::string &remote_path : paths)
     {
@@ -371,7 +366,6 @@ KvError EloqStore::UpdateStandbyMasterAddr(std::string standby_master_addr)
         return KvError::InvalidArgs;
     }
     options_.standby_master_addr = std::move(standby_master_addr);
-    options_.enable_local_standby = !options_.standby_master_addr.empty();
     if (standby_service_ != nullptr)
     {
         standby_service_->UpdateRemoteAddr(options_.standby_master_addr);
@@ -385,26 +379,6 @@ EloqStore::EloqStore(const KvOptions &opts) : options_(opts)
     {
         LOG(FATAL) << "Invalid KvOptions configuration";
     }
-#ifdef ELOQSTORE_WITH_TXSERVICE
-    const std::string store_path_list = BuildStorePathListWithWeights(
-        options_.store_path, options_.store_path_weights);
-    if (!store_path_list.empty())
-    {
-        GFLAGS_NAMESPACE::SetCommandLineOption("eloq_store_data_path_list",
-                                               store_path_list.c_str());
-    }
-#endif
-    const StoreMode mode = DetermineStoreMode(options_);
-    store_mode_.store(mode, std::memory_order_release);
-    if (mode == StoreMode::Cloud)
-    {
-        cloud_service_ = std::make_unique<CloudStorageService>(this);
-    }
-    else if (mode == StoreMode::StandbyMaster ||
-             mode == StoreMode::StandbyReplica)
-    {
-        standby_service_ = std::make_unique<StandbyService>(this);
-    }
 }
 
 EloqStore::~EloqStore()
@@ -417,7 +391,11 @@ EloqStore::~EloqStore()
 
 KvError EloqStore::Start(uint64_t term)
 {
-    LOG(INFO) << "===Start eloqstore, term: " << term;
+    if (!ValidateOptions(options_))
+    {
+        return KvError::InvalidArgs;
+    }
+
     auto fail_start = [this](KvError err)
     {
         running_status_.store(static_cast<uint8_t>(RunningStatus::Stopped),
@@ -446,6 +424,59 @@ KvError EloqStore::Start(uint64_t term)
         }
     }
 
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    const std::string store_path_list = BuildStorePathListWithWeights(
+        options_.store_path, options_.store_path_weights);
+    if (!store_path_list.empty())
+    {
+        GFLAGS_NAMESPACE::SetCommandLineOption("eloq_store_data_path_list",
+                                               store_path_list.c_str());
+    }
+#endif
+
+    StoreMode mode = StoreMode::Local;
+    if (options_.enable_local_standby)
+    {
+        mode = options_.standby_master_addr.empty() ? StoreMode::StandbyMaster
+                                                    : StoreMode::StandbyReplica;
+    }
+    else if (!options_.cloud_store_path.empty())
+    {
+        mode = StoreMode::Cloud;
+    }
+    const StoreMode prev_mode = store_mode_.exchange(
+        mode, std::memory_order_acq_rel);
+    LOG(INFO) << "===Start eloqstore, term: " << term << ", mode: "
+              << static_cast<int>(mode);
+    if (prev_mode != mode)
+    {
+        LOG(INFO) << "EloqStore::Start update store mode, prev_mode="
+                  << static_cast<int>(prev_mode)
+                  << ", new_mode=" << static_cast<int>(mode);
+    }
+    if (mode == StoreMode::Cloud)
+    {
+        if (cloud_service_ == nullptr)
+        {
+            cloud_service_ = std::make_unique<CloudStorageService>(this);
+        }
+        standby_service_.reset();
+    }
+    else if (mode == StoreMode::StandbyMaster ||
+             mode == StoreMode::StandbyReplica)
+    {
+        if (standby_service_ == nullptr)
+        {
+            standby_service_ = std::make_unique<StandbyService>(this);
+        }
+        cloud_service_.reset();
+    }
+    else
+    {
+        cloud_service_.reset();
+        standby_service_.reset();
+    }
+
     eloq_store = this;
     // Initialize
     if (!options_.store_path.empty())
@@ -458,7 +489,7 @@ KvError EloqStore::Start(uint64_t term)
     }
 
     // local mode, set term to 0
-    term_ = Mode() == StoreMode::Local ? 0 : term;
+    term_ = mode == StoreMode::Local ? 0 : term;
 
     // There are files opened at very early stage like stdin/stdout/stderr, glog
     // file, and root directories of data.
@@ -1185,8 +1216,8 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
 
 void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
 {
-    DLOG(INFO) << "HandleGlobalReopenRequest on " << req->TableId()
-               << " of tag " << req->Tag();
+    DLOG(INFO) << "HandleGlobalReopenRequest start, tag " << req->Tag()
+               << ", mode " << static_cast<int>(Mode());
     req->first_error_.store(static_cast<uint8_t>(KvError::NoError),
                             std::memory_order_relaxed);
     req->pending_.store(0, std::memory_order_relaxed);
@@ -1283,19 +1314,29 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
 
     if (partitions.empty())
     {
+        DLOG(INFO) << "HandleGlobalReopenRequest no partitions, tag "
+                   << req->Tag();
         req->SetDone(KvError::NoError);
         return;
     }
 
+    DLOG(INFO) << "HandleGlobalReopenRequest collected partitions, tag "
+               << req->Tag() << ", partition_count " << partitions.size();
     req->reopen_reqs_.reserve(partitions.size());
     req->pending_.store(static_cast<uint32_t>(partitions.size()),
                         std::memory_order_relaxed);
 
     auto on_reopen_done = [req](KvRequest *sub_req)
     {
-        KvError sub_err = sub_req->Error();
+        auto *reopen_req = static_cast<ReopenRequest *>(sub_req);
+        KvError sub_err = reopen_req->Error();
         if (sub_err != KvError::NoError)
         {
+            LOG(ERROR) << "HandleGlobalReopenRequest sub request failed, table "
+                       << reopen_req->TableId() << ", tag "
+                       << reopen_req->Tag() << ", error "
+                       << static_cast<uint32_t>(sub_err) << ", msg "
+                       << reopen_req->ErrMessage();
             uint8_t expected = static_cast<uint8_t>(KvError::NoError);
             uint8_t desired = static_cast<uint8_t>(sub_err);
             req->first_error_.compare_exchange_strong(
@@ -1304,19 +1345,30 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
                 std::memory_order_relaxed,
                 std::memory_order_relaxed);
         }
+        else
+        {
+            DLOG(INFO) << "HandleGlobalReopenRequest sub request succeeded, "
+                       << "table " << reopen_req->TableId() << ", tag "
+                       << reopen_req->Tag();
+        }
         if (req->pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
         {
             KvError final_err = static_cast<KvError>(
                 req->first_error_.load(std::memory_order_relaxed));
+            DLOG(INFO) << "HandleGlobalReopenRequest finish, tag " << req->Tag()
+                       << ", final_error "
+                       << static_cast<uint32_t>(final_err);
             req->SetDone(final_err);
         }
     };
 
     for (const TableIdent &partition : partitions)
     {
+        DLOG(INFO) << "HandleGlobalReopenRequest enqueue partition "
+                   << partition << ", tag " << req->Tag();
         auto reopen_req = std::make_unique<ReopenRequest>();
         reopen_req->SetArgs(partition);
-        if (Mode() == StoreMode::StandbyReplica)
+        if (!req->Tag().empty())
         {
             reopen_req->SetTag(req->Tag());
         }
@@ -1325,7 +1377,8 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
         if (!ExecAsyn(ptr, 0, on_reopen_done))
         {
             LOG(ERROR)
-                << "Handle global reopen request, enqueue reopen request fail";
+                << "Handle global reopen request, enqueue reopen request fail, "
+                << "partition " << partition << ", tag " << req->Tag();
             ptr->SetDone(KvError::NotRunning);
         }
     }

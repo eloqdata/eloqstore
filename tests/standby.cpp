@@ -418,18 +418,22 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
         master.ExecSync(&archive_req);
         REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
 
+        delete_range(master, 0, 5000);
+        verify_range(master, 0, 5000, false);
+
         master.Stop();
     }
 
     {
+        CleanupLocalStore(standby_opts);
         eloqstore::EloqStore standby(standby_opts);
         REQUIRE(standby.Start(1) == eloqstore::KvError::NoError);
 
-        // load manifest and index pages into memory to test online reopen
-        Scan(&standby, tbl_id, 0, 10000);
+        // Load the latest cloud state into memory before reopening to the
+        // archived snapshot.
+        verify_range(standby, 0, 5000, false);
 
-        eloqstore::ReopenRequest reopen_req;
-        reopen_req.SetArgs(tbl_id);
+        eloqstore::GlobalReopenRequest reopen_req;
         reopen_req.SetTag(std::to_string(1001));
         standby.ExecSync(&reopen_req);
         REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
@@ -455,14 +459,13 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
     }
 
     {
+        CleanupLocalStore(standby_opts);
         eloqstore::EloqStore standby(standby_opts);
         REQUIRE(standby.Start(1) == eloqstore::KvError::NoError);
 
-        // load manifest and index pages into memory to test online reopen
-        Scan(&standby, tbl_id, 0, 10000);
+        verify_range(standby, 0, 5000, false);
 
-        eloqstore::ReopenRequest reopen_req;
-        reopen_req.SetArgs(tbl_id);
+        eloqstore::GlobalReopenRequest reopen_req;
         reopen_req.SetTag(std::to_string(2002));
         standby.ExecSync(&reopen_req);
         REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
@@ -522,18 +525,22 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
         new_master.ExecSync(&archive_req);
         REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
 
+        delete_range(new_master, 5001, 10000);
+        verify_range(new_master, 5001, 10000, false);
+
         new_master.Stop();
     }
 
     {
         standby_opts.standby_master_store_paths = {new_master_dir.string()};
+        CleanupLocalStore(standby_opts);
         eloqstore::EloqStore standby(standby_opts);
         REQUIRE(standby.Start(2) == eloqstore::KvError::NoError);
 
-        Scan(&standby, tbl_id, 0, 10000);
+        verify_range(standby, 0, 5000, false);
+        verify_range(standby, 5001, 10000, false);
 
-        eloqstore::ReopenRequest reopen_req;
-        reopen_req.SetArgs(tbl_id);
+        eloqstore::GlobalReopenRequest reopen_req;
         reopen_req.SetTag(std::to_string(2002));
         standby.ExecSync(&reopen_req);
         REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);

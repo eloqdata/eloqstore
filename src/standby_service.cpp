@@ -324,6 +324,17 @@ fs::path StandbyService::TablePath(const TableIdent &tbl_id) const
 std::string StandbyService::RemotePartitionPath(const TableIdent &tbl_id) const
 {
     const KvOptions &options = store_->Options();
+    if (options.standby_master_store_paths.empty() ||
+        options.standby_master_store_path_lut.empty())
+    {
+        LOG(ERROR) << "StandbyService::RemotePartitionPath invalid standby "
+                   << "path config for " << tbl_id
+                   << ", standby_master_store_paths "
+                   << options.standby_master_store_paths.size()
+                   << ", standby_master_store_path_lut "
+                   << options.standby_master_store_path_lut.size();
+        return {};
+    }
     std::vector<std::string> remote_store_paths;
     {
         std::lock_guard<std::mutex> lk(remote_mutex_);
@@ -334,6 +345,14 @@ std::string StandbyService::RemotePartitionPath(const TableIdent &tbl_id) const
                               options.standby_master_store_path_lut);
     if (remote_path_idx >= remote_store_paths.size())
     {
+        LOG(ERROR) << "StandbyService::RemotePartitionPath missing store path "
+                   << "for " << tbl_id << ", remote_path_idx "
+                   << remote_path_idx << ", remote_store_paths "
+                   << remote_store_paths.size()
+                   << ", standby_master_store_paths "
+                   << options.standby_master_store_paths.size()
+                   << ", standby_master_store_path_lut "
+                   << options.standby_master_store_path_lut.size();
         return {};
     }
     std::string remote_path = remote_store_paths[remote_path_idx];
@@ -460,14 +479,23 @@ KvError StandbyService::RunRsyncJob(const RsyncJob &job)
 {
     if (job.archive_tag.empty())
     {
+        LOG(ERROR) << "StandbyService::RunRsyncJob empty archive tag for "
+                   << job.tbl_id;
         return KvError::InvalidArgs;
     }
     std::string remote_partition_path = RemotePartitionPath(job.tbl_id);
     std::string remote_manifest_path =
         RemoteArchiveManifestPath(job.tbl_id, job.archive_tag);
+    DLOG(INFO) << "StandbyService::RunRsyncJob begin, table " << job.tbl_id
+               << ", tag " << job.archive_tag << ", remote_partition_path "
+               << remote_partition_path << ", remote_manifest_path "
+               << remote_manifest_path;
     if (remote_partition_path.empty() || remote_manifest_path.empty())
     {
-        LOG(ERROR) << "StandbyService: remote partition path missing";
+        LOG(ERROR) << "StandbyService: remote partition path missing for "
+                   << job.tbl_id << ", tag " << job.archive_tag
+                   << ", remote_partition_path " << remote_partition_path
+                   << ", remote_manifest_path " << remote_manifest_path;
         return KvError::InvalidArgs;
     }
 
@@ -522,6 +550,8 @@ KvError StandbyService::RunRsyncJob(const RsyncJob &job)
                    << manifest_tmp;
         return KvError::NotFound;
     }
+    DLOG(INFO) << "StandbyService::RunRsyncJob finish, table " << job.tbl_id
+               << ", tag " << job.archive_tag;
     return KvError::NoError;
 }
 
