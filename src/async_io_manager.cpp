@@ -689,8 +689,7 @@ std::pair<ManifestFilePtr, KvError> IouringMgr::GetManifest(
         return {nullptr, err};
     }
     struct statx result = {};
-    auto [dir_fd, dir_err] =
-        OpenFD(tbl_id, LruFD::kDirectory, false, manifest_br, 0);
+    auto [dir_fd, dir_err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
     if (dir_err != KvError::NoError)
     {
         return {nullptr, dir_err};
@@ -906,15 +905,15 @@ void IouringMgr::CleanManifest(const TableIdent &tbl_id)
         return;
     }
 
+    uint64_t process_term = ProcessTerm();
     KvError dir_err = KvError::NoError;
     {
-        auto [dir_fd, err] =
-            OpenFD(tbl_id, LruFD::kDirectory, false, GetActiveBranch(), 0);
+        auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
         dir_err = err;
         if (dir_err == KvError::NoError)
         {
             const std::string manifest_name =
-                BranchManifestFileName(GetActiveBranch(), ProcessTerm());
+                BranchManifestFileName(GetActiveBranch(), process_term);
             int res = UnlinkAt(dir_fd.FdPair(), manifest_name.c_str(), false);
             if (res < 0 && res != -ENOENT)
             {
@@ -1143,8 +1142,8 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
             // This must be data file because manifest should always be
             // created by call WriteSnapshot.
             assert(file_id <= LruFD::kMaxDataFile);
-            auto [dfd_ref, err] = OpenOrCreateFD(
-                tbl_id, LruFD::kDirectory, false, true, branch_name, 0);
+            auto [dfd_ref, err] =
+                OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, "", 0);
             error = err;
             if (dfd_ref != nullptr)
             {
@@ -1185,8 +1184,8 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
         lru_fd.Get()->fd_ = LruFD::FdEmpty;
     }
 
-    // Set term and branch_name on newly opened data file FD.
-    if (file_id <= LruFD::kMaxDataFile)
+    // Set term and branch_name on newly opened file FD (data and manifest).
+    if (file_id != LruFD::kDirectory)
     {
         lru_fd.Get()->term_ = term;
         lru_fd.Get()->branch_name_ = std::string(branch_name);
@@ -2183,10 +2182,9 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
         CHECK_KV_ERR(err);
     }
 
-    auto [dir_fd, err] =
-        OpenFD(tbl_id, LruFD::kDirectory, false, GetActiveBranch(), 0);
-    CHECK_KV_ERR(err);
     uint64_t manifest_term = ProcessTerm();
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
+    CHECK_KV_ERR(err);
     std::string_view active_br = GetActiveBranch();
     const std::string manifest_name =
         BranchManifestFileName(active_br, manifest_term);
@@ -2204,10 +2202,9 @@ KvError IouringMgr::CreateArchive(const TableIdent &tbl_id,
                                   uint64_t ts,
                                   std::string_view branch_name)
 {
-    auto [dir_fd, err] =
-        OpenFD(tbl_id, LruFD::kDirectory, false, branch_name, 0);
-    CHECK_KV_ERR(err);
     uint64_t term = ProcessTerm();
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
+    CHECK_KV_ERR(err);
     const std::string name = BranchArchiveName(branch_name, term, ts);
     int res = WriteSnapshot(std::move(dir_fd), name, snapshot);
     if (res < 0)
@@ -2223,8 +2220,7 @@ KvError IouringMgr::WriteBranchManifest(const TableIdent &tbl_id,
                                         uint64_t term,
                                         std::string_view snapshot)
 {
-    auto [dir_fd, err] =
-        OpenFD(tbl_id, LruFD::kDirectory, false, branch_name, 0);
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
     CHECK_KV_ERR(err);
 
     // Generate branch manifest filename: manifest_<branch_name>_<term>
@@ -2243,8 +2239,7 @@ KvError IouringMgr::BranchManifestExists(const TableIdent &tbl_id,
                                          std::string_view branch_name,
                                          uint64_t term)
 {
-    auto [dir_fd, err] =
-        OpenFD(tbl_id, LruFD::kDirectory, false, branch_name, 0);
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
     CHECK_KV_ERR(err);
 
     const std::string name = BranchManifestFileName(branch_name, term);
@@ -2264,8 +2259,7 @@ KvError IouringMgr::BranchManifestExists(const TableIdent &tbl_id,
 KvError IouringMgr::BranchCurrentTermExists(const TableIdent &tbl_id,
                                             std::string_view branch_name)
 {
-    auto [dir_fd, err] =
-        OpenFD(tbl_id, LruFD::kDirectory, false, branch_name, 0);
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
     CHECK_KV_ERR(err);
 
     const std::string name = BranchCurrentTermFileName(branch_name);
@@ -2326,8 +2320,7 @@ KvError IouringMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
                                            std::string_view branch_name,
                                            uint64_t term)
 {
-    auto [dir_fd, err] =
-        OpenFD(tbl_id, LruFD::kDirectory, false, branch_name, 0);
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
     CHECK_KV_ERR(err);
 
     std::string filename = BranchCurrentTermFileName(branch_name);
@@ -2371,8 +2364,7 @@ KvError IouringMgr::DeleteBranchFiles(
     std::string_view branch_name,
     uint64_t /* term (unused: we read from CURRENT_TERM) */)
 {
-    auto [dir_fd, err] =
-        OpenFD(tbl_id, LruFD::kDirectory, false, branch_name, 0);
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
     CHECK_KV_ERR(err);
 
     std::string current_term_filename = BranchCurrentTermFileName(branch_name);
@@ -3868,8 +3860,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     if (selected_term != process_term)
     {
         // 1) Rename the manifest file locally.
-        auto [dir_fd, err] =
-            OpenFD(tbl_id, LruFD::kDirectory, false, selected_branch, 0);
+        auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
         if (err != KvError::NoError)
         {
             LOG(ERROR) << "CloudStoreMgr::GetManifest: failed to open "
@@ -4110,7 +4101,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
         return {nullptr, write_err};
     }
 
-    auto [dir_fd, dir_err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
+    auto [dir_fd, dir_err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
     if (dir_err != KvError::NoError)
     {
         return {nullptr, dir_err};
@@ -4392,7 +4383,7 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
         }
     }
 
-    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, active_br, 0);
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
     CHECK_KV_ERR(err);
     const std::string manifest_name =
         BranchManifestFileName(active_br, manifest_term_val);
@@ -4431,15 +4422,14 @@ KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
                                      uint64_t ts,
                                      std::string_view branch_name)
 {
-    auto [dir_fd, err] =
-        OpenFD(tbl_id, LruFD::kDirectory, false, branch_name, 0);
+    uint64_t term = ProcessTerm();
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
     CHECK_KV_ERR(err);
     int res = ReserveCacheSpace(options_->manifest_limit);
     if (res < 0)
     {
         return ToKvError(res);
     }
-    uint64_t term = ProcessTerm();
     const std::string name = BranchArchiveName(branch_name, term, ts);
     res = WriteSnapshot(std::move(dir_fd), name, snapshot);
     if (res < 0)
@@ -4458,8 +4448,7 @@ KvError CloudStoreMgr::WriteBranchManifest(const TableIdent &tbl_id,
                                            uint64_t term,
                                            std::string_view snapshot)
 {
-    auto [dir_fd, err] =
-        OpenFD(tbl_id, LruFD::kDirectory, false, branch_name, 0);
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
     CHECK_KV_ERR(err);
 
     // Generate branch manifest filename: manifest_<branch_name>_<term>
@@ -4928,14 +4917,14 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
     {
         const TableIdent *tbl_id = fd.Get()->tbl_->tbl_id_;
         uint64_t term = fd.Get()->term_;
+        const std::string &branch = fd.Get()->branch_name_;
         std::string filename;
         if (file_id == LruFD::kManifest)
         {
-            filename = BranchManifestFileName(GetActiveBranch(), ProcessTerm());
+            filename = BranchManifestFileName(branch, term);
         }
         else
         {
-            const std::string &branch = fd.Get()->branch_name_;
             filename = BranchDataFileName(file_id, branch, term);
         }
         EnqueClosedFile(FileKey{*tbl_id, filename});
