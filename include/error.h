@@ -29,7 +29,7 @@ enum struct KvError : uint8_t
     IoFail,         // Unclassified local I/O error.
     ExpiredTerm,    // Cloud term file indicates stale process term.
     OssInsufficientStorage,  // Object storage out of capacity (HTTP 507).
-    NotLeader,              // Found term ahead of process term.
+    NotLeader,               // Found term ahead of process term.
 
 };
 

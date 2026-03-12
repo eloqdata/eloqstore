@@ -444,10 +444,10 @@ KvError EloqStore::Start(uint64_t term)
     {
         mode = StoreMode::Cloud;
     }
-    const StoreMode prev_mode = store_mode_.exchange(
-        mode, std::memory_order_acq_rel);
-    LOG(INFO) << "===Start eloqstore, term: " << term << ", mode: "
-              << static_cast<int>(mode);
+    const StoreMode prev_mode =
+        store_mode_.exchange(mode, std::memory_order_acq_rel);
+    LOG(INFO) << "===Start eloqstore, term: " << term
+              << ", mode: " << static_cast<int>(mode);
     if (prev_mode != mode)
     {
         LOG(INFO) << "EloqStore::Start update store mode, prev_mode="
@@ -1333,10 +1333,9 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
         if (sub_err != KvError::NoError)
         {
             LOG(ERROR) << "HandleGlobalReopenRequest sub request failed, table "
-                       << reopen_req->TableId() << ", tag "
-                       << reopen_req->Tag() << ", error "
-                       << static_cast<uint32_t>(sub_err) << ", msg "
-                       << reopen_req->ErrMessage();
+                       << reopen_req->TableId() << ", tag " << reopen_req->Tag()
+                       << ", error " << static_cast<uint32_t>(sub_err)
+                       << ", msg " << reopen_req->ErrMessage();
             uint8_t expected = static_cast<uint8_t>(KvError::NoError);
             uint8_t desired = static_cast<uint8_t>(sub_err);
             req->first_error_.compare_exchange_strong(
@@ -1356,8 +1355,7 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
             KvError final_err = static_cast<KvError>(
                 req->first_error_.load(std::memory_order_relaxed));
             DLOG(INFO) << "HandleGlobalReopenRequest finish, tag " << req->Tag()
-                       << ", final_error "
-                       << static_cast<uint32_t>(final_err);
+                       << ", final_error " << static_cast<uint32_t>(final_err);
             req->SetDone(final_err);
         }
     };
@@ -1451,8 +1449,7 @@ void EloqStore::HandleGlobalListArchiveTagsRequest(
                 }
                 req->entries_.push_back(
                     GlobalListArchiveTagsRequest::ArchiveEntry{
-                        .term = term,
-                        .tag = std::move(*tag)});
+                        .term = term, .tag = std::move(*tag)});
             }
         }
     }
@@ -1473,9 +1470,7 @@ void EloqStore::HandleGlobalListArchiveTagsRequest(
                     req->entries_.end(),
                     [](const GlobalListArchiveTagsRequest::ArchiveEntry &lhs,
                        const GlobalListArchiveTagsRequest::ArchiveEntry &rhs)
-                    {
-                        return lhs.term == rhs.term && lhs.tag == rhs.tag;
-                    }),
+                    { return lhs.term == rhs.term && lhs.tag == rhs.tag; }),
         req->entries_.end());
     req->SetDone(KvError::NoError);
 }

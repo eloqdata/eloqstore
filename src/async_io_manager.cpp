@@ -3662,8 +3662,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
 
     uint64_t process_term = ProcessTerm();
     uint64_t selected_term = process_term;
-    std::string selected_filename =
-        ArchiveName(selected_term, archive_tag);
+    std::string selected_filename = ArchiveName(selected_term, archive_tag);
     DirectIoBuffer buffer;
     auto download_to_buffer = [&](std::string_view filename) -> KvError
     {
@@ -4454,10 +4453,9 @@ std::pair<ManifestFilePtr, KvError> StandbyStoreMgr::GetManifest(
     {
         if (err != KvError::NoError)
         {
-            DLOG(INFO)
-                << "StandbyStoreMgr::GetManifest direct load failed for "
-                << tbl_id << ", process_term=" << ProcessTerm()
-                << ", err=" << ErrorString(err);
+            DLOG(INFO) << "StandbyStoreMgr::GetManifest direct load failed for "
+                       << tbl_id << ", process_term=" << ProcessTerm()
+                       << ", err=" << ErrorString(err);
         }
         return {std::move(manifest), err};
     }
@@ -4474,8 +4472,8 @@ std::pair<ManifestFilePtr, KvError> StandbyStoreMgr::GetManifest(
 
     const uint64_t target_term = ProcessTerm();
     uint64_t source_term = 0;
-    KvError prep_err =
-        standby_service->PrepareLocalManifest(tbl_id, target_term, &source_term);
+    KvError prep_err = standby_service->PrepareLocalManifest(
+        tbl_id, target_term, &source_term);
     if (prep_err != KvError::NoError)
     {
         return {nullptr, prep_err};
@@ -4487,8 +4485,8 @@ std::pair<ManifestFilePtr, KvError> StandbyStoreMgr::GetManifest(
         return {nullptr, prep_err};
     }
     DLOG(INFO) << "StandbyStoreMgr::GetManifest fallback prepared manifest_"
-               << target_term << " from source term " << source_term
-               << " for " << tbl_id;
+               << target_term << " from source term " << source_term << " for "
+               << tbl_id;
     return IouringMgr::GetManifest(tbl_id);
 }
 

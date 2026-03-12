@@ -41,8 +41,8 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
         KvError enqueue_err = standby_service->RsyncPartition(tbl_id, tag);
         if (enqueue_err != KvError::NoError)
         {
-            LOG(ERROR) << "Reopen " << tbl_id
-                       << " rsync enqueue failed, tag " << tag << ", error "
+            LOG(ERROR) << "Reopen " << tbl_id << " rsync enqueue failed, tag "
+                       << tag << ", error "
                        << static_cast<uint32_t>(enqueue_err);
             request_ = nullptr;
             return enqueue_err;
@@ -64,9 +64,9 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
     if (err != KvError::NoError)
     {
         LOG(ERROR) << "Reopen " << tbl_id
-                   << " InstallExternalSnapshot failed, tag "
-                   << request_->Tag() << ", mode " << static_cast<int>(mode)
-                   << ", error " << static_cast<uint32_t>(err);
+                   << " InstallExternalSnapshot failed, tag " << request_->Tag()
+                   << ", mode " << static_cast<int>(mode) << ", error "
+                   << static_cast<uint32_t>(err);
     }
     if (err == KvError::NoError && mode != StoreMode::Local)
     {

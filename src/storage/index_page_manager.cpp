@@ -347,8 +347,7 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
     CHECK(eloq_store != nullptr);
     const StoreMode mode = eloq_store->Mode();
     DLOG(INFO) << "InstallExternalSnapshot begin, table " << tbl_ident
-               << ", mode " << static_cast<int>(mode) << ", tag "
-               << reopen_tag;
+               << ", mode " << static_cast<int>(mode) << ", tag " << reopen_tag;
     if (mode != StoreMode::Cloud && mode != StoreMode::StandbyReplica)
     {
         LOG(ERROR) << "InstallExternalSnapshot invalid mode, table "
@@ -389,8 +388,7 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
     if (mode == StoreMode::Cloud)
     {
         auto *cloud_mgr = static_cast<CloudStoreMgr *>(IoMgr());
-        auto [m, cloud_err] =
-            cloud_mgr->RefreshManifest(tbl_ident, reopen_tag);
+        auto [m, cloud_err] = cloud_mgr->RefreshManifest(tbl_ident, reopen_tag);
         err = cloud_err;
         manifest = std::move(m);
     }

@@ -69,11 +69,10 @@ private:
 
     struct Job
     {
-        using Payload =
-            std::variant<std::monostate,
-                         RsyncJob,
-                         ListPartitionsJob,
-                         PrepareManifestJob>;
+        using Payload = std::variant<std::monostate,
+                                     RsyncJob,
+                                     ListPartitionsJob,
+                                     PrepareManifestJob>;
 
         Payload payload;
         TaskContext context;
