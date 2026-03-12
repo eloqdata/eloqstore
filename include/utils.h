@@ -159,8 +159,8 @@ inline bool ParseStorePathListWithWeights(std::string_view input,
             continue;
         }
         uint64_t weight = 0;
-        auto [ptr, ec] = std::from_chars(
-            token.data(), token.data() + token.size(), weight);
+        auto [ptr, ec] =
+            std::from_chars(token.data(), token.data() + token.size(), weight);
         if (ec != std::errc() || ptr != token.data() + token.size())
         {
             if (error_message != nullptr)

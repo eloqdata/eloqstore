@@ -669,8 +669,8 @@ public:
         return term_;
     }
 
-    KvError UpdateStandbyMasterStorePaths(
-        std::vector<std::string> paths, std::vector<uint64_t> weights);
+    KvError UpdateStandbyMasterStorePaths(std::vector<std::string> paths,
+                                          std::vector<uint64_t> weights);
     KvError UpdateStandbyMasterAddr(std::string standby_master_addr);
 
     /**

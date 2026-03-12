@@ -59,8 +59,8 @@ private:
 
     struct Job
     {
-        using Payload = std::
-            variant<std::monostate, RsyncJob, ListPartitionsJob>;
+        using Payload =
+            std::variant<std::monostate, RsyncJob, ListPartitionsJob>;
 
         Payload payload;
         TaskContext context;

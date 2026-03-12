@@ -326,8 +326,8 @@ std::string StandbyService::RemotePartitionPath(const TableIdent &tbl_id) const
     return remote_path;
 }
 
-std::string StandbyService::RemoteArchiveManifestPath(const TableIdent &tbl_id,
-                                                      std::string_view archive_tag) const
+std::string StandbyService::RemoteArchiveManifestPath(
+    const TableIdent &tbl_id, std::string_view archive_tag) const
 {
     std::string remote_path = RemotePartitionPath(tbl_id);
     if (remote_path.empty())

@@ -91,11 +91,8 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
     std::vector<std::string> archive_tags;
     std::vector<std::string> data_files;
     std::vector<uint64_t> manifest_terms;
-    ClassifyFiles(local_files,
-                  archive_files,
-                  archive_tags,
-                  data_files,
-                  manifest_terms);
+    ClassifyFiles(
+        local_files, archive_files, archive_tags, data_files, manifest_terms);
 
     // No need to check term expired for local mode.
 
@@ -710,11 +707,8 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
     std::vector<std::string> archive_tags;
     std::vector<std::string> data_files;
     std::vector<uint64_t> manifest_terms;
-    ClassifyFiles(cloud_files,
-                  archive_files,
-                  archive_tags,
-                  data_files,
-                  manifest_terms);
+    ClassifyFiles(
+        cloud_files, archive_files, archive_tags, data_files, manifest_terms);
 
     // 3. check if term expired to avoid deleting invisible files.
     for (auto term : manifest_terms)

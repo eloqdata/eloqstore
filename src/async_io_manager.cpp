@@ -1931,8 +1931,7 @@ bool IouringMgr::HasOtherFile(const TableIdent &tbl_id) const
         {
             uint64_t term = 0;
             std::optional<std::string> tag;
-            if (ParseManifestFileSuffix(suffix, term, tag) &&
-                !tag.has_value())
+            if (ParseManifestFileSuffix(suffix, term, tag) && !tag.has_value())
             {
                 continue;
             }
@@ -2179,7 +2178,8 @@ KvError IouringMgr::CreateArchive(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError IouringMgr::DeleteArchive(const TableIdent &tbl_id, std::string_view tag)
+KvError IouringMgr::DeleteArchive(const TableIdent &tbl_id,
+                                  std::string_view tag)
 {
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
     CHECK_KV_ERR(err);
