@@ -284,7 +284,7 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
         {
             manifest_term = it->second;
         }
-        if (eloq_store != nullptr && eloq_store->Mode() != StoreMode::Local &&
+        if (!opts_->cloud_store_path.empty() && expect_term != 0 &&
             manifest_term != expect_term)
         {
             FileId next_file_id =

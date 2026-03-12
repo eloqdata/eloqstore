@@ -329,6 +329,14 @@ KvError BackgroundWrite::CreateArchive(std::string_view tag)
     std::string_view snapshot = wal_builder_.Snapshot(
         root, ttl_root, mapping, max_fp_id, dict_bytes, term_buf);
 
+    const std::string generated_tag =
+        tag.empty() ? std::to_string(utils::UnixTs<chrono::microseconds>())
+                    : std::string();
+    if (tag.empty())
+    {
+        tag = generated_tag;
+    }
+
     DLOG(INFO) << "CreateArchive begin, table=" << tbl_ident_
                << ", term=" << IoMgr()->ProcessTerm() << ", tag=" << tag
                << ", root=" << root << ", ttl_root=" << ttl_root

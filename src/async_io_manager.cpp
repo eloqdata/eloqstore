@@ -3506,13 +3506,17 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     bool found = false;
     for (const std::string &name : cloud_files)
     {
-        // "name" does not contain the prefix("manifest_").
+        auto [type, suffix] = ParseFileName(name);
+        if (type != FileNameManifest)
+        {
+            continue;
+        }
         uint64_t term = 0;
         std::optional<std::string> tag;
-        if (!ParseManifestFileSuffix(name, term, tag))
+        if (!ParseManifestFileSuffix(suffix, term, tag))
         {
             LOG(FATAL) << "CloudStoreMgr::GetManifest: failed to parse "
-                          "manifest file suffix: "
+                          "manifest filename: "
                        << name;
             continue;
         }

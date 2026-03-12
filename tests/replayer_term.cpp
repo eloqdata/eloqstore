@@ -89,8 +89,13 @@ TEST_CASE(
     REQUIRE(mapper != nullptr);
     REQUIRE(mapper->FilePgAllocator()->MaxFilePageId() == 17);
 
+    eloqstore::MemStoreMgr::Manifest file2(snapshot);
+    eloqstore::Replayer replayer2(&opts);
+    REQUIRE(replayer2.Replay(&file2) == eloqstore::KvError::NoError);
+    replayer2.file_id_term_mapping_->insert_or_assign(
+        eloqstore::IouringMgr::LruFD::kManifest, 1);
     // expect_term differs => bump to next file boundary
-    auto mapper2 = replayer.GetMapper(&idx_mgr, &tbl_id, 2);
+    auto mapper2 = replayer2.GetMapper(&idx_mgr, &tbl_id, 2);
     REQUIRE(mapper2 != nullptr);
     REQUIRE(mapper2->FilePgAllocator()->MaxFilePageId() == 32);
 }
