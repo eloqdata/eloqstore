@@ -300,6 +300,8 @@ KvError BackgroundWrite::CreateArchive(std::string_view tag)
     {
         // Partitions without manifest files (e.g., only term files) are
         // normal, archive is considered complete.
+        DLOG(INFO) << "CreateArchive is skipped, table=" << tbl_ident_
+                   << ", term=" << IoMgr()->ProcessTerm() << ", tag=" << tag;
         return KvError::NoError;
     }
     CHECK_KV_ERR(compact_err);
@@ -327,13 +329,15 @@ KvError BackgroundWrite::CreateArchive(std::string_view tag)
     std::string_view snapshot = wal_builder_.Snapshot(
         root, ttl_root, mapping, max_fp_id, dict_bytes, term_buf);
 
-    std::string archive_tag(tag);
-    if (archive_tag.empty())
-    {
-        archive_tag = std::to_string(utils::UnixTs<chrono::microseconds>());
-    }
-    err = IoMgr()->CreateArchive(tbl_ident_, snapshot, archive_tag);
+    DLOG(INFO) << "CreateArchive begin, table=" << tbl_ident_
+               << ", term=" << IoMgr()->ProcessTerm() << ", tag=" << tag
+               << ", root=" << root << ", ttl_root=" << ttl_root
+               << ", max_fp_id=" << max_fp_id
+               << ", snapshot_bytes=" << snapshot.size();
+    err = IoMgr()->CreateArchive(tbl_ident_, snapshot, tag);
     CHECK_KV_ERR(err);
+    DLOG(INFO) << "CreateArchive done, table=" << tbl_ident_
+               << ", term=" << IoMgr()->ProcessTerm() << ", tag=" << tag;
 
     // Update the cached max file id.
     FileId max_file_id =
@@ -341,8 +345,7 @@ KvError BackgroundWrite::CreateArchive(std::string_view tag)
     IoMgr()->least_not_archived_file_ids_[tbl_ident_] = max_file_id + 1;
 
     LOG(INFO) << "created archive for partition " << tbl_ident_ << " with tag "
-              << archive_tag << ", updated cached max file id to "
-              << max_file_id + 1;
+              << tag << ", updated cached max file id to " << max_file_id + 1;
     return KvError::NoError;
 }
 

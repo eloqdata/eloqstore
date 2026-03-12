@@ -936,6 +936,7 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
     req->archive_reqs_.clear();
 
     std::string tag = req->Tag();
+    const uint64_t term = req->Term();
     const GlobalArchiveRequest::Action action = req->GetAction();
     if (action == GlobalArchiveRequest::Action::Create && tag.empty())
     {
@@ -950,7 +951,7 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
     LOG(INFO) << "Handling global archive request action="
               << (action == GlobalArchiveRequest::Action::Create ? "create"
                                                                  : "delete")
-              << " tag=" << tag;
+              << " tag=" << tag << ", term=" << term;
 
     std::vector<TableIdent> all_partitions;
     if (options_.cloud_store_path.empty())
@@ -1084,6 +1085,7 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
                                    ? ArchiveRequest::Action::Create
                                    : ArchiveRequest::Action::Delete);
         archive_req->SetTag(tag);
+        archive_req->SetTerm(term);
         req->archive_reqs_.push_back(std::move(archive_req));
     }
 
@@ -1332,9 +1334,7 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
 void EloqStore::HandleGlobalListArchiveTagsRequest(
     GlobalListArchiveTagsRequest *req)
 {
-    req->tags_.clear();
-
-    std::unordered_set<std::string> uniq_tags;
+    req->entries_.clear();
     std::error_code ec;
     for (const std::string &root : options_.store_path)
     {
@@ -1396,13 +1396,34 @@ void EloqStore::HandleGlobalListArchiveTagsRequest(
                 {
                     continue;
                 }
-                uniq_tags.emplace(std::move(*tag));
+                req->entries_.push_back(
+                    GlobalListArchiveTagsRequest::ArchiveEntry{
+                        .term = term,
+                        .tag = std::move(*tag)});
             }
         }
     }
 
-    req->tags_.assign(uniq_tags.begin(), uniq_tags.end());
-    std::sort(req->tags_.begin(), req->tags_.end());
+    std::sort(req->entries_.begin(),
+              req->entries_.end(),
+              [](const GlobalListArchiveTagsRequest::ArchiveEntry &lhs,
+                 const GlobalListArchiveTagsRequest::ArchiveEntry &rhs)
+              {
+                  if (lhs.tag != rhs.tag)
+                  {
+                      return lhs.tag < rhs.tag;
+                  }
+                  return lhs.term < rhs.term;
+              });
+    req->entries_.erase(
+        std::unique(req->entries_.begin(),
+                    req->entries_.end(),
+                    [](const GlobalListArchiveTagsRequest::ArchiveEntry &lhs,
+                       const GlobalListArchiveTagsRequest::ArchiveEntry &rhs)
+                    {
+                        return lhs.term == rhs.term && lhs.tag == rhs.tag;
+                    }),
+        req->entries_.end());
     req->SetDone(KvError::NoError);
 }
 

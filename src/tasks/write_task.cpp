@@ -602,9 +602,9 @@ KvError WriteTask::FlushManifest()
     return KvError::NoError;
 }
 
-KvError WriteTask::DeleteArchive(std::string_view tag)
+KvError WriteTask::DeleteArchive(uint64_t term, std::string_view tag)
 {
-    return IoMgr()->DeleteArchive(tbl_ident_, tag);
+    return IoMgr()->DeleteArchive(tbl_ident_, term, tag);
 }
 
 KvError WriteTask::UpdateMeta()

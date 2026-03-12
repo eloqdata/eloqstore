@@ -610,14 +610,15 @@ bool Shard::ProcessReq(KvRequest *req)
             return false;
         }
         const std::string tag = archive_req->Tag();
+        const uint64_t term = archive_req->Term();
         const ArchiveRequest::Action action = archive_req->GetAction();
-        auto lbd = [task, tag, action]() -> KvError
+        auto lbd = [task, term, tag, action]() -> KvError
         {
             if (action == ArchiveRequest::Action::Create)
             {
                 return task->CreateArchive(tag);
             }
-            return task->DeleteArchive(tag);
+            return task->DeleteArchive(term, tag);
         };
         StartTask(task, req, lbd);
         return true;

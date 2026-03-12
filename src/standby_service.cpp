@@ -156,6 +156,23 @@ KvError StandbyService::RsyncPartition(const TableIdent &tbl_id,
     return SubmitJob(std::move(job));
 }
 
+KvError StandbyService::PrepareLocalManifest(const TableIdent &tbl_id,
+                                             uint64_t target_term,
+                                             uint64_t *source_term)
+{
+    Job job;
+    auto &prepare = job.payload.emplace<PrepareManifestJob>();
+    prepare.tbl_id = tbl_id;
+    prepare.target_term = target_term;
+    prepare.source_term = source_term;
+    CHECK(shard != nullptr);
+    KvTask *task = ThdTask();
+    CHECK(task != nullptr);
+    job.context.shard_id = shard->shard_id_;
+    job.context.task = task;
+    return SubmitJob(std::move(job));
+}
+
 KvError StandbyService::ListRemotePartitions(
     std::vector<std::string> *partitions)
 {
@@ -225,6 +242,11 @@ void StandbyService::WorkerLoop()
                      std::get_if<ListPartitionsJob>(&job.payload))
         {
             result = RunListPartitionsJob(*list);
+        }
+        else if (const auto *prepare =
+                     std::get_if<PrepareManifestJob>(&job.payload))
+        {
+            result = RunPrepareManifestJob(*prepare);
         }
         CompleteJob(job, result);
     }
@@ -499,6 +521,150 @@ KvError StandbyService::RunRsyncJob(const RsyncJob &job)
         LOG(ERROR) << "StandbyService: manifest.tmp missing after rsync: "
                    << manifest_tmp;
         return KvError::NotFound;
+    }
+    return KvError::NoError;
+}
+
+KvError StandbyService::RunPrepareManifestJob(const PrepareManifestJob &job)
+{
+    fs::path table_dir = TablePath(job.tbl_id);
+    std::error_code ec;
+    fs::directory_iterator it(table_dir, ec);
+    if (ec)
+    {
+        return FromErrno(ec.value());
+    }
+
+    bool found = false;
+    uint64_t selected_term = 0;
+    for (const auto &entry : it)
+    {
+        if (!entry.is_regular_file(ec))
+        {
+            continue;
+        }
+        if (ec)
+        {
+            return FromErrno(ec.value());
+        }
+        const std::string filename = entry.path().filename().string();
+        auto [type, suffix] = ParseFileName(filename);
+        if (type != FileNameManifest)
+        {
+            continue;
+        }
+        uint64_t term = 0;
+        std::optional<std::string> tag;
+        if (!ParseManifestFileSuffix(suffix, term, tag))
+        {
+            continue;
+        }
+        // Ignore archive manifests. Reopen flow handles those.
+        if (tag.has_value())
+        {
+            continue;
+        }
+        if (term > job.target_term)
+        {
+            return KvError::NotLeader;
+        }
+        if (!found || term > selected_term)
+        {
+            selected_term = term;
+            found = true;
+        }
+    }
+
+    if (!found)
+    {
+        return KvError::NotFound;
+    }
+
+    if (job.source_term != nullptr)
+    {
+        *job.source_term = selected_term;
+    }
+
+    bool mutated = false;
+    if (selected_term != job.target_term)
+    {
+        const fs::path src = table_dir / ManifestFileName(selected_term);
+        const fs::path dst = table_dir / ManifestFileName(job.target_term);
+        if (fs::exists(dst, ec))
+        {
+            if (ec)
+            {
+                return FromErrno(ec.value());
+            }
+            fs::remove(dst, ec);
+            if (ec)
+            {
+                return FromErrno(ec.value());
+            }
+        }
+        fs::rename(src, dst, ec);
+        if (ec)
+        {
+            return FromErrno(ec.value());
+        }
+        mutated = true;
+    }
+
+    // Keep only manifest_<target_term>; delete all other plain manifests.
+    fs::directory_iterator cleanup_it(table_dir, ec);
+    if (ec)
+    {
+        return FromErrno(ec.value());
+    }
+    for (const auto &entry : cleanup_it)
+    {
+        if (!entry.is_regular_file(ec))
+        {
+            continue;
+        }
+        if (ec)
+        {
+            return FromErrno(ec.value());
+        }
+        const std::string filename = entry.path().filename().string();
+        auto [type, suffix] = ParseFileName(filename);
+        if (type != FileNameManifest)
+        {
+            continue;
+        }
+        uint64_t term = 0;
+        std::optional<std::string> tag;
+        if (!ParseManifestFileSuffix(suffix, term, tag))
+        {
+            continue;
+        }
+        // Keep archive manifests and target plain manifest.
+        if (tag.has_value() || term == job.target_term)
+        {
+            continue;
+        }
+        fs::remove(entry.path(), ec);
+        if (ec)
+        {
+            return FromErrno(ec.value());
+        }
+        mutated = true;
+    }
+
+    if (mutated)
+    {
+        int dir_fd = open(table_dir.c_str(), O_RDONLY | O_DIRECTORY);
+        if (dir_fd < 0)
+        {
+            return ToKvError(-errno);
+        }
+        const int sync_res = fdatasync(dir_fd);
+        const int saved_errno = errno;
+        close(dir_fd);
+        if (sync_res < 0)
+        {
+            return ToKvError(-saved_errno);
+        }
     }
     return KvError::NoError;
 }

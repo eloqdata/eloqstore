@@ -36,6 +36,9 @@ public:
     void UpdateRemoteStorePaths(const std::vector<std::string> &store_paths);
 
     KvError RsyncPartition(const TableIdent &tbl_id, std::string archive_tag);
+    KvError PrepareLocalManifest(const TableIdent &tbl_id,
+                                 uint64_t target_term,
+                                 uint64_t *source_term);
     KvError ListRemotePartitions(std::vector<std::string> *partitions);
     void ProcessReadyTasks(size_t shard_id);
 
@@ -51,6 +54,13 @@ private:
         std::vector<std::string> *partitions{nullptr};
     };
 
+    struct PrepareManifestJob
+    {
+        TableIdent tbl_id;
+        uint64_t target_term{0};
+        uint64_t *source_term{nullptr};
+    };
+
     struct TaskContext
     {
         size_t shard_id{0};
@@ -60,7 +70,10 @@ private:
     struct Job
     {
         using Payload =
-            std::variant<std::monostate, RsyncJob, ListPartitionsJob>;
+            std::variant<std::monostate,
+                         RsyncJob,
+                         ListPartitionsJob,
+                         PrepareManifestJob>;
 
         Payload payload;
         TaskContext context;
@@ -79,6 +92,7 @@ private:
 
     KvError RunRsyncJob(const RsyncJob &job);
     KvError RunListPartitionsJob(const ListPartitionsJob &job);
+    KvError RunPrepareManifestJob(const PrepareManifestJob &job);
 
     static KvError RunRsyncCommand(const std::vector<const char *> &args,
                                    const std::string &log_target);

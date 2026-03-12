@@ -7,6 +7,7 @@
 
 #include <atomic>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -472,6 +473,14 @@ public:
     {
         return tag_;
     }
+    void SetTerm(uint64_t term)
+    {
+        term_ = term;
+    }
+    uint64_t Term() const
+    {
+        return term_;
+    }
 
     void SetAction(Action action)
     {
@@ -484,7 +493,10 @@ public:
     }
 
 private:
+    static constexpr uint64_t kUseProcessTerm =
+        std::numeric_limits<uint64_t>::max();
     std::string tag_;
+    uint64_t term_{kUseProcessTerm};
     Action action_{Action::Create};
 };
 
@@ -513,6 +525,14 @@ public:
     {
         return tag_;
     }
+    void SetTerm(uint64_t term)
+    {
+        term_ = term;
+    }
+    uint64_t Term() const
+    {
+        return term_;
+    }
 
     void SetAction(Action action)
     {
@@ -525,7 +545,10 @@ public:
     }
 
 private:
+    static constexpr uint64_t kUseProcessTerm =
+        std::numeric_limits<uint64_t>::max();
     std::string tag_;
+    uint64_t term_{kUseProcessTerm};
     Action action_{Action::Create};
     std::vector<std::unique_ptr<ArchiveRequest>> archive_reqs_;
     std::atomic<uint32_t> pending_{0};
@@ -563,6 +586,12 @@ private:
 class GlobalListArchiveTagsRequest : public KvRequest
 {
 public:
+    struct ArchiveEntry
+    {
+        uint64_t term{0};
+        std::string tag;
+    };
+
     RequestType Type() const override
     {
         return RequestType::GlobalListArchiveTags;
@@ -576,14 +605,14 @@ public:
     {
         return prefix_;
     }
-    const std::vector<std::string> &Tags() const
+    const std::vector<ArchiveEntry> &Entries() const
     {
-        return tags_;
+        return entries_;
     }
 
 private:
     std::string prefix_;
-    std::vector<std::string> tags_;
+    std::vector<ArchiveEntry> entries_;
 
     friend class EloqStore;
 };

@@ -52,6 +52,7 @@
 #include "eloq_store.h"
 #include "kill_point.h"
 #include "kv_options.h"
+#include "standby_service.h"
 #include "storage/root_meta.h"
 #include "storage/shard.h"
 #include "tasks/task.h"
@@ -66,6 +67,7 @@ namespace fs = std::filesystem;
 namespace
 {
 constexpr std::string_view kManifestTmp = "manifest.tmp";
+
 WriteTask *CurrentWriteTask()
 {
     KvTask *task = ThdTask();
@@ -2179,13 +2181,18 @@ KvError IouringMgr::CreateArchive(const TableIdent &tbl_id,
 }
 
 KvError IouringMgr::DeleteArchive(const TableIdent &tbl_id,
+                                  uint64_t term,
                                   std::string_view tag)
 {
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
     CHECK_KV_ERR(err);
-    const std::string name = ArchiveName(ProcessTerm(), tag);
+    if (term == std::numeric_limits<uint64_t>::max())
+    {
+        term = ProcessTerm();
+    }
+    const std::string name = ArchiveName(term, tag);
     const int res = UnlinkAt(dir_fd.FdPair(), name.c_str(), false);
-    if (res < 0)
+    if (res < 0 && res != -ENOENT)
     {
         return ToKvError(res);
     }
@@ -3538,7 +3545,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
         LOG(ERROR) << "CloudStoreMgr::GetManifest: found manifest term "
                    << selected_term << " greater than process_term "
                    << process_term << " for table " << tbl_id;
-        return {nullptr, KvError::ExpiredTerm};
+        return {nullptr, KvError::NotLeader};
     }
 
     // Ensure the selected manifest is downloaded locally.
@@ -3939,7 +3946,7 @@ KvError CloudStoreMgr::UpsertTermFile(const TableIdent &tbl_id,
             LOG(ERROR) << "CloudStoreMgr::UpsertTermFile: term file term "
                        << current_term << " greater than process_term "
                        << process_term << " for table " << tbl_id;
-            return KvError::ExpiredTerm;
+            return KvError::NotLeader;
         }
         if (current_term == process_term)
         {
@@ -4115,9 +4122,14 @@ KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
 }
 
 KvError CloudStoreMgr::DeleteArchive(const TableIdent &tbl_id,
+                                     uint64_t term,
                                      std::string_view tag)
 {
-    const std::string name = ArchiveName(ProcessTerm(), tag);
+    if (term == std::numeric_limits<uint64_t>::max())
+    {
+        term = ProcessTerm();
+    }
+    const std::string name = ArchiveName(term, tag);
     auto [dir_fd, open_err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
     CHECK_KV_ERR(open_err);
     const int local_unlink_res = UnlinkAt(dir_fd.FdPair(), name.c_str(), false);
@@ -4132,6 +4144,10 @@ KvError CloudStoreMgr::DeleteArchive(const TableIdent &tbl_id,
     AcquireCloudSlot(current_task);
     obj_store_.SubmitTask(&delete_task, shard);
     current_task->WaitIo();
+    if (delete_task.error_ == KvError::NotFound)
+    {
+        return KvError::NoError;
+    }
     return delete_task.error_;
 }
 
@@ -4511,6 +4527,52 @@ void StandbyStoreMgr::WaitForStandbyTasksToDrain()
         std::this_thread::sleep_for(kPollInterval);
 #endif
     }
+}
+
+std::pair<ManifestFilePtr, KvError> StandbyStoreMgr::GetManifest(
+    const TableIdent &tbl_id)
+{
+    auto [manifest, err] = IouringMgr::GetManifest(tbl_id);
+    if (err != KvError::NotFound)
+    {
+        if (err != KvError::NoError)
+        {
+            DLOG(INFO)
+                << "StandbyStoreMgr::GetManifest direct load failed for "
+                << tbl_id << ", process_term=" << ProcessTerm()
+                << ", err=" << ErrorString(err);
+        }
+        return {std::move(manifest), err};
+    }
+    StandbyService *standby_service = shard->store_->GetStandbyService();
+    if (standby_service == nullptr)
+    {
+        return {nullptr, KvError::InvalidArgs};
+    }
+    KvTask *current_task = ThdTask();
+    if (current_task == nullptr)
+    {
+        return {nullptr, KvError::InvalidArgs};
+    }
+
+    const uint64_t target_term = ProcessTerm();
+    uint64_t source_term = 0;
+    KvError prep_err =
+        standby_service->PrepareLocalManifest(tbl_id, target_term, &source_term);
+    if (prep_err != KvError::NoError)
+    {
+        return {nullptr, prep_err};
+    }
+    current_task->WaitIo();
+    prep_err = static_cast<KvError>(current_task->io_res_);
+    if (prep_err != KvError::NoError)
+    {
+        return {nullptr, prep_err};
+    }
+    DLOG(INFO) << "StandbyStoreMgr::GetManifest fallback prepared manifest_"
+               << target_term << " from source term " << source_term
+               << " for " << tbl_id;
+    return IouringMgr::GetManifest(tbl_id);
 }
 
 std::string StandbyStoreMgr::BuildRemoteFilePath(
@@ -5313,9 +5375,11 @@ KvError MemStoreMgr::CreateArchive(const TableIdent &tbl_id,
 }
 
 KvError MemStoreMgr::DeleteArchive(const TableIdent &tbl_id,
+                                   uint64_t term,
                                    std::string_view tag)
 {
     (void) tbl_id;
+    (void) term;
     (void) tag;
     LOG(FATAL) << "not implemented";
     return KvError::InvalidArgs;

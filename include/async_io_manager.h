@@ -131,6 +131,7 @@ public:
                                   std::string_view snapshot,
                                   std::string_view tag) = 0;
     virtual KvError DeleteArchive(const TableIdent &tbl_id,
+                                  uint64_t term,
                                   std::string_view tag) = 0;
     virtual std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) = 0;
@@ -411,6 +412,7 @@ public:
                           std::string_view snapshot,
                           std::string_view tag) override;
     KvError DeleteArchive(const TableIdent &tbl_id,
+                          uint64_t term,
                           std::string_view tag) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
@@ -790,6 +792,7 @@ public:
                           std::string_view snapshot,
                           std::string_view tag) override;
     KvError DeleteArchive(const TableIdent &tbl_id,
+                          uint64_t term,
                           std::string_view tag) override;
     KvError AbortWrite(const TableIdent &tbl_id) override;
     void CleanManifest(const TableIdent &tbl_id) override;
@@ -908,7 +911,7 @@ public:
 
 private:
     // Upsert term file with limited retry logic
-    // Returns NoError on success, ExpiredTerm if condition invalid, other
+    // Returns NoError on success, NotLeader if condition invalid, other
     // errors on failure
     KvError UpsertTermFile(const TableIdent &tbl_id, uint64_t process_term);
     // CAS create term file (only if doesn't exist)
@@ -1084,6 +1087,9 @@ public:
         return process_term_;
     }
 
+    std::pair<ManifestFilePtr, KvError> GetManifest(
+        const TableIdent &tbl_id) override;
+
     std::pair<ManifestFilePtr, KvError> RefreshManifest(
         const TableIdent &tbl_id);
 
@@ -1128,6 +1134,7 @@ public:
                           std::string_view snapshot,
                           std::string_view tag) override;
     KvError DeleteArchive(const TableIdent &tbl_id,
+                          uint64_t term,
                           std::string_view tag) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
