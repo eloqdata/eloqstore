@@ -24,9 +24,9 @@ namespace fs = std::filesystem;
 
 namespace
 {
-std::vector<uint64_t> CollectArchiveTimestamps(const fs::path &partition_path)
+std::vector<std::string> CollectArchiveTags(const fs::path &partition_path)
 {
-    std::vector<uint64_t> timestamps;
+    std::vector<std::string> tags;
     for (const auto &entry : fs::directory_iterator(partition_path))
     {
         if (!entry.is_regular_file())
@@ -40,12 +40,12 @@ std::vector<uint64_t> CollectArchiveTimestamps(const fs::path &partition_path)
         }
         auto [type, suffix] = eloqstore::ParseFileName(filename);
         uint64_t term = 0;
-        std::optional<uint64_t> ts;
-        REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, term, ts));
-        REQUIRE(ts.has_value());
-        timestamps.push_back(*ts);
+        std::optional<std::string> tag;
+        REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, term, tag));
+        REQUIRE(tag.has_value());
+        tags.push_back(*tag);
     }
-    return timestamps;
+    return tags;
 }
 }  // namespace
 
@@ -221,15 +221,15 @@ TEST_CASE("global archive shares timestamp and filters partitions",
     for (const auto &tbl_id : partitions)
     {
         const fs::path partition_path = fs::path(test_path) / tbl_id.ToString();
-        auto timestamps = CollectArchiveTimestamps(partition_path);
+        auto tags = CollectArchiveTags(partition_path);
         if (included_ids.count(tbl_id.partition_id_) != 0)
         {
-            REQUIRE(timestamps.size() == 1);
-            REQUIRE(timestamps.front() == kSnapshotTs);
+            REQUIRE(tags.size() == 1);
+            REQUIRE(tags.front() == std::to_string(kSnapshotTs));
         }
         else
         {
-            REQUIRE(timestamps.empty());
+            REQUIRE(tags.empty());
         }
     }
 }
@@ -272,9 +272,9 @@ TEST_CASE("global archive handles more partitions than max_archive_tasks",
     for (const auto &tbl_id : partitions)
     {
         const fs::path partition_path = fs::path(test_path) / tbl_id.ToString();
-        auto timestamps = CollectArchiveTimestamps(partition_path);
-        REQUIRE(timestamps.size() == 1);
-        REQUIRE(timestamps.front() == kSnapshotTs);
+        auto tags = CollectArchiveTags(partition_path);
+        REQUIRE(tags.size() == 1);
+        REQUIRE(tags.front() == std::to_string(kSnapshotTs));
     }
 }
 

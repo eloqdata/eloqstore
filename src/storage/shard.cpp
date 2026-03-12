@@ -104,7 +104,10 @@ void Shard::WorkLoop()
         // Idle state, wait for new requests or exit.
         while (nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle())
         {
-            if (store_->IsStopped())
+            const auto status =
+                store_->running_status_.load(std::memory_order_relaxed);
+            if (status !=
+                static_cast<uint8_t>(EloqStore::RunningStatus::Running))
             {
                 return -1;
             }

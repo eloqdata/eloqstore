@@ -920,9 +920,9 @@ TEST_CASE("cloud global archive shares timestamp and filters partitions",
     store->ExecSync(&global_req);
     REQUIRE(global_req.Error() == eloqstore::KvError::NoError);
 
-    auto collect_archive_timestamps = [&](const eloqstore::TableIdent &tbl_id)
+    auto collect_archive_tags = [&](const eloqstore::TableIdent &tbl_id)
     {
-        std::vector<uint64_t> timestamps;
+        std::vector<std::string> tags;
         auto files = ListCloudFiles(options, cloud_root, tbl_id.ToString());
         for (const auto &filename : files)
         {
@@ -932,12 +932,12 @@ TEST_CASE("cloud global archive shares timestamp and filters partitions",
             }
             auto [type, suffix] = eloqstore::ParseFileName(filename);
             uint64_t term = 0;
-            std::optional<uint64_t> ts;
-            REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, term, ts));
-            REQUIRE(ts.has_value());
-            timestamps.push_back(*ts);
+            std::optional<std::string> tag;
+            REQUIRE(eloqstore::ParseManifestFileSuffix(suffix, term, tag));
+            REQUIRE(tag.has_value());
+            tags.push_back(*tag);
         }
-        return timestamps;
+        return tags;
     };
 
     auto wait_for_archive = [&](const eloqstore::TableIdent &tbl_id)
@@ -945,7 +945,7 @@ TEST_CASE("cloud global archive shares timestamp and filters partitions",
         return WaitForCondition(
             20s,
             200ms,
-            [&]() { return !collect_archive_timestamps(tbl_id).empty(); });
+            [&]() { return !collect_archive_tags(tbl_id).empty(); });
     };
 
     const std::vector<eloqstore::TableIdent> included_partitions = {
@@ -960,18 +960,18 @@ TEST_CASE("cloud global archive shares timestamp and filters partitions",
     for (const auto &tbl_id : included_partitions)
     {
         REQUIRE(wait_for_archive(tbl_id));
-        auto timestamps = collect_archive_timestamps(tbl_id);
-        REQUIRE_FALSE(timestamps.empty());
-        for (uint64_t ts : timestamps)
+        auto tags = collect_archive_tags(tbl_id);
+        REQUIRE_FALSE(tags.empty());
+        for (const auto &tag : tags)
         {
-            REQUIRE(ts == kSnapshotTs);
+            REQUIRE(tag == std::to_string(kSnapshotTs));
         }
     }
 
     for (const auto &tbl_id : excluded_partitions)
     {
-        auto timestamps = collect_archive_timestamps(tbl_id);
-        REQUIRE(timestamps.empty());
+        auto tags = collect_archive_tags(tbl_id);
+        REQUIRE(tags.empty());
     }
 }
 
