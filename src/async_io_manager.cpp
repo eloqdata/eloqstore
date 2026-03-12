@@ -3274,6 +3274,7 @@ void CloudStoreMgr::WaitForCloudTasksToDrain()
     while (obj_store_.HasPendingWork() || inflight_cloud_slots_ > 0)
     {
 #ifdef ELOQ_MODULE_ENABLED
+        constexpr uint64_t kPollIntervalUs = 5000;
         bthread_usleep(kPollIntervalUs);
 #else
         constexpr auto kPollInterval = std::chrono::milliseconds(5);
@@ -4500,11 +4501,10 @@ void StandbyStoreMgr::Stop()
 
 void StandbyStoreMgr::WaitForStandbyTasksToDrain()
 {
-    constexpr uint64_t kPollIntervalUs = 5000;
-
     while (inflight_standby_tasks_.load(std::memory_order_acquire) > 0)
     {
 #ifdef ELOQ_MODULE_ENABLED
+        constexpr uint64_t kPollIntervalUs = 5000;
         bthread_usleep(kPollIntervalUs);
 #else
         constexpr auto kPollInterval = std::chrono::milliseconds(5);
