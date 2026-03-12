@@ -521,7 +521,7 @@ public:
 
     struct BaseReq
     {
-        explicit BaseReq(KvTask *task = nullptr) : task_(task){};
+        explicit BaseReq(KvTask *task = nullptr) : task_(task) {};
         KvTask *task_;
         int res_{0};
         uint32_t flags_{0};
@@ -657,12 +657,13 @@ public:
      * implementations may return ENOENT directly on local miss and let the
      * caller decide whether to create the file.
      */
-    std::pair<LruFD::Ref, KvError> OpenOrCreateFD(const TableIdent &tbl_id,
-                                                  FileId file_id,
-                                                  bool direct = false,
-                                                  bool create = true,
-                                                  uint64_t term = 0,
-                                                  bool skip_cloud_lookup = false);
+    std::pair<LruFD::Ref, KvError> OpenOrCreateFD(
+        const TableIdent &tbl_id,
+        FileId file_id,
+        bool direct = false,
+        bool create = true,
+        uint64_t term = 0,
+        bool skip_cloud_lookup = false);
     bool EvictFD();
 
     class WriteReqPool
@@ -1099,7 +1100,7 @@ public:
     class Manifest : public ManifestFile
     {
     public:
-        explicit Manifest(std::string_view content) : content_(content){};
+        explicit Manifest(std::string_view content) : content_(content) {};
         KvError Read(char *dst, size_t n) override;
         KvError SkipPadding(size_t n) override;
 

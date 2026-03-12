@@ -542,7 +542,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               offset_(offset),
               fd_ref_(std::move(fd)),
-              page_(true){};
+              page_(true) {};
 
         bool done_{false};
         uint32_t offset_;
@@ -751,8 +751,8 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
         file_id <= LruFD::kMaxDataFile && offset == 0;
     OnFileRangeWritePrepared(
         tbl_id, file_id, term, offset, std::string_view(buf_ptr, bytes));
-    auto [fd_ref, err] = OpenOrCreateFD(
-        tbl_id, file_id, true, true, term, skip_cloud_lookup);
+    auto [fd_ref, err] =
+        OpenOrCreateFD(tbl_id, file_id, true, true, term, skip_cloud_lookup);
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;
 
@@ -1534,7 +1534,7 @@ KvError IouringMgr::FdatasyncFiles(const TableIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)){};
+            : BaseReq(task), fd_ref_(std::move(fd)) {};
         LruFD::Ref fd_ref_;
     };
 
@@ -1591,7 +1591,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     struct CloseReq : BaseReq
     {
         CloseReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)){};
+            : BaseReq(task), fd_ref_(std::move(fd)) {};
         LruFD::Ref fd_ref_;
         int reg_idx_{-1};
         int fd_{LruFD::FdEmpty};
@@ -4993,7 +4993,7 @@ void CloudStoreMgr::FileCleaner::Shutdown()
     coro_ = coro_.resume();
 }
 
-MemStoreMgr::MemStoreMgr(const KvOptions *opts) : AsyncIoManager(opts){};
+MemStoreMgr::MemStoreMgr(const KvOptions *opts) : AsyncIoManager(opts) {};
 
 KvError MemStoreMgr::Init(Shard *shard)
 {

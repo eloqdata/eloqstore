@@ -1,10 +1,9 @@
-#include <catch2/catch_test_macros.hpp>
+#include "tasks/write_task.h"
 
+#include <catch2/catch_test_macros.hpp>
 #include <memory>
 #include <string>
 #include <vector>
-
-#include "tasks/write_task.h"
 
 namespace
 {
