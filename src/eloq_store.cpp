@@ -1460,6 +1460,10 @@ void EloqStore::Stop()
         return;
     }
     DLOG(INFO) << "EloqStore::Stop stage=begin";
+    for (auto &shard : shards_)
+    {
+        shard->IoManager()->NotifyStoreStopping();
+    }
     if (prewarm_service_ != nullptr)
     {
         DLOG(INFO) << "EloqStore::Stop stage=stop_prewarm";

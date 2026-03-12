@@ -103,14 +103,6 @@ void StandbyService::Stop()
         return;
     }
     accepting_jobs_.store(false, std::memory_order_release);
-    while (pending_jobs_.load(std::memory_order_acquire) > 0)
-    {
-#ifdef ELOQ_MODULE_ENABLED
-        bthread_usleep(1000);
-#else
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-#endif
-    }
     Job stop_job;
     stop_job.payload.emplace<std::monostate>();
     jobs_.enqueue(std::move(stop_job));
@@ -217,6 +209,11 @@ void StandbyService::WorkerLoop()
         if (std::holds_alternative<std::monostate>(job.payload))
         {
             return;
+        }
+        if (!running_.load(std::memory_order_acquire))
+        {
+            CompleteJob(job, KvError::NotRunning);
+            continue;
         }
 
         KvError result = KvError::NoError;

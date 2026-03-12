@@ -44,6 +44,7 @@ void CloudStorageService::Start()
     {
         return;
     }
+    accepting_jobs_.store(true, std::memory_order_release);
     workers_.reserve(worker_count_);
     for (size_t i = 0; i < worker_count_; ++i)
     {
@@ -53,6 +54,7 @@ void CloudStorageService::Start()
 
 void CloudStorageService::Stop()
 {
+    accepting_jobs_.store(false, std::memory_order_release);
     bool was_running = !stopping_.exchange(true, std::memory_order_acq_rel);
     for (auto &queue : job_queues_)
     {
@@ -97,9 +99,22 @@ void CloudStorageService::UnregisterObjectStore(size_t shard_id)
 
 void CloudStorageService::Submit(ObjectStore *store, ObjectStore::Task *task)
 {
+    if (!accepting_jobs_.load(std::memory_order_acquire))
+    {
+        task->error_ = KvError::NotRunning;
+        NotifyTaskFinished(task);
+        return;
+    }
     Shard *owner = task->owner_shard_;
     CHECK(owner != nullptr) << "Cloud task missing owner shard";
     pending_jobs_.fetch_add(1, std::memory_order_relaxed);
+    if (!accepting_jobs_.load(std::memory_order_acquire))
+    {
+        pending_jobs_.fetch_sub(1, std::memory_order_relaxed);
+        task->error_ = KvError::NotRunning;
+        NotifyTaskFinished(task);
+        return;
+    }
     size_t worker_idx = owner->shard_id_ % worker_count_;
     job_queues_[worker_idx].enqueue({store, task});
 }
@@ -126,12 +141,8 @@ void CloudStorageService::RunWorker(size_t worker_index)
             .count();
     while (true)
     {
-        if (stopping_.load(std::memory_order_acquire))
-        {
-            break;
-        }
-
         bool http_active = ProcessHttpWork(worker_index);
+        const bool stopping = stopping_.load(std::memory_order_acquire);
 
         bool started_jobs = false;
         PendingJob ready_jobs[128];
@@ -145,8 +156,23 @@ void CloudStorageService::RunWorker(size_t worker_index)
                 continue;
             }
             pending_jobs_.fetch_sub(1, std::memory_order_relaxed);
+            if (stopping)
+            {
+                ready_job.task->error_ = KvError::NotRunning;
+                NotifyTaskFinished(ready_job.task);
+                continue;
+            }
             ready_job.store->StartHttpRequest(ready_job.task);
             started_jobs = true;
+        }
+
+        if (stopping)
+        {
+            if (!http_active)
+            {
+                break;
+            }
+            continue;
         }
 
         if (http_active || started_jobs)
@@ -160,6 +186,12 @@ void CloudStorageService::RunWorker(size_t worker_index)
         if (has_job && job.store != nullptr && job.task != nullptr)
         {
             pending_jobs_.fetch_sub(1, std::memory_order_relaxed);
+            if (stopping_.load(std::memory_order_acquire))
+            {
+                job.task->error_ = KvError::NotRunning;
+                NotifyTaskFinished(job.task);
+                continue;
+            }
             job.store->StartHttpRequest(job.task);
         }
     }

@@ -32,6 +32,10 @@ public:
     {
         return pending_jobs_.load(std::memory_order_acquire) > 0;
     }
+    bool IsStopping() const
+    {
+        return stopping_.load(std::memory_order_acquire);
+    }
 
 private:
     struct PendingJob
@@ -65,6 +69,7 @@ private:
     size_t worker_count_{1};
     std::vector<std::thread> workers_;
     std::atomic<bool> stopping_{true};
+    std::atomic<bool> accepting_jobs_{false};
     std::atomic<uint64_t> pending_jobs_{0};
 };
 

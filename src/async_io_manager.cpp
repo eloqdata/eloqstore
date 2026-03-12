@@ -3195,7 +3195,7 @@ void CloudStoreMgr::Stop()
     {
         prewarmer->Shutdown();
     }
-    if (cloud_service_)
+    if (cloud_service_ && !IsStoreStopping())
     {
         WaitForCloudTasksToDrain();
     }
@@ -4492,7 +4492,10 @@ StandbyStoreMgr::StandbyStoreMgr(const KvOptions *opts, uint32_t fd_limit)
 
 void StandbyStoreMgr::Stop()
 {
-    WaitForStandbyTasksToDrain();
+    if (!IsStoreStopping())
+    {
+        WaitForStandbyTasksToDrain();
+    }
 }
 
 void StandbyStoreMgr::WaitForStandbyTasksToDrain()

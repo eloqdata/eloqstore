@@ -85,6 +85,14 @@ public:
     virtual void Stop()
     {
     }
+    virtual void NotifyStoreStopping()
+    {
+        store_stopping_.store(true, std::memory_order_release);
+    }
+    bool IsStoreStopping() const
+    {
+        return store_stopping_.load(std::memory_order_acquire);
+    }
     virtual void Submit() = 0;
     virtual void PollComplete() = 0;
     virtual bool NeedPrewarm() const
@@ -340,6 +348,7 @@ public:
     }
 
     const KvOptions *options_;
+    std::atomic<bool> store_stopping_{false};
 
     std::unordered_map<TableIdent, FileId> least_not_archived_file_ids_;
 };
