@@ -265,6 +265,20 @@ KvError EloqStore::Start(uint64_t term)
     // Start threads.
     stopped_.store(false, std::memory_order_relaxed);
 
+    for (auto &shard : shards_)
+    {
+        shard->Start();
+    }
+
+#ifdef ELOQ_MODULE_ENABLED
+    module_ = std::make_unique<EloqStoreModule>(&shards_);
+    eloq::register_module(module_.get());
+    for (auto &shard : shards_)
+    {
+        eloq::EloqModule::NotifyWorker(static_cast<int>(shard->shard_id_));
+    }
+#endif
+
     if (options_.data_append_mode && options_.num_retained_archives > 0 &&
         options_.archive_interval_secs > 0)
     {
@@ -275,15 +289,6 @@ KvError EloqStore::Start(uint64_t term)
         archive_crond_->Start();
     }
 
-    for (auto &shard : shards_)
-    {
-        shard->Start();
-    }
-
-#ifdef ELOQ_MODULE_ENABLED
-    module_ = std::make_unique<EloqStoreModule>(&shards_);
-    eloq::register_module(module_.get());
-#endif
     if (!options_.cloud_store_path.empty() && options_.prewarm_cloud_cache)
     {
         if (prewarm_service_ == nullptr)

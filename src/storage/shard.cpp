@@ -6,7 +6,6 @@
 #include <cassert>
 #include <chrono>
 #include <cstddef>
-#include <mutex>
 #include <string>
 #include <utility>
 #include <vector>
@@ -16,6 +15,7 @@
 #endif
 
 #include "async_io_manager.h"
+#include "error.h"
 #include "tasks/list_object_task.h"
 #include "tasks/reopen_task.h"
 #include "utils.h"
@@ -79,10 +79,22 @@ void Shard::InitIoMgrAndPagePool()
     io_mgr_and_page_pool_inited_ = true;
 }
 
+void Shard::RunStartupRestore()
+{
+    KvError err = io_mgr_->RestoreStartupState();
+    if (err != KvError::NoError)
+    {
+        LOG(FATAL) << "startup cache restore failed on shard " +
+                          std::to_string(shard_id_) + ": " + ErrorString(err);
+        exit(1);
+    }
+}
+
 void Shard::WorkLoop()
 {
     shard = this;
     InitIoMgrAndPagePool();
+    RunStartupRestore();
 
     // Get new requests from the queue, only blocked when there are no requests
     // and no active tasks.
@@ -687,18 +699,27 @@ void Shard::OnTaskFinished(KvTask *task)
 #ifdef ELOQ_MODULE_ENABLED
 void Shard::WorkOneRound()
 {
-    if (int8_t running_status = running_status_.load(std::memory_order_relaxed);
-        __builtin_expect(running_status != 0, 0))
+    const int8_t running_status =
+        running_status_.load(std::memory_order_relaxed);
+    if (__builtin_expect(running_status == 2, 0))
     {
-        if (running_status == 1)
+        return;
+    }
+
+    const bool stopping = running_status == 1;
+    auto stop_if_drained = [this]() -> bool
+    {
+        if (req_queue_size_.load(std::memory_order_relaxed) == 0 &&
+            task_mgr_.NumActive() == 0 && io_mgr_->IsIdle())
         {
             index_mgr_.Shutdown();
             io_mgr_->Stop();
             task_mgr_.Shutdown();
             running_status_.store(2, std::memory_order_release);
+            return true;
         }
-        return;
-    }
+        return false;
+    };
     ts_ = ReadTimeMicroseconds();
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: start timing the round
@@ -709,6 +730,7 @@ void Shard::WorkOneRound()
     {
         InitIoMgrAndPagePool();
     }
+    RunStartupRestore();
     KvRequest *reqs[128];
     size_t nreqs = requests_.try_dequeue_bulk(reqs, std::size(reqs));
 
@@ -716,6 +738,11 @@ void Shard::WorkOneRound()
         nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle();
     if (is_idle_round)
     {
+        if (stopping)
+        {
+            (void) stop_if_drained();
+            return;
+        }
         // No request and no active task and no active io.
         if (io_mgr_->NeedPrewarm())
         {
@@ -750,6 +777,11 @@ void Shard::WorkOneRound()
     if (DurationMicroseconds(ts_) < FLAGS_max_processing_time_microseconds)
     {
         ExecuteReadyTasks();
+    }
+
+    if (stopping && stop_if_drained())
+    {
+        return;
     }
 
 #ifdef ELOQSTORE_WITH_TXSERVICE

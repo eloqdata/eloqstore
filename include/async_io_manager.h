@@ -94,6 +94,10 @@ public:
     virtual void InitBackgroundJob()
     {
     }
+    virtual KvError RestoreStartupState()
+    {
+        return KvError::NoError;
+    }
     virtual void RunPrewarm() {};
 
     /** These methods are provided for kv task. */
@@ -758,6 +762,7 @@ public:
         return LruFD::kManifest;
     }
     KvError Init(Shard *shard) override;
+    KvError RestoreStartupState() override;
     bool IsIdle() override;
     void Stop() override;
     void Submit() override;

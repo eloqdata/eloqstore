@@ -74,6 +74,7 @@ public:
 private:
     void WorkLoop();
     void InitIoMgrAndPagePool();
+    void RunStartupRestore();
     bool ExecuteReadyTasks();
     void OnTaskFinished(KvTask *task);
     void OnReceivedReq(KvRequest *req);

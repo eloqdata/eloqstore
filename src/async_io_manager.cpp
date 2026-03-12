@@ -2613,13 +2613,16 @@ KvError CloudStoreMgr::Init(Shard *shard)
         err = obj_store_.EnsureBucketExists();
         CHECK_KV_ERR(err);
     }
-
-    if (options_->allow_reuse_local_caches)
-    {
-        err = RestoreLocalCacheState();
-        CHECK_KV_ERR(err);
-    }
     return KvError::NoError;
+}
+
+KvError CloudStoreMgr::RestoreStartupState()
+{
+    if (!options_->allow_reuse_local_caches)
+    {
+        return KvError::NoError;
+    }
+    return RestoreLocalCacheState();
 }
 
 void CloudStoreMgr::OnFileRangeWritePrepared(const TableIdent &tbl_id,
@@ -3150,7 +3153,9 @@ std::pair<size_t, size_t> CloudStoreMgr::TrimRestoredCacheUsage()
 
 bool CloudStoreMgr::IsIdle()
 {
-    return file_cleaner_.status_ == TaskStatus::Idle;
+    return file_cleaner_.status_ == TaskStatus::Idle &&
+           active_prewarm_tasks_ == 0 && inflight_cloud_slots_ == 0 &&
+           !obj_store_.HasPendingWork();
 }
 
 void CloudStoreMgr::Stop()
@@ -3267,7 +3272,7 @@ void CloudStoreMgr::WaitForCloudTasksToDrain()
 {
     constexpr auto kPollInterval = std::chrono::milliseconds(5);
 
-    while (obj_store_.HasPendingWork())
+    while (obj_store_.HasPendingWork() || inflight_cloud_slots_ > 0)
     {
         std::this_thread::sleep_for(kPollInterval);
     }
