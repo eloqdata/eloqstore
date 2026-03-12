@@ -172,11 +172,13 @@ TEST_CASE("ParseManifestFileSuffix - edge cases", "[filename]")
     REQUIRE_FALSE(
         eloqstore::ParseManifestFileSuffix("abc_123456789", term2, timestamp2));
 
-    // Invalid format (non-numeric timestamp)
+    // Tag can be non-numeric.
     uint64_t term3 = 0;
     std::optional<std::string> timestamp3;
-    REQUIRE_FALSE(
-        eloqstore::ParseManifestFileSuffix("5_abc", term3, timestamp3));
+    REQUIRE(eloqstore::ParseManifestFileSuffix("5_abc", term3, timestamp3));
+    REQUIRE(term3 == 5);
+    REQUIRE(timestamp3.has_value());
+    REQUIRE(timestamp3.value() == "abc");
 }
 
 TEST_CASE("DataFileName - term-aware format", "[filename]")
