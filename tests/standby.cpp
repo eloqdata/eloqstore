@@ -306,10 +306,17 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
                         continue;
                     }
 
-                    if (type == eloqstore::FileNameData &&
-                        parsed.second.back() != '2')
+                    if (type == eloqstore::FileNameData)
                     {
-                        return false;
+                        eloqstore::FileId file_id = 0;
+                        uint64_t term = 0;
+                        if (!eloqstore::ParseDataFileSuffix(parsed.second,
+                                                            file_id,
+                                                            term) ||
+                            term != 2)
+                        {
+                            return false;
+                        }
                     }
                 }
 
@@ -573,10 +580,17 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
                         continue;
                     }
 
-                    if (type == eloqstore::FileNameData &&
-                        parsed.second.back() == '1')
+                    if (type == eloqstore::FileNameData)
                     {
-                        return false;
+                        eloqstore::FileId file_id = 0;
+                        uint64_t term = 0;
+                        if (eloqstore::ParseDataFileSuffix(parsed.second,
+                                                           file_id,
+                                                           term) &&
+                            term == 1)
+                        {
+                            return false;
+                        }
                     }
                 }
 

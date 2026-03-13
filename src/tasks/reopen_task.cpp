@@ -1,5 +1,7 @@
 #include "tasks/reopen_task.h"
 
+#include <string>
+
 #include "eloq_store.h"
 #include "standby_service.h"
 #include "storage/index_page_manager.h"
