@@ -4193,24 +4193,43 @@ KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
                                      std::string_view snapshot,
                                      std::string_view tag)
 {
+    uint64_t term = ProcessTerm();
+    FileKey key(tbl_id, ArchiveName(term, tag));
+    bool dequed = DequeClosedFile(key);
+    if (dequed)
+    {
+        LOG(WARNING) << "CreateArchive found existing archive in closed cache, "
+                        "table="
+                     << tbl_id << " filename=" << key.filename_;
+    }
+    if (!dequed)
+    {
+        int res = ReserveCacheSpace(options_->manifest_limit);
+        if (res < 0)
+        {
+            return ToKvError(res);
+        }
+    }
+
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
     CHECK_KV_ERR(err);
-    int res = ReserveCacheSpace(options_->manifest_limit);
+    int res = WriteSnapshot(std::move(dir_fd), key.filename_, snapshot);
     if (res < 0)
     {
+        if (dequed)
+        {
+            EnqueClosedFile(std::move(key));
+        }
         return ToKvError(res);
     }
-    uint64_t term = ProcessTerm();
-    const std::string name = ArchiveName(term, tag);
-    res = WriteSnapshot(std::move(dir_fd), name, snapshot);
-    if (res < 0)
-    {
-        return ToKvError(res);
-    }
-    err = UploadFile(tbl_id, name, nullptr, snapshot);
+
+    err = UploadFile(tbl_id, key.filename_, nullptr, snapshot);
     IouringMgr::CloseDirect(res);
-    used_local_space_ += options_->manifest_limit;
-    EnqueClosedFile(FileKey(tbl_id, name));
+    if (!dequed)
+    {
+        used_local_space_ += options_->manifest_limit;
+    }
+    EnqueClosedFile(std::move(key));
     return err;
 }
 

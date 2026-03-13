@@ -820,6 +820,41 @@ TEST_CASE("cloud gc preserves archived data after truncate",
     store->Stop();
 }
 
+TEST_CASE("cloud archive create is idempotent for an existing tag",
+          "[cloud][archive]")
+{
+    CleanupStore(cloud_archive_opts);
+
+    eloqstore::EloqStore *store = InitStore(cloud_archive_opts);
+    MapVerifier tester(test_tbl_id, store, false);
+    tester.SetValueSize(1000);
+    tester.Upsert(0, 100);
+    tester.Validate();
+
+    constexpr std::string_view kArchiveTag = "repeat_tag";
+    for (int i = 0; i < 2; ++i)
+    {
+        eloqstore::ArchiveRequest archive_req;
+        archive_req.SetTableId(test_tbl_id);
+        archive_req.SetTag(std::string(kArchiveTag));
+        bool ok = store->ExecAsyn(&archive_req);
+        REQUIRE(ok);
+        archive_req.Wait();
+        REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
+    }
+
+    const std::vector<std::string> cloud_files = ListCloudFiles(
+        cloud_archive_opts,
+        cloud_archive_opts.cloud_store_path,
+        test_tbl_id.ToString());
+    const std::string expected_archive =
+        eloqstore::ArchiveName(store->Term(), kArchiveTag);
+    REQUIRE(std::count(cloud_files.begin(), cloud_files.end(), expected_archive)
+            == 1);
+
+    store->Stop();
+}
+
 TEST_CASE("cloud global archive shares timestamp and filters partitions",
           "[cloud][archive][global]")
 {
