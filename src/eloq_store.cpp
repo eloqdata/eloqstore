@@ -1735,6 +1735,19 @@ bool EloqStore::IsStopped() const
            static_cast<uint8_t>(RunningStatus::Stopped);
 }
 
+bool EloqStore::Inited() const
+{
+    for (const auto &shard : shards_)
+    {
+        if (!shard->io_mgr_and_page_pool_inited_.load(
+                std::memory_order_acquire))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 void KvRequest::SetTableId(TableIdent tbl_id)
 {
     tbl_id_ = std::move(tbl_id);

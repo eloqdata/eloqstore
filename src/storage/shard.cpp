@@ -77,26 +77,20 @@ KvError Shard::Init()
 
 void Shard::InitIoMgrAndPagePool()
 {
-    io_mgr_->InitBackgroundJob();
-    io_mgr_and_page_pool_inited_ = true;
-}
-
-void Shard::RunStartupRestore()
-{
     KvError err = io_mgr_->RestoreStartupState();
-    startup_restore_finished_ = true;
     if (err != KvError::NoError)
     {
         LOG(FATAL) << "startup cache restore failed on shard " +
                           std::to_string(shard_id_) + ": " + ErrorString(err);
         exit(1);
     }
+    io_mgr_->InitBackgroundJob();
+    io_mgr_and_page_pool_inited_.store(true, std::memory_order_release);
 }
 
 void Shard::WorkLoop()
 {
     shard = this;
-    RunStartupRestore();
     InitIoMgrAndPagePool();
 
     // Get new requests from the queue, only blocked when there are no requests
@@ -778,11 +772,9 @@ void Shard::WorkOneRound()
     metrics::TimePoint round_start{};
 #endif
 
-    if (__builtin_expect(!startup_restore_finished_, false))
-    {
-        RunStartupRestore();
-    }
-    if (__builtin_expect(!io_mgr_and_page_pool_inited_, false))
+    if (__builtin_expect(
+            !io_mgr_and_page_pool_inited_.load(std::memory_order_acquire),
+            false))
     {
         InitIoMgrAndPagePool();
     }

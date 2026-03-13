@@ -1232,11 +1232,14 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
 
     // Restart without prewarm so it doesn't auto-download.
     REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(WaitForCondition(std::chrono::seconds(5),
+                             std::chrono::milliseconds(10),
+                             [&]() { return store->Inited(); }));
     {
         std::filesystem::path restored_manifest =
             std::filesystem::path(options.store_path.front()) /
             tbl_id.ToString() / manifest_name;
-        // Manifest should be removed to avoid to be outdated.
+        // Manifest should be removed to avoid being outdated before reopen.
         REQUIRE(!std::filesystem::exists(restored_manifest));
     }
 
@@ -1515,6 +1518,9 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
     }
 
     REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(WaitForCondition(std::chrono::seconds(5),
+                             std::chrono::milliseconds(10),
+                             [&]() { return store->Inited(); }));
     for (size_t i = 0; i < tbl_ids.size(); ++i)
     {
         std::filesystem::path restored_manifest =

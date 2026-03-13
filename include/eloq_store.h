@@ -669,6 +669,7 @@ public:
     KvError Start(uint64_t term = 0);
     void Stop();
     bool IsStopped() const;
+    bool Inited() const;
     const KvOptions &Options() const;
     CloudStorageService *CloudService() const
     {
