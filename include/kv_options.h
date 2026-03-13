@@ -124,6 +124,11 @@ struct KvOptions
      */
     uint16_t cloud_request_threads = 1;
     /**
+     * @brief Maximum number of concurrent standby rsync/ssh child processes
+     * managed by the single standby supervisor thread.
+     */
+    uint16_t standby_max_concurrency = 1;
+    /**
      * @brief Max cached DirectIO buffers per shard.
      */
     uint32_t direct_io_buffer_pool_size = 16;

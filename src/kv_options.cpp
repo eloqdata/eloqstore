@@ -204,6 +204,11 @@ int KvOptions::LoadFromIni(const char *path)
         cloud_request_threads = reader.GetUnsigned(
             sec_run, "cloud_request_threads", cloud_request_threads);
     }
+    if (reader.HasValue(sec_run, "standby_max_concurrency"))
+    {
+        standby_max_concurrency = reader.GetUnsigned(
+            sec_run, "standby_max_concurrency", standby_max_concurrency);
+    }
     if (reader.HasValue(sec_run, "direct_io_buffer_pool_size"))
     {
         direct_io_buffer_pool_size = reader.GetUnsigned(
@@ -393,6 +398,7 @@ bool KvOptions::operator==(const KvOptions &other) const
            max_cloud_concurrency == other.max_cloud_concurrency &&
            max_write_concurrency == other.max_write_concurrency &&
            cloud_request_threads == other.cloud_request_threads &&
+           standby_max_concurrency == other.standby_max_concurrency &&
            direct_io_buffer_pool_size == other.direct_io_buffer_pool_size &&
            write_buffer_size == other.write_buffer_size &&
            non_page_io_batch_size == other.non_page_io_batch_size &&
