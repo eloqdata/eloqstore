@@ -137,7 +137,8 @@ MapVerifier::MapVerifier(eloqstore::TableIdent tid,
 
 MapVerifier::~MapVerifier()
 {
-    if (!answer_.empty() && auto_clean_)
+    if (!answer_.empty() && auto_clean_ && eloq_store_ != nullptr &&
+        !eloq_store_->IsStopped())
     {
         Clean();
     }

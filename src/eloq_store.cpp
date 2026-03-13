@@ -559,10 +559,6 @@ KvError EloqStore::Start(uint64_t term)
         archive_crond_->Start();
     }
 
-#ifdef ELOQ_MODULE_ENABLED
-    module_ = std::make_unique<EloqStoreModule>(&shards_);
-    eloq::register_module(module_.get());
-#endif
     if (options_.prewarm_cloud_cache && Mode() == StoreMode::Cloud)
     {
         if (prewarm_service_ == nullptr)
