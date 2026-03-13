@@ -711,7 +711,7 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
                               FilePageId file_page_id)
 {
     auto [file_id, offset] = ConvFilePageId(file_page_id);
-    uint64_t term = GetFileIdTerm(tbl_id, file_id).value_or(ProcessTerm());
+    uint64_t term = ProcessTerm();
     std::string_view branch = GetActiveBranch();
     auto [fd_ref, err] =
         OpenOrCreateFD(tbl_id, file_id, true, true, branch, term);
@@ -752,13 +752,7 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
                                       std::vector<uint16_t> &release_indices,
                                       bool use_fixed)
 {
-    std::optional<uint64_t> term_opt = GetFileIdTerm(tbl_id, file_id);
-    // term must have been registered by SetBranchFileIdTerm in AllocatePage
-    // before any write to this file_id is submitted.
-    CHECK(term_opt.has_value())
-        << "No branch term registered for file_id " << file_id
-        << " — SetBranchFileIdTerm must be called before SubmitMergedWrite";
-    uint64_t term = *term_opt;
+    uint64_t term = ProcessTerm();
     std::string_view branch = GetActiveBranch();
     OnFileRangeWritePrepared(tbl_id,
                              file_id,
@@ -1192,24 +1186,6 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     }
     lru_fd.Get()->mu_.Unlock();
     return {std::move(lru_fd), KvError::NoError};
-}
-
-std::optional<uint64_t> IouringMgr::GetFileIdTerm(const TableIdent &tbl_id,
-                                                  FileId file_id)
-{
-    auto it_term_tbl = branch_file_mapping_.find(tbl_id);
-    if (it_term_tbl == branch_file_mapping_.end())
-    {
-        return std::nullopt;
-    }
-    const auto &mapping = it_term_tbl->second;
-    std::string branch_name;
-    uint64_t term;
-    if (!::eloqstore::GetBranchNameAndTerm(mapping, file_id, branch_name, term))
-    {
-        return std::nullopt;
-    }
-    return term;
 }
 
 bool IouringMgr::GetBranchNameAndTerm(const TableIdent &tbl_id,

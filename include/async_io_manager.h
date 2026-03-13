@@ -304,15 +304,6 @@ public:
 
     virtual void CleanManifest(const TableIdent &tbl_id) = 0;
 
-    // Get term for a specific file_id in a table (default: 0 for non-cloud
-    // modes, concrete cloud implementations can override to return actual
-    // terms).
-    virtual std::optional<uint64_t> GetFileIdTerm(const TableIdent &tbl_id,
-                                                  FileId file_id)
-    {
-        return 0;
-    }
-
     // Get branch_name and term for a specific file_id in a table in one lookup.
     // Returns true if found, false otherwise (branch_name and term unchanged).
     virtual bool GetBranchNameAndTerm(const TableIdent &tbl_id,
@@ -456,12 +447,6 @@ public:
                               uint64_t term) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
-
-    // Get or create FileIdTermMapping for a table.
-    // Get term for a specific file_id in a table (returns nullopt if not
-    // found).
-    std::optional<uint64_t> GetFileIdTerm(const TableIdent &tbl_id,
-                                          FileId file_id) override;
 
     // Get branch_name and term for a specific file_id in a table in one lookup.
     bool GetBranchNameAndTerm(const TableIdent &tbl_id,

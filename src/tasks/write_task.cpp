@@ -376,9 +376,10 @@ std::pair<PageId, FilePageId> WriteTask::AllocatePage(PageId page_id)
     FilePageId file_page_id = cow_meta_.mapper_->FilePgAllocator()->Allocate();
     FileId file_id_after_allocate =
         cow_meta_.mapper_->FilePgAllocator()->CurrentFileId();
-    if (!IoMgr()
-             ->GetFileIdTerm(tbl_ident_, file_id_before_allocate)
-             .has_value())
+    std::string unused_branch;
+    uint64_t unused_term;
+    if (!IoMgr()->GetBranchNameAndTerm(
+            tbl_ident_, file_id_before_allocate, unused_branch, unused_term))
     {
         IoMgr()->SetBranchFileIdTerm(tbl_ident_,
                                      file_id_before_allocate,
