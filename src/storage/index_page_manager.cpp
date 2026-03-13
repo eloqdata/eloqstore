@@ -418,18 +418,16 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
             FileId max_file_id = max_fp_id >> Options()->pages_per_file_shift;
             if (max_file_id <= IouringMgr::LruFD::kMaxDataFile)
             {
-                uint64_t term = IoMgr()
-                                    ->GetFileIdTerm(tbl_ident, max_file_id)
-                                    .value_or(IoMgr()->ProcessTerm());
                 std::string branch_name;
-                uint64_t branch_term = term;
+                uint64_t term;
                 if (!IoMgr()->GetBranchNameAndTerm(
-                        tbl_ident, max_file_id, branch_name, branch_term))
+                        tbl_ident, max_file_id, branch_name, term))
                 {
                     branch_name = MainBranchName;
+                    term = IoMgr()->ProcessTerm();
                 }
                 KvError sync_err = cloud_mgr->DownloadFile(
-                    tbl_ident, max_file_id, branch_name, branch_term, true);
+                    tbl_ident, max_file_id, branch_name, term, true);
                 if (sync_err != KvError::NoError &&
                     sync_err != KvError::NotFound)
                 {
