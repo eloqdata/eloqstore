@@ -310,9 +310,8 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
                     {
                         eloqstore::FileId file_id = 0;
                         uint64_t term = 0;
-                        if (!eloqstore::ParseDataFileSuffix(parsed.second,
-                                                            file_id,
-                                                            term) ||
+                        if (!eloqstore::ParseDataFileSuffix(
+                                parsed.second, file_id, term) ||
                             term != 2)
                         {
                             return false;
@@ -584,9 +583,8 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
                     {
                         eloqstore::FileId file_id = 0;
                         uint64_t term = 0;
-                        if (eloqstore::ParseDataFileSuffix(parsed.second,
-                                                           file_id,
-                                                           term) &&
+                        if (eloqstore::ParseDataFileSuffix(
+                                parsed.second, file_id, term) &&
                             term == 1)
                         {
                             return false;

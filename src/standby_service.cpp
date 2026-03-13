@@ -293,8 +293,9 @@ void StandbyService::SupervisorLoop()
                 break;
             }
         }
-        const int timeout_ms =
-            inflight_jobs_.empty() ? -1 : (needs_polling ? kPollingFallbackMs : -1);
+        const int timeout_ms = inflight_jobs_.empty()
+                                   ? -1
+                                   : (needs_polling ? kPollingFallbackMs : -1);
 
         std::array<epoll_event, 32> events{};
         int nfds = epoll_wait(epoll_fd_,
@@ -508,8 +509,8 @@ void StandbyService::AddPartitionsFromOutput(std::string_view output,
         size_t next = output.find('\n', pos);
         std::string name = std::string(output.substr(
             pos,
-            next == std::string_view::npos ? std::string_view::npos :
-                                             next - pos));
+            next == std::string_view::npos ? std::string_view::npos
+                                           : next - pos));
         if (!name.empty() && name.back() == '\r')
         {
             name.pop_back();
@@ -712,8 +713,7 @@ KvError StandbyService::StartRsyncJob(std::list<InflightJob>::iterator it)
                                       remote_partition_spec.c_str(),
                                       dest.c_str(),
                                       nullptr};
-    KvError err =
-        SpawnChild(argv, false, &it->pid, &it->pidfd, &it->stdout_fd);
+    KvError err = SpawnChild(argv, false, &it->pid, &it->pidfd, &it->stdout_fd);
     if (err != KvError::NoError)
     {
         return err;
@@ -766,10 +766,9 @@ KvError StandbyService::StartNextListPartitionsCommand(
     }
     else
     {
-        args_storage = {
-            "ssh",
-            it->list_remote_addr,
-            "ls -1 -- " + QuoteForPosixShell(store_path)};
+        args_storage = {"ssh",
+                        it->list_remote_addr,
+                        "ls -1 -- " + QuoteForPosixShell(store_path)};
     }
     argv.reserve(args_storage.size() + 1);
     for (const std::string &arg : args_storage)
@@ -813,9 +812,9 @@ KvError StandbyService::StartNextListPartitionsCommand(
     }
     it->step = Step::ListPartitions;
     it->log_target =
-        (it->list_remote_addr.empty() || it->list_remote_addr == "local") ?
-            "ls" :
-            "ssh";
+        (it->list_remote_addr.empty() || it->list_remote_addr == "local")
+            ? "ls"
+            : "ssh";
     it->capture_output.clear();
     inflight_by_pid_[it->pid] = it;
     return KvError::NoError;
@@ -1017,10 +1016,9 @@ void StandbyService::HandleExitedChild(std::list<InflightJob>::iterator it,
         fs::path table_dir = TablePath(rsync->tbl_id);
         fs::path manifest_tmp = table_dir / kManifestTmp;
         std::string manifest_tmp_path = manifest_tmp.string();
-        std::string remote_manifest_spec =
-            RemoteSpec(RemoteArchiveManifestPath(rsync->tbl_id,
-                                                 rsync->archive_tag),
-                       false);
+        std::string remote_manifest_spec = RemoteSpec(
+            RemoteArchiveManifestPath(rsync->tbl_id, rsync->archive_tag),
+            false);
         std::vector<const char *> argv = {"rsync",
                                           "-a",
                                           "--inplace",
@@ -1316,8 +1314,8 @@ KvError StandbyService::InterpretCommandStatus(int status,
     }
     else
     {
-        LOG(WARNING) << "StandbyService: " << command
-                     << " returned status " << status;
+        LOG(WARNING) << "StandbyService: " << command << " returned status "
+                     << status;
     }
     return KvError::IoFail;
 }

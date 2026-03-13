@@ -1,5 +1,7 @@
 #pragma once
 
+#include <sys/types.h>
+
 #include <atomic>
 #include <cstdint>
 #include <deque>
@@ -15,7 +17,6 @@
 #include <unordered_set>
 #include <variant>
 #include <vector>
-#include <sys/types.h>
 
 #include "common.h"
 #include "concurrentqueue/concurrentqueue.h"
@@ -142,8 +143,7 @@ private:
                               int *stdout_fd);
     static KvError InterpretRsyncStatus(int status,
                                         std::string_view log_target);
-    static KvError InterpretCommandStatus(int status,
-                                          std::string_view command);
+    static KvError InterpretCommandStatus(int status, std::string_view command);
 
     fs::path TablePath(const TableIdent &tbl_id) const;
     std::string RemotePartitionPath(const TableIdent &tbl_id) const;
@@ -162,7 +162,8 @@ private:
     moodycamel::ConcurrentQueue<Job> jobs_;
     std::deque<Job> pending_queue_;
     std::list<InflightJob> inflight_jobs_;
-    std::unordered_map<pid_t, std::list<InflightJob>::iterator> inflight_by_pid_;
+    std::unordered_map<pid_t, std::list<InflightJob>::iterator>
+        inflight_by_pid_;
     std::unordered_map<int, pid_t> pipe_to_pid_;
     std::unordered_set<std::string> active_partitions_;
     int epoll_fd_{-1};

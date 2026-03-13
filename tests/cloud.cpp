@@ -843,14 +843,14 @@ TEST_CASE("cloud archive create is idempotent for an existing tag",
         REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
     }
 
-    const std::vector<std::string> cloud_files = ListCloudFiles(
-        cloud_archive_opts,
-        cloud_archive_opts.cloud_store_path,
-        test_tbl_id.ToString());
+    const std::vector<std::string> cloud_files =
+        ListCloudFiles(cloud_archive_opts,
+                       cloud_archive_opts.cloud_store_path,
+                       test_tbl_id.ToString());
     const std::string expected_archive =
         eloqstore::ArchiveName(store->Term(), kArchiveTag);
-    REQUIRE(std::count(cloud_files.begin(), cloud_files.end(), expected_archive)
-            == 1);
+    REQUIRE(std::count(
+                cloud_files.begin(), cloud_files.end(), expected_archive) == 1);
 
     store->Stop();
 }
