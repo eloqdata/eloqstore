@@ -7,6 +7,15 @@
 
 namespace
 {
+class TestKvTask : public eloqstore::KvTask
+{
+public:
+    eloqstore::TaskType Type() const override
+    {
+        return eloqstore::TaskType::BatchWrite;
+    }
+};
+
 class TestWriteTask : public eloqstore::WriteTask
 {
 public:
@@ -161,4 +170,37 @@ TEST_CASE("write task releases completed upload buffers before commit",
     REQUIRE(task.DrainPendingUploads() == eloqstore::KvError::CloudErr);
     REQUIRE(task.PendingUploadCount() == 0);
     REQUIRE_FALSE(task.AllocatedNewBuffer());
+}
+
+TEST_CASE("object store task completion finishes kv task io",
+          "[write_task][cloud]")
+{
+    TestKvTask kv_task;
+    kv_task.inflight_io_ = 1;
+
+    eloqstore::ObjectStore::DeleteTask task("remote/path");
+    task.SetKvTask(&kv_task);
+
+    task.CompleteCloudTask();
+
+    REQUIRE(kv_task.inflight_io_ == 0);
+}
+
+TEST_CASE("object store upload completion delegates to owner write task",
+          "[write_task][cloud]")
+{
+    TestWriteTask owner;
+    owner.SetTable({"upload-complete-hook", 0});
+    owner.AddInflightUploadTask();
+
+    eloqstore::ObjectStore::UploadTask upload_task(&owner.TableId(),
+                                                   "data_1_1");
+    upload_task.owner_write_task_ = &owner;
+    upload_task.SetKvTask(&owner);
+
+    upload_task.CompleteCloudTask();
+
+    REQUIRE(owner.InflightUploads() == 0);
+    REQUIRE(owner.inflight_io_ == 0);
+    REQUIRE(owner.ReleaseCount() == 1);
 }

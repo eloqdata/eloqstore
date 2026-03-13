@@ -155,6 +155,10 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     }
     append_aggregator_ = WriteBufferAggregator(buf_size);
     append_aggregator_.Reset();
+    CHECK_EQ(inflight_upload_tasks_, 0)
+        << "WriteTask::Reset() called with async uploads still in flight";
+    CHECK(pending_upload_tasks_.empty())
+        << "WriteTask::Reset() called before pending uploads were drained";
     inflight_upload_tasks_ = 0;
     pending_upload_tasks_.clear();
     ResetUploadState();

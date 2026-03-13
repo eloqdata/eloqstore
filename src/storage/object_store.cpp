@@ -120,6 +120,22 @@ ObjectStore::ObjectStore(const KvOptions *options, CloudStorageService *service)
     async_http_mgr_ = std::make_unique<AsyncHttpManager>(options, service);
 }
 
+void ObjectStore::Task::CompleteCloudTask()
+{
+    CHECK(kv_task_ != nullptr);
+    kv_task_->FinishIo();
+}
+
+void ObjectStore::UploadTask::CompleteCloudTask()
+{
+    if (owner_write_task_ != nullptr)
+    {
+        owner_write_task_->CompletePendingUploadTask(this);
+        return;
+    }
+    Task::CompleteCloudTask();
+}
+
 ObjectStore::~ObjectStore()
 {
     async_http_mgr_.reset();

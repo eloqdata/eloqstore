@@ -700,27 +700,19 @@ void Shard::OnTaskFinished(KvTask *task)
 #ifdef ELOQ_MODULE_ENABLED
 void Shard::WorkOneRound()
 {
-    const int8_t running_status =
-        running_status_.load(std::memory_order_relaxed);
-    if (__builtin_expect(running_status == 2, 0))
+    if (int8_t running_status = running_status_.load(std::memory_order_relaxed);
+        __builtin_expect(running_status != 0, 0))
     {
-        return;
-    }
-
-    const bool stopping = running_status == 1;
-    auto stop_if_drained = [this]() -> bool
-    {
-        if (req_queue_size_.load(std::memory_order_relaxed) == 0 &&
-            task_mgr_.NumActive() == 0 && io_mgr_->IsIdle())
+        if (running_status == 1)
         {
             index_mgr_.Shutdown();
             io_mgr_->Stop();
             task_mgr_.Shutdown();
             running_status_.store(2, std::memory_order_release);
-            return true;
         }
-        return false;
-    };
+        return;
+    }
+
     ts_ = ReadTimeMicroseconds();
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: start timing the round
@@ -743,11 +735,6 @@ void Shard::WorkOneRound()
         nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle();
     if (is_idle_round)
     {
-        if (stopping)
-        {
-            (void) stop_if_drained();
-            return;
-        }
         // No request and no active task and no active io.
         if (io_mgr_->NeedPrewarm())
         {
@@ -782,11 +769,6 @@ void Shard::WorkOneRound()
     if (DurationMicroseconds(ts_) < FLAGS_max_processing_time_microseconds)
     {
         ExecuteReadyTasks();
-    }
-
-    if (stopping && stop_if_drained())
-    {
-        return;
     }
 
 #ifdef ELOQSTORE_WITH_TXSERVICE

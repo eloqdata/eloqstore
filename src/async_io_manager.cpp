@@ -3319,22 +3319,7 @@ void CloudStoreMgr::ProcessCloudReadyTasks(Shard *shard)
 
     for (size_t i = 0; i < nready; ++i)
     {
-        ObjectStore::Task *task = ready_tasks[i];
-        if (task == nullptr || task->kv_task_ == nullptr)
-        {
-            continue;
-        }
-        if (task->TaskType() == ObjectStore::Task::Type::AsyncUpload)
-        {
-            auto *upload_task = static_cast<ObjectStore::UploadTask *>(task);
-            if (upload_task->owner_write_task_ != nullptr)
-            {
-                upload_task->owner_write_task_->CompletePendingUploadTask(
-                    upload_task);
-                continue;
-            }
-        }
-        task->kv_task_->FinishIo();
+        ready_tasks[i]->CompleteCloudTask();
     }
 
     ReleaseCloudSlot(nready);

@@ -84,6 +84,7 @@ public:
         };
         virtual Type TaskType() = 0;
         virtual std::string Info() const = 0;
+        virtual void CompleteCloudTask();
 
         KvError error_{KvError::NoError};
         DirectIoBuffer response_data_;
@@ -153,6 +154,7 @@ public:
             return std::string("Upload(") + tbl_id_->ToString() + '/' +
                    filename_ + ')';
         }
+        void CompleteCloudTask() override;
 
         const TableIdent *tbl_id_;
         std::string filename_;
