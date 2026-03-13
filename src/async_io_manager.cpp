@@ -3276,8 +3276,6 @@ void CloudStoreMgr::StopAllPrewarmTasks()
 
 void CloudStoreMgr::WaitForCloudTasksToDrain()
 {
-    constexpr uint64_t kPollIntervalUs = 5000;
-
     while (obj_store_.HasPendingWork() || inflight_cloud_slots_ > 0)
     {
 #ifdef ELOQ_MODULE_ENABLED
