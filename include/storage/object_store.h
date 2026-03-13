@@ -132,10 +132,10 @@ public:
         std::string Info() const override
         {
             return std::string("Download(") + tbl_id_->ToString() + '/' +
-                   std::string(filename_) + ')';
+                   filename_ + ')';
         }
         const TableIdent *tbl_id_;
-        std::string_view filename_;
+        std::string filename_;
     };
 
     class UploadTask : public Task
