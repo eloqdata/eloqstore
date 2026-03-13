@@ -911,7 +911,7 @@ public:
 
 private:
     // Upsert term file with limited retry logic
-    // Returns NoError on success, NotLeader if condition invalid, other
+    // Returns NoError on success, ExpiredTerm if condition invalid, other
     // errors on failure
     KvError UpsertTermFile(const TableIdent &tbl_id, uint64_t process_term);
     // CAS create term file (only if doesn't exist)

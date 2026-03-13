@@ -29,8 +29,6 @@ enum struct KvError : uint8_t
     IoFail,         // Unclassified local I/O error.
     ExpiredTerm,    // Cloud term file indicates stale process term.
     OssInsufficientStorage,  // Object storage out of capacity (HTTP 507).
-    NotLeader,               // Found term ahead of process term.
-
 };
 
 constexpr const char *ErrorString(KvError err)
@@ -71,8 +69,6 @@ constexpr const char *ErrorString(KvError err)
         return "Expired term";
     case KvError::OssInsufficientStorage:
         return "Object storage insufficient storage";
-    case KvError::NotLeader:
-        return "Not leader";
     }
     return "Unknown error";
 }

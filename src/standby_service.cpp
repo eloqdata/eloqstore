@@ -596,7 +596,7 @@ KvError StandbyService::RunPrepareManifestJob(const PrepareManifestJob &job)
         }
         if (term > job.target_term)
         {
-            return KvError::NotLeader;
+            return KvError::ExpiredTerm;
         }
         if (!found || term > selected_term)
         {
