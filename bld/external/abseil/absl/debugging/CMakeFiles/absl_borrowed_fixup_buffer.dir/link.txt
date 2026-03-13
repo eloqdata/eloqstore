@@ -1,2 +1,0 @@
-/usr/bin/ar qc libabsl_borrowed_fixup_buffer.a CMakeFiles/absl_borrowed_fixup_buffer.dir/internal/borrowed_fixup_buffer.cc.o
-/usr/bin/ranlib libabsl_borrowed_fixup_buffer.a

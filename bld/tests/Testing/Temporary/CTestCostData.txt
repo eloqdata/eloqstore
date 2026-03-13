@@ -1,7 +1,0 @@
-create archives 0 0
-cloud reopen refreshes manifest via archive swap 0 0
-Replayer allocator bumping occurs when manifest_term != expect_term in cloud mode 0 0
----
-create archives
-cloud reopen refreshes manifest via archive swap
-Replayer allocator bumping occurs when manifest_term != expect_term in cloud mode

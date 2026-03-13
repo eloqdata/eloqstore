@@ -1,5 +1,0 @@
-if(EXISTS "/home/chenzhao/ssh-projects/eloqstore_standby_local/bld/tests/eloq_store_test_tests-b12d07c.cmake")
-  include("/home/chenzhao/ssh-projects/eloqstore_standby_local/bld/tests/eloq_store_test_tests-b12d07c.cmake")
-else()
-  add_test(eloq_store_test_NOT_BUILT-b12d07c eloq_store_test_NOT_BUILT-b12d07c)
-endif()

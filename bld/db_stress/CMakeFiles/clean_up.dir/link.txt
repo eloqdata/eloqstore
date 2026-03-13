@@ -1,1 +1,0 @@
-/usr/bin/c++ CMakeFiles/clean_up.dir/clean_up.cpp.o -o clean_up  /usr/lib/x86_64-linux-gnu/libgflags.so.2.2.2 

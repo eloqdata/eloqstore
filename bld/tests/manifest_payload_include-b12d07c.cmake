@@ -1,5 +1,0 @@
-if(EXISTS "/home/chenzhao/ssh-projects/eloqstore_standby_local/bld/tests/manifest_payload_tests-b12d07c.cmake")
-  include("/home/chenzhao/ssh-projects/eloqstore_standby_local/bld/tests/manifest_payload_tests-b12d07c.cmake")
-else()
-  add_test(manifest_payload_NOT_BUILT-b12d07c manifest_payload_NOT_BUILT-b12d07c)
-endif()
