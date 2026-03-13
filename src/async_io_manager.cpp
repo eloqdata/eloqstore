@@ -3655,8 +3655,10 @@ private:
 std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
     const TableIdent &tbl_id, std::string_view archive_tag)
 {
-    // Reopen flow always targets a tagged archive manifest.
-    CHECK(!archive_tag.empty());
+    if (archive_tag.empty())
+    {
+        return GetManifest(tbl_id);
+    }
 
     LruFD::Ref old_fd = GetOpenedFD(tbl_id, LruFD::kManifest);
     if (old_fd != nullptr)
