@@ -1182,7 +1182,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     if (file_id != LruFD::kDirectory)
     {
         lru_fd.Get()->term_ = term;
-        lru_fd.Get()->branch_name_ = std::string(branch_name);
+        lru_fd.Get()->branch_name_ = InternBranchName(branch_name);
     }
     lru_fd.Get()->mu_.Unlock();
     return {std::move(lru_fd), KvError::NoError};
@@ -1228,6 +1228,17 @@ void IouringMgr::SetBranchFileMapping(const TableIdent &tbl_id,
                                       BranchFileMapping mapping)
 {
     branch_file_mapping_[tbl_id] = std::move(mapping);
+}
+
+std::string_view IouringMgr::InternBranchName(std::string_view name)
+{
+    auto it = branch_name_pool_.find(name);
+    if (it != branch_name_pool_.end())
+    {
+        return *it;
+    }
+    auto [inserted_it, inserted] = branch_name_pool_.emplace(name);
+    return *inserted_it;
 }
 
 const BranchFileMapping &IouringMgr::GetBranchFileMapping(
@@ -4792,7 +4803,7 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
         }
         else
         {
-            const std::string &branch = fd.Get()->branch_name_;
+            std::string_view branch = fd.Get()->branch_name_;
             filename = BranchDataFileName(file_id, branch, term);
         }
         err = UploadFile(tbl_id, filename, CurrentWriteTask());
@@ -4861,7 +4872,7 @@ KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
             }
             else
             {
-                const std::string &branch = fd.Get()->branch_name_;
+                std::string_view branch = fd.Get()->branch_name_;
                 filename = BranchDataFileName(file_id, branch, term);
             }
             filenames.emplace_back(std::move(filename));
@@ -4893,7 +4904,7 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
     {
         const TableIdent *tbl_id = fd.Get()->tbl_->tbl_id_;
         uint64_t term = fd.Get()->term_;
-        const std::string &branch = fd.Get()->branch_name_;
+        std::string_view branch = fd.Get()->branch_name_;
         std::string filename;
         if (file_id == LruFD::kManifest)
         {

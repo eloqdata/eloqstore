@@ -20,6 +20,8 @@
 #include <variant>
 #include <vector>
 
+#include "absl/container/node_hash_set.h"
+
 // https://github.com/cameron314/concurrentqueue/issues/280
 #undef BLOCK_SIZE
 
@@ -464,6 +466,10 @@ public:
     void SetBranchFileMapping(const TableIdent &tbl_id,
                               BranchFileMapping mapping) override;
 
+    // Intern a branch name string and return a stable string_view.
+    // The returned view remains valid for the lifetime of this IouringMgr.
+    std::string_view InternBranchName(std::string_view name);
+
     // Return the current BranchFileMapping for a table.
     const BranchFileMapping &GetBranchFileMapping(
         const TableIdent &tbl_id) override;
@@ -570,8 +576,9 @@ public:
         uint32_t ref_count_{0};
         LruFD *prev_{nullptr};
         LruFD *next_{nullptr};
-        uint64_t term_{0};         // Term of the file this FD represents
-        std::string branch_name_;  // Branch name of the file this FD represents
+        uint64_t term_{0};  // Term of the file this FD represents
+        std::string_view
+            branch_name_;  // Branch name of the file this FD represents
     };
 
     enum class UserDataType : uint8_t
@@ -808,6 +815,11 @@ public:
 
     // Active branch for this shard.
     std::string active_branch_{MainBranchName};
+
+    // Pool of interned branch name strings. Provides stable string_view
+    // references for LruFD::branch_name_ without per-FD heap allocations.
+    // Uses node_hash_set for pointer stability across insertions.
+    absl::node_hash_set<std::string> branch_name_pool_;
 
     KvError BootstrapRing(Shard *shard);
 };
