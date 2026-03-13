@@ -12,12 +12,14 @@
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
+#include <chrono>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -399,17 +401,22 @@ KvError EloqStore::Start(uint64_t term)
     auto fail_start = [this](KvError err)
     {
         running_status_.store(static_cast<uint8_t>(RunningStatus::Stopped),
-                              std::memory_order_relaxed);
+                              std::memory_order_release);
         return err;
     };
 
-    uint8_t cur = running_status_.load(std::memory_order_relaxed);
+    uint8_t cur = running_status_.load(std::memory_order_acquire);
     while (true)
     {
         if (cur == static_cast<uint8_t>(RunningStatus::Running))
         {
             LOG(ERROR) << "EloqStore started , do not start again";
             return KvError::NoError;
+        }
+        if (cur == static_cast<uint8_t>(RunningStatus::Starting))
+        {
+            LOG(ERROR) << "EloqStore is starting, reject concurrent start";
+            return KvError::Busy;
         }
         if (cur == static_cast<uint8_t>(RunningStatus::Stopping))
         {
@@ -418,7 +425,10 @@ KvError EloqStore::Start(uint64_t term)
         }
         if (cur == static_cast<uint8_t>(RunningStatus::Stopped) &&
             running_status_.compare_exchange_weak(
-                cur, static_cast<uint8_t>(RunningStatus::Running)))
+                cur,
+                static_cast<uint8_t>(RunningStatus::Starting),
+                std::memory_order_acq_rel,
+                std::memory_order_acquire))
         {
             break;
         }
@@ -562,6 +572,8 @@ KvError EloqStore::Start(uint64_t term)
         prewarm_service_->Start();
     }
 
+    running_status_.store(static_cast<uint8_t>(RunningStatus::Running),
+                          std::memory_order_release);
     LOG(INFO) << "EloqStore is started.";
     return KvError::NoError;
 }
@@ -1522,11 +1534,32 @@ bool EloqStore::SendRequest(KvRequest *req)
 
 void EloqStore::Stop()
 {
-    uint8_t expected = static_cast<uint8_t>(RunningStatus::Running);
-    if (!running_status_.compare_exchange_strong(
-            expected, static_cast<uint8_t>(RunningStatus::Stopping)))
+    while (true)
     {
-        return;
+        uint8_t current = running_status_.load(std::memory_order_acquire);
+        if (current == static_cast<uint8_t>(RunningStatus::Stopped) ||
+            current == static_cast<uint8_t>(RunningStatus::Stopping))
+        {
+            return;
+        }
+        if (current == static_cast<uint8_t>(RunningStatus::Starting))
+        {
+#ifdef ELOQ_MODULE_ENABLED
+            bthread_usleep(1000);
+#else
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+#endif
+            continue;
+        }
+        if (current == static_cast<uint8_t>(RunningStatus::Running) &&
+            running_status_.compare_exchange_weak(
+                current,
+                static_cast<uint8_t>(RunningStatus::Stopping),
+                std::memory_order_acq_rel,
+                std::memory_order_acquire))
+        {
+            break;
+        }
     }
     DLOG(INFO) << "EloqStore::Stop stage=begin";
     for (auto &shard : shards_)
@@ -1604,7 +1637,7 @@ void EloqStore::Stop()
         eloq_store = nullptr;
     }
     running_status_.store(static_cast<uint8_t>(RunningStatus::Stopped),
-                          std::memory_order_relaxed);
+                          std::memory_order_release);
     LOG(INFO) << "EloqStore is stopped.";
 }
 
@@ -1702,7 +1735,7 @@ const KvOptions &EloqStore::Options() const
 
 bool EloqStore::IsStopped() const
 {
-    return running_status_.load(std::memory_order_relaxed) ==
+    return running_status_.load(std::memory_order_acquire) ==
            static_cast<uint8_t>(RunningStatus::Stopped);
 }
 

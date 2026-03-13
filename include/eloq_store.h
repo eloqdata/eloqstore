@@ -656,9 +656,10 @@ class EloqStore
 public:
     enum class RunningStatus : uint8_t
     {
-        Running = 0,
-        Stopping = 1,
-        Stopped = 2,
+        Starting = 0,
+        Running = 1,
+        Stopping = 2,
+        Stopped = 3,
     };
 
     EloqStore(const KvOptions &opts);
