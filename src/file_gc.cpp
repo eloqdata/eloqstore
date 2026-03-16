@@ -473,10 +473,13 @@ KvError DeleteUnreferencedCloudFiles(
     const std::vector<uint64_t> &manifest_terms,
     const RetainedFiles &retained_files,
     FileId least_not_archived_file_id,
-    CloudStoreMgr *cloud_mgr)
+    CloudStoreMgr *cloud_mgr,
+    std::vector<std::string> &deleted_filenames)
 {
     std::vector<std::string> files_to_delete;
+    std::vector<std::string> basenames_to_delete;
     auto process_term = cloud_mgr->ProcessTerm();
+    deleted_filenames.clear();
 
     for (const std::string &file_name : data_files)
     {
@@ -510,6 +513,7 @@ KvError DeleteUnreferencedCloudFiles(
         {
             std::string remote_path = tbl_id.ToString() + "/" + file_name;
             files_to_delete.push_back(remote_path);
+            basenames_to_delete.push_back(file_name);
         }
         else
         {
@@ -523,6 +527,7 @@ KvError DeleteUnreferencedCloudFiles(
     {
         files_to_delete.emplace_back(tbl_id.ToString() + "/" +
                                      ManifestFileName(process_term));
+        basenames_to_delete.emplace_back(ManifestFileName(process_term));
     }
 
     // delete expired manifest files.
@@ -532,6 +537,7 @@ KvError DeleteUnreferencedCloudFiles(
         {
             files_to_delete.emplace_back(tbl_id.ToString() + "/" +
                                          ManifestFileName(term));
+            basenames_to_delete.emplace_back(ManifestFileName(term));
         }
     }
 
@@ -558,17 +564,26 @@ KvError DeleteUnreferencedCloudFiles(
 
     current_task->WaitIo();
 
-    for (const auto &task : delete_tasks)
+    KvError first_error = KvError::NoError;
+    deleted_filenames.reserve(basenames_to_delete.size());
+    for (size_t i = 0; i < delete_tasks.size(); ++i)
     {
+        const auto &task = delete_tasks[i];
         if (task.error_ != KvError::NoError)
         {
             LOG(ERROR) << "Failed to delete file " << task.remote_path_ << ": "
                        << ErrorString(task.error_);
-            return task.error_;
+            if (first_error == KvError::NoError)
+            {
+                first_error = task.error_;
+            }
+            continue;
         }
+
+        deleted_filenames.push_back(basenames_to_delete[i]);
     }
 
-    return KvError::NoError;
+    return first_error;
 }
 
 KvError DeleteUnreferencedLocalFiles(const TableIdent &tbl_id,
@@ -731,18 +746,20 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
     }
 
     // 5. delete unreferenced data files.
+    std::vector<std::string> deleted_filenames;
     err = DeleteUnreferencedCloudFiles(tbl_id,
                                        data_files,
                                        manifest_terms,
                                        retained_files,
                                        least_not_archived_file_id,
-                                       cloud_mgr);
-    if (err != KvError::NoError)
+                                       cloud_mgr,
+                                       deleted_filenames);
+    if (!deleted_filenames.empty())
     {
-        return err;
+        cloud_mgr->RequestGcLocalCleanup(tbl_id, deleted_filenames);
     }
 
-    return KvError::NoError;
+    return err;
 }
 
 }  // namespace FileGarbageCollector

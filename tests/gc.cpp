@@ -62,6 +62,25 @@ bool CheckLocalPartitionExists(const eloqstore::KvOptions &opts,
     return false;
 }
 
+std::vector<std::string> ListLocalPartitionFiles(const eloqstore::KvOptions &opts,
+                                                 const eloqstore::TableIdent &tbl_id)
+{
+    std::vector<std::string> result;
+    for (const std::string &store_path : opts.store_path)
+    {
+        fs::path partition_path = fs::path(store_path) / tbl_id.ToString();
+        if (!fs::exists(partition_path))
+        {
+            continue;
+        }
+        for (const auto &entry : fs::directory_iterator(partition_path))
+        {
+            result.push_back(entry.path().filename().string());
+        }
+    }
+    return result;
+}
+
 // Helper function to check if cloud partition directory exists
 bool CheckCloudPartitionExists(const eloqstore::KvOptions &opts,
                                const eloqstore::TableIdent &tbl_id)
@@ -95,84 +114,117 @@ void WaitForGC(int seconds = 1)
     std::this_thread::sleep_for(chrono::seconds(seconds));
 }
 
-// TEST_CASE("local mode truncate directory cleanup", "[gc][local]")
-// {
-//     eloqstore::EloqStore *store = InitStore(local_gc_opts);
-//     eloqstore::TableIdent tbl_id = {"gc_test", 1};
-//     MapVerifier tester(tbl_id, store, false);
-//     tester.SetValueSize(1000);
+namespace
+{
+template <typename Pred>
+bool WaitForCondition(std::chrono::milliseconds timeout,
+                      std::chrono::milliseconds step,
+                      Pred &&pred)
+{
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (pred())
+        {
+            return true;
+        }
+        std::this_thread::sleep_for(step);
+    }
+    return pred();
+}
+}  // namespace
 
-//     // Write some data to create partition directory
-//     tester.Upsert(0, 100);
-//     tester.Validate();
+TEST_CASE("local mode truncate preserves current manifest", "[gc][local]")
+{
+    using namespace std::chrono_literals;
 
-//     // Verify partition directory exists
-//     REQUIRE(CheckLocalPartitionExists(local_gc_opts, tbl_id));
+    CleanupStore(local_gc_opts);
 
-//     // Truncate the partition using MapVerifier (delete all data)
-//     tester.Truncate(0, true);  // Delete all data
+    eloqstore::EloqStore *store = InitStore(local_gc_opts);
+    eloqstore::TableIdent tbl_id = {"gc_test", 1};
+    MapVerifier tester(tbl_id, store, false);
+    tester.SetValueSize(1000);
 
-//     // Wait for GC to process
-//     WaitForGC();
+    tester.Upsert(0, 100);
+    tester.Validate();
+    REQUIRE(CheckLocalPartitionExists(local_gc_opts, tbl_id));
 
-//     // Verify partition directory is removed
-//     REQUIRE_FALSE(CheckLocalPartitionExists(local_gc_opts, tbl_id));
-// }
+    tester.Truncate(0, true);
 
-// TEST_CASE("local mode repeated write and truncate", "[gc][local]")
-// {
-//     CleanupStore(local_gc_opts);
+    REQUIRE(WaitForCondition(3s,
+                             20ms,
+                             [&]()
+                             {
+                                 std::vector<std::string> files =
+                                     ListLocalPartitionFiles(local_gc_opts,
+                                                             tbl_id);
+                                 if (files.empty())
+                                 {
+                                     return false;
+                                 }
+                                 return files.size() == 1 &&
+                                        files[0] == eloqstore::ManifestFileName(0);
+                             }));
 
-//     eloqstore::EloqStore *store = InitStore(local_gc_opts);
-//     eloqstore::TableIdent tbl_id = {"gc_repeat", 1};
-//     MapVerifier tester(tbl_id, store, false);
-//     tester.SetValueSize(1000);
+    CleanupStore(local_gc_opts);
+}
 
-//     // Repeat write and truncate operations
-//     for (int i = 0; i < 3; i++)
-//     {
-//         // Write data
-//         tester.Upsert(i * 100, (i + 1) * 100);
-//         tester.Validate();
+TEST_CASE("local mode clean manifest removes empty partition directory",
+          "[gc][local]")
+{
+    using namespace std::chrono_literals;
 
-//         // Verify partition directory exists
-//         REQUIRE(CheckLocalPartitionExists(local_gc_opts, tbl_id));
+    eloqstore::KvOptions opts = local_gc_opts;
+    opts.num_threads = 1;
+    opts.root_meta_cache_size = 5000;
+    opts.init_page_count = 8;
+    opts.data_page_size = 4096;
 
-//         // Truncate using MapVerifier (delete all data)
-//         tester.Truncate(0, true);  // Delete all data
+    CleanupStore(opts);
 
-//         // Wait for GC
-//         WaitForGC();
+    eloqstore::EloqStore *store = InitStore(opts);
+    eloqstore::TableIdent tbl_id = {"gc_delete_all", 1};
+    MapVerifier tester(tbl_id, store, false);
+    tester.SetValueSize(256);
 
-//         // Verify directory is cleaned up
-//         REQUIRE_FALSE(CheckLocalPartitionExists(local_gc_opts, tbl_id));
-//     }
-// }
+    tester.Upsert(0, 200);
+    tester.Validate();
+    REQUIRE(CheckLocalPartitionExists(opts, tbl_id));
 
-// TEST_CASE("local mode delete all data cleanup", "[gc][local]")
-// {
-//     eloqstore::EloqStore *store = InitStore(local_gc_opts);
-//     eloqstore::TableIdent tbl_id = {"gc_delete_all", 1};
-//     MapVerifier tester(tbl_id, store, false);
-//     tester.SetValueSize(1000);
+    tester.Truncate(0, true);
 
-//     // Write some data
-//     tester.Upsert(0, 100);
-//     tester.Validate();
+    REQUIRE(WaitForCondition(3s,
+                             20ms,
+                             [&]()
+                             {
+                                 std::vector<std::string> files =
+                                     ListLocalPartitionFiles(opts, tbl_id);
+                                 return files.size() == 1 &&
+                                        files[0] == eloqstore::ManifestFileName(0);
+                             }));
 
-//     // Verify partition directory exists
-//     REQUIRE(CheckLocalPartitionExists(local_gc_opts, tbl_id));
+    std::vector<std::unique_ptr<MapVerifier>> evictors;
+    for (uint32_t pid = 2; pid < 12; ++pid)
+    {
+        auto verifier =
+            std::make_unique<MapVerifier>(eloqstore::TableIdent{"gc_evict", pid},
+                                          store,
+                                          false);
+        verifier->SetAutoClean(false);
+        verifier->SetValueSize(256);
+        verifier->Upsert(0, 200);
+        verifier->Read(0);
+        verifier->Read(1);
+        evictors.emplace_back(std::move(verifier));
+    }
 
-//     // Delete all data
-//     tester.Delete(0, 100);
-//     tester.Validate();
+    REQUIRE(WaitForCondition(5s,
+                             20ms,
+                             [&]() { return !CheckLocalPartitionExists(opts,
+                                                                       tbl_id); }));
 
-//     // Wait for GC to process
-//     WaitForGC();
-
-//     // Verify partition directory is removed after deleting all data
-//     REQUIRE_FALSE(CheckLocalPartitionExists(local_gc_opts, tbl_id));
-// }
+    CleanupStore(opts);
+}
 
 TEST_CASE("cloud mode truncate remote directory cleanup", "[gc][cloud]")
 {
