@@ -88,6 +88,9 @@ For Ubuntu 24.04, you can install all required dependencies using the provided s
 
 ```shell
 bash scripts/install_dependency_ubuntu2404.sh
+
+# using check flag to avoid installing existing dependencies  
+bash scripts/install_dependency_ubuntu2404.sh --check
 ```
 
 This script installs all necessary dependencies including:
