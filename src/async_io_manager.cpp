@@ -84,6 +84,29 @@ WriteTask *CurrentWriteTask()
         return nullptr;
     }
 }
+
+bool ParseCloudCleanupFilename(std::string_view filename,
+                               FileId &file_id,
+                               uint64_t &term)
+{
+    auto [type, suffix] = ParseFileName(filename);
+    if (type == FileNameData)
+    {
+        return ParseDataFileSuffix(suffix, file_id, term);
+    }
+    if (type == FileNameManifest)
+    {
+        std::optional<std::string> tag;
+        if (!ParseManifestFileSuffix(suffix, term, tag) ||
+            tag.has_value())
+        {
+            return false;
+        }
+        file_id = IouringMgr::LruFD::kManifest;
+        return true;
+    }
+    return false;
+}
 }  // namespace
 
 char *VarPagePtr(const VarPage &page)
@@ -899,6 +922,87 @@ size_t IouringMgr::GetOpenFileLimit() const
     return fd_limit_;
 }
 
+KvError IouringMgr::TryCleanupLocalPartitionDir(const TableIdent &tbl_id)
+{
+    const std::string partition_name = tbl_id.ToString();
+
+    LruFD::Ref dir_fd = GetOpenedFD(tbl_id, LruFD::kDirectory);
+    LruFD::Ref manifest_fd = GetOpenedFD(tbl_id, LruFD::kManifest);
+    const bool directory_active =
+        dir_fd != nullptr && dir_fd.Get()->ref_count_ > 1;
+    const bool manifest_active =
+        manifest_fd != nullptr && manifest_fd.Get()->ref_count_ > 1;
+
+    auto close_idle_fd =
+        [&](LruFD::Ref &fd_ref, std::string_view fd_name) -> KvError
+    {
+        if (fd_ref == nullptr || fd_ref.Get()->ref_count_ != 1)
+        {
+            return KvError::NoError;
+        }
+
+        KvError close_err = CloseFile(std::move(fd_ref));
+        if (close_err != KvError::NoError)
+        {
+            LOG(WARNING) << "Failed to close cached-idle " << fd_name
+                         << " handle for table " << tbl_id << ": "
+                         << ErrorString(close_err);
+        }
+        return close_err;
+    };
+
+    KvError close_err = close_idle_fd(dir_fd, "directory");
+    if (close_err != KvError::NoError)
+    {
+        return close_err;
+    }
+    close_err = close_idle_fd(manifest_fd, "manifest");
+    if (close_err != KvError::NoError)
+    {
+        return close_err;
+    }
+
+    if (directory_active || manifest_active)
+    {
+        DLOG(INFO) << "Skip cleaning partition directory " << partition_name
+                   << " because "
+                   << (directory_active ? "directory" : "manifest")
+                   << " handle is still active";
+        return KvError::NoError;
+    }
+
+    FdIdx root_fd = GetRootFD(tbl_id);
+    struct statx stx = {};
+    int stat_res = StatxAt(root_fd, partition_name.c_str(), &stx);
+    if (stat_res < 0)
+    {
+        if (stat_res == -ENOENT)
+        {
+            return KvError::NoError;
+        }
+        LOG(WARNING) << "Failed to stat partition directory " << partition_name
+                     << " for table " << tbl_id << ": "
+                     << strerror(-stat_res);
+        return ToKvError(stat_res);
+    }
+    if ((stx.stx_mode & S_IFMT) != S_IFDIR)
+    {
+        LOG(WARNING) << "Skip cleaning non-directory partition path "
+                     << partition_name << " for table " << tbl_id;
+        return KvError::IoFail;
+    }
+
+    int dir_res = UnlinkAt(root_fd, partition_name.c_str(), true);
+    if (dir_res == 0 || dir_res == -ENOENT || dir_res == -ENOTEMPTY)
+    {
+        return KvError::NoError;
+    }
+
+    LOG(WARNING) << "Failed to delete partition directory " << partition_name
+                 << " for table " << tbl_id << ": " << strerror(-dir_res);
+    return ToKvError(dir_res);
+}
+
 void IouringMgr::CleanManifest(const TableIdent &tbl_id)
 {
     if (HasOtherFile(tbl_id))
@@ -941,30 +1045,11 @@ void IouringMgr::CleanManifest(const TableIdent &tbl_id)
                    << " during cleanup: " << ErrorString(dir_err);
     }
 
-    FdIdx root_fd = GetRootFD(tbl_id);
-    std::string dir_name = tbl_id.ToString();
-    int dir_res = UnlinkAt(root_fd, dir_name.c_str(), true);
-    if (dir_res < 0)
+    KvError cleanup_err = TryCleanupLocalPartitionDir(tbl_id);
+    if (cleanup_err != KvError::NoError)
     {
-        if (dir_res == -ENOENT)
-        {
-            DLOG(INFO) << "Directory " << dir_name
-                       << " already removed while cleaning manifest";
-        }
-        else if (dir_res == -ENOTEMPTY)
-        {
-            DLOG(INFO) << "Directory " << dir_name
-                       << " is not empty, skip removing";
-        }
-        else
-        {
-            LOG(WARNING) << "Failed to delete directory " << dir_name << " : "
-                         << strerror(-dir_res);
-        }
-    }
-    else
-    {
-        DLOG(INFO) << "Successfully deleted directory " << dir_name;
+        LOG(WARNING) << "Failed to clean partition directory for table "
+                     << tbl_id << ": " << ErrorString(cleanup_err);
     }
 }
 
@@ -3112,6 +3197,8 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
         }
     }
 
+    const size_t retained_files =
+        cached_files.size() - (has_max_data_file ? 1U : 0U);
     for (size_t i = 0; i < cached_files.size(); ++i)
     {
         if (has_max_data_file && std::find(max_data_file_indices.begin(),
@@ -3126,6 +3213,28 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
         used_local_space_ += file_info.expected_size;
         ++restored_files;
         restored_bytes += file_info.expected_size;
+    }
+
+    if (retained_files == 0)
+    {
+        std::error_code remove_ec;
+        bool removed_dir = fs::remove(table_path, remove_ec);
+        if (remove_ec)
+        {
+            if (remove_ec.value() != ENOENT && remove_ec.value() != ENOTEMPTY &&
+                remove_ec.value() != EEXIST)
+            {
+                LOG(ERROR) << "Failed to remove idle partition directory "
+                           << table_path << " for table " << tbl_id << ": "
+                           << remove_ec.message();
+                return ToKvError(-remove_ec.value());
+            }
+        }
+        else if (removed_dir)
+        {
+            LOG(INFO) << "Removed idle partition directory " << table_path
+                      << " during cache restore";
+        }
     }
 
     return KvError::NoError;
@@ -3195,6 +3304,7 @@ std::pair<size_t, size_t> CloudStoreMgr::TrimRestoredCacheUsage()
 bool CloudStoreMgr::IsIdle()
 {
     return file_cleaner_.status_ == TaskStatus::Idle &&
+           pending_gc_cleanup_queue_.empty() &&
            active_prewarm_tasks_ == 0 && inflight_cloud_slots_ == 0 &&
            !obj_store_.HasPendingWork();
 }
@@ -3973,6 +4083,28 @@ std::tuple<uint64_t, std::string, KvError> CloudStoreMgr::ReadTermFile()
     return {term, download_task.etag_, KvError::NoError};
 }
 
+void CloudStoreMgr::RequestGcLocalCleanup(
+    const TableIdent &tbl_id, const std::vector<std::string> &filenames)
+{
+    bool queued = false;
+    for (const std::string &filename : filenames)
+    {
+        FileKey key(tbl_id, filename);
+        auto [_, inserted] = pending_gc_cleanup_.insert(key);
+        if (!inserted)
+        {
+            continue;
+        }
+        pending_gc_cleanup_queue_.push_back(std::move(key));
+        queued = true;
+    }
+
+    if (queued && file_cleaner_.status_ == TaskStatus::Idle)
+    {
+        file_cleaner_.Resume();
+    }
+}
+
 KvError CloudStoreMgr::UpsertTermFile(uint64_t process_term)
 {
     constexpr uint64_t kMaxAttempts = 10;
@@ -4218,7 +4350,8 @@ KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
         }
     }
 
-    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
+    auto [dir_fd, err] = OpenOrCreateFD(
+        tbl_id, LruFD::kDirectory, false, true, 0);
     CHECK_KV_ERR(err);
     int res = WriteSnapshot(std::move(dir_fd), key.filename_, snapshot);
     if (res < 0)
@@ -4441,7 +4574,13 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
     {
         const TableIdent *tbl_id = fd.Get()->tbl_->tbl_id_;
         uint64_t term = fd.Get()->term_;
-        EnqueClosedFile(FileKey(*tbl_id, ToFilename(file_id, term)));
+        FileKey key(*tbl_id, ToFilename(file_id, term));
+        const bool pending_cleanup = pending_gc_cleanup_.contains(key);
+        EnqueClosedFile(std::move(key));
+        if (pending_cleanup && file_cleaner_.status_ == TaskStatus::Idle)
+        {
+            file_cleaner_.Resume();
+        }
     }
     return KvError::NoError;
 }
@@ -5265,6 +5404,7 @@ void CloudStoreMgr::FileCleaner::Run()
         UnlinkReq() = default;
         CachedFile *file_;
         fs::path path_;
+        bool gc_cleanup_{false};
     };
 
     std::array<UnlinkReq, batch_size> unlink_reqs;
@@ -5276,8 +5416,11 @@ void CloudStoreMgr::FileCleaner::Run()
     status_ = TaskStatus::Ongoing;
     while (true)
     {
-        if (!io_mgr_->HasEvictableFile() ||
-            (io_mgr_->used_local_space_ <= threshold && requesting_.Empty()))
+        const bool has_pending_gc = !io_mgr_->pending_gc_cleanup_queue_.empty();
+        const bool needs_pressure_eviction =
+            io_mgr_->HasEvictableFile() &&
+            (io_mgr_->used_local_space_ > threshold || !requesting_.Empty());
+        if (!has_pending_gc && !needs_pressure_eviction)
         {
             // No file to evict, or used space is below threshold.
             requesting_.WakeAll();
@@ -5293,27 +5436,132 @@ void CloudStoreMgr::FileCleaner::Run()
         }
 
         uint16_t req_count = 0;
-        for (CachedFile *file = io_mgr_->lru_file_tail_.prev_;
-             file != &io_mgr_->lru_file_head_;
-             file = file->prev_)
+        bool made_progress = false;
+        std::vector<FileKey> retry_keys;
+        retry_keys.reserve(io_mgr_->pending_gc_cleanup_queue_.size());
+        std::unordered_set<TableIdent> touched_partitions;
+
+        if (has_pending_gc)
         {
-            if (req_count == batch_size)
+            const size_t pending_count = io_mgr_->pending_gc_cleanup_queue_.size();
+            for (size_t i = 0; i < pending_count && req_count < batch_size; ++i)
             {
-                // For pointer stability, we can not reallocate this vector.
-                break;
+                FileKey key =
+                    std::move(io_mgr_->pending_gc_cleanup_queue_.front());
+                io_mgr_->pending_gc_cleanup_queue_.pop_front();
+                if (!io_mgr_->pending_gc_cleanup_.contains(key))
+                {
+                    continue;
+                }
+
+                FileId file_id = 0;
+                uint64_t term = 0;
+                if (!ParseCloudCleanupFilename(key.filename_, file_id, term))
+                {
+                    LOG(WARNING) << "Skip invalid pending GC cleanup file "
+                                 << key.filename_ << " for table "
+                                 << key.tbl_id_;
+                    io_mgr_->pending_gc_cleanup_.erase(key);
+                    made_progress = true;
+                    continue;
+                }
+
+                LruFD::Ref fd_ref = io_mgr_->GetOpenedFD(key.tbl_id_, file_id);
+                if (fd_ref != nullptr && fd_ref.Get()->term_ == term)
+                {
+                    if (fd_ref.Get()->ref_count_ > 1)
+                    {
+                        retry_keys.emplace_back(std::move(key));
+                        continue;
+                    }
+
+                    KvError close_err = io_mgr_->CloseFile(std::move(fd_ref));
+                    if (close_err != KvError::NoError)
+                    {
+                        LOG(WARNING)
+                            << "Failed to close cached-idle file during GC "
+                               "cleanup for table "
+                            << key.tbl_id_ << " file " << key.filename_
+                            << ": " << ErrorString(close_err);
+                        retry_keys.emplace_back(std::move(key));
+                        continue;
+                    }
+                    made_progress = true;
+                }
+
+                auto it = io_mgr_->closed_files_.find(key);
+                if (it == io_mgr_->closed_files_.end())
+                {
+                    io_mgr_->pending_gc_cleanup_.erase(key);
+                    made_progress = true;
+                    continue;
+                }
+
+                CachedFile *file = &it->second;
+                file->evicting_ = true;
+
+                UnlinkReq &req = unlink_reqs[req_count++];
+                req.file_ = file;
+                req.gc_cleanup_ = true;
+                req.path_ = file->key_->tbl_id_.ToString();
+                req.path_ /= file->key_->filename_;
+
+                io_uring_sqe *sqe = io_mgr_->GetSQE(UserDataType::BaseReq, &req);
+                int root_fd = io_mgr_->GetRootFD(file->key_->tbl_id_).first;
+                io_uring_prep_unlinkat(sqe, root_fd, req.path_.c_str(), 0);
             }
 
-            // Set evicting to block task that try to open it.
-            file->evicting_ = true;
+            for (FileKey &key : retry_keys)
+            {
+                io_mgr_->pending_gc_cleanup_queue_.push_back(std::move(key));
+            }
+        }
 
-            UnlinkReq &req = unlink_reqs[req_count++];
-            req.file_ = file;
-            req.path_ = file->key_->tbl_id_.ToString();
-            req.path_ /= file->key_->filename_;
+        if (req_count < batch_size && needs_pressure_eviction)
+        {
+            for (CachedFile *file = io_mgr_->lru_file_tail_.prev_;
+                 file != &io_mgr_->lru_file_head_;
+                 file = file->prev_)
+            {
+                if (req_count == batch_size)
+                {
+                    // For pointer stability, we can not reallocate this vector.
+                    break;
+                }
+                if (file->evicting_ ||
+                    io_mgr_->pending_gc_cleanup_.contains(*file->key_))
+                {
+                    continue;
+                }
 
-            io_uring_sqe *sqe = io_mgr_->GetSQE(UserDataType::BaseReq, &req);
-            int root_fd = io_mgr_->GetRootFD(req.file_->key_->tbl_id_).first;
-            io_uring_prep_unlinkat(sqe, root_fd, req.path_.c_str(), 0);
+                // Set evicting to block task that try to open it.
+                file->evicting_ = true;
+
+                UnlinkReq &req = unlink_reqs[req_count++];
+                req.file_ = file;
+                req.gc_cleanup_ = false;
+                req.path_ = file->key_->tbl_id_.ToString();
+                req.path_ /= file->key_->filename_;
+
+                io_uring_sqe *sqe = io_mgr_->GetSQE(UserDataType::BaseReq, &req);
+                int root_fd = io_mgr_->GetRootFD(req.file_->key_->tbl_id_).first;
+                io_uring_prep_unlinkat(sqe, root_fd, req.path_.c_str(), 0);
+            }
+        }
+
+        if (req_count == 0)
+        {
+            if (!made_progress)
+            {
+                status_ = TaskStatus::Idle;
+                Yield();
+                if (killed_)
+                {
+                    break;
+                }
+                status_ = TaskStatus::Ongoing;
+            }
+            continue;
         }
 
         WaitIo();
@@ -5322,22 +5570,50 @@ void CloudStoreMgr::FileCleaner::Run()
         {
             const UnlinkReq &req = unlink_reqs[i];
             CachedFile *file = req.file_;
-            if (req.res_ < 0)
+            if (req.res_ < 0 && req.res_ != -ENOENT)
             {
                 LOG(ERROR) << "unlink file failed: " << req.path_ << " : "
                            << strerror(-req.res_);
                 file->evicting_ = false;
                 file->waiting_.Wake();
+                if (req.gc_cleanup_)
+                {
+                    io_mgr_->pending_gc_cleanup_queue_.push_back(*file->key_);
+                }
                 continue;
             }
 
             size_t file_size = io_mgr_->EstimateFileSize(file->key_->filename_);
-            io_mgr_->used_local_space_ -= file_size;
+            if (file_size <= io_mgr_->used_local_space_)
+            {
+                io_mgr_->used_local_space_ -= file_size;
+            }
+            else
+            {
+                io_mgr_->used_local_space_ = 0;
+            }
+            touched_partitions.insert(file->key_->tbl_id_);
+            if (req.gc_cleanup_)
+            {
+                io_mgr_->pending_gc_cleanup_.erase(*file->key_);
+            }
             file->Deque();
             file->waiting_.Wake();
             io_mgr_->closed_files_.erase(*file->key_);
 
             requesting_.WakeOne();
+        }
+
+        for (const TableIdent &tbl_id : touched_partitions)
+        {
+            KvError cleanup_err = io_mgr_->TryCleanupLocalPartitionDir(tbl_id);
+            if (cleanup_err != KvError::NoError)
+            {
+                LOG(WARNING)
+                    << "Failed to clean local partition directory for table "
+                    << tbl_id << " after file cleanup: "
+                    << ErrorString(cleanup_err);
+            }
         }
         DLOG(INFO) << "file cleaner send " << req_count << " unlink requests";
     }

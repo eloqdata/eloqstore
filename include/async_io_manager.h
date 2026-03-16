@@ -9,6 +9,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <span>
@@ -16,6 +17,7 @@
 #include <string_view>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -481,6 +483,7 @@ public:
         return 0;  // IouringMgr doesn't use local file caching
     }
 
+    KvError TryCleanupLocalPartitionDir(const TableIdent &tbl_id);
     void CleanManifest(const TableIdent &tbl_id) override;
 
     static constexpr uint64_t oflags_dir = O_DIRECTORY | O_RDONLY;
@@ -907,6 +910,8 @@ public:
         const TableIdent &tbl_id) override;
     std::pair<ManifestFilePtr, KvError> RefreshManifest(
         const TableIdent &tbl_id, std::string_view archive_tag);
+    void RequestGcLocalCleanup(const TableIdent &tbl_id,
+                               const std::vector<std::string> &filenames);
     KvError DownloadFile(const TableIdent &tbl_id,
                          FileId file_id,
                          uint64_t term,
@@ -1019,6 +1024,8 @@ private:
      * @brief Locally cached files that are not currently opened.
      */
     std::unordered_map<FileKey, CachedFile> closed_files_;
+    std::unordered_set<FileKey> pending_gc_cleanup_;
+    std::deque<FileKey> pending_gc_cleanup_queue_;
     CachedFile lru_file_head_;
     CachedFile lru_file_tail_;
     size_t used_local_space_{0};

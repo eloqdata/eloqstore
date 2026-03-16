@@ -80,7 +80,8 @@ KvError DeleteUnreferencedCloudFiles(
     const std::vector<uint64_t> &manifest_terms,
     const RetainedFiles &retained_files,
     FileId least_not_archived_file_id,
-    CloudStoreMgr *cloud_mgr);
+    CloudStoreMgr *cloud_mgr,
+    std::vector<std::string> &deleted_filenames);
 }  // namespace FileGarbageCollector
 
 }  // namespace eloqstore
