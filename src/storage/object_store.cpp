@@ -807,11 +807,12 @@ void AsyncHttpManager::ProcessCompletedRequests()
                 else
                 {
                     constexpr size_t kMaxHttpErrorBodyLogBytes = 512;
-                    std::string_view response_body = task->response_data_.view();
+                    std::string_view response_body =
+                        task->response_data_.view();
                     if (response_body.size() > kMaxHttpErrorBodyLogBytes)
                     {
-                        response_body = response_body.substr(
-                            0, kMaxHttpErrorBodyLogBytes);
+                        response_body =
+                            response_body.substr(0, kMaxHttpErrorBodyLogBytes);
                     }
                     LOG(ERROR) << "HTTP error: " << response_code
                                << ", task=" << task->Info()
