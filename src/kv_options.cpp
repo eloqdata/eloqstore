@@ -246,7 +246,6 @@ int KvOptions::LoadFromIni(const char *path)
         prewarm_task_count =
             reader.GetUnsigned(sec_run, "prewarm_task_count", 1);
     }
-
     write_buffer_ratio = std::clamp(write_buffer_ratio, 0.0, 1.0);
     constexpr char sec_permanent[] = "permanent";
     if (!reader.HasSection(sec_permanent))

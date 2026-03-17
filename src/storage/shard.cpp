@@ -62,7 +62,8 @@ KvError Shard::Init()
         uint64_t term = store_ != nullptr ? store_->Term() : 0;
         if (store_->Mode() == StoreMode::Cloud)
         {
-            static_cast<CloudStoreMgr *>(io_mgr_.get())->SetProcessTerm(term);
+            auto *cloud_mgr = static_cast<CloudStoreMgr *>(io_mgr_.get());
+            cloud_mgr->SetProcessTerm(term);
         }
         else if (store_->Mode() == StoreMode::StandbyReplica ||
                  store_->Mode() == StoreMode::StandbyMaster)
@@ -623,6 +624,13 @@ bool Shard::ProcessReq(KvRequest *req)
         req->SetDone(KvError::InvalidArgs);
         return true;
     }
+    case RequestType::GlobalCleanCurrentTerm:
+    {
+        LOG(ERROR)
+            << "GlobalCleanCurrentTerm request routed to shard unexpectedly";
+        req->SetDone(KvError::InvalidArgs);
+        return true;
+    }
     case RequestType::GlobalReopen:
     {
         LOG(ERROR) << "GlobalReopen request routed to shard unexpectedly";
@@ -666,6 +674,19 @@ bool Shard::ProcessReq(KvRequest *req)
             return false;
         }
         auto lbd = [task]() -> KvError { return task->CleanExpiredKeys(); };
+        StartTask(task, req, lbd);
+        return true;
+    }
+    case RequestType::DeleteCurrentTerm:
+    {
+        auto *delete_req = static_cast<DeleteCurrentTermRequest *>(req);
+        BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());
+        if (task == nullptr)
+        {
+            return false;
+        }
+        auto lbd = [task, delete_req]() -> KvError
+        { return task->DeleteCurrentTermIfOlderThan(delete_req->Term()); };
         StartTask(task, req, lbd);
         return true;
     }

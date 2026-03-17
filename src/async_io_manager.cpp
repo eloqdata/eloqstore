@@ -3969,6 +3969,75 @@ std::tuple<uint64_t, std::string, KvError> CloudStoreMgr::ReadTermFile(
     return {term, download_task.etag_, KvError::NoError};
 }
 
+KvError CloudStoreMgr::DeleteCurrentTermIfAlone(const TableIdent &tbl_id,
+                                                uint64_t clean_term)
+{
+    std::vector<std::string> cloud_files;
+    std::string continuation_token;
+    KvTask *current_task = ThdTask();
+    do
+    {
+        ObjectStore::ListTask list_task(tbl_id.ToString(), true);
+        list_task.SetContinuationToken(continuation_token);
+        list_task.SetKvTask(current_task);
+        AcquireCloudSlot(current_task);
+        obj_store_.SubmitTask(&list_task, shard);
+        current_task->WaitIo();
+
+        if (list_task.error_ != KvError::NoError)
+        {
+            return list_task.error_;
+        }
+
+        std::vector<std::string> batch_files;
+        std::string next_token;
+        if (!obj_store_.ParseListObjectsResponse(list_task.response_data_.view(),
+                                                 list_task.json_data_,
+                                                 &batch_files,
+                                                 nullptr,
+                                                 &next_token))
+        {
+            return KvError::Corrupted;
+        }
+        cloud_files.insert(cloud_files.end(),
+                           std::make_move_iterator(batch_files.begin()),
+                           std::make_move_iterator(batch_files.end()));
+        continuation_token = std::move(next_token);
+    } while (!continuation_token.empty());
+
+    if (cloud_files.size() != 1 || cloud_files[0] != CurrentTermFileName)
+    {
+        return KvError::NoError;
+    }
+
+    auto [term, etag, read_err] = ReadTermFile(tbl_id);
+    if (read_err == KvError::NotFound)
+    {
+        return KvError::NoError;
+    }
+    CHECK_KV_ERR(read_err);
+    if (term >= clean_term)
+    {
+        return KvError::NoError;
+    }
+
+    auto [delete_err, response_code] =
+        CasDeleteCurrentTermFileWithEtag(tbl_id, etag);
+    if (delete_err == KvError::NotFound)
+    {
+        return KvError::NoError;
+    }
+    if (delete_err == KvError::CloudErr &&
+        (response_code == 412 || response_code == 409 || response_code == 404))
+    {
+        LOG(INFO) << "CloudStoreMgr::DeleteCurrentTermIfAlone skipped by CAS "
+                  << "for table " << tbl_id << " (HTTP " << response_code
+                  << ")";
+        return KvError::NoError;
+    }
+    return delete_err;
+}
+
 KvError CloudStoreMgr::UpsertTermFile(const TableIdent &tbl_id,
                                       uint64_t process_term)
 {
@@ -4118,6 +4187,22 @@ std::pair<KvError, int64_t> CloudStoreMgr::CasUpdateTermFileWithEtag(
     current_task->WaitIo();
 
     return {upload_task.error_, upload_task.response_code_};
+}
+
+std::pair<KvError, int64_t> CloudStoreMgr::CasDeleteCurrentTermFileWithEtag(
+    const TableIdent &tbl_id, const std::string &etag)
+{
+    KvTask *current_task = ThdTask();
+    ObjectStore::DeleteTask delete_task(tbl_id.ToString() + "/" +
+                                        CurrentTermFileName);
+    delete_task.if_match_ = etag;
+    delete_task.SetKvTask(current_task);
+
+    AcquireCloudSlot(current_task);
+    obj_store_.SubmitTask(&delete_task, shard);
+    current_task->WaitIo();
+
+    return {delete_task.error_, delete_task.response_code_};
 }
 
 KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,

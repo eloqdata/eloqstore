@@ -225,6 +225,8 @@ public:
         }
 
         std::string remote_path_;
+        // For If-Match header
+        std::string if_match_{};
     };
 
 private:

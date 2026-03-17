@@ -200,6 +200,10 @@ private:
             return "local_gc";
         case RequestType::CleanExpired:
             return "clean_expired";
+        case RequestType::DeleteCurrentTerm:
+            return "delete_current_term";
+        case RequestType::GlobalCleanCurrentTerm:
+            return "global_clean_current_term";
         default:
             return "unknown";
         }

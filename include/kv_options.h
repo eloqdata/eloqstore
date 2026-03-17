@@ -302,7 +302,6 @@ struct KvOptions
      * enabled.
      */
     uint16_t prewarm_task_count = 3;
-
     /**
      * @brief Filter function to determine which partitions belong to this
      * instance.

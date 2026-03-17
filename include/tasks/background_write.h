@@ -24,6 +24,8 @@ public:
 
     KvError RunLocalFileGc();
 
+    KvError DeleteCurrentTermIfOlderThan(uint64_t clean_term);
+
 private:
     void HeapSortFpIdsWithYield(
         std::vector<std::pair<FilePageId, PageId>> &fp_ids);

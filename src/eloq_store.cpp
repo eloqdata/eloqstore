@@ -967,6 +967,121 @@ void EloqStore::HandleDropTableRequest(DropTableRequest *req)
     }
 }
 
+void EloqStore::HandleGlobalCleanCurrentTermRequest(
+    GlobalCleanCurrentTermRequest *req)
+{
+    req->first_error_.store(static_cast<uint8_t>(KvError::NoError),
+                            std::memory_order_relaxed);
+    req->pending_.store(0, std::memory_order_relaxed);
+    req->delete_reqs_.clear();
+
+    if (options_.cloud_store_path.empty())
+    {
+        req->SetDone(KvError::NoError);
+        return;
+    }
+
+    std::vector<TableIdent> partitions;
+    std::vector<std::string> objects;
+    ListObjectRequest list_request(&objects);
+    list_request.SetRemotePath(std::string{});
+    list_request.SetRecursive(false);
+    do
+    {
+#ifdef ELOQ_MODULE_ENABLED
+        {
+            std::lock_guard<bthread::Mutex> lk(list_request.mutex_);
+            list_request.done_ = false;
+        }
+#else
+        list_request.done_.store(false, std::memory_order_relaxed);
+#endif
+        list_request.err_ = KvError::NoError;
+        list_request.GetNextContinuationToken()->clear();
+        objects.clear();
+        shards_[utils::RandomInt(static_cast<int>(shards_.size()))]
+            ->AddKvRequest(&list_request);
+        list_request.Wait();
+
+        if (list_request.Error() != KvError::NoError)
+        {
+            req->SetDone(list_request.Error());
+            return;
+        }
+
+        if (partitions.empty())
+        {
+            partitions.reserve(objects.size());
+        }
+
+        for (auto &name : objects)
+        {
+            TableIdent tbl_id = TableIdent::FromString(name);
+            if (!tbl_id.IsValid())
+            {
+                continue;
+            }
+            if (options_.partition_filter && !options_.partition_filter(tbl_id))
+            {
+                continue;
+            }
+            partitions.emplace_back(std::move(tbl_id));
+        }
+
+        if (list_request.HasMoreResults())
+        {
+            list_request.SetContinuationToken(
+                *list_request.GetNextContinuationToken());
+        }
+    } while (list_request.HasMoreResults());
+
+    if (partitions.empty())
+    {
+        req->SetDone(KvError::NoError);
+        return;
+    }
+
+    req->delete_reqs_.reserve(partitions.size());
+    req->pending_.store(static_cast<uint32_t>(partitions.size()),
+                        std::memory_order_relaxed);
+
+    auto on_delete_done = [req](KvRequest *sub_req)
+    {
+        KvError sub_err = sub_req->Error();
+        if (sub_err != KvError::NoError)
+        {
+            uint8_t expected = static_cast<uint8_t>(KvError::NoError);
+            uint8_t desired = static_cast<uint8_t>(sub_err);
+            req->first_error_.compare_exchange_strong(
+                expected,
+                desired,
+                std::memory_order_relaxed,
+                std::memory_order_relaxed);
+        }
+        if (req->pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+        {
+            KvError final_err = static_cast<KvError>(
+                req->first_error_.load(std::memory_order_relaxed));
+            req->SetDone(final_err);
+        }
+    };
+
+    for (const TableIdent &partition : partitions)
+    {
+        auto delete_req = std::make_unique<DeleteCurrentTermRequest>();
+        delete_req->SetTableId(partition);
+        delete_req->SetTerm(req->Term());
+        DeleteCurrentTermRequest *ptr = delete_req.get();
+        req->delete_reqs_.push_back(std::move(delete_req));
+        if (!ExecAsyn(ptr, 0, on_delete_done))
+        {
+            LOG(ERROR) << "Handle global clean current term request, enqueue "
+                          "delete request fail";
+            ptr->SetDone(KvError::NotRunning);
+        }
+    }
+}
+
 void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
 {
     req->first_error_.store(static_cast<uint8_t>(KvError::NoError),
@@ -1510,6 +1625,12 @@ bool EloqStore::SendRequest(KvRequest *req)
     if (req->Type() == RequestType::GlobalArchive)
     {
         HandleGlobalArchiveRequest(static_cast<GlobalArchiveRequest *>(req));
+        return true;
+    }
+    if (req->Type() == RequestType::GlobalCleanCurrentTerm)
+    {
+        HandleGlobalCleanCurrentTermRequest(
+            static_cast<GlobalCleanCurrentTermRequest *>(req));
         return true;
     }
     if (req->Type() == RequestType::GlobalReopen)

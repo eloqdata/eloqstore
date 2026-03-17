@@ -639,6 +639,11 @@ bool AsyncHttpManager::SetupDeleteRequest(ObjectStore::DeleteTask *task,
     {
         task->headers_ = curl_slist_append(task->headers_, header_line.c_str());
     }
+    if (!task->if_match_.empty())
+    {
+        std::string header = "If-Match: " + task->if_match_;
+        task->headers_ = curl_slist_append(task->headers_, header.c_str());
+    }
     if (task->headers_)
     {
         curl_easy_setopt(easy, CURLOPT_HTTPHEADER, task->headers_);

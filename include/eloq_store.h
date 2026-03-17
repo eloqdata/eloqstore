@@ -49,6 +49,8 @@ enum class RequestType : uint8_t
     Compact,
     LocalGc,
     CleanExpired,
+    DeleteCurrentTerm,
+    GlobalCleanCurrentTerm,
     GlobalArchive,
     GlobalReopen,
     GlobalListArchiveTags
@@ -84,6 +86,10 @@ inline const char *RequestTypeToString(RequestType type)
         return "local_gc";
     case RequestType::CleanExpired:
         return "clean_expired";
+    case RequestType::DeleteCurrentTerm:
+        return "delete_current_term";
+    case RequestType::GlobalCleanCurrentTerm:
+        return "global_clean_current_term";
     case RequestType::GlobalArchive:
         return "global_archive";
     case RequestType::GlobalReopen:
@@ -644,6 +650,55 @@ public:
     }
 };
 
+class DeleteCurrentTermRequest : public WriteRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::DeleteCurrentTerm;
+    }
+
+    void SetTerm(uint64_t term)
+    {
+        term_ = term;
+    }
+
+    uint64_t Term() const
+    {
+        return term_;
+    }
+
+private:
+    uint64_t term_{0};
+};
+
+class GlobalCleanCurrentTermRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::GlobalCleanCurrentTerm;
+    }
+
+    void SetTerm(uint64_t term)
+    {
+        term_ = term;
+    }
+
+    uint64_t Term() const
+    {
+        return term_;
+    }
+
+private:
+    uint64_t term_{0};
+    std::vector<std::unique_ptr<DeleteCurrentTermRequest>> delete_reqs_;
+    std::atomic<uint32_t> pending_{0};
+    std::atomic<uint8_t> first_error_{static_cast<uint8_t>(KvError::NoError)};
+
+    friend class EloqStore;
+};
+
 class ArchiveCrond;
 class ObjectStore;
 class EloqStoreModule;
@@ -744,6 +799,7 @@ public:
 private:
     bool SendRequest(KvRequest *req);
     void HandleDropTableRequest(DropTableRequest *req);
+    void HandleGlobalCleanCurrentTermRequest(GlobalCleanCurrentTermRequest *req);
     void HandleGlobalArchiveRequest(GlobalArchiveRequest *req);
     void HandleGlobalReopenRequest(GlobalReopenRequest *req);
     void HandleGlobalListArchiveTagsRequest(GlobalListArchiveTagsRequest *req);

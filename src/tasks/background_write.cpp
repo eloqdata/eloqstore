@@ -4,6 +4,7 @@
 #include <memory>  // for std::shared_ptr
 #include <string>
 
+#include "async_io_manager.h"
 #include "storage/mem_index_page.h"
 #include "storage/shard.h"
 #include "utils.h"
@@ -360,6 +361,16 @@ KvError BackgroundWrite::CreateArchive(std::string_view tag)
 KvError BackgroundWrite::RunLocalFileGc()
 {
     return TriggerLocalFileGC();
+}
+
+KvError BackgroundWrite::DeleteCurrentTermIfOlderThan(uint64_t clean_term)
+{
+    if (Options()->cloud_store_path.empty())
+    {
+        return KvError::NoError;
+    }
+    auto *cloud_mgr = static_cast<CloudStoreMgr *>(IoMgr());
+    return cloud_mgr->DeleteCurrentTermIfAlone(tbl_ident_, clean_term);
 }
 
 }  // namespace eloqstore

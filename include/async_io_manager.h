@@ -908,6 +908,8 @@ public:
     // If file doesn't exist (404), returns {0, "", NotFound}
     std::tuple<uint64_t, std::string, KvError> ReadTermFile(
         const TableIdent &tbl_id);
+    KvError DeleteCurrentTermIfAlone(const TableIdent &tbl_id,
+                                     uint64_t clean_term);
 
 private:
     // Upsert term file with limited retry logic
@@ -923,6 +925,9 @@ private:
     std::pair<KvError, int64_t> CasUpdateTermFileWithEtag(
         const TableIdent &tbl_id,
         uint64_t process_term,
+        const std::string &etag);
+    std::pair<KvError, int64_t> CasDeleteCurrentTermFileWithEtag(
+        const TableIdent &tbl_id,
         const std::string &etag);
     void WaitForCloudTasksToDrain();
 

@@ -86,3 +86,70 @@ TEST_CASE("cloud start with different term", "[cloud][term]")
 
     CleanupStore(cloud_options);
 }
+
+TEST_CASE("cloud delete current term after truncate", "[cloud][term][gc]")
+{
+    using namespace std::chrono_literals;
+
+    CleanupStore(cloud_options);
+
+    eloqstore::EloqStore *store = InitStore(cloud_options);
+    store->Stop();
+    REQUIRE(store->Start(1) == eloqstore::KvError::NoError);
+
+    const eloqstore::TableIdent tbl_id{"cloud_term_cleanup", 0};
+
+    eloqstore::BatchWriteRequest write_req;
+    write_req.SetArgs(tbl_id, {});
+    write_req.AddWrite("k1", "v1", 1, eloqstore::WriteOp::Upsert);
+    store->ExecSync(&write_req);
+    REQUIRE(write_req.Error() == eloqstore::KvError::NoError);
+
+    eloqstore::TruncateRequest truncate_req;
+    truncate_req.SetArgs(tbl_id, std::string_view{});
+    store->ExecSync(&truncate_req);
+    REQUIRE(truncate_req.Error() == eloqstore::KvError::NoError);
+
+    std::vector<std::string> cloud_files;
+    bool found_current_term_only = false;
+    for (int i = 0; i < 40; ++i)
+    {
+        cloud_files =
+            ListCloudFiles(cloud_options,
+                           cloud_options.cloud_store_path,
+                           tbl_id.ToString());
+        if (cloud_files.size() == 1 &&
+            cloud_files[0] == eloqstore::CurrentTermFileName)
+        {
+            found_current_term_only = true;
+            break;
+        }
+        std::this_thread::sleep_for(100ms);
+    }
+    REQUIRE(found_current_term_only);
+
+    eloqstore::DeleteCurrentTermRequest delete_req;
+    delete_req.SetTableId(tbl_id);
+    delete_req.SetTerm(2);
+    store->ExecSync(&delete_req);
+    REQUIRE(delete_req.Error() == eloqstore::KvError::NoError);
+
+    bool prefix_empty = false;
+    for (int i = 0; i < 20; ++i)
+    {
+        cloud_files =
+            ListCloudFiles(cloud_options,
+                           cloud_options.cloud_store_path,
+                           tbl_id.ToString());
+        if (cloud_files.empty())
+        {
+            prefix_empty = true;
+            break;
+        }
+        std::this_thread::sleep_for(100ms);
+    }
+    REQUIRE(prefix_empty);
+
+    store->Stop();
+    CleanupStore(cloud_options);
+}
