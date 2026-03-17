@@ -1269,10 +1269,9 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
     {
         max_inflight = 1;
     }
-    max_inflight = std::min(
-        max_inflight,
-        static_cast<size_t>(std::max<uint32_t>(
-            options_.max_global_request_batch, 1)));
+    max_inflight = std::min(max_inflight,
+                            static_cast<size_t>(std::max<uint32_t>(
+                                options_.max_global_request_batch, 1)));
     if (max_inflight > state->total)
     {
         max_inflight = state->total;
