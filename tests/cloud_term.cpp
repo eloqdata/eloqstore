@@ -93,21 +93,31 @@ TEST_CASE("cloud delete current term after truncate", "[cloud][term][gc]")
 
     CleanupStore(cloud_options);
 
-    eloqstore::EloqStore *store = InitStore(cloud_options);
-    store->Stop();
-    REQUIRE(store->Start(1) == eloqstore::KvError::NoError);
-
     const eloqstore::TableIdent tbl_id{"cloud_term_cleanup", 0};
+
+    eloqstore::EloqStore writer_store(cloud_options);
+    REQUIRE(writer_store.Start(1) == eloqstore::KvError::NoError);
 
     eloqstore::BatchWriteRequest write_req;
     write_req.SetArgs(tbl_id, {});
     write_req.AddWrite("k1", "v1", 1, eloqstore::WriteOp::Upsert);
-    store->ExecSync(&write_req);
+    writer_store.ExecSync(&write_req);
     REQUIRE(write_req.Error() == eloqstore::KvError::NoError);
+
+    writer_store.Stop();
+    CleanupLocalStore(cloud_options);
+
+    eloqstore::EloqStore store(cloud_options);
+    REQUIRE(store.Start(1) == eloqstore::KvError::NoError);
+
+    eloqstore::ReadRequest read_existing_req;
+    read_existing_req.SetArgs(tbl_id, "k1");
+    store.ExecSync(&read_existing_req);
+    REQUIRE(read_existing_req.Error() == eloqstore::KvError::NoError);
 
     eloqstore::TruncateRequest truncate_req;
     truncate_req.SetArgs(tbl_id, std::string_view{});
-    store->ExecSync(&truncate_req);
+    store.ExecSync(&truncate_req);
     REQUIRE(truncate_req.Error() == eloqstore::KvError::NoError);
 
     std::vector<std::string> cloud_files;
@@ -129,23 +139,22 @@ TEST_CASE("cloud delete current term after truncate", "[cloud][term][gc]")
     eloqstore::DeleteCurrentTermRequest delete_req;
     delete_req.SetTableId(tbl_id);
     delete_req.SetTerm(2);
-    store->ExecSync(&delete_req);
+    store.ExecSync(&delete_req);
     REQUIRE(delete_req.Error() == eloqstore::KvError::NoError);
 
-    bool prefix_empty = false;
-    for (int i = 0; i < 20; ++i)
-    {
-        cloud_files = ListCloudFiles(
-            cloud_options, cloud_options.cloud_store_path, tbl_id.ToString());
-        if (cloud_files.empty())
-        {
-            prefix_empty = true;
-            break;
-        }
-        std::this_thread::sleep_for(100ms);
-    }
-    REQUIRE(prefix_empty);
+    cloud_files = ListCloudFiles(
+        cloud_options, cloud_options.cloud_store_path, tbl_id.ToString());
+    REQUIRE(cloud_files.empty());
 
-    store->Stop();
+    eloqstore::ReadRequest read_req;
+    read_req.SetArgs(tbl_id, "k1");
+    store.ExecSync(&read_req);
+    REQUIRE(read_req.Error() == eloqstore::KvError::NotFound);
+
+    cloud_files = ListCloudFiles(
+        cloud_options, cloud_options.cloud_store_path, tbl_id.ToString());
+    REQUIRE(cloud_files.empty());
+
+    store.Stop();
     CleanupStore(cloud_options);
 }

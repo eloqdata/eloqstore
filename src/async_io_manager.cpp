@@ -3413,17 +3413,30 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     }
 
     uint64_t process_term = ProcessTerm();
-
-    // Check and update term file
-    KvError term_err = UpsertTermFile(tbl_id, process_term);
-    if (term_err != KvError::NoError)
+    auto [current_term, etag, read_term_err] = ReadTermFile(tbl_id);
+    (void) etag;
+    if (read_term_err != KvError::NoError && read_term_err != KvError::NotFound)
     {
-        return {nullptr, term_err};
+        return {nullptr, read_term_err};
+    }
+    const bool has_term_file = (read_term_err == KvError::NoError);
+    if (!has_term_file && ThdTask()->ReadOnly())
+    {
+        return {nullptr, KvError::NotFound};
+    }
+    if (has_term_file && current_term > process_term)
+    {
+        return {nullptr, KvError::ExpiredTerm};
     }
 
     KvError dl_err = DownloadFile(tbl_id, LruFD::kManifest, process_term);
     if (dl_err == KvError::NoError)
     {
+        KvError term_err = UpsertTermFile(tbl_id, process_term);
+        if (term_err != KvError::NoError)
+        {
+            return {nullptr, term_err};
+        }
         return IouringMgr::GetManifest(tbl_id);
     }
     else if (dl_err != KvError::NotFound)
@@ -3544,6 +3557,12 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
                    << selected_term << " greater than process_term "
                    << process_term << " for table " << tbl_id;
         return {nullptr, KvError::ExpiredTerm};
+    }
+
+    KvError term_err = UpsertTermFile(tbl_id, process_term);
+    if (term_err != KvError::NoError)
+    {
+        return {nullptr, term_err};
     }
 
     // Ensure the selected manifest is downloaded locally.
