@@ -175,6 +175,11 @@ int KvOptions::LoadFromIni(const char *path)
         max_archive_tasks =
             reader.GetUnsigned(sec_run, "max_archive_tasks", 256);
     }
+    if (reader.HasValue(sec_run, "max_global_request_batch"))
+    {
+        max_global_request_batch = reader.GetUnsigned(
+            sec_run, "max_global_request_batch", max_global_request_batch);
+    }
     if (reader.HasValue(sec_run, "file_amplify_factor"))
     {
         file_amplify_factor =
@@ -392,6 +397,7 @@ bool KvOptions::operator==(const KvOptions &other) const
            num_retained_archives == other.num_retained_archives &&
            archive_interval_secs == other.archive_interval_secs &&
            max_archive_tasks == other.max_archive_tasks &&
+           max_global_request_batch == other.max_global_request_batch &&
            file_amplify_factor == other.file_amplify_factor &&
            local_space_limit == other.local_space_limit &&
            reserve_space_ratio == other.reserve_space_ratio &&

@@ -92,6 +92,11 @@ struct KvOptions
      */
     uint16_t max_archive_tasks = 256;
     /**
+     * @brief Maximum number of per-partition requests submitted at a time by
+     * global operations such as global archive/reopen.
+     */
+    uint32_t max_global_request_batch = 1000;
+    /**
      * @brief Move pages in data file that space amplification factor
      * bigger than this value.
      * Only take effect when data_append_mode is enabled.

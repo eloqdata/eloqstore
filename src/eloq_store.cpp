@@ -930,40 +930,98 @@ void EloqStore::HandleDropTableRequest(DropTableRequest *req)
     req->pending_.store(static_cast<uint32_t>(partitions.size()),
                         std::memory_order_relaxed);
 
-    auto on_truncate_done = [req](KvRequest *sub_req)
-    {
-        KvError sub_err = sub_req->Error();
-        if (sub_err != KvError::NoError)
-        {
-            uint8_t expected = static_cast<uint8_t>(KvError::NoError);
-            uint8_t desired = static_cast<uint8_t>(sub_err);
-            req->first_error_.compare_exchange_strong(
-                expected,
-                desired,
-                std::memory_order_relaxed,
-                std::memory_order_relaxed);
-        }
-        if (req->pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
-        {
-            KvError final_err = static_cast<KvError>(
-                req->first_error_.load(std::memory_order_relaxed));
-            req->SetDone(final_err);
-        }
-    };
-
-    req->truncate_reqs_.reserve(partitions.size());
     for (const TableIdent &partition : partitions)
     {
         auto trunc_req = std::make_unique<TruncateRequest>();
         trunc_req->SetArgs(partition, std::string_view{});
-        TruncateRequest *ptr = trunc_req.get();
         req->truncate_reqs_.push_back(std::move(trunc_req));
-        if (!ExecAsyn(ptr, 0, on_truncate_done))
+    }
+
+    struct DropTableScheduleState
+        : public std::enable_shared_from_this<DropTableScheduleState>
+    {
+        EloqStore *store = nullptr;
+        DropTableRequest *req = nullptr;
+        size_t total = 0;
+        std::atomic<size_t> next_index{0};
+
+        bool HandleTruncateResult(KvError sub_err)
         {
-            LOG(ERROR)
-                << "Handle droptable request, enqueue truncate request fail";
-            ptr->SetDone(KvError::NotRunning);
+            if (sub_err != KvError::NoError)
+            {
+                uint8_t expected = static_cast<uint8_t>(KvError::NoError);
+                uint8_t desired = static_cast<uint8_t>(sub_err);
+                req->first_error_.compare_exchange_strong(
+                    expected,
+                    desired,
+                    std::memory_order_relaxed,
+                    std::memory_order_relaxed);
+            }
+            if (req->pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+            {
+                KvError final_err = static_cast<KvError>(
+                    req->first_error_.load(std::memory_order_relaxed));
+                req->SetDone(final_err);
+                return true;
+            }
+            return false;
         }
+
+        void OnTruncateDone(KvRequest *sub_req)
+        {
+            if (HandleTruncateResult(sub_req->Error()))
+            {
+                return;
+            }
+            ScheduleNext();
+        }
+
+        void ScheduleNext()
+        {
+            while (true)
+            {
+                size_t idx = next_index.fetch_add(1, std::memory_order_relaxed);
+                if (idx >= total)
+                {
+                    return;
+                }
+
+                TruncateRequest *ptr = req->truncate_reqs_[idx].get();
+                auto self = shared_from_this();
+                auto on_truncate_done = [self](KvRequest *sub_req)
+                { self->OnTruncateDone(sub_req); };
+                if (store->ExecAsyn(ptr, 0, on_truncate_done))
+                {
+                    return;
+                }
+
+                LOG(ERROR) << "Handle droptable request, enqueue truncate "
+                              "request fail";
+                ptr->callback_ = nullptr;
+                ptr->SetDone(KvError::NotRunning);
+                if (HandleTruncateResult(KvError::NotRunning))
+                {
+                    return;
+                }
+            }
+        }
+    };
+
+    auto state = std::make_shared<DropTableScheduleState>();
+    state->store = this;
+    state->req = req;
+    state->total = req->truncate_reqs_.size();
+
+    size_t max_inflight =
+        std::max<uint32_t>(options_.max_global_request_batch, 1);
+    if (max_inflight > state->total)
+    {
+        max_inflight = state->total;
+    }
+
+    for (size_t i = 0; i < max_inflight; ++i)
+    {
+        state->ScheduleNext();
     }
 }
 
@@ -1211,6 +1269,10 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
     {
         max_inflight = 1;
     }
+    max_inflight = std::min(
+        max_inflight,
+        static_cast<size_t>(std::max<uint32_t>(
+            options_.max_global_request_batch, 1)));
     if (max_inflight > state->total)
     {
         max_inflight = state->total;
@@ -1334,59 +1396,121 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
     req->pending_.store(static_cast<uint32_t>(partitions.size()),
                         std::memory_order_relaxed);
 
-    auto on_reopen_done = [req](KvRequest *sub_req)
-    {
-        auto *reopen_req = static_cast<ReopenRequest *>(sub_req);
-        KvError sub_err = reopen_req->Error();
-        if (sub_err != KvError::NoError)
-        {
-            LOG(ERROR) << "HandleGlobalReopenRequest sub request failed, table "
-                       << reopen_req->TableId() << ", tag " << reopen_req->Tag()
-                       << ", error " << static_cast<uint32_t>(sub_err)
-                       << ", msg " << reopen_req->ErrMessage();
-            uint8_t expected = static_cast<uint8_t>(KvError::NoError);
-            uint8_t desired = static_cast<uint8_t>(sub_err);
-            req->first_error_.compare_exchange_strong(
-                expected,
-                desired,
-                std::memory_order_relaxed,
-                std::memory_order_relaxed);
-        }
-        else
-        {
-            DLOG(INFO) << "HandleGlobalReopenRequest sub request succeeded, "
-                       << "table " << reopen_req->TableId() << ", tag "
-                       << reopen_req->Tag();
-        }
-        if (req->pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
-        {
-            KvError final_err = static_cast<KvError>(
-                req->first_error_.load(std::memory_order_relaxed));
-            DLOG(INFO) << "HandleGlobalReopenRequest finish, tag " << req->Tag()
-                       << ", final_error " << static_cast<uint32_t>(final_err);
-            req->SetDone(final_err);
-        }
-    };
-
     for (const TableIdent &partition : partitions)
     {
-        DLOG(INFO) << "HandleGlobalReopenRequest enqueue partition "
-                   << partition << ", tag " << req->Tag();
         auto reopen_req = std::make_unique<ReopenRequest>();
         reopen_req->SetArgs(partition);
         if (!req->Tag().empty())
         {
             reopen_req->SetTag(req->Tag());
         }
-        ReopenRequest *ptr = reopen_req.get();
         req->reopen_reqs_.push_back(std::move(reopen_req));
-        if (!ExecAsyn(ptr, 0, on_reopen_done))
+    }
+
+    struct ReopenScheduleState
+        : public std::enable_shared_from_this<ReopenScheduleState>
+    {
+        EloqStore *store = nullptr;
+        GlobalReopenRequest *req = nullptr;
+        size_t total = 0;
+        std::atomic<size_t> next_index{0};
+
+        bool HandleReopenResult(ReopenRequest *reopen_req)
         {
-            LOG(ERROR)
-                << "Handle global reopen request, enqueue reopen request fail, "
-                << "partition " << partition << ", tag " << req->Tag();
-            ptr->SetDone(KvError::NotRunning);
+            KvError sub_err = reopen_req->Error();
+            if (sub_err != KvError::NoError)
+            {
+                LOG(ERROR) << "HandleGlobalReopenRequest sub request failed, "
+                           << "table " << reopen_req->TableId() << ", tag "
+                           << reopen_req->Tag() << ", error "
+                           << static_cast<uint32_t>(sub_err) << ", msg "
+                           << reopen_req->ErrMessage();
+                uint8_t expected = static_cast<uint8_t>(KvError::NoError);
+                uint8_t desired = static_cast<uint8_t>(sub_err);
+                req->first_error_.compare_exchange_strong(
+                    expected,
+                    desired,
+                    std::memory_order_relaxed,
+                    std::memory_order_relaxed);
+            }
+            else
+            {
+                DLOG(INFO) << "HandleGlobalReopenRequest sub request "
+                           << "succeeded, table " << reopen_req->TableId()
+                           << ", tag " << reopen_req->Tag();
+            }
+            if (req->pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+            {
+                KvError final_err = static_cast<KvError>(
+                    req->first_error_.load(std::memory_order_relaxed));
+                DLOG(INFO) << "HandleGlobalReopenRequest finish, tag "
+                           << req->Tag() << ", final_error "
+                           << static_cast<uint32_t>(final_err);
+                req->SetDone(final_err);
+                return true;
+            }
+            return false;
         }
+
+        void OnReopenDone(KvRequest *sub_req)
+        {
+            auto *reopen_req = static_cast<ReopenRequest *>(sub_req);
+            if (HandleReopenResult(reopen_req))
+            {
+                return;
+            }
+            ScheduleNext();
+        }
+
+        void ScheduleNext()
+        {
+            while (true)
+            {
+                size_t idx = next_index.fetch_add(1, std::memory_order_relaxed);
+                if (idx >= total)
+                {
+                    return;
+                }
+
+                ReopenRequest *ptr = req->reopen_reqs_[idx].get();
+                DLOG(INFO) << "HandleGlobalReopenRequest enqueue partition "
+                           << ptr->TableId() << ", tag " << req->Tag();
+                auto self = shared_from_this();
+                auto on_reopen_done = [self](KvRequest *sub_req)
+                { self->OnReopenDone(sub_req); };
+                if (store->ExecAsyn(ptr, 0, on_reopen_done))
+                {
+                    return;
+                }
+
+                LOG(ERROR) << "Handle global reopen request, enqueue reopen "
+                              "request fail, partition "
+                           << ptr->TableId() << ", tag " << req->Tag();
+                ptr->callback_ = nullptr;
+                ptr->SetDone(KvError::NotRunning);
+                if (HandleReopenResult(ptr))
+                {
+                    return;
+                }
+            }
+        }
+    };
+
+    auto state = std::make_shared<ReopenScheduleState>();
+    state->store = this;
+    state->req = req;
+    state->total = req->reopen_reqs_.size();
+
+    size_t max_inflight =
+        std::max<uint32_t>(options_.max_global_request_batch, 1);
+    if (max_inflight > state->total)
+    {
+        max_inflight = state->total;
+    }
+
+    for (size_t i = 0; i < max_inflight; ++i)
+    {
+        state->ScheduleNext();
     }
 }
 
