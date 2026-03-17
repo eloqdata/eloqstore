@@ -531,6 +531,8 @@ public:
          * @brief mu_ avoids open/close file concurrently.
          */
         Mutex mu_;
+        bool opening_{false};
+        WaitingZone open_waiting_;
         int fd_{FdEmpty};
         int reg_idx_{-1};
         bool dirty_{false};
