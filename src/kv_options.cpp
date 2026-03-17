@@ -274,6 +274,11 @@ int KvOptions::LoadFromIni(const char *path)
         standby_master_addr =
             reader.Get(sec_permanent, "standby_master_addr", "");
     }
+    if (reader.HasValue(sec_permanent, "standby_listen_addr"))
+    {
+        standby_listen_addr =
+            reader.Get(sec_permanent, "standby_listen_addr", "");
+    }
     if (reader.HasValue(sec_permanent, "standby_master_store_paths"))
     {
         std::string input =
@@ -410,6 +415,7 @@ bool KvOptions::operator==(const KvOptions &other) const
            store_path_weights == other.store_path_weights &&
            cloud_store_path == other.cloud_store_path &&
            standby_master_addr == other.standby_master_addr &&
+           standby_listen_addr == other.standby_listen_addr &&
            standby_master_store_paths == other.standby_master_store_paths &&
            standby_master_store_path_weights ==
                other.standby_master_store_path_weights &&

@@ -6,6 +6,10 @@
 #include <liburing.h>
 #include <liburing/io_uring.h>
 #include <linux/openat2.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <sys/epoll.h>
+#include <sys/socket.h>
 #include <signal.h>
 #include <spawn.h>
 #include <sys/uio.h>
@@ -26,6 +30,7 @@
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <set>
 #include <span>
 #include <string>
 #include <system_error>
@@ -67,6 +72,82 @@ namespace fs = std::filesystem;
 namespace
 {
 constexpr std::string_view kManifestTmp = "manifest.tmp";
+
+void CloseFd(int *fd)
+{
+    if (fd != nullptr && *fd >= 0)
+    {
+        close(*fd);
+        *fd = -1;
+    }
+}
+
+bool ParseListenEndpoint(std::string_view endpoint,
+                         std::string *host,
+                         std::string *port)
+{
+    const size_t pos = endpoint.rfind(':');
+    if (pos == std::string_view::npos || pos == 0 || pos + 1 >= endpoint.size())
+    {
+        return false;
+    }
+    if (host != nullptr)
+    {
+        *host = std::string(endpoint.substr(0, pos));
+    }
+    if (port != nullptr)
+    {
+        *port = std::string(endpoint.substr(pos + 1));
+    }
+    return true;
+}
+
+bool SetNonBlocking(int fd)
+{
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0)
+    {
+        return false;
+    }
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+
+bool WriteBestEffort(int fd, std::string_view data)
+{
+    size_t written = 0;
+    while (written < data.size())
+    {
+        ssize_t n = write(fd, data.data() + written, data.size() - written);
+        if (n > 0)
+        {
+            written += static_cast<size_t>(n);
+            continue;
+        }
+        if (n < 0 && errno == EINTR)
+        {
+            continue;
+        }
+        if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        {
+            epoll_event wait_event{};
+            wait_event.events = EPOLLOUT;
+            int wait_fd = epoll_create1(EPOLL_CLOEXEC);
+            if (wait_fd < 0)
+            {
+                return false;
+            }
+            bool ok = epoll_ctl(wait_fd, EPOLL_CTL_ADD, fd, &wait_event) == 0 &&
+                      epoll_wait(wait_fd, &wait_event, 1, 1000) > 0;
+            close(wait_fd);
+            if (ok)
+            {
+                continue;
+            }
+        }
+        return false;
+    }
+    return true;
+}
 
 WriteTask *CurrentWriteTask()
 {
@@ -146,7 +227,8 @@ std::unique_ptr<AsyncIoManager> AsyncIoManager::Instance(const EloqStore *store,
         break;
     case StoreMode::StandbyReplica:
     case StoreMode::StandbyMaster:
-        mgr = std::make_unique<StandbyStoreMgr>(opts, fd_limit);
+        mgr = std::make_unique<StandbyStoreMgr>(
+            opts, fd_limit, mode == StoreMode::StandbyMaster);
         break;
     case StoreMode::Local:
     default:
@@ -4606,23 +4688,465 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-StandbyStoreMgr::StandbyStoreMgr(const KvOptions *opts, uint32_t fd_limit)
-    : IouringMgr(opts, fd_limit)
+StandbyStoreMgr::StandbyStoreMgr(const KvOptions *opts,
+                                 uint32_t fd_limit,
+                                 bool enable_listener)
+    : IouringMgr(opts, fd_limit),
+      enable_listener_(enable_listener),
+      accepted_conn_buffer_pool_(opts != nullptr ? opts->direct_io_buffer_pool_size
+                                                 : 0)
 {
     CHECK(opts != nullptr);
     const std::string &addr = opts->standby_master_addr;
     if (addr.empty())
+    {
+        if (enable_listener_ && !opts->standby_listen_addr.empty())
+        {
+            LOG(INFO) << "StandbyStoreMgr standby listener configured at "
+                      << opts->standby_listen_addr;
+        }
         return;
+    }
     remote_addr_ = addr;
     LOG(INFO) << "StandbyStoreMgr replicating from " << remote_addr_;
 }
 
+StandbyStoreMgr::~StandbyStoreMgr()
+{
+    StopListener();
+}
+
+KvError StandbyStoreMgr::Init(Shard *target_shard)
+{
+    KvError err = IouringMgr::Init(target_shard);
+    if (err != KvError::NoError)
+    {
+        return err;
+    }
+    if (enable_listener_ && !options_->standby_listen_addr.empty())
+    {
+        StartListener();
+    }
+    return KvError::NoError;
+}
+
 void StandbyStoreMgr::Stop()
 {
+    StopListener();
     if (!IsStoreStopping())
     {
         WaitForStandbyTasksToDrain();
     }
+}
+
+void StandbyStoreMgr::StartListener()
+{
+    bool expected = false;
+    if (!listener_running_.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel))
+    {
+        return;
+    }
+
+    std::string host;
+    std::string port;
+    if (!ParseListenEndpoint(options_->standby_listen_addr, &host, &port))
+    {
+        listener_running_.store(false, std::memory_order_release);
+        LOG(ERROR) << "invalid standby_listen_addr: "
+                   << options_->standby_listen_addr;
+        return;
+    }
+
+    addrinfo hints{};
+    hints.ai_family = AF_UNSPEC;
+    hints.ai_socktype = SOCK_STREAM;
+    hints.ai_flags = AI_PASSIVE;
+    addrinfo *result = nullptr;
+    int gai = getaddrinfo(host.c_str(), port.c_str(), &hints, &result);
+    if (gai != 0)
+    {
+        listener_running_.store(false, std::memory_order_release);
+        LOG(ERROR) << "getaddrinfo failed for standby listener "
+                   << options_->standby_listen_addr << ": "
+                   << gai_strerror(gai);
+        return;
+    }
+
+    for (addrinfo *ai = result; ai != nullptr; ai = ai->ai_next)
+    {
+        int fd = socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC, 0);
+        if (fd < 0)
+        {
+            continue;
+        }
+        int one = 1;
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+        if (bind(fd, ai->ai_addr, ai->ai_addrlen) == 0 &&
+            listen(fd, 128) == 0 && SetNonBlocking(fd))
+        {
+            listener_fd_ = fd;
+            break;
+        }
+        CloseFd(&fd);
+    }
+    freeaddrinfo(result);
+
+    if (listener_fd_ < 0)
+    {
+        listener_running_.store(false, std::memory_order_release);
+        LOG(ERROR) << "failed to bind standby listener at "
+                   << options_->standby_listen_addr;
+        return;
+    }
+
+    acceptor_thread_ = std::thread([this] { AcceptorLoop(); });
+}
+
+void StandbyStoreMgr::StopListener()
+{
+    const bool was_running =
+        listener_running_.exchange(false, std::memory_order_acq_rel);
+    if (listener_fd_ >= 0)
+    {
+        shutdown(listener_fd_, SHUT_RDWR);
+        CloseFd(&listener_fd_);
+    }
+    if (acceptor_thread_.joinable())
+    {
+        acceptor_thread_.join();
+    }
+    if (!was_running)
+    {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lk(accepted_conn_mutex_);
+    for (AcceptedConnection &conn : accepted_conns_)
+    {
+        if (conn.fd >= 0)
+        {
+            close(conn.fd);
+            conn.fd = -1;
+        }
+        accepted_conn_buffer_pool_.Release(std::move(conn.header_bytes));
+    }
+    accepted_conns_.clear();
+}
+
+void StandbyStoreMgr::AcceptorLoop()
+{
+    int epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+    if (epoll_fd < 0)
+    {
+        LOG(ERROR) << "failed to create standby listener epoll fd: "
+                   << strerror(errno);
+        return;
+    }
+
+    epoll_event listen_event{};
+    listen_event.events = EPOLLIN;
+    listen_event.data.fd = listener_fd_;
+    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, listener_fd_, &listen_event) != 0)
+    {
+        LOG(ERROR) << "failed to add standby listener fd to epoll: "
+                   << strerror(errno);
+        close(epoll_fd);
+        return;
+    }
+
+    std::unordered_map<int, PendingAcceptedConnection> pending;
+    std::array<epoll_event, 32> events{};
+    while (listener_running_.load(std::memory_order_acquire))
+    {
+        int nfds = epoll_wait(
+            epoll_fd, events.data(), static_cast<int>(events.size()), 100);
+        if (nfds < 0)
+        {
+            if (errno == EINTR)
+            {
+                continue;
+            }
+            LOG(ERROR) << "standby listener epoll_wait failed: "
+                       << strerror(errno);
+            break;
+        }
+        for (int i = 0; i < nfds; ++i)
+        {
+            const int fd = events[i].data.fd;
+            if (fd == listener_fd_)
+            {
+                while (true)
+                {
+                    int conn_fd =
+                        accept4(listener_fd_, nullptr, nullptr, SOCK_CLOEXEC);
+                    if (conn_fd < 0)
+                    {
+                        if (errno == EAGAIN || errno == EWOULDBLOCK)
+                        {
+                            break;
+                        }
+                        if (errno != EINTR)
+                        {
+                            LOG(ERROR) << "standby listener accept failed: "
+                                       << strerror(errno);
+                        }
+                        break;
+                    }
+                    if (!SetNonBlocking(conn_fd))
+                    {
+                        close(conn_fd);
+                        continue;
+                    }
+                    PendingAcceptedConnection pending_conn;
+                    pending_conn.fd = conn_fd;
+                    epoll_event conn_event{};
+                    conn_event.events = EPOLLIN | EPOLLERR | EPOLLHUP;
+                    conn_event.data.fd = conn_fd;
+                    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, conn_fd, &conn_event) !=
+                        0)
+                    {
+                        close(conn_fd);
+                        continue;
+                    }
+                    pending.emplace(conn_fd, std::move(pending_conn));
+                }
+                continue;
+            }
+
+            auto it = pending.find(fd);
+            if (it == pending.end())
+            {
+                continue;
+            }
+            PendingAcceptedConnection &pending_conn = it->second;
+            bool close_conn = false;
+            constexpr uint32_t kMaxHeaderBytes = 64 * 1024;
+            while (!close_conn)
+            {
+                if (pending_conn.bytes_read < sizeof(uint32_t))
+                {
+                    ssize_t n = read(fd,
+                                     pending_conn.len_buf + pending_conn.bytes_read,
+                                     sizeof(uint32_t) - pending_conn.bytes_read);
+                    if (n == 0)
+                    {
+                        close_conn = true;
+                        break;
+                    }
+                    if (n < 0)
+                    {
+                        if (errno == EAGAIN || errno == EWOULDBLOCK)
+                        {
+                            break;
+                        }
+                        if (errno == EINTR)
+                        {
+                            continue;
+                        }
+                        close_conn = true;
+                        break;
+                    }
+                    pending_conn.bytes_read += static_cast<size_t>(n);
+                    if (pending_conn.bytes_read < sizeof(uint32_t))
+                    {
+                        break;
+                    }
+                    pending_conn.header_len = DecodeFixed32(pending_conn.len_buf);
+                    if (pending_conn.header_len == 0 ||
+                        pending_conn.header_len > kMaxHeaderBytes)
+                    {
+                        close_conn = true;
+                        break;
+                    }
+                    pending_conn.header_bytes = accepted_conn_buffer_pool_.Acquire();
+                    pending_conn.header_bytes.resize(pending_conn.header_len);
+                    pending_conn.bytes_read = 0;
+                }
+
+                ssize_t n = read(fd,
+                                 pending_conn.header_bytes.data() +
+                                     pending_conn.bytes_read,
+                                 pending_conn.header_len - pending_conn.bytes_read);
+                if (n == 0)
+                {
+                    close_conn = true;
+                    break;
+                }
+                if (n < 0)
+                {
+                    if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    {
+                        break;
+                    }
+                    if (errno == EINTR)
+                    {
+                        continue;
+                    }
+                    close_conn = true;
+                    break;
+                }
+                pending_conn.bytes_read += static_cast<size_t>(n);
+                if (pending_conn.bytes_read < pending_conn.header_len)
+                {
+                    break;
+                }
+
+                AcceptedConnection conn;
+                conn.fd = fd;
+                conn.header_bytes = std::move(pending_conn.header_bytes);
+                if (!DecodeAcceptedHeader(conn.header_bytes.view(), &conn.header))
+                {
+                    accepted_conn_buffer_pool_.Release(std::move(conn.header_bytes));
+                    close_conn = true;
+                    break;
+                }
+
+                epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+                if (conn.header.request_type ==
+                    StandbyRequestType::ListPartitions)
+                {
+                    HandleListPartitionsRequest(fd);
+                    accepted_conn_buffer_pool_.Release(
+                        std::move(conn.header_bytes));
+                    close(fd);
+                    pending.erase(it);
+                    close_conn = false;
+                    goto next_event;
+                }
+                std::lock_guard<std::mutex> lk(accepted_conn_mutex_);
+                accepted_conns_.push_back(std::move(conn));
+                pending.erase(it);
+                close_conn = false;
+                goto next_event;
+            }
+
+            if (close_conn)
+            {
+                epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+                if (pending_conn.header_bytes.capacity() != 0)
+                {
+                    accepted_conn_buffer_pool_.Release(
+                        std::move(pending_conn.header_bytes));
+                }
+                close(fd);
+                pending.erase(it);
+            }
+        next_event:
+            continue;
+        }
+    }
+
+    for (auto &[fd, pending_conn] : pending)
+    {
+        epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr);
+        if (pending_conn.header_bytes.capacity() != 0)
+        {
+            accepted_conn_buffer_pool_.Release(std::move(pending_conn.header_bytes));
+        }
+        close(fd);
+    }
+    close(epoll_fd);
+}
+
+bool StandbyStoreMgr::DecodeAcceptedHeader(std::string_view encoded,
+                                           StandbySessionHeader *header)
+{
+    if (header == nullptr)
+    {
+        return false;
+    }
+
+    std::string_view input = encoded;
+    uint32_t request_type = 0;
+    if (!GetVarint32(&input, &request_type))
+    {
+        return false;
+    }
+    header->request_type = static_cast<StandbyRequestType>(request_type);
+    if (header->request_type == StandbyRequestType::ListPartitions)
+    {
+        return input.empty();
+    }
+    if (header->request_type != StandbyRequestType::Sync)
+    {
+        return false;
+    }
+
+    uint32_t tbl_id_len = 0;
+    if (!GetVarint32(&input, &tbl_id_len) || tbl_id_len > input.size())
+    {
+        return false;
+    }
+
+    TableIdent tbl_id =
+        TableIdent::FromString(std::string(input.substr(0, tbl_id_len)));
+    input.remove_prefix(tbl_id_len);
+
+    uint64_t term = 0;
+    uint64_t max_fp_id = 0;
+    if (!tbl_id.IsValid() || !GetVarint64(&input, &term) ||
+        !GetVarint64(&input, &max_fp_id) || !input.empty())
+    {
+        return false;
+    }
+
+    header->tbl_id = std::move(tbl_id);
+    header->term = term;
+    header->max_fp_id = max_fp_id;
+    return true;
+}
+
+bool StandbyStoreMgr::HandleListPartitionsRequest(int fd)
+{
+    std::set<std::string> partitions;
+    for (const std::string &root_path_str : options_->store_path)
+    {
+        std::error_code ec;
+        fs::directory_iterator it(fs::path(root_path_str), ec);
+        if (ec)
+        {
+            ec.clear();
+            continue;
+        }
+        for (; it != fs::directory_iterator{}; it.increment(ec))
+        {
+            if (ec)
+            {
+                ec.clear();
+                break;
+            }
+            if (!it->is_directory(ec))
+            {
+                ec.clear();
+                continue;
+            }
+            const std::string entry_name = it->path().filename().string();
+            if (entry_name == "lost+found")
+            {
+                continue;
+            }
+            TableIdent tbl_id = TableIdent::FromString(entry_name);
+            if (!tbl_id.IsValid())
+            {
+                continue;
+            }
+            partitions.insert(std::move(entry_name));
+        }
+    }
+
+    std::string payload;
+    PutVarint32(&payload, static_cast<uint32_t>(partitions.size()));
+    for (const std::string &name : partitions)
+    {
+        PutVarint32(&payload, static_cast<uint32_t>(name.size()));
+        payload.append(name);
+    }
+
+    std::string frame;
+    PutFixed32(&frame, static_cast<uint32_t>(payload.size()));
+    frame.append(payload);
+    return WriteBestEffort(fd, frame);
 }
 
 void StandbyStoreMgr::WaitForStandbyTasksToDrain()

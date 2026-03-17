@@ -224,6 +224,11 @@ struct KvOptions
      */
     std::string standby_master_addr;
     /**
+     * @brief Optional listen endpoint for standby master TCP sessions.
+     * Format: host:port. Empty disables the listener.
+     */
+    std::string standby_listen_addr;
+    /**
      * @brief Remote store path list for the master when running in standby
      * replica mode. These must be absolute paths and correspond to the master
      * store paths selected by standby_master_store_path_lut.

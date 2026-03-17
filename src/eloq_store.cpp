@@ -200,6 +200,19 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
             }
         }
     }
+    if (!opts.standby_listen_addr.empty())
+    {
+        if (!opts.enable_local_standby)
+        {
+            LOG(ERROR) << "standby_listen_addr requires enable_local_standby";
+            return false;
+        }
+        if (opts.standby_listen_addr.find(':') == std::string::npos)
+        {
+            LOG(ERROR) << "standby_listen_addr must be in 'host:port' format";
+            return false;
+        }
+    }
     if (!opts.cloud_store_path.empty())
     {
         if (opts.max_cloud_concurrency == 0)

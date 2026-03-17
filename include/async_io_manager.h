@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string>
@@ -1076,7 +1077,11 @@ private:
 class StandbyStoreMgr final : public IouringMgr
 {
 public:
-    StandbyStoreMgr(const KvOptions *opts, uint32_t fd_limit);
+    StandbyStoreMgr(const KvOptions *opts,
+                    uint32_t fd_limit,
+                    bool enable_listener);
+    ~StandbyStoreMgr() override;
+    KvError Init(Shard *shard) override;
     void Stop() override;
     void SetProcessTerm(uint64_t term)
     {
@@ -1094,12 +1099,56 @@ public:
         const TableIdent &tbl_id);
 
 private:
+    enum class StandbyRequestType : uint8_t
+    {
+        Invalid = 0,
+        ListPartitions = 1,
+        Sync = 2,
+    };
+
+    struct StandbySessionHeader
+    {
+        StandbyRequestType request_type{StandbyRequestType::Invalid};
+        TableIdent tbl_id;
+        uint64_t term{0};
+        FilePageId max_fp_id{0};
+    };
+
+    struct AcceptedConnection
+    {
+        int fd{-1};
+        StandbySessionHeader header;
+        DirectIoBuffer header_bytes;
+    };
+
+    struct PendingAcceptedConnection
+    {
+        int fd{-1};
+        uint32_t header_len{0};
+        size_t bytes_read{0};
+        DirectIoBuffer header_bytes;
+        char len_buf[sizeof(uint32_t)]{};
+    };
+
+    static bool DecodeAcceptedHeader(std::string_view encoded,
+                                     StandbySessionHeader *header);
+    bool HandleListPartitionsRequest(int fd);
+    void StartListener();
+    void StopListener();
+    void AcceptorLoop();
     void WaitForStandbyTasksToDrain();
     std::string BuildRemoteFilePath(const TableIdent &tbl_id,
                                     std::string_view filename) const;
     int RunRsync(const std::string &remote, const std::string &dst);
     std::atomic<size_t> inflight_standby_tasks_{0};
     uint64_t process_term_{0};
+    const bool enable_listener_{false};
+    std::atomic<bool> listener_running_{false};
+    int listener_fd_{-1};
+    std::thread acceptor_thread_;
+    DirectIoBufferPool accepted_conn_buffer_pool_;
+    mutable std::mutex accepted_conn_mutex_;
+    std::vector<AcceptedConnection> accepted_conns_;
 
     std::string remote_addr_;
 };
