@@ -171,6 +171,16 @@ public:
         return page_.IsRegistered();
     }
 
+    void SetError(KvError err)
+    {
+        err_ = err;
+    }
+
+    KvError Error() const
+    {
+        return err_;
+    }
+
 private:
     /**
      * @brief The page ID is 0, if the page is newly created in memory and has
@@ -187,6 +197,15 @@ private:
     uint32_t ref_cnt_{0};
     FilePageId file_page_id_{MaxFilePageId};
     Page page_;
+
+    /**
+     * @brief The error of the page.
+     * If the page is not loaded, the error is KvError::NoError.
+     * If the page is loaded, the error is the error of loading the page.
+     * If the page is not KvError::NoError, the page will be freed on no
+     * reference to it.
+     */
+    KvError err_{KvError::NoError};
 
     WaitingZone waiting_;
 

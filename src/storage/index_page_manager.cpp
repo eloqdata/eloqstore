@@ -119,6 +119,7 @@ MemIndexPage *IndexPageManager::AllocIndexPage()
     }
     assert(next_free->IsDetached());
     assert(!next_free->IsPinned());
+    assert(next_free->Error() == KvError::NoError);
     next_free->in_free_list_ = false;
     return next_free;
 }
@@ -127,6 +128,7 @@ void IndexPageManager::FreeIndexPage(MemIndexPage *page)
 {
     assert(page->IsDetached());
     assert(!page->IsPinned());
+    page->SetError(KvError::NoError);
     page->in_free_list_ = true;
     free_head_.EnqueNext(page);
 }
@@ -494,7 +496,14 @@ std::pair<MemIndexPage::Handle, KvError> IndexPageManager::FindPage(
             {
                 new_page->waiting_.WakeAll();
                 mapping->Unswizzling(new_page);
-                FreeIndexPage(new_page);
+                if (new_page->IsPinned())
+                {
+                    new_page->SetError(err);
+                }
+                else
+                {
+                    FreeIndexPage(new_page);
+                }
                 return {MemIndexPage::Handle(), err};
             }
             FinishIo(mapping, new_page);
@@ -505,6 +514,18 @@ std::pair<MemIndexPage::Handle, KvError> IndexPageManager::FindPage(
         {
             // This page is not loaded yet.
             handle->waiting_.Wait(ThdTask());
+            if (handle->Error() != KvError::NoError)
+            {
+                MemIndexPage *page = handle.Get();
+                KvError err = page->Error();
+                handle.Reset();
+                if (!page->IsPinned())
+                {
+                    FreeIndexPage(page);
+                }
+                return {MemIndexPage::Handle(), err};
+            }
+            assert(handle->IsPinned());
         }
         else
         {
