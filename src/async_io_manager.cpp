@@ -3991,11 +3991,12 @@ KvError CloudStoreMgr::DeleteCurrentTermIfAlone(const TableIdent &tbl_id,
 
         std::vector<std::string> batch_files;
         std::string next_token;
-        if (!obj_store_.ParseListObjectsResponse(list_task.response_data_.view(),
-                                                 list_task.json_data_,
-                                                 &batch_files,
-                                                 nullptr,
-                                                 &next_token))
+        if (!obj_store_.ParseListObjectsResponse(
+                list_task.response_data_.view(),
+                list_task.json_data_,
+                &batch_files,
+                nullptr,
+                &next_token))
         {
             return KvError::Corrupted;
         }

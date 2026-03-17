@@ -799,7 +799,8 @@ public:
 private:
     bool SendRequest(KvRequest *req);
     void HandleDropTableRequest(DropTableRequest *req);
-    void HandleGlobalCleanCurrentTermRequest(GlobalCleanCurrentTermRequest *req);
+    void HandleGlobalCleanCurrentTermRequest(
+        GlobalCleanCurrentTermRequest *req);
     void HandleGlobalArchiveRequest(GlobalArchiveRequest *req);
     void HandleGlobalReopenRequest(GlobalReopenRequest *req);
     void HandleGlobalListArchiveTagsRequest(GlobalListArchiveTagsRequest *req);

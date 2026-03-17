@@ -114,10 +114,8 @@ TEST_CASE("cloud delete current term after truncate", "[cloud][term][gc]")
     bool found_current_term_only = false;
     for (int i = 0; i < 40; ++i)
     {
-        cloud_files =
-            ListCloudFiles(cloud_options,
-                           cloud_options.cloud_store_path,
-                           tbl_id.ToString());
+        cloud_files = ListCloudFiles(
+            cloud_options, cloud_options.cloud_store_path, tbl_id.ToString());
         if (cloud_files.size() == 1 &&
             cloud_files[0] == eloqstore::CurrentTermFileName)
         {
@@ -137,10 +135,8 @@ TEST_CASE("cloud delete current term after truncate", "[cloud][term][gc]")
     bool prefix_empty = false;
     for (int i = 0; i < 20; ++i)
     {
-        cloud_files =
-            ListCloudFiles(cloud_options,
-                           cloud_options.cloud_store_path,
-                           tbl_id.ToString());
+        cloud_files = ListCloudFiles(
+            cloud_options, cloud_options.cloud_store_path, tbl_id.ToString());
         if (cloud_files.empty())
         {
             prefix_empty = true;

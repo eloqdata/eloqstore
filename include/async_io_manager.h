@@ -927,8 +927,7 @@ private:
         uint64_t process_term,
         const std::string &etag);
     std::pair<KvError, int64_t> CasDeleteCurrentTermFileWithEtag(
-        const TableIdent &tbl_id,
-        const std::string &etag);
+        const TableIdent &tbl_id, const std::string &etag);
     void WaitForCloudTasksToDrain();
 
 private:
