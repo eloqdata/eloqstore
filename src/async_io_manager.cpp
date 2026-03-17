@@ -1154,51 +1154,66 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     PartitionFiles *tbl = &it_tbl->second;
     auto [it_fd, _] = tbl->fds_.try_emplace(file_id, tbl, file_id, term);
     LruFD::Ref lru_fd(&it_fd->second, this);
+    LruFD *fd_state = lru_fd.Get();
 
-    // Avoid multiple coroutines from concurrently opening or closing the same
-    // file duplicately.
-    lru_fd.Get()->mu_.Lock();
-    if (file_id == LruFD::kDirectory)
+    // Serialize potentially blocking open/create work without holding mu_ so
+    // cache eviction and cleanup can still inspect the FD state.
+    while (true)
     {
-        if (lru_fd.Get()->fd_ != LruFD::FdEmpty)
+        fd_state->mu_.Lock();
+        if (file_id == LruFD::kDirectory)
         {
-            lru_fd.Get()->mu_.Unlock();
-            return {std::move(lru_fd), KvError::NoError};
-        }
-    }
-    else if (lru_fd.Get()->reg_idx_ >= 0)
-    {
-        // Check for term mismatch when not in local mode.
-        if (eloq_store->Mode() != StoreMode::Local &&
-            file_id != LruFD::kDirectory && term != 0)
-        {
-            uint64_t cached_term = lru_fd.Get()->term_;
-            if (cached_term != 0 && cached_term != term)
+            if (fd_state->fd_ != LruFD::FdEmpty)
             {
-                // Term mismatch detected, close and reopen with correct term.
-                int old_idx = lru_fd.Get()->reg_idx_;
-                int res = CloseDirect(old_idx);
-                if (res < 0)
-                {
-                    lru_fd.Get()->mu_.Unlock();
-                    return {nullptr, ToKvError(res)};
-                }
-                lru_fd.Get()->reg_idx_ = -1;
-                // Fall through to open/create with correct term
-            }
-            else
-            {
-                // No mismatch, use cached FD.
-                lru_fd.Get()->mu_.Unlock();
+                fd_state->mu_.Unlock();
                 return {std::move(lru_fd), KvError::NoError};
             }
         }
-        else
+        else if (fd_state->reg_idx_ >= 0)
         {
-            // Local mode or directory, use cached FD.
-            lru_fd.Get()->mu_.Unlock();
-            return {std::move(lru_fd), KvError::NoError};
+            // Check for term mismatch when not in local mode.
+            if (eloq_store->Mode() != StoreMode::Local &&
+                file_id != LruFD::kDirectory && term != 0)
+            {
+                uint64_t cached_term = fd_state->term_;
+                if (cached_term != 0 && cached_term != term)
+                {
+                    // Term mismatch detected, close and reopen with correct
+                    // term.
+                    int old_idx = fd_state->reg_idx_;
+                    int res = CloseDirect(old_idx);
+                    if (res < 0)
+                    {
+                        fd_state->mu_.Unlock();
+                        return {nullptr, ToKvError(res)};
+                    }
+                    fd_state->reg_idx_ = -1;
+                    // Fall through to open/create with correct term.
+                }
+                else
+                {
+                    // No mismatch, use cached FD.
+                    fd_state->mu_.Unlock();
+                    return {std::move(lru_fd), KvError::NoError};
+                }
+            }
+            else
+            {
+                // Local mode or directory, use cached FD.
+                fd_state->mu_.Unlock();
+                return {std::move(lru_fd), KvError::NoError};
+            }
         }
+
+        if (!fd_state->opening_)
+        {
+            fd_state->opening_ = true;
+            fd_state->mu_.Unlock();
+            break;
+        }
+
+        fd_state->mu_.Unlock();
+        fd_state->open_waiting_.Wait(ThdTask());
     }
 
     int fd;
@@ -1251,27 +1266,34 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
             LOG(ERROR) << "open failed " << tbl_id << " file id " << file_id
                        << " : " << ErrorString(error);
         }
-        lru_fd.Get()->mu_.Unlock();
+
+        fd_state->mu_.Lock();
+        fd_state->opening_ = false;
+        fd_state->open_waiting_.WakeAll();
+        fd_state->mu_.Unlock();
         return {nullptr, error};
     }
 
+    fd_state->mu_.Lock();
     if (file_id == LruFD::kDirectory)
     {
-        lru_fd.Get()->fd_ = fd;
-        lru_fd.Get()->reg_idx_ = -1;
+        fd_state->fd_ = fd;
+        fd_state->reg_idx_ = -1;
     }
     else
     {
-        lru_fd.Get()->reg_idx_ = fd;
-        lru_fd.Get()->fd_ = LruFD::FdEmpty;
+        fd_state->reg_idx_ = fd;
+        fd_state->fd_ = LruFD::FdEmpty;
     }
 
     // Set term on newly opened data file FD.
     if (file_id <= LruFD::kMaxDataFile)
     {
-        lru_fd.Get()->term_ = term;
+        fd_state->term_ = term;
     }
-    lru_fd.Get()->mu_.Unlock();
+    fd_state->opening_ = false;
+    fd_state->open_waiting_.WakeAll();
+    fd_state->mu_.Unlock();
     return {std::move(lru_fd), KvError::NoError};
 }
 
