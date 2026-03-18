@@ -77,6 +77,22 @@ private:
     void OnTaskFinished(KvTask *task);
     void OnReceivedReq(KvRequest *req);
     bool ProcessReq(KvRequest *req);
+    static bool ShouldCheckPartitionFilter(RequestType type)
+    {
+        switch (type)
+        {
+        case RequestType::ListObject:
+        case RequestType::ListStandbyPartition:
+        case RequestType::GlobalArchive:
+        case RequestType::GlobalReopen:
+        case RequestType::GlobalListArchiveTags:
+        case RequestType::ChangePartition:
+        case RequestType::ApplyPartitionChange:
+            return false;
+        default:
+            return true;
+        }
+    }
     void TryStartPendingWrite(const TableIdent &tbl_id);
     void TryDispatchPendingWrites();
 

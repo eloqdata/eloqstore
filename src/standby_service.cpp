@@ -552,7 +552,7 @@ void StandbyService::ProcessReadyTasks(size_t shard_id)
                        << shard_id << ", task=" << completion.task
                        << ", result=" << static_cast<int>(completion.result);
         }
-        completion.task->io_res_ = static_cast<int>(completion.result);
+        completion.task->io_res_ = KvErrorToIoResult(completion.result);
         completion.task->FinishIo();
         if (completion.task->Type() == TaskType::ListStandbyPartition)
         {

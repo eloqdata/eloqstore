@@ -70,6 +70,10 @@ void KvTask::FinishIo()
     case TaskStatus::BlockedIO:
         if (inflight_io_ == 0)
         {
+            if (force_aborted_ && io_res_ == 0)
+            {
+                io_res_ = -ECANCELED;
+            }
             Resume();
         }
         break;

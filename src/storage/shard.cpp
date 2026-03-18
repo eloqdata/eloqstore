@@ -422,6 +422,16 @@ void Shard::TryDispatchPendingWrites()
 
 bool Shard::ProcessReq(KvRequest *req)
 {
+    if (ShouldCheckPartitionFilter(req->Type()))
+    {
+        const TableIdent &tbl_id = req->TableId();
+        if (tbl_id.IsValid() && !store_->PartitionIncluded(tbl_id))
+        {
+            req->SetDone(KvError::NotRunning);
+            return true;
+        }
+    }
+
     switch (req->Type())
     {
     case RequestType::Read:
@@ -537,7 +547,7 @@ bool Shard::ProcessReq(KvRequest *req)
             DLOG(INFO) << "Shard::ProcessReq ListStandbyPartition done, req="
                        << req << ", task=" << current_task
                        << ", io_res=" << current_task->io_res_;
-            return static_cast<KvError>(current_task->io_res_);
+            return ToKvError(current_task->io_res_);
         };
         StartTask(task, req, lbd);
         return true;
@@ -634,6 +644,84 @@ bool Shard::ProcessReq(KvRequest *req)
         LOG(ERROR)
             << "GlobalListArchiveTags request routed to shard unexpectedly";
         req->SetDone(KvError::InvalidArgs);
+        return true;
+    }
+    case RequestType::ChangePartition:
+    {
+        LOG(ERROR) << "ChangePartition request routed to shard unexpectedly";
+        req->SetDone(KvError::InvalidArgs);
+        return true;
+    }
+    case RequestType::ApplyPartitionChange:
+    {
+        auto *change_req = static_cast<ApplyPartitionChangeRequest *>(req);
+        auto partition_included = [&](const TableIdent &tbl_id) -> bool
+        {
+            if (!change_req->partition_filter_)
+            {
+                return true;
+            }
+            return (*change_req->partition_filter_)(tbl_id).has_value();
+        };
+
+        task_mgr_.ForEachActiveTask(
+            [&](KvTask *task)
+            {
+                if (task->req_ == nullptr)
+                {
+                    return;
+                }
+                const TableIdent &tbl_id = task->req_->TableId();
+                if (!tbl_id.IsValid())
+                {
+                    return;
+                }
+                if (!partition_included(tbl_id))
+                {
+                    task->ForceAbort();
+                }
+            });
+
+        std::vector<TableIdent> empty_queues;
+        empty_queues.reserve(pending_queues_.size());
+        for (auto &[tbl_id, pending_q] : pending_queues_)
+        {
+            if (partition_included(tbl_id))
+            {
+                continue;
+            }
+
+            while (WriteRequest *queued_req = pending_q.PopFront();
+                   queued_req != nullptr)
+            {
+                queued_req->SetDone(KvError::NotRunning);
+            }
+
+            if (!pending_q.running_)
+            {
+                empty_queues.push_back(tbl_id);
+            }
+        }
+
+        for (const TableIdent &tbl_id : empty_queues)
+        {
+            auto it = pending_queues_.find(tbl_id);
+            if (it == pending_queues_.end())
+            {
+                continue;
+            }
+            if (!it->second.running_ && it->second.Empty())
+            {
+                pending_queues_.erase(it);
+                --running_writing_tasks_;
+            }
+        }
+
+        auto *store = const_cast<EloqStore *>(store_);
+        std::atomic_store(&store->partition_filter_,
+                          change_req->partition_filter_);
+        change_req->pending_->fetch_sub(1, std::memory_order_acq_rel);
+        req->SetDone(KvError::NoError);
         return true;
     }
     case RequestType::Compact:

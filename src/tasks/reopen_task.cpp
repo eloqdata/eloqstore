@@ -50,7 +50,7 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
             return enqueue_err;
         }
         current_task->WaitIo();
-        KvError sync_err = static_cast<KvError>(current_task->io_res_);
+        KvError sync_err = ToKvError(current_task->io_res_);
         if (sync_err != KvError::NoError)
         {
             LOG(ERROR) << "Reopen " << tbl_id << " rsync failed, tag " << tag

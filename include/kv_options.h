@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,6 +21,9 @@ constexpr int64_t TB = 1LL << 40;
 
 constexpr uint8_t max_overflow_pointers = 128;
 constexpr uint16_t max_read_pages_batch = max_overflow_pointers;
+using PartitionFilter =
+    std::function<std::optional<PartitionGroupId>(const TableIdent &)>;
+
 struct KvOptions
 {
     int LoadFromIni(const char *path);
@@ -304,15 +308,15 @@ struct KvOptions
     uint16_t prewarm_task_count = 3;
 
     /**
-     * @brief Filter function to determine which partitions belong to this
-     * instance.
-     * The filter returning true means that this table partition belongs to the
-     * current instance and should be included in operations like prewarming,
-     * snapshotting, etc.
+     * @brief Classify which partition group a table partition belongs to.
+     * Returning std::nullopt means that this partition does not belong to this
+     * instance. If the function returns a partition group id, runtime
+     * partition-group state decides whether that partition is currently active
+     * for operations like prewarming, snapshotting, and reopen.
      * If not set (empty), all partitions are considered to belong to this
      * instance.
      */
-    std::function<bool(const TableIdent &)> partition_filter;
+    PartitionFilter partition_filter;
 };
 
 }  // namespace eloqstore

@@ -27,6 +27,7 @@ enum struct KvError : uint8_t
     NoPermission,   // Permission denied (EPERM).
     CloudErr,       // Cloud service error (non-timeout HTTP/CURL).
     IoFail,         // Unclassified local I/O error.
+    Aborted,        // Operation aborted after in-flight I/O drained.
     ExpiredTerm,    // Cloud term file indicates stale process term.
     OssInsufficientStorage,  // Object storage out of capacity (HTTP 507).
 };
@@ -59,6 +60,8 @@ constexpr const char *ErrorString(KvError err)
         return "Device or resource busy";
     case KvError::IoFail:
         return "I/O failure";
+    case KvError::Aborted:
+        return "Operation aborted";
     case KvError::CloudErr:
         return "Cloud service is unavailable";
     case KvError::Timeout:

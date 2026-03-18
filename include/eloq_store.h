@@ -10,6 +10,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -51,7 +52,9 @@ enum class RequestType : uint8_t
     CleanExpired,
     GlobalArchive,
     GlobalReopen,
-    GlobalListArchiveTags
+    GlobalListArchiveTags,
+    ChangePartition,
+    ApplyPartitionChange
 };
 
 inline const char *RequestTypeToString(RequestType type)
@@ -90,6 +93,10 @@ inline const char *RequestTypeToString(RequestType type)
         return "global_reopen";
     case RequestType::GlobalListArchiveTags:
         return "global_list_archive_tags";
+    case RequestType::ChangePartition:
+        return "change_partition";
+    case RequestType::ApplyPartitionChange:
+        return "apply_partition_change";
     default:
         return "unknown";
     }
@@ -617,6 +624,55 @@ private:
     friend class EloqStore;
 };
 
+class ChangePartitionRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::ChangePartition;
+    }
+
+    void SetPartitionFilter(PartitionFilter partition_filter)
+    {
+        if (partition_filter)
+        {
+            partition_filter_ = std::make_shared<PartitionFilter>(
+                std::move(partition_filter));
+        }
+        else
+        {
+            partition_filter_.reset();
+        }
+    }
+
+    void SetStopStore(bool stop_store)
+    {
+        stop_store_ = stop_store;
+    }
+
+private:
+    std::shared_ptr<const PartitionFilter> partition_filter_{nullptr};
+    bool stop_store_{false};
+
+    friend class EloqStore;
+};
+
+class ApplyPartitionChangeRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::ApplyPartitionChange;
+    }
+
+private:
+    std::shared_ptr<const PartitionFilter> partition_filter_{nullptr};
+    std::atomic<uint32_t> *pending_{nullptr};
+
+    friend class EloqStore;
+    friend class Shard;
+};
+
 class CompactRequest : public WriteRequest
 {
 public:
@@ -747,6 +803,10 @@ private:
     void HandleGlobalArchiveRequest(GlobalArchiveRequest *req);
     void HandleGlobalReopenRequest(GlobalReopenRequest *req);
     void HandleGlobalListArchiveTagsRequest(GlobalListArchiveTagsRequest *req);
+    void HandleChangePartitionRequest(ChangePartitionRequest *req);
+    std::optional<PartitionGroupId> ResolvePartitionGroup(
+        const TableIdent &tbl_id) const;
+    bool PartitionIncluded(const TableIdent &tbl_id) const;
     KvError CollectTablePartitions(const std::string &table_name,
                                    std::vector<TableIdent> &partitions) const;
     KvError InitStoreSpace();
@@ -773,6 +833,7 @@ private:
 
     bool enable_eloqstore_metrics_{false};
     std::atomic<StoreMode> store_mode_{StoreMode::Local};
+    std::shared_ptr<const PartitionFilter> partition_filter_{nullptr};
 
     friend class Shard;
     friend class AsyncIoManager;

@@ -381,6 +381,11 @@ EloqStore::EloqStore(const KvOptions &opts) : options_(opts)
     {
         LOG(FATAL) << "Invalid KvOptions configuration";
     }
+    if (options_.partition_filter)
+    {
+        partition_filter_ =
+            std::make_shared<PartitionFilter>(options_.partition_filter);
+    }
 }
 
 EloqStore::~EloqStore()
@@ -1033,8 +1038,7 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
                     continue;
                 }
 
-                if (options_.partition_filter &&
-                    !options_.partition_filter(tbl_id))
+                if (!PartitionIncluded(tbl_id))
                 {
                     continue;
                 }
@@ -1087,8 +1091,7 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
                     continue;
                 }
 
-                if (options_.partition_filter &&
-                    !options_.partition_filter(tbl_id))
+                if (!PartitionIncluded(tbl_id))
                 {
                     continue;
                 }
@@ -1262,7 +1265,7 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
             {
                 continue;
             }
-            if (options_.partition_filter && !options_.partition_filter(tbl_id))
+            if (!PartitionIncluded(tbl_id))
             {
                 continue;
             }
@@ -1309,8 +1312,7 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
                     continue;
                 }
 
-                if (options_.partition_filter &&
-                    !options_.partition_filter(tbl_id))
+                if (!PartitionIncluded(tbl_id))
                 {
                     continue;
                 }
@@ -1523,9 +1525,66 @@ bool EloqStore::SendRequest(KvRequest *req)
             static_cast<GlobalListArchiveTagsRequest *>(req));
         return true;
     }
+    if (req->Type() == RequestType::ChangePartition)
+    {
+        HandleChangePartitionRequest(static_cast<ChangePartitionRequest *>(req));
+        return true;
+    }
 
     Shard *shard = shards_[req->TableId().ShardIndex(shards_.size())].get();
     return shard->AddKvRequest(req);
+}
+
+std::optional<PartitionGroupId> EloqStore::ResolvePartitionGroup(
+    const TableIdent &tbl_id) const
+{
+    std::shared_ptr<const PartitionFilter> partition_filter =
+        std::atomic_load(&partition_filter_);
+    if (!partition_filter)
+    {
+        return PartitionGroupId{0};
+    }
+    return (*partition_filter)(tbl_id);
+}
+
+bool EloqStore::PartitionIncluded(const TableIdent &tbl_id) const
+{
+    return ResolvePartitionGroup(tbl_id).has_value();
+}
+
+void EloqStore::HandleChangePartitionRequest(ChangePartitionRequest *req)
+{
+    std::vector<std::unique_ptr<ApplyPartitionChangeRequest>> sub_reqs;
+    sub_reqs.reserve(shards_.size());
+    std::atomic<uint32_t> pending(static_cast<uint32_t>(shards_.size()));
+
+    for (auto &shard : shards_)
+    {
+        auto sub_req = std::make_unique<ApplyPartitionChangeRequest>();
+        sub_req->partition_filter_ = req->partition_filter_;
+        sub_req->pending_ = &pending;
+        if (!shard->AddKvRequest(sub_req.get()))
+        {
+            req->SetDone(KvError::Busy);
+            return;
+        }
+        sub_reqs.push_back(std::move(sub_req));
+    }
+
+    while (pending.load(std::memory_order_acquire) > 0)
+    {
+#ifdef ELOQ_MODULE_ENABLED
+        bthread_usleep(1000);
+#else
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+#endif
+    }
+
+    if (req->stop_store_)
+    {
+        Stop();
+    }
+    req->SetDone(KvError::NoError);
 }
 
 void EloqStore::Stop()

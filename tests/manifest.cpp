@@ -196,8 +196,13 @@ TEST_CASE("global archive shares timestamp and filters partitions",
         partitions[2].partition_id_,
     };
     opts.partition_filter =
-        [included_ids](const eloqstore::TableIdent &tbl) -> bool
-    { return included_ids.count(tbl.partition_id_) != 0; };
+        [included_ids](const eloqstore::TableIdent &tbl)
+        -> std::optional<eloqstore::PartitionGroupId>
+    {
+        return included_ids.count(tbl.partition_id_) != 0
+                   ? std::optional<eloqstore::PartitionGroupId>{0}
+                   : std::nullopt;
+    };
 
     eloqstore::EloqStore *store = InitStore(opts);
     std::vector<std::unique_ptr<MapVerifier>> writers;

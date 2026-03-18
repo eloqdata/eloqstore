@@ -373,8 +373,13 @@ TEST_CASE("cloud prewarm honors partition filter", "[cloud][prewarm]")
         partitions[1],
     };
     options.partition_filter =
-        [included](const eloqstore::TableIdent &tbl) -> bool
-    { return included.count(tbl) != 0; };
+        [included](const eloqstore::TableIdent &tbl)
+        -> std::optional<eloqstore::PartitionGroupId>
+    {
+        return included.count(tbl) != 0
+                   ? std::optional<eloqstore::PartitionGroupId>{0}
+                   : std::nullopt;
+    };
 
     eloqstore::EloqStore *store = InitStore(options);
     for (const auto &tbl_id : partitions)
@@ -884,8 +889,13 @@ TEST_CASE("cloud global archive shares timestamp and filters partitions",
         second_page_partition_id,
     };
     options.partition_filter =
-        [included_ids](const eloqstore::TableIdent &tbl) -> bool
-    { return included_ids.count(tbl.partition_id_) != 0; };
+        [included_ids](const eloqstore::TableIdent &tbl)
+        -> std::optional<eloqstore::PartitionGroupId>
+    {
+        return included_ids.count(tbl.partition_id_) != 0
+                   ? std::optional<eloqstore::PartitionGroupId>{0}
+                   : std::nullopt;
+    };
 
     eloqstore::EloqStore *store = InitStore(options);
     std::vector<std::unique_ptr<MapVerifier>> writers;
@@ -1277,8 +1287,14 @@ TEST_CASE("cloud reopen triggers prewarm to download newer remote data files",
     options.prewarm_cloud_cache = true;
     options.prewarm_task_count = 1;
     options.allow_reuse_local_caches = true;
-    options.partition_filter = [&enable_partition_filter](const auto &)
-    { return enable_partition_filter.load(std::memory_order_relaxed); };
+    options.partition_filter =
+        [&enable_partition_filter](const auto &)
+        -> std::optional<eloqstore::PartitionGroupId>
+    {
+        return enable_partition_filter.load(std::memory_order_relaxed)
+                   ? std::optional<eloqstore::PartitionGroupId>{0}
+                   : std::nullopt;
+    };
 
     CleanupStore(options);
 

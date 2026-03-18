@@ -355,6 +355,7 @@ public:
 };
 
 KvError ToKvError(int err_no);
+int KvErrorToIoResult(KvError err);
 
 class IouringMgr : public AsyncIoManager
 {

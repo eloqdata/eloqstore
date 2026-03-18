@@ -486,8 +486,7 @@ void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
                 total_files_skipped++;
                 continue;
             }
-            if (store_->options_.partition_filter &&
-                !store_->options_.partition_filter(tbl_id))
+            if (!store_->PartitionIncluded(tbl_id))
             {
                 total_files_skipped++;
                 continue;

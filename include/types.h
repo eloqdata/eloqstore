@@ -14,6 +14,8 @@
 
 namespace eloqstore
 {
+using PartitionGroupId = uint32_t;
+
 enum class StoreMode
 {
     Local = 0,

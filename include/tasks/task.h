@@ -115,10 +115,19 @@ public:
     int WaitIoResult();
     void WaitIo();
     void FinishIo();
+    void ForceAbort()
+    {
+        force_aborted_ = true;
+    }
+    bool ForceAborted() const
+    {
+        return force_aborted_;
+    }
 
     uint32_t inflight_io_{0};
     int io_res_{0};
     uint32_t io_flags_{0};
+    bool force_aborted_{false};
 
     TaskStatus status_{TaskStatus::Idle};
     KvRequest *req_{nullptr};

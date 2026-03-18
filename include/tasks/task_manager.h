@@ -44,6 +44,26 @@ public:
     void FinishExternalTask();
 
     size_t NumActive() const;
+    template <typename F>
+    void ForEachActiveTask(F &&visitor)
+    {
+        auto visit = [&](KvTask *task)
+        {
+            if (task->status_ == TaskStatus::Idle ||
+                task->status_ == TaskStatus::Finished)
+            {
+                return;
+            }
+            visitor(task);
+        };
+        batch_write_pool_.ForEachTask(visit);
+        bg_write_pool_.ForEachTask(visit);
+        read_pool_.ForEachTask(visit);
+        scan_pool_.ForEachTask(visit);
+        list_object_pool_.ForEachTask(visit);
+        list_standby_partition_pool_.ForEachTask(visit);
+        reopen_pool_.ForEachTask(visit);
+    }
 
     void Shutdown();
 

@@ -992,9 +992,38 @@ KvError ToKvError(int err_no)
         return KvError::OpenFileLimit;
     case -ENOSPC:
         return KvError::OutOfSpace;
+    case -ECANCELED:
+        return KvError::Aborted;
     default:
         LOG(ERROR) << "ToKvError: " << err_no;
         return KvError::IoFail;
+    }
+}
+
+int KvErrorToIoResult(KvError err)
+{
+    switch (err)
+    {
+    case KvError::NoError:
+        return 0;
+    case KvError::NoPermission:
+        return -EPERM;
+    case KvError::NotFound:
+        return -ENOENT;
+    case KvError::TryAgain:
+        return -EAGAIN;
+    case KvError::OutOfMem:
+        return -ENOMEM;
+    case KvError::Busy:
+        return -EBUSY;
+    case KvError::OpenFileLimit:
+        return -EMFILE;
+    case KvError::OutOfSpace:
+        return -ENOSPC;
+    case KvError::Aborted:
+        return -ECANCELED;
+    default:
+        return -EIO;
     }
 }
 
@@ -4673,7 +4702,7 @@ std::pair<ManifestFilePtr, KvError> StandbyStoreMgr::GetManifest(
         return {nullptr, prep_err};
     }
     current_task->WaitIo();
-    prep_err = static_cast<KvError>(current_task->io_res_);
+    prep_err = ToKvError(current_task->io_res_);
     if (prep_err != KvError::NoError)
     {
         return {nullptr, prep_err};
