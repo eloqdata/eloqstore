@@ -97,8 +97,7 @@ bool ParseCloudCleanupFilename(std::string_view filename,
     if (type == FileNameManifest)
     {
         std::optional<std::string> tag;
-        if (!ParseManifestFileSuffix(suffix, term, tag) ||
-            tag.has_value())
+        if (!ParseManifestFileSuffix(suffix, term, tag) || tag.has_value())
         {
             return false;
         }
@@ -708,7 +707,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
 std::pair<ManifestFilePtr, KvError> IouringMgr::GetManifest(
     const TableIdent &tbl_id)
 {
-    LruFD::Ref old_fd = GetOpenedFD(tbl_id, LruFD::kManifest);
+    auto [old_fd, _] = GetOpenedFD(tbl_id, LruFD::kManifest);
     if (old_fd != nullptr)
     {
         assert(old_fd.Get()->ref_count_ == 1);
@@ -856,7 +855,7 @@ KvError IouringMgr::SyncData(const TableIdent &tbl_id)
     fds.reserve(dirty_ids.size());
     for (FileId file_id : dirty_ids)
     {
-        LruFD::Ref fd_ref = GetOpenedFD(tbl_id, file_id);
+        auto [fd_ref, _] = GetOpenedFD(tbl_id, file_id);
         if (fd_ref == nullptr)
         {
             continue;
@@ -897,7 +896,7 @@ KvError IouringMgr::CloseFiles(const TableIdent &tbl_id,
     fd_refs.reserve(file_ids.size());
     for (FileId file_id : file_ids)
     {
-        LruFD::Ref fd_ref = GetOpenedFD(tbl_id, file_id);
+        auto [fd_ref, _] = GetOpenedFD(tbl_id, file_id);
         if (fd_ref != nullptr)
         {
             fd_refs.emplace_back(std::move(fd_ref));
@@ -926,15 +925,17 @@ KvError IouringMgr::TryCleanupLocalPartitionDir(const TableIdent &tbl_id)
 {
     const std::string partition_name = tbl_id.ToString();
 
-    LruFD::Ref dir_fd = GetOpenedFD(tbl_id, LruFD::kDirectory);
-    LruFD::Ref manifest_fd = GetOpenedFD(tbl_id, LruFD::kManifest);
+    auto [dir_fd, dir_state] = GetOpenedFD(tbl_id, LruFD::kDirectory);
+    auto [manifest_fd, manifest_state] = GetOpenedFD(tbl_id, LruFD::kManifest);
     const bool directory_active =
-        dir_fd != nullptr && dir_fd.Get()->ref_count_ > 1;
-    const bool manifest_active =
-        manifest_fd != nullptr && manifest_fd.Get()->ref_count_ > 1;
+        dir_state == OpenedFDState::Opening ||
+        (dir_state == OpenedFDState::Opened && dir_fd.Get()->ref_count_ > 1);
+    const bool manifest_active = manifest_state == OpenedFDState::Opening ||
+                                 (manifest_state == OpenedFDState::Opened &&
+                                  manifest_fd.Get()->ref_count_ > 1);
 
-    auto close_idle_fd =
-        [&](LruFD::Ref &fd_ref, std::string_view fd_name) -> KvError
+    auto close_idle_fd = [&](LruFD::Ref &fd_ref,
+                             std::string_view fd_name) -> KvError
     {
         if (fd_ref == nullptr || fd_ref.Get()->ref_count_ != 1)
         {
@@ -967,7 +968,12 @@ KvError IouringMgr::TryCleanupLocalPartitionDir(const TableIdent &tbl_id)
         DLOG(INFO) << "Skip cleaning partition directory " << partition_name
                    << " because "
                    << (directory_active ? "directory" : "manifest")
-                   << " handle is still active";
+                   << ((directory_active &&
+                        dir_state == OpenedFDState::Opening) ||
+                               (manifest_active &&
+                                manifest_state == OpenedFDState::Opening)
+                           ? " handle is still opening"
+                           : " handle is still active");
         return KvError::NoError;
     }
 
@@ -981,8 +987,7 @@ KvError IouringMgr::TryCleanupLocalPartitionDir(const TableIdent &tbl_id)
             return KvError::NoError;
         }
         LOG(WARNING) << "Failed to stat partition directory " << partition_name
-                     << " for table " << tbl_id << ": "
-                     << strerror(-stat_res);
+                     << " for table " << tbl_id << ": " << strerror(-stat_res);
         return ToKvError(stat_res);
     }
     if ((stx.stx_mode & S_IFMT) != S_IFDIR)
@@ -1109,27 +1114,36 @@ IouringMgr::FdIdx IouringMgr::GetRootFD(const TableIdent &tbl_id)
     return {root_fd, false};
 }
 
-IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(const TableIdent &tbl_id,
-                                               FileId file_id)
+std::pair<IouringMgr::LruFD::Ref, IouringMgr::OpenedFDState>
+IouringMgr::GetOpenedFD(const TableIdent &tbl_id, FileId file_id)
 {
     auto it_tbl = tables_.find(tbl_id);
     if (it_tbl == tables_.end())
     {
-        return nullptr;
+        return {nullptr, OpenedFDState::Missing};
     }
     auto it_fd = it_tbl->second.fds_.find(file_id);
     if (it_fd == it_tbl->second.fds_.end())
     {
-        return nullptr;
+        return {nullptr, OpenedFDState::Missing};
     }
     // This file may be in the process of being closed.
     LruFD::Ref fd_ref(&it_fd->second, this);
-    fd_ref.Get()->mu_.Lock();
+    LruFD *fd_state = fd_ref.Get();
+    fd_state->mu_.Lock();
+    if (fd_state->opening_)
+    {
+        fd_state->mu_.Unlock();
+        return {nullptr, OpenedFDState::Opening};
+    }
     bool empty = (file_id == LruFD::kDirectory)
-                     ? fd_ref.Get()->fd_ == LruFD::FdEmpty
-                     : fd_ref.Get()->reg_idx_ < 0;
-    fd_ref.Get()->mu_.Unlock();
-    return empty ? nullptr : fd_ref;
+                     ? fd_state->fd_ == LruFD::FdEmpty
+                     : fd_state->reg_idx_ < 0;
+    fd_state->mu_.Unlock();
+    return empty ? std::pair<LruFD::Ref, OpenedFDState>(nullptr,
+                                                        OpenedFDState::Missing)
+                 : std::pair<LruFD::Ref, OpenedFDState>(std::move(fd_ref),
+                                                        OpenedFDState::Opened);
 }
 
 std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenFD(
@@ -2248,7 +2262,7 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
 KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
                                    std::string_view snapshot)
 {
-    LruFD::Ref fd_ref = GetOpenedFD(tbl_id, LruFD::kManifest);
+    auto [fd_ref, _] = GetOpenedFD(tbl_id, LruFD::kManifest);
     if (fd_ref != nullptr)
     {
         // Close the old manifest firstly.
@@ -2852,7 +2866,7 @@ KvError CloudStoreMgr::OnDataFileSealed(const TableIdent &tbl_id,
                                         FileId file_id)
 {
     assert(file_id <= LruFD::kMaxDataFile);
-    LruFD::Ref fd_ref = GetOpenedFD(tbl_id, file_id);
+    auto [fd_ref, _] = GetOpenedFD(tbl_id, file_id);
     WriteTask *owner = CurrentWriteTask();
     const uint64_t term =
         fd_ref != nullptr
@@ -3326,9 +3340,8 @@ std::pair<size_t, size_t> CloudStoreMgr::TrimRestoredCacheUsage()
 bool CloudStoreMgr::IsIdle()
 {
     return file_cleaner_.status_ == TaskStatus::Idle &&
-           pending_gc_cleanup_queue_.empty() &&
-           active_prewarm_tasks_ == 0 && inflight_cloud_slots_ == 0 &&
-           !obj_store_.HasPendingWork();
+           pending_gc_cleanup_queue_.empty() && active_prewarm_tasks_ == 0 &&
+           inflight_cloud_slots_ == 0 && !obj_store_.HasPendingWork();
 }
 
 void CloudStoreMgr::Stop()
@@ -3781,7 +3794,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
     if (archive_tag.empty())
     {
         // Always fetch the latest manifest from cloud, even if local exists.
-        LruFD::Ref old_fd = GetOpenedFD(tbl_id, LruFD::kManifest);
+        auto [old_fd, _] = GetOpenedFD(tbl_id, LruFD::kManifest);
         if (old_fd != nullptr)
         {
             CloseFile(std::move(old_fd));
@@ -3958,7 +3971,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
         return IouringMgr::GetManifest(tbl_id);
     }
 
-    LruFD::Ref old_fd = GetOpenedFD(tbl_id, LruFD::kManifest);
+    auto [old_fd, _] = GetOpenedFD(tbl_id, LruFD::kManifest);
     if (old_fd != nullptr)
     {
         CloseFile(std::move(old_fd));
@@ -4286,7 +4299,7 @@ std::pair<KvError, int64_t> CloudStoreMgr::CasUpdateTermFileWithEtag(
 KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
                                       std::string_view snapshot)
 {
-    LruFD::Ref fd_ref = GetOpenedFD(tbl_id, LruFD::kManifest);
+    auto [fd_ref, _] = GetOpenedFD(tbl_id, LruFD::kManifest);
     if (fd_ref != nullptr)
     {
         // Close the old manifest firstly.
@@ -4372,8 +4385,8 @@ KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
         }
     }
 
-    auto [dir_fd, err] = OpenOrCreateFD(
-        tbl_id, LruFD::kDirectory, false, true, 0);
+    auto [dir_fd, err] =
+        OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, 0);
     CHECK_KV_ERR(err);
     int res = WriteSnapshot(std::move(dir_fd), key.filename_, snapshot);
     if (res < 0)
@@ -4976,7 +4989,7 @@ int StandbyStoreMgr::RunRsync(const std::string &remote, const std::string &dst)
 std::pair<ManifestFilePtr, KvError> StandbyStoreMgr::RefreshManifest(
     const TableIdent &tbl_id)
 {
-    LruFD::Ref old_fd = GetOpenedFD(tbl_id, LruFD::kManifest);
+    auto [old_fd, _] = GetOpenedFD(tbl_id, LruFD::kManifest);
     if (old_fd != nullptr)
     {
         CloseFile(std::move(old_fd));
@@ -5465,7 +5478,8 @@ void CloudStoreMgr::FileCleaner::Run()
 
         if (has_pending_gc)
         {
-            const size_t pending_count = io_mgr_->pending_gc_cleanup_queue_.size();
+            const size_t pending_count =
+                io_mgr_->pending_gc_cleanup_queue_.size();
             for (size_t i = 0; i < pending_count && req_count < batch_size; ++i)
             {
                 FileKey key =
@@ -5480,15 +5494,21 @@ void CloudStoreMgr::FileCleaner::Run()
                 uint64_t term = 0;
                 if (!ParseCloudCleanupFilename(key.filename_, file_id, term))
                 {
-                    LOG(WARNING) << "Skip invalid pending GC cleanup file "
-                                 << key.filename_ << " for table "
-                                 << key.tbl_id_;
+                    LOG(WARNING)
+                        << "Skip invalid pending GC cleanup file "
+                        << key.filename_ << " for table " << key.tbl_id_;
                     io_mgr_->pending_gc_cleanup_.erase(key);
                     made_progress = true;
                     continue;
                 }
 
-                LruFD::Ref fd_ref = io_mgr_->GetOpenedFD(key.tbl_id_, file_id);
+                auto [fd_ref, fd_state] =
+                    io_mgr_->GetOpenedFD(key.tbl_id_, file_id);
+                if (fd_state == OpenedFDState::Opening)
+                {
+                    retry_keys.emplace_back(std::move(key));
+                    continue;
+                }
                 if (fd_ref != nullptr && fd_ref.Get()->term_ == term)
                 {
                     if (fd_ref.Get()->ref_count_ > 1)
@@ -5503,8 +5523,8 @@ void CloudStoreMgr::FileCleaner::Run()
                         LOG(WARNING)
                             << "Failed to close cached-idle file during GC "
                                "cleanup for table "
-                            << key.tbl_id_ << " file " << key.filename_
-                            << ": " << ErrorString(close_err);
+                            << key.tbl_id_ << " file " << key.filename_ << ": "
+                            << ErrorString(close_err);
                         retry_keys.emplace_back(std::move(key));
                         continue;
                     }
@@ -5528,7 +5548,8 @@ void CloudStoreMgr::FileCleaner::Run()
                 req.path_ = file->key_->tbl_id_.ToString();
                 req.path_ /= file->key_->filename_;
 
-                io_uring_sqe *sqe = io_mgr_->GetSQE(UserDataType::BaseReq, &req);
+                io_uring_sqe *sqe =
+                    io_mgr_->GetSQE(UserDataType::BaseReq, &req);
                 int root_fd = io_mgr_->GetRootFD(file->key_->tbl_id_).first;
                 io_uring_prep_unlinkat(sqe, root_fd, req.path_.c_str(), 0);
             }
@@ -5565,8 +5586,10 @@ void CloudStoreMgr::FileCleaner::Run()
                 req.path_ = file->key_->tbl_id_.ToString();
                 req.path_ /= file->key_->filename_;
 
-                io_uring_sqe *sqe = io_mgr_->GetSQE(UserDataType::BaseReq, &req);
-                int root_fd = io_mgr_->GetRootFD(req.file_->key_->tbl_id_).first;
+                io_uring_sqe *sqe =
+                    io_mgr_->GetSQE(UserDataType::BaseReq, &req);
+                int root_fd =
+                    io_mgr_->GetRootFD(req.file_->key_->tbl_id_).first;
                 io_uring_prep_unlinkat(sqe, root_fd, req.path_.c_str(), 0);
             }
         }
@@ -5633,8 +5656,8 @@ void CloudStoreMgr::FileCleaner::Run()
             {
                 LOG(WARNING)
                     << "Failed to clean local partition directory for table "
-                    << tbl_id << " after file cleanup: "
-                    << ErrorString(cleanup_err);
+                    << tbl_id
+                    << " after file cleanup: " << ErrorString(cleanup_err);
             }
         }
         DLOG(INFO) << "file cleaner send " << req_count << " unlink requests";
