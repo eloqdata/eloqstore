@@ -66,6 +66,11 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
         LOG(ERROR) << "Option max_inflight_write cannot be zero";
         return false;
     }
+    if (opts.max_global_request_batch == 0)
+    {
+        LOG(ERROR) << "Option max_global_request_batch cannot be zero";
+        return false;
+    }
     if ((opts.data_page_size & (page_align - 1)) != 0)
     {
         LOG(ERROR) << "Option data_page_size is not page aligned";
