@@ -1739,6 +1739,7 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
     options.cloud_store_path += "/reopen-global";
     options.prewarm_cloud_cache = false;
     options.allow_reuse_local_caches = true;
+    options.pages_per_file_shift = 1;  // Keep at least one data file after cache restore.
 
     CleanupStore(options);
 
@@ -1755,7 +1756,20 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
     {
         verifiers.emplace_back(
             std::make_unique<MapVerifier>(tbl_id, store, false));
+        verifiers.back()->SetValueSize(10024);
     }
+
+    auto count_data_files = [&](const eloqstore::TableIdent &tbl_id)
+    {
+        const std::filesystem::path partition_path =
+            std::filesystem::path(options.store_path.front()) / tbl_id.ToString();
+        const std::vector<std::string> files =
+            ListLocalPartitionFiles(partition_path);
+        return std::count_if(files.begin(),
+                             files.end(),
+                             [](const std::string &name)
+                             { return name.rfind("data_", 0) == 0; });
+    };
 
     // Version 1 data, keep a local backup.
     std::vector<std::map<std::string, eloqstore::KvEntry>> v1_datasets;
@@ -1771,6 +1785,10 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
 
     // Stop to ensure local files are durable before backup.
     store->Stop();
+    for (const auto &tbl_id : tbl_ids)
+    {
+        REQUIRE(count_data_files(tbl_id) > 1);
+    }
 
     const std::string backup_root = "/tmp/test-data-reopen-global-backup";
     const std::string manifest_name = eloqstore::ManifestFileName(0);
@@ -1835,36 +1853,6 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
             std::filesystem::copy_options::recursive |
                 std::filesystem::copy_options::overwrite_existing);
     }
-    auto clear_partition_data_files = [&](const eloqstore::TableIdent &table_id)
-    {
-        for (const auto &path : options.store_path)
-        {
-            std::filesystem::path part_path =
-                std::filesystem::path(path) / table_id.ToString();
-            if (!std::filesystem::exists(part_path))
-            {
-                continue;
-            }
-            for (const auto &ent :
-                 std::filesystem::directory_iterator(part_path))
-            {
-                if (!ent.is_regular_file())
-                {
-                    continue;
-                }
-                auto [type, suffix] =
-                    eloqstore::ParseFileName(ent.path().filename().string());
-                if (type == eloqstore::FileNameData)
-                {
-                    std::filesystem::remove(ent.path());
-                }
-            }
-        }
-    };
-    for (const auto &tbl_id : tbl_ids)
-    {
-        clear_partition_data_files(tbl_id);
-    }
 
     REQUIRE(store->Start() == eloqstore::KvError::NoError);
     REQUIRE(WaitForCondition(std::chrono::seconds(5),
@@ -1872,6 +1860,7 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
                              [&]() { return store->Inited(); }));
     for (size_t i = 0; i < tbl_ids.size(); ++i)
     {
+        REQUIRE(count_data_files(tbl_ids[i]) > 0);
         std::filesystem::path restored_manifest =
             std::filesystem::path(options.store_path.front()) /
             tbl_ids[i].ToString() / manifest_name;
