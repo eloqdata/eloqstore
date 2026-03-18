@@ -494,14 +494,15 @@ std::pair<MemIndexPage::Handle, KvError> IndexPageManager::FindPage(
             new_page->page_ = std::move(page);
             if (err != KvError::NoError)
             {
-                new_page->waiting_.WakeAll();
                 mapping->Unswizzling(new_page);
                 if (new_page->IsPinned())
                 {
                     new_page->SetError(err);
+                    new_page->waiting_.WakeAll();
                 }
                 else
                 {
+                    CHECK(new_page->waiting_.Empty());
                     FreeIndexPage(new_page);
                 }
                 return {MemIndexPage::Handle(), err};
