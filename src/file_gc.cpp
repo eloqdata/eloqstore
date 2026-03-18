@@ -19,6 +19,7 @@
 #include "replayer.h"
 #include "storage/mem_index_page.h"
 #include "storage/object_store.h"
+#include "storage/shard.h"
 #include "tasks/task.h"
 #include "utils.h"
 namespace eloqstore
@@ -474,12 +475,18 @@ KvError DeleteUnreferencedCloudFiles(
     const RetainedFiles &retained_files,
     FileId least_not_archived_file_id,
     CloudStoreMgr *cloud_mgr,
-    std::vector<std::string> &deleted_filenames)
+    std::vector<std::string> &deleted_filenames,
+    bool *deleted_current_manifest)
 {
     std::vector<std::string> files_to_delete;
     std::vector<std::string> basenames_to_delete;
     auto process_term = cloud_mgr->ProcessTerm();
+    const std::string current_manifest = ManifestFileName(process_term);
     deleted_filenames.clear();
+    if (deleted_current_manifest != nullptr)
+    {
+        *deleted_current_manifest = false;
+    }
 
     for (const std::string &file_name : data_files)
     {
@@ -569,6 +576,14 @@ KvError DeleteUnreferencedCloudFiles(
     for (size_t i = 0; i < delete_tasks.size(); ++i)
     {
         const auto &task = delete_tasks[i];
+        const bool manifest_gone =
+            basenames_to_delete[i] == current_manifest &&
+            (task.error_ == KvError::NoError ||
+             task.error_ == KvError::NotFound);
+        if (manifest_gone && deleted_current_manifest != nullptr)
+        {
+            *deleted_current_manifest = true;
+        }
         if (task.error_ != KvError::NoError)
         {
             LOG(ERROR) << "Failed to delete file " << task.remote_path_ << ": "
@@ -747,16 +762,22 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
 
     // 5. delete unreferenced data files.
     std::vector<std::string> deleted_filenames;
+    bool deleted_current_manifest = false;
     err = DeleteUnreferencedCloudFiles(tbl_id,
                                        data_files,
                                        manifest_terms,
                                        retained_files,
                                        least_not_archived_file_id,
                                        cloud_mgr,
-                                       deleted_filenames);
+                                       deleted_filenames,
+                                       &deleted_current_manifest);
     if (!deleted_filenames.empty())
     {
         cloud_mgr->RequestGcLocalCleanup(tbl_id, deleted_filenames);
+    }
+    if (deleted_current_manifest)
+    {
+        shard->IndexManager()->MarkManifestMissing(tbl_id);
     }
 
     return err;
