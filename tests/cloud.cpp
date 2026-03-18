@@ -11,8 +11,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include "common.h"
 #include "async_io_manager.h"
+#include "common.h"
 #include "kv_options.h"
 #include "storage/shard.h"
 #include "test_utils.h"
@@ -77,7 +77,8 @@ std::vector<std::string> ListLocalPartitionFiles(
     {
         return files;
     }
-    for (const auto &entry : std::filesystem::directory_iterator(partition_path))
+    for (const auto &entry :
+         std::filesystem::directory_iterator(partition_path))
     {
         if (entry.is_regular_file())
         {
@@ -329,19 +330,22 @@ TEST_CASE("cloud gc removes local cached files after remote truncate",
 
     const fs::path partition_path =
         fs::path(options.store_path[0]) / tbl_id.ToString();
-    REQUIRE(WaitForCondition(
-        10s,
-        50ms,
-        [&]() { return ContainsFileWithPrefix(ListLocalPartitionFiles(partition_path), "data_"); }));
+    REQUIRE(WaitForCondition(10s,
+                             50ms,
+                             [&]()
+                             {
+                                 return ContainsFileWithPrefix(
+                                     ListLocalPartitionFiles(partition_path),
+                                     "data_");
+                             }));
 
     const std::vector<std::string> local_before =
         ListLocalPartitionFiles(partition_path);
     REQUIRE(ContainsFileWithPrefix(local_before, "data_"));
-    const auto deleted_local_it =
-        std::find_if(local_before.begin(),
-                     local_before.end(),
-                     [](const std::string &name)
-                     { return name.rfind("data_", 0) == 0; });
+    const auto deleted_local_it = std::find_if(
+        local_before.begin(),
+        local_before.end(),
+        [](const std::string &name) { return name.rfind("data_", 0) == 0; });
     REQUIRE(deleted_local_it != local_before.end());
     const std::string deleted_local_file = *deleted_local_it;
 
@@ -350,8 +354,7 @@ TEST_CASE("cloud gc removes local cached files after remote truncate",
     REQUIRE(WaitForCondition(
         20s,
         100ms,
-        [&]()
-        { return !fs::exists(partition_path / deleted_local_file); }));
+        [&]() { return !fs::exists(partition_path / deleted_local_file); }));
     REQUIRE(WaitForCondition(
         20s, 100ms, [&]() { return !fs::exists(partition_path); }));
 
@@ -359,8 +362,10 @@ TEST_CASE("cloud gc removes local cached files after remote truncate",
     CleanupStore(options);
 }
 
-TEST_CASE("cloud gc waits for an actively referenced local file before deleting cache",
-          "[cloud][gc][targeted]")
+TEST_CASE(
+    "cloud gc waits for an actively referenced local file before deleting "
+    "cache",
+    "[cloud][gc][targeted]")
 {
     using namespace std::chrono_literals;
     namespace fs = std::filesystem;
@@ -385,7 +390,11 @@ TEST_CASE("cloud gc waits for an actively referenced local file before deleting 
     REQUIRE(WaitForCondition(
         10s,
         50ms,
-        [&]() { return FindLowestDataFile(ListLocalPartitionFiles(partition_path)).has_value(); }));
+        [&]()
+        {
+            return FindLowestDataFile(ListLocalPartitionFiles(partition_path))
+                .has_value();
+        }));
 
     std::optional<std::string> target_name =
         FindLowestDataFile(ListLocalPartitionFiles(partition_path));
@@ -404,8 +413,9 @@ TEST_CASE("cloud gc waits for an actively referenced local file before deleting 
 
     eloqstore::Shard *shard = PrimaryShard(store);
     REQUIRE(shard != nullptr);
-    auto *cloud_mgr = static_cast<eloqstore::CloudStoreMgr *>(shard->IoManager());
-    auto held_fd = cloud_mgr->GetOpenedFD(tbl_id, target_file_id);
+    auto *cloud_mgr =
+        static_cast<eloqstore::CloudStoreMgr *>(shard->IoManager());
+    auto [held_fd, state] = cloud_mgr->GetOpenedFD(tbl_id, target_file_id);
     REQUIRE(held_fd != nullptr);
     REQUIRE(held_fd.Get()->term_ == target_term);
 
@@ -416,8 +426,8 @@ TEST_CASE("cloud gc waits for an actively referenced local file before deleting 
     REQUIRE(fs::exists(target_path));
 
     held_fd = eloqstore::IouringMgr::LruFD::Ref();
-    REQUIRE(
-        WaitForCondition(20s, 100ms, [&]() { return !fs::exists(target_path); }));
+    REQUIRE(WaitForCondition(
+        20s, 100ms, [&]() { return !fs::exists(target_path); }));
     REQUIRE(WaitForCondition(
         20s, 100ms, [&]() { return !fs::exists(partition_path); }));
 
@@ -648,10 +658,9 @@ TEST_CASE("cloud startup restore removes empty idle partition directories",
     REQUIRE(fs::is_empty(partition_path));
 
     REQUIRE(store->Start() == eloqstore::KvError::NoError);
-    REQUIRE(WaitForCondition(
-        chrono::seconds(5),
-        chrono::milliseconds(20),
-        [&]() { return !fs::exists(partition_path); }));
+    REQUIRE(WaitForCondition(chrono::seconds(5),
+                             chrono::milliseconds(20),
+                             [&]() { return !fs::exists(partition_path); }));
 
     store->Stop();
     CleanupStore(options);
@@ -692,10 +701,9 @@ TEST_CASE("cloud startup restore removes partitions cleaned to empty",
     REQUIRE(fs::exists(tmp_path));
 
     REQUIRE(store->Start() == eloqstore::KvError::NoError);
-    REQUIRE(WaitForCondition(
-        chrono::seconds(5),
-        chrono::milliseconds(20),
-        [&]() { return !fs::exists(partition_path); }));
+    REQUIRE(WaitForCondition(chrono::seconds(5),
+                             chrono::milliseconds(20),
+                             [&]() { return !fs::exists(partition_path); }));
 
     store->Stop();
     CleanupStore(options);
@@ -1739,7 +1747,8 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
     options.cloud_store_path += "/reopen-global";
     options.prewarm_cloud_cache = false;
     options.allow_reuse_local_caches = true;
-    options.pages_per_file_shift = 1;  // Keep at least one data file after cache restore.
+    options.pages_per_file_shift =
+        1;  // Keep at least one data file after cache restore.
 
     CleanupStore(options);
 
@@ -1762,7 +1771,8 @@ TEST_CASE("cloud global reopen refreshes local manifests", "[cloud][reopen]")
     auto count_data_files = [&](const eloqstore::TableIdent &tbl_id)
     {
         const std::filesystem::path partition_path =
-            std::filesystem::path(options.store_path.front()) / tbl_id.ToString();
+            std::filesystem::path(options.store_path.front()) /
+            tbl_id.ToString();
         const std::vector<std::string> files =
             ListLocalPartitionFiles(partition_path);
         return std::count_if(files.begin(),

@@ -62,8 +62,8 @@ bool CheckLocalPartitionExists(const eloqstore::KvOptions &opts,
     return false;
 }
 
-std::vector<std::string> ListLocalPartitionFiles(const eloqstore::KvOptions &opts,
-                                                 const eloqstore::TableIdent &tbl_id)
+std::vector<std::string> ListLocalPartitionFiles(
+    const eloqstore::KvOptions &opts, const eloqstore::TableIdent &tbl_id)
 {
     std::vector<std::string> result;
     for (const std::string &store_path : opts.store_path)
@@ -151,21 +151,22 @@ TEST_CASE("local mode truncate preserves current manifest", "[gc][local]")
 
     tester.Truncate(0, true);
 
-    REQUIRE(WaitForCondition(3s,
-                             20ms,
-                             [&]()
+    REQUIRE(
+        WaitForCondition(3s,
+                         20ms,
+                         [&]()
+                         {
+                             std::vector<std::string> files =
+                                 ListLocalPartitionFiles(local_gc_opts, tbl_id);
+                             if (files.empty())
                              {
-                                 std::vector<std::string> files =
-                                     ListLocalPartitionFiles(local_gc_opts,
-                                                             tbl_id);
-                                 if (files.empty())
-                                 {
-                                     return false;
-                                 }
-                                 return files.size() == 1 &&
-                                        files[0] == eloqstore::ManifestFileName(0);
-                             }));
+                                 return false;
+                             }
+                             return files.size() == 1 &&
+                                    files[0] == eloqstore::ManifestFileName(0);
+                         }));
 
+    store->Stop();
     CleanupStore(local_gc_opts);
 }
 
@@ -200,16 +201,15 @@ TEST_CASE("local mode clean manifest removes empty partition directory",
                                  std::vector<std::string> files =
                                      ListLocalPartitionFiles(opts, tbl_id);
                                  return files.size() == 1 &&
-                                        files[0] == eloqstore::ManifestFileName(0);
+                                        files[0] ==
+                                            eloqstore::ManifestFileName(0);
                              }));
 
     std::vector<std::unique_ptr<MapVerifier>> evictors;
     for (uint32_t pid = 2; pid < 12; ++pid)
     {
-        auto verifier =
-            std::make_unique<MapVerifier>(eloqstore::TableIdent{"gc_evict", pid},
-                                          store,
-                                          false);
+        auto verifier = std::make_unique<MapVerifier>(
+            eloqstore::TableIdent{"gc_evict", pid}, store, false);
         verifier->SetAutoClean(false);
         verifier->SetValueSize(256);
         verifier->Upsert(0, 200);
@@ -218,11 +218,10 @@ TEST_CASE("local mode clean manifest removes empty partition directory",
         evictors.emplace_back(std::move(verifier));
     }
 
-    REQUIRE(WaitForCondition(5s,
-                             20ms,
-                             [&]() { return !CheckLocalPartitionExists(opts,
-                                                                       tbl_id); }));
+    REQUIRE(WaitForCondition(
+        5s, 20ms, [&]() { return !CheckLocalPartitionExists(opts, tbl_id); }));
 
+    store->Stop();
     CleanupStore(opts);
 }
 

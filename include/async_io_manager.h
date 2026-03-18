@@ -671,10 +671,20 @@ public:
     bool HasOtherFile(const TableIdent &tbl_id) const;
 
     FdIdx GetRootFD(const TableIdent &tbl_id);
+    enum class OpenedFDState : uint8_t
+    {
+        Missing,
+        Opening,
+        Opened
+    };
     /**
-     * @brief Get file descripter if it is already opened.
+     * @brief Get file descriptor visibility state for an existing FD state.
+     * Returns {fd_ref, Opened} only when a published local handle exists.
+     * Returns {nullptr, Opening} when another task is still opening the file.
+     * Returns {nullptr, Missing} when no published local handle exists.
      */
-    LruFD::Ref GetOpenedFD(const TableIdent &tbl_id, FileId file_id);
+    std::pair<LruFD::Ref, OpenedFDState> GetOpenedFD(const TableIdent &tbl_id,
+                                                     FileId file_id);
     /**
      * @brief Open file if already exists. Only data file is opened with
      * O_DIRECT by default. Set `direct` to true to open manifest with O_DIRECT.

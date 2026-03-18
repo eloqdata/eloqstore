@@ -576,15 +576,14 @@ KvError DeleteUnreferencedCloudFiles(
     for (size_t i = 0; i < delete_tasks.size(); ++i)
     {
         const auto &task = delete_tasks[i];
-        const bool manifest_gone =
-            basenames_to_delete[i] == current_manifest &&
-            (task.error_ == KvError::NoError ||
-             task.error_ == KvError::NotFound);
+        const bool manifest_gone = basenames_to_delete[i] == current_manifest &&
+                                   (task.error_ == KvError::NoError ||
+                                    task.error_ == KvError::NotFound);
         if (manifest_gone && deleted_current_manifest != nullptr)
         {
             *deleted_current_manifest = true;
         }
-        if (task.error_ != KvError::NoError)
+        if (task.error_ != KvError::NoError && task.error_ != KvError::NotFound)
         {
             LOG(ERROR) << "Failed to delete file " << task.remote_path_ << ": "
                        << ErrorString(task.error_);
