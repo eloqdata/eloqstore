@@ -1752,7 +1752,7 @@ void EloqStore::HandleGlobalListArchiveTagsRequest(
 
 bool EloqStore::SendRequest(KvRequest *req)
 {
-    if (status_.load(std::memory_order_relaxed) != Status::Running)
+    if (status_.load(std::memory_order_acquire) != Status::Running)
     {
         return false;
     }
