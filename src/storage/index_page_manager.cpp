@@ -342,33 +342,6 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
     root_meta_mgr_.EvictIfNeeded();
 }
 
-void IndexPageManager::MarkManifestMissing(const TableIdent &tbl_ident)
-{
-    auto *entry = root_meta_mgr_.Find(tbl_ident);
-    if (entry == nullptr)
-    {
-        return;
-    }
-
-    RootMeta &meta = entry->meta_;
-    if (meta.mapper_ == nullptr || meta.manifest_size_ == 0)
-    {
-        return;
-    }
-
-    // Cloud GC only deletes the current manifest for an empty partition.
-    // Keep the in-memory RootMeta consistent so the next write rebuilds a
-    // fresh snapshot instead of appending to a manifest that no longer exists.
-    if (meta.root_id_ != MaxPageId || meta.ttl_root_id_ != MaxPageId ||
-        meta.mapper_->MappingCount() != 0)
-    {
-        return;
-    }
-
-    meta.manifest_size_ = 0;
-    root_meta_mgr_.UpdateBytes(entry, RootMetaBytes(meta));
-}
-
 KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
                                                   CowRootMeta &cow_meta,
                                                   std::string_view reopen_tag)

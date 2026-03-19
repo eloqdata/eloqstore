@@ -379,6 +379,7 @@ void MapVerifier::Scan(std::string_view begin,
     while (true)
     {
         eloq_store_->ExecSync(&req);
+        auto [n_entries, n_bytes] = req.ResultSize();
         if (req.Error() != eloqstore::KvError::NoError)
         {
             CHECK(req.Error() == eloqstore::KvError::NotFound);
@@ -388,7 +389,6 @@ void MapVerifier::Scan(std::string_view begin,
         }
 
         // Verify scan result
-        auto [n_entries, n_bytes] = req.ResultSize();
         CHECK(n_entries <= page_entries);
         CHECK(n_bytes <= page_size || n_entries == 1);
         for (auto &entry : req.Entries())

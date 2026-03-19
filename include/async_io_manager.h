@@ -9,7 +9,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
-#include <deque>
 #include <memory>
 #include <optional>
 #include <span>
@@ -531,8 +530,6 @@ public:
          * @brief mu_ avoids open/close file concurrently.
          */
         Mutex mu_;
-        bool opening_{false};
-        WaitingZone open_waiting_;
         int fd_{FdEmpty};
         int reg_idx_{-1};
         bool dirty_{false};
@@ -661,6 +658,22 @@ public:
                          uint64_t mode,
                          uint64_t term = 0,
                          bool skip_cloud_lookup = false);
+    virtual void WaitForEvictingPath(const TableIdent &tbl_id,
+                                     FileId file_id,
+                                     uint64_t term)
+    {
+    }
+    virtual bool StartEvictingPath(const TableIdent &tbl_id,
+                                   FileId file_id,
+                                   uint64_t term)
+    {
+        return true;
+    }
+    virtual void FinishEvictingPath(const TableIdent &tbl_id,
+                                    FileId file_id,
+                                    uint64_t term)
+    {
+    }
     virtual KvError SyncFile(LruFD::Ref fd);
     virtual KvError SyncFiles(const TableIdent &tbl_id,
                               std::span<LruFD::Ref> fds);
@@ -671,20 +684,10 @@ public:
     bool HasOtherFile(const TableIdent &tbl_id) const;
 
     FdIdx GetRootFD(const TableIdent &tbl_id);
-    enum class OpenedFDState : uint8_t
-    {
-        Missing,
-        Opening,
-        Opened
-    };
     /**
-     * @brief Get file descriptor visibility state for an existing FD state.
-     * Returns {fd_ref, Opened} only when a published local handle exists.
-     * Returns {nullptr, Opening} when another task is still opening the file.
-     * Returns {nullptr, Missing} when no published local handle exists.
+     * @brief Get file descripter if it is already opened.
      */
-    std::pair<LruFD::Ref, OpenedFDState> GetOpenedFD(const TableIdent &tbl_id,
-                                                     FileId file_id);
+    LruFD::Ref GetOpenedFD(const TableIdent &tbl_id, FileId file_id);
     /**
      * @brief Open file if already exists. Only data file is opened with
      * O_DIRECT by default. Set `direct` to true to open manifest with O_DIRECT.
@@ -928,6 +931,7 @@ public:
                          FileId file_id,
                          uint64_t term,
                          bool download_to_exist = false);
+    KvError CloseFile(LruFD::Ref fd) override;
 
     // Read partition-group CURRENT_TERM file from cloud, returns
     // {term_value, etag, error}. If file doesn't exist (404), returns
@@ -960,10 +964,18 @@ private:
                  uint64_t mode,
                  uint64_t term = 0,
                  bool skip_cloud_lookup = false) override;
+    void WaitForEvictingPath(const TableIdent &tbl_id,
+                             FileId file_id,
+                             uint64_t term) override;
+    bool StartEvictingPath(const TableIdent &tbl_id,
+                           FileId file_id,
+                           uint64_t term) override;
+    void FinishEvictingPath(const TableIdent &tbl_id,
+                            FileId file_id,
+                            uint64_t term) override;
     KvError SyncFile(LruFD::Ref fd) override;
     KvError SyncFiles(const TableIdent &tbl_id,
                       std::span<LruFD::Ref> fds) override;
-    KvError CloseFile(LruFD::Ref fd) override;
 
     KvError UploadFile(const TableIdent &tbl_id,
                        std::string filename,
@@ -1006,13 +1018,18 @@ private:
                                  size_t &restored_files,
                                  size_t &restored_bytes);
     std::pair<size_t, size_t> TrimRestoredCacheUsage();
+    FileKey EvictingPathKey(const TableIdent &tbl_id,
+                            FileId file_id,
+                            uint64_t term) const;
+    void WaitForEvictingKey(const FileKey &key);
+    bool StartEvictingKey(FileKey key);
+    void FinishEvictingKey(const FileKey &key);
+    bool IsEvictingKey(const FileKey &key) const;
 
     struct CachedFile
     {
         CachedFile() = default;
         const FileKey *key_;
-        bool evicting_{false};
-        WaitingSeat waiting_;
 
         void Deque()
         {
@@ -1036,8 +1053,12 @@ private:
      * @brief Locally cached files that are not currently opened.
      */
     std::unordered_map<FileKey, CachedFile> closed_files_;
+    struct EvictingPath
+    {
+        WaitingZone waiting_;
+    };
+    std::unordered_map<FileKey, EvictingPath> evicting_paths_;
     std::unordered_set<FileKey> pending_gc_cleanup_;
-    std::deque<FileKey> pending_gc_cleanup_queue_;
     CachedFile lru_file_head_;
     CachedFile lru_file_tail_;
     size_t used_local_space_{0};

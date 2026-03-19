@@ -6,6 +6,7 @@
 #include <filesystem>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -66,6 +67,68 @@ bool IsFileRetained(const RetainedFiles &retained_files,
         return false;
     }
     return it->second == term;
+}
+
+bool ParseCloudCleanupFilename(std::string_view filename,
+                               FileId &file_id,
+                               uint64_t &term)
+{
+    auto [type, suffix] = ParseFileName(filename);
+    if (type == FileNameData)
+    {
+        return ParseDataFileSuffix(suffix, file_id, term);
+    }
+    if (type == FileNameManifest)
+    {
+        std::optional<std::string> tag;
+        if (!ParseManifestFileSuffix(suffix, term, tag) || tag.has_value())
+        {
+            return false;
+        }
+        file_id = IouringMgr::LruFD::kManifest;
+        return true;
+    }
+    return false;
+}
+
+void CollectLocalCleanupTargets(
+    const TableIdent &tbl_id,
+    const std::vector<std::string> &deleted_filenames,
+    CloudStoreMgr *cloud_mgr,
+    std::vector<std::string> &targets)
+{
+    targets.clear();
+    targets.reserve(deleted_filenames.size());
+    for (const std::string &filename : deleted_filenames)
+    {
+        FileId file_id = 0;
+        uint64_t term = 0;
+        if (!ParseCloudCleanupFilename(filename, file_id, term))
+        {
+            continue;
+        }
+
+        IouringMgr::LruFD::Ref fd_ref = cloud_mgr->GetOpenedFD(tbl_id, file_id);
+        if (fd_ref != nullptr && fd_ref.Get()->term_ == term)
+        {
+            if (fd_ref.Get()->ref_count_ > 1)
+            {
+                continue;
+            }
+
+            KvError close_err = cloud_mgr->CloseFile(std::move(fd_ref));
+            if (close_err != KvError::NoError)
+            {
+                LOG(WARNING)
+                    << "Failed to close idle file before local GC "
+                    << "cleanup, table=" << tbl_id << " file=" << filename
+                    << " err=" << ErrorString(close_err);
+                continue;
+            }
+        }
+
+        targets.push_back(filename);
+    }
 }
 }  // namespace
 
@@ -475,18 +538,13 @@ KvError DeleteUnreferencedCloudFiles(
     const RetainedFiles &retained_files,
     FileId least_not_archived_file_id,
     CloudStoreMgr *cloud_mgr,
-    std::vector<std::string> &deleted_filenames,
-    bool *deleted_current_manifest)
+    std::vector<std::string> &deleted_filenames)
 {
     std::vector<std::string> files_to_delete;
     std::vector<std::string> basenames_to_delete;
     auto process_term = cloud_mgr->ProcessTerm();
     const std::string current_manifest = ManifestFileName(process_term);
     deleted_filenames.clear();
-    if (deleted_current_manifest != nullptr)
-    {
-        *deleted_current_manifest = false;
-    }
 
     for (const std::string &file_name : data_files)
     {
@@ -579,9 +637,26 @@ KvError DeleteUnreferencedCloudFiles(
         const bool manifest_gone = basenames_to_delete[i] == current_manifest &&
                                    (task.error_ == KvError::NoError ||
                                     task.error_ == KvError::NotFound);
-        if (manifest_gone && deleted_current_manifest != nullptr)
+        if (manifest_gone)
         {
-            *deleted_current_manifest = true;
+            RootMetaMgr *root_meta_mgr =
+                shard->IndexManager()->RootMetaManager();
+            auto *entry = root_meta_mgr->Find(tbl_id);
+            if (entry != nullptr)
+            {
+                RootMeta &meta = entry->meta_;
+                // Cloud GC only deletes the current manifest for an empty
+                // partition. Keep the in-memory RootMeta consistent so the
+                // next write rebuilds a fresh snapshot instead of appending to
+                // a manifest that no longer exists.
+                if (meta.mapper_ != nullptr && meta.manifest_size_ != 0 &&
+                    meta.root_id_ == MaxPageId &&
+                    meta.ttl_root_id_ == MaxPageId &&
+                    meta.mapper_->MappingCount() == 0)
+                {
+                    meta.manifest_size_ = 0;
+                }
+            }
         }
         if (task.error_ != KvError::NoError && task.error_ != KvError::NotFound)
         {
@@ -761,22 +836,22 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
 
     // 5. delete unreferenced data files.
     std::vector<std::string> deleted_filenames;
-    bool deleted_current_manifest = false;
     err = DeleteUnreferencedCloudFiles(tbl_id,
                                        data_files,
                                        manifest_terms,
                                        retained_files,
                                        least_not_archived_file_id,
                                        cloud_mgr,
-                                       deleted_filenames,
-                                       &deleted_current_manifest);
+                                       deleted_filenames);
     if (!deleted_filenames.empty())
     {
-        cloud_mgr->RequestGcLocalCleanup(tbl_id, deleted_filenames);
-    }
-    if (deleted_current_manifest)
-    {
-        shard->IndexManager()->MarkManifestMissing(tbl_id);
+        std::vector<std::string> local_cleanup_targets;
+        CollectLocalCleanupTargets(
+            tbl_id, deleted_filenames, cloud_mgr, local_cleanup_targets);
+        if (!local_cleanup_targets.empty())
+        {
+            cloud_mgr->RequestGcLocalCleanup(tbl_id, local_cleanup_targets);
+        }
     }
 
     return err;

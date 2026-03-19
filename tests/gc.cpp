@@ -8,6 +8,7 @@
 #include "common.h"
 #include "kv_options.h"
 #include "test_utils.h"
+#include "utils.h"
 
 using namespace test_util;
 namespace fs = std::filesystem;
@@ -227,7 +228,10 @@ TEST_CASE("local mode clean manifest removes empty partition directory",
 
 TEST_CASE("cloud mode truncate remote directory cleanup", "[gc][cloud]")
 {
-    eloqstore::EloqStore *store = InitStore(cloud_gc_opts);
+    eloqstore::KvOptions options = cloud_gc_opts;
+    options.fd_limit += utils::CountUsedFD();
+
+    eloqstore::EloqStore *store = InitStore(options);
     eloqstore::TableIdent tbl_id = {"gc_cloud_truncate", 1};
     MapVerifier tester(tbl_id, store, false);
     tester.SetValueSize(1000);
@@ -237,7 +241,7 @@ TEST_CASE("cloud mode truncate remote directory cleanup", "[gc][cloud]")
     tester.Validate();
 
     // Verify cloud partition exists
-    REQUIRE(CheckCloudPartitionExists(cloud_gc_opts, tbl_id));
+    REQUIRE(CheckCloudPartitionExists(options, tbl_id));
 
     // Truncate the partition using MapVerifier (delete all data)
     tester.Truncate(0, true);  // Delete all data
@@ -246,14 +250,17 @@ TEST_CASE("cloud mode truncate remote directory cleanup", "[gc][cloud]")
     WaitForGC(2);  // Cloud operations may take longer
 
     // Verify cloud partition directory is removed
-    REQUIRE_FALSE(CheckCloudPartitionExists(cloud_gc_opts, tbl_id));
+    REQUIRE_FALSE(CheckCloudPartitionExists(options, tbl_id));
 }
 
 TEST_CASE("cloud mode delete all data remote cleanup", "[gc][cloud]")
 {
     CleanupStore(cloud_gc_opts);
 
-    eloqstore::EloqStore *store = InitStore(cloud_gc_opts);
+    eloqstore::KvOptions options = cloud_gc_opts;
+    options.fd_limit += utils::CountUsedFD();
+
+    eloqstore::EloqStore *store = InitStore(options);
     eloqstore::TableIdent tbl_id = {"gc_cloud_delete", 1};
     MapVerifier tester(tbl_id, store, false);
     tester.SetValueSize(1000);
@@ -263,7 +270,7 @@ TEST_CASE("cloud mode delete all data remote cleanup", "[gc][cloud]")
     tester.Validate();
 
     // Verify cloud partition exists
-    REQUIRE(CheckCloudPartitionExists(cloud_gc_opts, tbl_id));
+    REQUIRE(CheckCloudPartitionExists(options, tbl_id));
 
     // Delete all data
     tester.Delete(0, 100);
@@ -273,7 +280,7 @@ TEST_CASE("cloud mode delete all data remote cleanup", "[gc][cloud]")
     WaitForGC(2);
 
     // Verify cloud partition directory is removed
-    REQUIRE_FALSE(CheckCloudPartitionExists(cloud_gc_opts, tbl_id));
+    REQUIRE_FALSE(CheckCloudPartitionExists(options, tbl_id));
 
     CleanupStore(cloud_gc_opts);
 }
@@ -282,7 +289,10 @@ TEST_CASE("archive prevents data deletion after truncate", "[gc][archive]")
 {
     CleanupStore(archive_gc_opts);
 
-    eloqstore::EloqStore *store = InitStore(archive_gc_opts);
+    eloqstore::KvOptions options = archive_gc_opts;
+    options.fd_limit += utils::CountUsedFD();
+
+    eloqstore::EloqStore *store = InitStore(options);
     eloqstore::TableIdent tbl_id = {"gc_archive_test", 1};
     MapVerifier tester(tbl_id, store, false);
     tester.SetValueSize(1000);
@@ -304,7 +314,7 @@ TEST_CASE("archive prevents data deletion after truncate", "[gc][archive]")
     tester.Validate();
 
     // Verify cloud partition exists
-    REQUIRE(CheckCloudPartitionExists(archive_gc_opts, tbl_id));
+    REQUIRE(CheckCloudPartitionExists(options, tbl_id));
 
     // Truncate after archive using MapVerifier (delete all data)
     tester.Truncate(0, true);  // Delete all data
@@ -313,13 +323,11 @@ TEST_CASE("archive prevents data deletion after truncate", "[gc][archive]")
     WaitForGC(2);
 
     // Data should NOT be deleted because archive exists
-    if (!archive_gc_opts.cloud_store_path.empty())
+    if (!options.cloud_store_path.empty())
     {
         // For cloud mode, check that some files still exist (archive files)
-        std::vector<std::string> remaining_files =
-            ListCloudFiles(archive_gc_opts,
-                           archive_gc_opts.cloud_store_path,
-                           tbl_id.ToString());
+        std::vector<std::string> remaining_files = ListCloudFiles(
+            options, options.cloud_store_path, tbl_id.ToString());
 
         // Should have at least the archive manifest file
         bool has_archive = false;
@@ -337,11 +345,11 @@ TEST_CASE("archive prevents data deletion after truncate", "[gc][archive]")
     {
         // For local mode, check that partition directory still exists with
         // archive
-        REQUIRE(CheckLocalPartitionExists(archive_gc_opts, tbl_id));
+        REQUIRE(CheckLocalPartitionExists(options, tbl_id));
 
         // Verify archive file exists in local directory
         fs::path partition_path =
-            fs::path(archive_gc_opts.store_path[0]) / tbl_id.ToString();
+            fs::path(options.store_path[0]) / tbl_id.ToString();
         bool archive_found = false;
 
         if (fs::exists(partition_path))
@@ -369,7 +377,10 @@ TEST_CASE("cloud mode repeated truncate with directory purge", "[gc][cloud]")
 {
     CleanupStore(cloud_gc_opts);
 
-    eloqstore::EloqStore *store = InitStore(cloud_gc_opts);
+    eloqstore::KvOptions options = cloud_gc_opts;
+    options.fd_limit += utils::CountUsedFD();
+
+    eloqstore::EloqStore *store = InitStore(options);
     eloqstore::TableIdent tbl_id = {"gc_cloud_repeat", 1};
     MapVerifier tester(tbl_id, store, false);
     tester.SetValueSize(1000);
@@ -383,7 +394,7 @@ TEST_CASE("cloud mode repeated truncate with directory purge", "[gc][cloud]")
         tester.Validate();
 
         // Verify cloud partition exists
-        REQUIRE(CheckCloudPartitionExists(cloud_gc_opts, tbl_id));
+        REQUIRE(CheckCloudPartitionExists(options, tbl_id));
 
         // Truncate using MapVerifier (delete all data)
         tester.Truncate(0, true);  // Delete all data
@@ -392,7 +403,7 @@ TEST_CASE("cloud mode repeated truncate with directory purge", "[gc][cloud]")
         WaitForGC(2);
 
         // Verify cloud directory is completely removed
-        REQUIRE_FALSE(CheckCloudPartitionExists(cloud_gc_opts, tbl_id));
+        REQUIRE_FALSE(CheckCloudPartitionExists(options, tbl_id));
     }
 
     CleanupStore(cloud_gc_opts);
