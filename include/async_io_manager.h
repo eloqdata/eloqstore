@@ -882,6 +882,14 @@ public:
     {
         process_term_ = term;
     }
+    void SetPartitionGroupId(PartitonGroupId partition_group_id)
+    {
+        partition_group_id_ = partition_group_id;
+    }
+    PartitonGroupId PartitionGroupId() const
+    {
+        return partition_group_id_;
+    }
     uint64_t ProcessTerm() const override
     {
         return process_term_;
@@ -904,26 +912,25 @@ public:
                          uint64_t term,
                          bool download_to_exist = false);
 
-    // Read term file from cloud, returns {term_value, etag, error}
-    // If file doesn't exist (404), returns {0, "", NotFound}
-    std::tuple<uint64_t, std::string, KvError> ReadTermFile(
-        const TableIdent &tbl_id);
+    // Read partition-group CURRENT_TERM file from cloud, returns
+    // {term_value, etag, error}. If file doesn't exist (404), returns
+    // {0, "", NotFound}.
+    std::tuple<uint64_t, std::string, KvError> ReadTermFile();
+    KvError SyncPartitionGroupTermFile();
 
 private:
-    // Upsert term file with limited retry logic
-    // Returns NoError on success, ExpiredTerm if condition invalid, other
-    // errors on failure
-    KvError UpsertTermFile(const TableIdent &tbl_id, uint64_t process_term);
-    // CAS create term file (only if doesn't exist)
+    // Upsert partition-group term file with limited retry logic. Returns
+    // NoError on success, ExpiredTerm if condition invalid, other errors on
+    // failure.
+    KvError UpsertTermFile(uint64_t process_term);
+    // CAS create partition-group term file (only if doesn't exist)
     // Returns {error, response_code}
-    std::pair<KvError, int64_t> CasCreateTermFile(const TableIdent &tbl_id,
-                                                  uint64_t process_term);
-    // CAS update term file with specific ETag
+    std::pair<KvError, int64_t> CasCreateTermFile(uint64_t process_term);
+    // CAS update partition-group term file with specific ETag
     // Returns {error, response_code}
     std::pair<KvError, int64_t> CasUpdateTermFileWithEtag(
-        const TableIdent &tbl_id,
-        uint64_t process_term,
-        const std::string &etag);
+        uint64_t process_term, const std::string &etag);
+    std::string PartitionGroupTermRemotePath() const;
     void WaitForCloudTasksToDrain();
 
 private:
@@ -1063,6 +1070,7 @@ private:
     // 0 means unspecified/legacy; in that case term validation in GetManifest
     // will be skipped and the latest manifest term will be used.
     uint64_t process_term_{0};
+    PartitonGroupId partition_group_id_{0};
 
     size_t inflight_cloud_slots_{0};
     WaitingZone cloud_slot_waiting_;

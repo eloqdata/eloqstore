@@ -45,6 +45,13 @@ public:
     void AddPendingLocalGc(const TableIdent &tbl_id);
     bool HasPendingLocalGc(const TableIdent &tbl_id);
 #ifdef ELOQ_MODULE_ENABLED
+    enum class ShardStatus : uint8_t
+    {
+        Running = 0,
+        Stopping = 1,
+        Stopped = 2,
+    };
+
     bool NeedStop() const;
 #endif
 
@@ -58,8 +65,7 @@ public:
     std::atomic<bool> io_mgr_and_page_pool_inited_{false};
 
 #ifdef ELOQ_MODULE_ENABLED
-    // 0 for running, 1 for to stop, 2 for stopped
-    std::atomic<int8_t> running_status_{0};
+    std::atomic<ShardStatus> running_status_{ShardStatus::Running};
 #endif
     const EloqStore *store_;
     const size_t shard_id_{0};
@@ -255,5 +261,6 @@ private:
     static std::atomic<uint64_t> tsc_cycles_per_microsecond_;
 
     friend class EloqStoreModule;
+    friend class EloqStore;
 };
 }  // namespace eloqstore

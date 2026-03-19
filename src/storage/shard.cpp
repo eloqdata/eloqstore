@@ -62,7 +62,9 @@ KvError Shard::Init()
         uint64_t term = store_ != nullptr ? store_->Term() : 0;
         if (store_->Mode() == StoreMode::Cloud)
         {
-            static_cast<CloudStoreMgr *>(io_mgr_.get())->SetProcessTerm(term);
+            auto *cloud_mgr = static_cast<CloudStoreMgr *>(io_mgr_.get());
+            cloud_mgr->SetProcessTerm(term);
+            cloud_mgr->SetPartitionGroupId(store_->PartitionGroupId());
         }
         else if (store_->Mode() == StoreMode::StandbyReplica ||
                  store_->Mode() == StoreMode::StandbyMaster)
@@ -103,10 +105,10 @@ void Shard::WorkLoop()
         // Idle state, wait for new requests or exit.
         while (nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle())
         {
-            const auto status =
-                store_->running_status_.load(std::memory_order_relaxed);
-            if (status !=
-                static_cast<uint8_t>(EloqStore::RunningStatus::Running))
+            const auto status = store_->status_.load(std::memory_order_relaxed);
+            if (io_mgr_->IsStoreStopping() ||
+                status == EloqStore::Status::Stopped ||
+                status == EloqStore::Status::Stopping)
             {
                 return -1;
             }
@@ -174,16 +176,19 @@ void Shard::WorkLoop()
 #endif
     }
 
+    task_mgr_.Shutdown();
+    // Unfinished tasks may still own MemIndexPage::Handle instances.
+    // Release task state before tearing down the index-page pool they
+    // reference.
     index_mgr_.Shutdown();
     io_mgr_->Stop();
-    task_mgr_.Shutdown();
 }
 
 void Shard::Start()
 {
 #ifdef ELOQ_MODULE_ENABLED
     shard = this;
-    running_status_ = 0;
+    running_status_.store(ShardStatus::Running, std::memory_order_release);
 #else
     thd_ = std::thread([this] { WorkLoop(); });
 #endif
@@ -336,7 +341,8 @@ bool Shard::HasPendingLocalGc(const TableIdent &tbl_id)
 #ifdef ELOQ_MODULE_ENABLED
 bool Shard::NeedStop() const
 {
-    return running_status_.load(std::memory_order_relaxed) == 1;
+    return running_status_.load(std::memory_order_relaxed) ==
+           ShardStatus::Stopping;
 }
 #endif
 
@@ -753,18 +759,9 @@ void Shard::OnTaskFinished(KvTask *task)
 #ifdef ELOQ_MODULE_ENABLED
 void Shard::WorkOneRound()
 {
-    if (int8_t running_status = running_status_.load(std::memory_order_relaxed);
-        __builtin_expect(running_status != 0, 0))
-    {
-        if (running_status == 1)
-        {
-            index_mgr_.Shutdown();
-            io_mgr_->Stop();
-            task_mgr_.Shutdown();
-            running_status_.store(2, std::memory_order_release);
-        }
-        return;
-    }
+    const bool stop_requested =
+        running_status_.load(std::memory_order_relaxed) ==
+        ShardStatus::Stopping;
 
     ts_ = ReadTimeMicroseconds();
 #ifdef ELOQSTORE_WITH_TXSERVICE
@@ -786,6 +783,15 @@ void Shard::WorkOneRound()
         nreqs == 0 && task_mgr_.NumActive() == 0 && io_mgr_->IsIdle();
     if (is_idle_round)
     {
+        if (stop_requested)
+        {
+            task_mgr_.Shutdown();
+            index_mgr_.Shutdown();
+            io_mgr_->Stop();
+            running_status_.store(ShardStatus::Stopped,
+                                  std::memory_order_release);
+            return;
+        }
         // No request and no active task and no active io.
         if (io_mgr_->NeedPrewarm())
         {

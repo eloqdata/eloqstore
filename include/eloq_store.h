@@ -654,7 +654,7 @@ class StandbyService;
 class EloqStore
 {
 public:
-    enum class RunningStatus : uint8_t
+    enum class Status : uint8_t
     {
         Starting = 0,
         Running = 1,
@@ -666,7 +666,7 @@ public:
     EloqStore(const EloqStore &) = delete;
     EloqStore(EloqStore &&) = delete;
     ~EloqStore();
-    KvError Start(uint64_t term = 0);
+    KvError Start(uint64_t term = 0, PartitonGroupId partition_group_id = 0);
     void Stop();
     bool IsStopped() const;
     bool Inited() const;
@@ -698,6 +698,10 @@ public:
     uint64_t Term() const
     {
         return term_;
+    }
+    PartitonGroupId PartitionGroupId() const
+    {
+        return partition_group_id_;
     }
 
     KvError UpdateStandbyMasterStorePaths(std::vector<std::string> paths,
@@ -751,6 +755,7 @@ private:
                                    std::vector<TableIdent> &partitions) const;
     KvError InitStoreSpace();
     KvError BuildStorePathLut();
+    void CleanupRuntime(size_t started_shards);
 
     KvOptions options_;
     std::vector<int> root_fds_;
@@ -761,9 +766,9 @@ private:
 #ifdef ELOQSTORE_WITH_TXSERVICE
     std::vector<std::unique_ptr<metrics::Meter>> metrics_meters_;
 #endif
-    std::atomic<uint8_t> running_status_{
-        static_cast<uint8_t>(RunningStatus::Stopped)};
+    std::atomic<Status> status_{Status::Stopped};
     uint64_t term_{0};
+    PartitonGroupId partition_group_id_{0};
     std::unique_ptr<ArchiveCrond> archive_crond_{nullptr};
     std::unique_ptr<PrewarmService> prewarm_service_{nullptr};
     std::unique_ptr<StandbyService> standby_service_{nullptr};

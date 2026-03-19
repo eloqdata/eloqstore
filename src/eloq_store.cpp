@@ -56,6 +56,19 @@ constexpr size_t kMaxStorePathLutEntries = kDefaultStorePathLutEntries;
 
 bool EloqStore::ValidateOptions(KvOptions &opts)
 {
+    std::string cloud_provider_lower = opts.cloud_provider;
+    std::transform(cloud_provider_lower.begin(),
+                   cloud_provider_lower.end(),
+                   cloud_provider_lower.begin(),
+                   [](unsigned char c)
+                   { return static_cast<char>(std::tolower(c)); });
+    if (opts.cloud_endpoint.empty() &&
+        (cloud_provider_lower == "gcs" || cloud_provider_lower == "google" ||
+         cloud_provider_lower == "google-cloud"))
+    {
+        opts.cloud_endpoint = "https://storage.googleapis.com";
+    }
+
     if (opts.num_threads == 0)
     {
         LOG(ERROR) << "Options num_threads cannot be zero";
@@ -396,44 +409,144 @@ EloqStore::~EloqStore()
     }
 }
 
-KvError EloqStore::Start(uint64_t term)
+void EloqStore::CleanupRuntime(size_t started_shards)
+{
+    const size_t shard_count = std::min(started_shards, shards_.size());
+
+    DLOG(INFO) << "EloqStore::CleanupRuntime stage=begin"
+               << ", started_shards=" << shard_count;
+    for (size_t i = 0; i < shard_count; ++i)
+    {
+        if (shards_[i] != nullptr)
+        {
+            shards_[i]->IoManager()->NotifyStoreStopping();
+        }
+    }
+    if (prewarm_service_ != nullptr)
+    {
+        DLOG(INFO) << "EloqStore::CleanupRuntime stage=stop_prewarm";
+        prewarm_service_->Stop();
+    }
+    if (archive_crond_ != nullptr)
+    {
+        DLOG(INFO) << "EloqStore::CleanupRuntime stage=stop_archive_crond";
+        archive_crond_->Stop();
+    }
+    // Stop external async services before shard task-manager shutdown can
+    // abort stack-backed waiting requests.
+    if (standby_service_)
+    {
+        DLOG(INFO) << "EloqStore::CleanupRuntime stage=stop_standby_service";
+        standby_service_->Stop();
+    }
+    if (cloud_service_)
+    {
+        DLOG(INFO) << "EloqStore::CleanupRuntime stage=stop_cloud_service";
+        cloud_service_->Stop();
+    }
+#ifdef ELOQ_MODULE_ENABLED
+    if (module_ != nullptr)
+    {
+        DLOG(INFO)
+            << "EloqStore::CleanupRuntime stage=signal_module_workers_stop";
+        for (size_t i = 0; i < shard_count; ++i)
+        {
+            if (shards_[i] != nullptr)
+            {
+                shards_[i]->running_status_.store(Shard::ShardStatus::Stopping,
+                                                  std::memory_order_release);
+                eloq::EloqModule::NotifyWorker(
+                    static_cast<int>(shards_[i]->shard_id_));
+            }
+        }
+        DLOG(INFO)
+            << "EloqStore::CleanupRuntime stage=wait_module_workers_stop";
+        while (true)
+        {
+            bool all_stopped = true;
+            for (size_t i = 0; i < shard_count; ++i)
+            {
+                if (shards_[i] != nullptr && shards_[i]->running_status_.load(
+                                                 std::memory_order_relaxed) !=
+                                                 Shard::ShardStatus::Stopped)
+                {
+                    all_stopped = false;
+                    break;
+                }
+            }
+            if (all_stopped)
+            {
+                break;
+            }
+            bthread_usleep(1000);
+        }
+        DLOG(INFO) << "EloqStore::CleanupRuntime stage=unregister_module";
+        eloq::unregister_module(module_.get());
+    }
+#endif
+
+    DLOG(INFO) << "EloqStore::CleanupRuntime stage=stop_shards";
+    for (size_t i = 0; i < shard_count; ++i)
+    {
+        if (shards_[i] != nullptr)
+        {
+            shards_[i]->Stop();
+        }
+    }
+
+    DLOG(INFO) << "EloqStore::CleanupRuntime stage=clear_resources";
+    shards_.clear();
+
+    for (int fd : root_fds_)
+    {
+        [[maybe_unused]] int res = close(fd);
+        assert(res == 0);
+    }
+    root_fds_.clear();
+    if (eloq_store == this)
+    {
+        eloq_store = nullptr;
+    }
+}
+
+KvError EloqStore::Start(uint64_t term, PartitonGroupId partition_group_id)
 {
     if (!ValidateOptions(options_))
     {
         return KvError::InvalidArgs;
     }
 
-    auto fail_start = [this](KvError err)
+    size_t started_shards = 0;
+    auto fail_start = [this, &started_shards](KvError err)
     {
-        running_status_.store(static_cast<uint8_t>(RunningStatus::Stopped),
-                              std::memory_order_release);
+        CleanupRuntime(started_shards);
+        status_.store(Status::Stopped, std::memory_order_release);
         return err;
     };
 
-    uint8_t cur = running_status_.load(std::memory_order_acquire);
+    Status cur = status_.load(std::memory_order_acquire);
     while (true)
     {
-        if (cur == static_cast<uint8_t>(RunningStatus::Running))
+        if (cur == Status::Running)
         {
             LOG(ERROR) << "EloqStore started , do not start again";
             return KvError::NoError;
         }
-        if (cur == static_cast<uint8_t>(RunningStatus::Starting))
+        if (cur == Status::Starting)
         {
             LOG(ERROR) << "EloqStore is starting, reject concurrent start";
             return KvError::Busy;
         }
-        if (cur == static_cast<uint8_t>(RunningStatus::Stopping))
+        if (cur == Status::Stopping)
         {
             LOG(ERROR) << "EloqStore is stopping, reject start";
             return KvError::Busy;
         }
-        if (cur == static_cast<uint8_t>(RunningStatus::Stopped) &&
-            running_status_.compare_exchange_weak(
-                cur,
-                static_cast<uint8_t>(RunningStatus::Starting),
-                std::memory_order_acq_rel,
-                std::memory_order_acquire))
+        if (cur == Status::Stopped &&
+            status_.compare_exchange_weak(cur,
+                                          Status::Starting,
+                                          std::memory_order_acq_rel,
+                                          std::memory_order_acquire))
         {
             break;
         }
@@ -462,6 +575,7 @@ KvError EloqStore::Start(uint64_t term)
     const StoreMode prev_mode =
         store_mode_.exchange(mode, std::memory_order_acq_rel);
     LOG(INFO) << "===Start eloqstore, term: " << term
+              << ", partition_group_id: " << partition_group_id
               << ", mode: " << static_cast<int>(mode);
     if (prev_mode != mode)
     {
@@ -496,7 +610,10 @@ KvError EloqStore::Start(uint64_t term)
     // Initialize
     if (!options_.store_path.empty())
     {
+        DLOG(INFO) << "EloqStore::Start stage=init_store_space_begin";
         KvError err = InitStoreSpace();
+        DLOG(INFO) << "EloqStore::Start stage=init_store_space_end err="
+                   << ErrorString(err);
         if (err != KvError::NoError)
         {
             return fail_start(err);
@@ -505,6 +622,7 @@ KvError EloqStore::Start(uint64_t term)
 
     // local mode, set term to 0
     term_ = mode == StoreMode::Local ? 0 : term;
+    partition_group_id_ = mode == StoreMode::Cloud ? partition_group_id : 0;
 
     // There are files opened at very early stage like stdin/stdout/stderr, glog
     // file, and root directories of data.
@@ -519,11 +637,14 @@ KvError EloqStore::Start(uint64_t term)
     shards_.resize(options_.num_threads);
     for (size_t i = 0; i < options_.num_threads; i++)
     {
+        DLOG(INFO) << "EloqStore::Start stage=shard_init_begin shard=" << i;
         if (shards_[i] == nullptr)
         {
             shards_[i] = std::make_unique<Shard>(this, i, shard_fd_limit);
         }
         KvError err = shards_[i]->Init();
+        DLOG(INFO) << "EloqStore::Start stage=shard_init_end shard=" << i
+                   << ", err=" << ErrorString(err);
         if (err != KvError::NoError)
         {
             return fail_start(err);
@@ -532,26 +653,45 @@ KvError EloqStore::Start(uint64_t term)
 
     if (cloud_service_)
     {
+        DLOG(INFO) << "EloqStore::Start stage=sync_current_term_begin";
+        DLOG(INFO) << "EloqStore::Start stage=cloud_service_start_begin";
         cloud_service_->Start();
+        DLOG(INFO) << "EloqStore::Start stage=cloud_service_start_end";
+
+        DLOG(INFO) << "EloqStore::Start stage=sync_current_term_wait";
+        cloud_service_->bootstrap_state_.Wait();
+        DLOG(INFO) << "EloqStore::Start stage=sync_current_term_done err="
+                   << ErrorString(cloud_service_->bootstrap_state_.err_);
+        if (cloud_service_->bootstrap_state_.err_ != KvError::NoError)
+        {
+            return fail_start(cloud_service_->bootstrap_state_.err_);
+        }
     }
     else if (standby_service_)
     {
+        DLOG(INFO) << "EloqStore::Start stage=standby_service_start_begin";
         standby_service_->Start();
+        DLOG(INFO) << "EloqStore::Start stage=standby_service_start_end";
     }
 
     // Start threads.
-    for (auto &shard : shards_)
+    for (size_t i = 0; i < shards_.size(); ++i)
     {
-        shard->Start();
+        DLOG(INFO) << "EloqStore::Start stage=shard_start_begin shard=" << i;
+        shards_[i]->Start();
+        DLOG(INFO) << "EloqStore::Start stage=shard_start_end shard=" << i;
+        ++started_shards;
     }
 
 #ifdef ELOQ_MODULE_ENABLED
+    DLOG(INFO) << "EloqStore::Start stage=module_register_begin";
     module_ = std::make_unique<EloqStoreModule>(&shards_);
     eloq::register_module(module_.get());
     for (auto &shard : shards_)
     {
         eloq::EloqModule::NotifyWorker(static_cast<int>(shard->shard_id_));
     }
+    DLOG(INFO) << "EloqStore::Start stage=module_register_end";
 #endif
 
     if (options_.data_append_mode && options_.num_retained_archives > 0 &&
@@ -573,8 +713,7 @@ KvError EloqStore::Start(uint64_t term)
         prewarm_service_->Start();
     }
 
-    running_status_.store(static_cast<uint8_t>(RunningStatus::Running),
-                          std::memory_order_release);
+    status_.store(Status::Running, std::memory_order_release);
     LOG(INFO) << "EloqStore is started.";
     return KvError::NoError;
 }
@@ -1613,8 +1752,7 @@ void EloqStore::HandleGlobalListArchiveTagsRequest(
 
 bool EloqStore::SendRequest(KvRequest *req)
 {
-    if (running_status_.load(std::memory_order_relaxed) !=
-        static_cast<uint8_t>(RunningStatus::Running))
+    if (status_.load(std::memory_order_relaxed) != Status::Running)
     {
         return false;
     }
@@ -1651,7 +1789,6 @@ bool EloqStore::SendRequest(KvRequest *req)
             static_cast<GlobalListArchiveTagsRequest *>(req));
         return true;
     }
-
     Shard *shard = shards_[req->TableId().ShardIndex(shards_.size())].get();
     return shard->AddKvRequest(req);
 }
@@ -1660,108 +1797,27 @@ void EloqStore::Stop()
 {
     while (true)
     {
-        uint8_t current = running_status_.load(std::memory_order_acquire);
-        if (current == static_cast<uint8_t>(RunningStatus::Stopped) ||
-            current == static_cast<uint8_t>(RunningStatus::Stopping))
+        Status current = status_.load(std::memory_order_acquire);
+        if (current == Status::Stopped || current == Status::Stopping)
         {
             return;
         }
-        if (current == static_cast<uint8_t>(RunningStatus::Starting))
+        if (current == Status::Starting)
         {
-#ifdef ELOQ_MODULE_ENABLED
-            bthread_usleep(1000);
-#else
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-#endif
+            std::this_thread::yield();
             continue;
         }
-        if (current == static_cast<uint8_t>(RunningStatus::Running) &&
-            running_status_.compare_exchange_weak(
-                current,
-                static_cast<uint8_t>(RunningStatus::Stopping),
-                std::memory_order_acq_rel,
-                std::memory_order_acquire))
+        if (current == Status::Running &&
+            status_.compare_exchange_weak(current,
+                                          Status::Stopping,
+                                          std::memory_order_acq_rel,
+                                          std::memory_order_acquire))
         {
             break;
         }
     }
-    DLOG(INFO) << "EloqStore::Stop stage=begin";
-    for (auto &shard : shards_)
-    {
-        shard->IoManager()->NotifyStoreStopping();
-    }
-    if (prewarm_service_ != nullptr)
-    {
-        DLOG(INFO) << "EloqStore::Stop stage=stop_prewarm";
-        prewarm_service_->Stop();
-    }
-    if (archive_crond_ != nullptr)
-    {
-        DLOG(INFO) << "EloqStore::Stop stage=stop_archive_crond";
-        archive_crond_->Stop();
-    }
-    // Stop external async services before shard task-manager shutdown can
-    // abort stack-backed waiting requests.
-    if (standby_service_)
-    {
-        DLOG(INFO) << "EloqStore::Stop stage=stop_standby_service";
-        standby_service_->Stop();
-    }
-    if (cloud_service_)
-    {
-        DLOG(INFO) << "EloqStore::Stop stage=stop_cloud_service";
-        cloud_service_->Stop();
-    }
-#ifdef ELOQ_MODULE_ENABLED
-    DLOG(INFO) << "EloqStore::Stop stage=signal_module_workers_stop";
-    for (auto &shard : shards_)
-    {
-        shard->running_status_.store(1, std::memory_order_release);
-        eloq::EloqModule::NotifyWorker(static_cast<int>(shard->shard_id_));
-    }
-    DLOG(INFO) << "EloqStore::Stop stage=wait_module_workers_stop";
-    while (true)
-    {
-        bool all_stopped = true;
-        for (auto &shard : shards_)
-        {
-            if (shard->running_status_.load(std::memory_order_relaxed) != 2)
-            {
-                all_stopped = false;
-                break;
-            }
-        }
-        if (all_stopped)
-            break;
-        bthread_usleep(1000);
-    }
-    DLOG(INFO) << "EloqStore::Stop stage=unregister_module";
-    eloq::unregister_module(module_.get());
-#endif
-
-    DLOG(INFO) << "EloqStore::Stop stage=stop_shards";
-    for (auto &shard : shards_)
-    {
-        shard->Stop();
-    }
-
-    // Start clear resources after all threads stopped.
-    DLOG(INFO) << "EloqStore::Stop stage=clear_resources";
-
-    shards_.clear();
-
-    for (int fd : root_fds_)
-    {
-        [[maybe_unused]] int res = close(fd);
-        assert(res == 0);
-    }
-    root_fds_.clear();
-    if (eloq_store == this)
-    {
-        eloq_store = nullptr;
-    }
-    running_status_.store(static_cast<uint8_t>(RunningStatus::Stopped),
-                          std::memory_order_release);
+    CleanupRuntime(shards_.size());
+    status_.store(Status::Stopped, std::memory_order_release);
     LOG(INFO) << "EloqStore is stopped.";
 }
 
@@ -1859,8 +1915,7 @@ const KvOptions &EloqStore::Options() const
 
 bool EloqStore::IsStopped() const
 {
-    return running_status_.load(std::memory_order_acquire) ==
-           static_cast<uint8_t>(RunningStatus::Stopped);
+    return status_.load(std::memory_order_acquire) == Status::Stopped;
 }
 
 bool EloqStore::Inited() const

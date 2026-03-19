@@ -665,32 +665,31 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
 {
     // Check term file before proceeding
     uint64_t process_term = cloud_mgr->ProcessTerm();
-    auto [term_file_term, etag, err] = cloud_mgr->ReadTermFile(tbl_id);
+    auto [term_file_term, etag, err] = cloud_mgr->ReadTermFile();
 
     if (err == KvError::NotFound)
     {
-        // Legacy table - proceed with existing manifest term validation
-        // (backward compatible behavior)
-        LOG(INFO) << "ExecuteCloudGC: term file not found for table " << tbl_id;
+        LOG(INFO) << "ExecuteCloudGC: term file not found for partition_group "
+                  << cloud_mgr->PartitionGroupId();
         return KvError::NoError;
     }
     else if (err != KvError::NoError)
     {
-        LOG(ERROR) << "ExecuteCloudGC: failed to read term file for table "
-                   << tbl_id << " : " << ErrorString(err);
+        LOG(ERROR) << "ExecuteCloudGC: failed to read term file for "
+                   << "partition_group " << cloud_mgr->PartitionGroupId()
+                   << " : " << ErrorString(err);
         return err;
     }
     else
     {
-        // Term file exists - validate
         if (term_file_term != process_term)
         {
             LOG(WARNING) << "ExecuteCloudGC: term file term " << term_file_term
                          << " != process_term " << process_term << " for table "
-                         << tbl_id << ", skipping GC";
+                         << tbl_id << ", partition_group "
+                         << cloud_mgr->PartitionGroupId() << ", skipping GC";
             return KvError::ExpiredTerm;
         }
-        // term_file_term == process_term, proceed with GC
     }
 
     // 1. list all files in cloud.

@@ -44,6 +44,16 @@ void CloudStorageService::Start()
     {
         return;
     }
+#ifdef ELOQ_MODULE_ENABLED
+    {
+        std::lock_guard<bthread::Mutex> lk(bootstrap_state_.mutex_);
+        bootstrap_state_.err_ = KvError::Busy;
+        bootstrap_state_.done_ = false;
+    }
+#else
+    bootstrap_state_.err_ = KvError::Busy;
+    bootstrap_state_.done_.store(false, std::memory_order_relaxed);
+#endif
     accepting_jobs_.store(true, std::memory_order_release);
     workers_.reserve(worker_count_);
     for (size_t i = 0; i < worker_count_; ++i)
@@ -139,6 +149,30 @@ void CloudStorageService::RunWorker(size_t worker_index)
     const int64_t wait_timeout_us =
         std::chrono::duration_cast<std::chrono::microseconds>(kIdleWait)
             .count();
+    if (worker_index == 0)
+    {
+        KvError err = KvError::Busy;
+        if (stopping_.load(std::memory_order_acquire))
+        {
+            err = KvError::NotRunning;
+        }
+        else
+        {
+            ObjectStore *bootstrap_store = nullptr;
+            {
+                std::shared_lock lk(shard_locks_.front().mutex);
+                bootstrap_store = shard_stores_.front();
+            }
+            err = bootstrap_store == nullptr
+                      ? KvError::CloudErr
+                      : bootstrap_store->BootstrapUpsertTermFile(
+                            CurrentTermFileNameForPartitionGroup(
+                                store_->PartitionGroupId()),
+                            store_->Term());
+        }
+        bootstrap_state_.SetDone(err);
+    }
+
     while (true)
     {
         bool http_active = ProcessHttpWork(worker_index);

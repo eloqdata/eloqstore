@@ -50,6 +50,8 @@ public:
     ~ObjectStore();
 
     KvError EnsureBucketExists();
+    KvError BootstrapUpsertTermFile(std::string_view remote_path,
+                                    uint64_t process_term);
 
     bool ParseListObjectsResponse(
         std::string_view payload,
@@ -125,17 +127,26 @@ public:
             : tbl_id_(tbl_id), filename_(filename)
         {
         }
+        explicit DownloadTask(std::string remote_path)
+            : remote_path_(std::move(remote_path))
+        {
+        }
         Type TaskType() override
         {
             return Type::AsyncDownload;
         }
         std::string Info() const override
         {
-            return std::string("Download(") + tbl_id_->ToString() + '/' +
-                   filename_ + ')';
+            if (tbl_id_ != nullptr)
+            {
+                return std::string("Download(") + tbl_id_->ToString() + '/' +
+                       filename_ + ')';
+            }
+            return std::string("Download(") + remote_path_ + ')';
         }
-        const TableIdent *tbl_id_;
+        const TableIdent *tbl_id_{nullptr};
         std::string filename_;
+        std::string remote_path_;
     };
 
     class UploadTask : public Task
@@ -145,19 +156,28 @@ public:
             : tbl_id_(tbl_id), filename_(std::move(filename))
         {
         }
+        explicit UploadTask(std::string remote_path, bool /*remote_root*/)
+            : remote_path_(std::move(remote_path))
+        {
+        }
         Type TaskType() override
         {
             return Type::AsyncUpload;
         }
         std::string Info() const override
         {
-            return std::string("Upload(") + tbl_id_->ToString() + '/' +
-                   filename_ + ')';
+            if (tbl_id_ != nullptr)
+            {
+                return std::string("Upload(") + tbl_id_->ToString() + '/' +
+                       filename_ + ')';
+            }
+            return std::string("Upload(") + remote_path_ + ')';
         }
         void CompleteCloudTask() override;
 
-        const TableIdent *tbl_id_;
+        const TableIdent *tbl_id_{nullptr};
         std::string filename_;
+        std::string remote_path_;
         WriteTask *owner_write_task_{nullptr};
         // Total logical object size expected by remote upload.
         size_t file_size_{0};
@@ -244,6 +264,8 @@ public:
     void Shutdown();
 
     KvError EnsureBucketExists();
+    KvError BootstrapUpsertTermFile(std::string_view remote_path,
+                                    uint64_t process_term);
 
     bool IsIdle() const
     {

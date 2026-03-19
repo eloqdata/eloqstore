@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <ostream>
 #include <string>
+#include <string_view>
 #include <utility>  // NOLINT(build/include_order)
 
 #include "external/span.hpp"
@@ -30,6 +31,7 @@ constexpr FilePageId MaxFilePageId = UINT64_MAX;
 
 using FileId = uint64_t;
 static constexpr FileId MaxFileId = UINT64_MAX;
+using PartitonGroupId = uint32_t;
 
 constexpr char FileNameSeparator = '_';
 static constexpr char FileNameData[] = "data";
@@ -39,6 +41,13 @@ static constexpr char TmpSuffix[] = ".tmp";
 constexpr size_t kDefaultScanPrefetchPageCount = 6;
 
 namespace fs = std::filesystem;
+
+inline std::string CurrentTermFileNameForPartitionGroup(
+    PartitonGroupId partition_group_id)
+{
+    return std::string(CurrentTermFileName) + "_" +
+           std::to_string(partition_group_id);
+}
 
 struct TableIdent
 {

@@ -53,36 +53,35 @@ TaskManager::TaskManager(const KvOptions *opts)
 
 void TaskManager::Shutdown()
 {
-    size_t aborted_tasks = 0;
-    size_t aborted_reqs = 0;
-    auto abort_unfinished = [&](KvTask *task)
+    size_t unfinished_tasks = 0;
+    size_t unfinished_reqs = 0;
+    auto check_finished = [&](KvTask *task)
     {
-        if (task->status_ == TaskStatus::Idle ||
-            task->status_ == TaskStatus::Finished)
+        if (task->status_ == TaskStatus::Idle)
         {
             return;
         }
-        ++aborted_tasks;
+        ++unfinished_tasks;
         if (task->req_ != nullptr)
         {
-            ++aborted_reqs;
-            LOG(INFO) << "TaskManager::Shutdown abort request "
-                      << typeid(*task->req_).name();
-            task->req_->SetDone(KvError::NotRunning);
-            task->req_ = nullptr;
+            ++unfinished_reqs;
+            LOG(ERROR) << "TaskManager::Shutdown found unfinished request "
+                       << typeid(*task->req_).name();
         }
-        task->status_ = TaskStatus::Finished;
-        task->inflight_io_ = 0;
     };
-    batch_write_pool_.ForEachTask(abort_unfinished);
-    bg_write_pool_.ForEachTask(abort_unfinished);
-    read_pool_.ForEachTask(abort_unfinished);
-    scan_pool_.ForEachTask(abort_unfinished);
-    list_object_pool_.ForEachTask(abort_unfinished);
-    list_standby_partition_pool_.ForEachTask(abort_unfinished);
-    reopen_pool_.ForEachTask(abort_unfinished);
-    LOG(INFO) << "TaskManager::Shutdown finished, aborted_tasks="
-              << aborted_tasks << ", aborted_reqs=" << aborted_reqs;
+    batch_write_pool_.ForEachTask(check_finished);
+    bg_write_pool_.ForEachTask(check_finished);
+    read_pool_.ForEachTask(check_finished);
+    scan_pool_.ForEachTask(check_finished);
+    list_object_pool_.ForEachTask(check_finished);
+    list_standby_partition_pool_.ForEachTask(check_finished);
+    reopen_pool_.ForEachTask(check_finished);
+    CHECK_EQ(unfinished_tasks, 0)
+        << "TaskManager::Shutdown requires a quiesced shard, unfinished_tasks="
+        << unfinished_tasks << ", unfinished_reqs=" << unfinished_reqs;
+    CHECK_EQ(num_active_, 0)
+        << "TaskManager::Shutdown found tasks still registered as active";
+    LOG(INFO) << "TaskManager::Shutdown finished";
 
     num_active_ = 0;
     num_active_write_ = 0;

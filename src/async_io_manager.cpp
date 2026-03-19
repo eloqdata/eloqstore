@@ -2982,9 +2982,8 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
     cached_files.reserve(64);
 
     bool has_max_data_file = false;
-    uint64_t max_term = 0;
     FileId max_file_id = 0;
-    size_t max_data_file_idx = 0;
+    std::vector<size_t> max_data_file_indices;
 
     fs::directory_iterator end;
     for (; file_it != end; file_it.increment(ec))
@@ -3072,13 +3071,15 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
             }
             info.file_id = file_id;
             info.term = term;
-            if (!has_max_data_file || term > max_term ||
-                (term == max_term && file_id > max_file_id))
+            if (!has_max_data_file || file_id > max_file_id)
             {
                 has_max_data_file = true;
-                max_term = term;
                 max_file_id = file_id;
-                max_data_file_idx = cached_files.size();
+                max_data_file_indices = {cached_files.size()};
+            }
+            else if (file_id == max_file_id)
+            {
+                max_data_file_indices.emplace_back(cached_files.size());
             }
         }
 
@@ -3094,17 +3095,18 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
 
     if (has_max_data_file)
     {
-        const CachedFileInfo &victim = cached_files[max_data_file_idx];
-        std::error_code remove_ec;
-        fs::remove(victim.path, remove_ec);
-        if (remove_ec)
+        for (size_t idx : max_data_file_indices)
         {
-            LOG(ERROR) << "Failed to remove max data file " << victim.path
-                       << ": " << remove_ec.message();
-            return KvError::InvalidArgs;
-        }
-        else
-        {
+            const CachedFileInfo &victim = cached_files[idx];
+            std::error_code remove_ec;
+            fs::remove(victim.path, remove_ec);
+            if (remove_ec)
+            {
+                LOG(ERROR) << "Failed to remove max data file " << victim.path
+                           << ": " << remove_ec.message();
+                return KvError::InvalidArgs;
+            }
+
             LOG(INFO) << "Removed max data file " << victim.path
                       << " during cache restore";
         }
@@ -3112,7 +3114,9 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
 
     for (size_t i = 0; i < cached_files.size(); ++i)
     {
-        if (has_max_data_file && i == max_data_file_idx)
+        if (has_max_data_file && std::find(max_data_file_indices.begin(),
+                                           max_data_file_indices.end(),
+                                           i) != max_data_file_indices.end())
         {
             continue;
         }
@@ -3413,13 +3417,6 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     }
 
     uint64_t process_term = ProcessTerm();
-
-    // Check and update term file
-    KvError term_err = UpsertTermFile(tbl_id, process_term);
-    if (term_err != KvError::NoError)
-    {
-        return {nullptr, term_err};
-    }
 
     KvError dl_err = DownloadFile(tbl_id, LruFD::kManifest, process_term);
     if (dl_err == KvError::NoError)
@@ -3919,13 +3916,21 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
     return IouringMgr::GetManifest(tbl_id);
 }
 
-std::tuple<uint64_t, std::string, KvError> CloudStoreMgr::ReadTermFile(
-    const TableIdent &tbl_id)
+std::string CloudStoreMgr::PartitionGroupTermRemotePath() const
+{
+    return CurrentTermFileNameForPartitionGroup(partition_group_id_);
+}
+
+KvError CloudStoreMgr::SyncPartitionGroupTermFile()
+{
+    return UpsertTermFile(ProcessTerm());
+}
+
+std::tuple<uint64_t, std::string, KvError> CloudStoreMgr::ReadTermFile()
 {
     KvTask *current_task = ThdTask();
 
-    // Download CURRENT_TERM file
-    ObjectStore::DownloadTask download_task(&tbl_id, CurrentTermFileName);
+    ObjectStore::DownloadTask download_task(PartitionGroupTermRemotePath());
     download_task.SetKvTask(current_task);
     AcquireCloudSlot(current_task);
     obj_store_.SubmitTask(&download_task, shard);
@@ -3933,7 +3938,7 @@ std::tuple<uint64_t, std::string, KvError> CloudStoreMgr::ReadTermFile(
 
     if (download_task.error_ == KvError::NotFound)
     {
-        return {0, "", KvError::NotFound};  // Legacy table
+        return {0, "", KvError::NotFound};
     }
     if (download_task.error_ != KvError::NoError)
     {
@@ -3965,132 +3970,136 @@ std::tuple<uint64_t, std::string, KvError> CloudStoreMgr::ReadTermFile(
         return {0, "", KvError::Corrupted};
     }
 
-    // Extract ETag from download_task.etag_
     return {term, download_task.etag_, KvError::NoError};
 }
 
-KvError CloudStoreMgr::UpsertTermFile(const TableIdent &tbl_id,
-                                      uint64_t process_term)
+KvError CloudStoreMgr::UpsertTermFile(uint64_t process_term)
 {
     constexpr uint64_t kMaxAttempts = 10;
     uint64_t attempt = 0;
     while (attempt < kMaxAttempts)
     {
-        // 1. Read term file (get current_term and ETag)
-        auto [current_term, etag, read_err] = ReadTermFile(tbl_id);
+        auto [current_term, etag, read_err] = ReadTermFile();
 
         if (read_err == KvError::NotFound)
         {
             DLOG(INFO) << "CloudStoreMgr::UpsertTermFile: term file not found "
-                          "for table "
-                       << tbl_id << ", create term file with process_term "
+                       << "for partition_group_id " << partition_group_id_
+                       << ", create term file with process_term "
                        << process_term;
-            // Legacy table - create term file with current process_term
-            auto [create_err, response_code] =
-                CasCreateTermFile(tbl_id, process_term);
+            DLOG(INFO) << "CloudStoreMgr::UpsertTermFile: CasCreateTermFile "
+                       << "partition_group_id=" << partition_group_id_
+                       << ", process_term=" << process_term;
+            auto [create_err, response_code] = CasCreateTermFile(process_term);
+            DLOG(INFO) << "CloudStoreMgr::UpsertTermFile: CasCreateTermFile "
+                       << "finished partition_group_id=" << partition_group_id_
+                       << ", err=" << ErrorString(create_err)
+                       << ", response_code=" << response_code;
             if (create_err == KvError::NoError)
             {
-                // Successfully created, no update needed
                 return KvError::NoError;
             }
 
-            // Check if CAS conflict (412 or 409) - file already exists
             if (create_err == KvError::CloudErr &&
                 (response_code == 412 || response_code == 409))
             {
-                // CAS conflict detected - file was created by another instance
-                // Retry by reading the file and continuing with update logic
                 ++attempt;
                 LOG(WARNING) << "CloudStoreMgr::UpsertTermFile: CAS conflict "
-                             << "(HTTP " << response_code << ") when creating "
-                             << "term file for table " << tbl_id << " (attempt "
-                             << attempt << "/" << kMaxAttempts
+                             << "(HTTP " << response_code
+                             << ") when creating term file for "
+                             << "partition_group_id " << partition_group_id_
+                             << " (attempt " << attempt << "/" << kMaxAttempts
                              << "), retrying with backoff";
-                continue;  // Retry by reading term file in next iteration
+                continue;
             }
 
-            // Non-CAS error - try read again to see if file was created by
-            // another instance
-            std::tie(current_term, etag, read_err) = ReadTermFile(tbl_id);
+            std::tie(current_term, etag, read_err) = ReadTermFile();
             if (read_err != KvError::NoError)
             {
                 LOG(WARNING)
                     << "CloudStoreMgr::UpsertTermFile: failed to create "
-                    << "term file for legacy table " << tbl_id
+                    << "term file for partition_group_id "
+                    << partition_group_id_
                     << ", error: " << ErrorString(create_err);
                 return create_err;
             }
-            // Successfully read after retry, continue with validation
         }
         if (read_err != KvError::NoError)
         {
             LOG(ERROR)
                 << "CloudStoreMgr::UpsertTermFile: failed to read term file "
-                << "for table " << tbl_id << " : " << ErrorString(read_err);
+                << "for partition_group_id " << partition_group_id_ << " : "
+                << ErrorString(read_err);
             return read_err;
         }
 
-        // 2. Validate update condition
         if (current_term > process_term)
         {
-            // Term file is ahead, instance is outdated
             LOG(ERROR) << "CloudStoreMgr::UpsertTermFile: term file term "
                        << current_term << " greater than process_term "
-                       << process_term << " for table " << tbl_id;
+                       << process_term << " for partition_group_id "
+                       << partition_group_id_;
             return KvError::ExpiredTerm;
         }
         if (current_term == process_term)
         {
-            // Already up-to-date, no update needed
             return KvError::NoError;
         }
 
-        // 3. Attempt CAS update with If-Match: etag
+        DLOG(INFO)
+            << "CloudStoreMgr::UpsertTermFile: CasUpdateTermFileWithEtag "
+            << "partition_group_id=" << partition_group_id_
+            << ", current_term=" << current_term
+            << ", process_term=" << process_term << ", etag=" << etag;
         auto [err, response_code] =
-            CasUpdateTermFileWithEtag(tbl_id, process_term, etag);
+            CasUpdateTermFileWithEtag(process_term, etag);
+        DLOG(INFO)
+            << "CloudStoreMgr::UpsertTermFile: CasUpdateTermFileWithEtag "
+            << "finished partition_group_id=" << partition_group_id_
+            << ", err=" << ErrorString(err)
+            << ", response_code=" << response_code;
 
         if (err == KvError::NoError)
         {
             return KvError::NoError;
         }
 
-        // 4. Check if CAS conflict (412 or 409 or 404)
         if (err == KvError::NotFound ||
             (err == KvError::CloudErr &&
              (response_code == 412 || response_code == 409 ||
               response_code == 404)))
         {
             ++attempt;
-            // CAS conflict detected - retry with backoff
             LOG(WARNING) << "CloudStoreMgr::UpsertTermFile: CAS conflict "
-                         << "(HTTP " << response_code << ") for table "
-                         << tbl_id << " (attempt " << attempt << "/"
-                         << kMaxAttempts << "), current_term=" << current_term
+                         << "(HTTP " << response_code
+                         << ") for partition_group_id " << partition_group_id_
+                         << " (attempt " << attempt << "/" << kMaxAttempts
+                         << "), current_term=" << current_term
                          << ", process_term=" << process_term
                          << ", retrying with backoff";
 
             continue;
         }
 
-        // Non-CAS error - return immediately
         LOG(ERROR) << "CloudStoreMgr::UpsertTermFile: non-retryable error "
-                   << ErrorString(err) << " for table " << tbl_id;
+                   << ErrorString(err) << " for partition_group_id "
+                   << partition_group_id_;
         return err;
     }
 
-    // Exceeded max attempts
     LOG(ERROR) << "CloudStoreMgr::UpsertTermFile: exceeded max attempts ("
-               << kMaxAttempts << ") for table " << tbl_id;
+               << kMaxAttempts << ") for partition_group_id "
+               << partition_group_id_;
     return KvError::CloudErr;
 }
 
 std::pair<KvError, int64_t> CloudStoreMgr::CasCreateTermFile(
-    const TableIdent &tbl_id, uint64_t process_term)
+    uint64_t process_term)
 {
     KvTask *current_task = ThdTask();
     std::string term_str = std::to_string(process_term);
 
-    ObjectStore::UploadTask upload_task(&tbl_id, CurrentTermFileName);
+    ObjectStore::UploadTask upload_task(PartitionGroupTermRemotePath(), true);
     upload_task.data_buffer_.append(term_str);
     upload_task.if_none_match_ = "*";  // Only create if doesn't exist
     upload_task.SetKvTask(current_task);
@@ -4103,12 +4112,12 @@ std::pair<KvError, int64_t> CloudStoreMgr::CasCreateTermFile(
 }
 
 std::pair<KvError, int64_t> CloudStoreMgr::CasUpdateTermFileWithEtag(
-    const TableIdent &tbl_id, uint64_t process_term, const std::string &etag)
+    uint64_t process_term, const std::string &etag)
 {
     KvTask *current_task = ThdTask();
     std::string term_str = std::to_string(process_term);
 
-    ObjectStore::UploadTask upload_task(&tbl_id, CurrentTermFileName);
+    ObjectStore::UploadTask upload_task(PartitionGroupTermRemotePath(), true);
     upload_task.data_buffer_.append(term_str);
     upload_task.if_match_ = etag;  // Only update if ETag matches
     upload_task.SetKvTask(current_task);

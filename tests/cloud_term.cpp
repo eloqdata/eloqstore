@@ -20,11 +20,14 @@ namespace chrono = std::chrono;
 
 TEST_CASE("cloud start with different term", "[cloud][term]")
 {
-    eloqstore::EloqStore *store = InitStore(cloud_options);
+    eloqstore::KvOptions options = cloud_options;
+    options.allow_reuse_local_caches = true;
+
+    eloqstore::EloqStore *store = InitStore(options);
     store->Stop();
 
     // start with term 1
-    store->Start(1);
+    REQUIRE(store->Start(1) == eloqstore::KvError::NoError);
     MapVerifier tester(test_tbl_id, store);
     tester.SetValueSize(40960);
     tester.SetStore(store);
@@ -38,7 +41,7 @@ TEST_CASE("cloud start with different term", "[cloud][term]")
     CleanupLocalStore(cloud_options);
 
     // start with term 5, can read data written by term 1
-    store->Start(5);
+    REQUIRE(store->Start(5) == eloqstore::KvError::NoError);
     tester.Validate();
     REQUIRE(tester.CheckKey(30) == eloqstore::KvError::NoError);
     REQUIRE(tester.CheckKey(200) == eloqstore::KvError::NotFound);
@@ -51,38 +54,20 @@ TEST_CASE("cloud start with different term", "[cloud][term]")
 
     // start with term 3, should be expired, because term 3 is less than
     // term 5
-    store->Start(3);
-    REQUIRE(tester.CheckKey(30) == eloqstore::KvError::ExpiredTerm);
+    REQUIRE(store->Start(3) == eloqstore::KvError::ExpiredTerm);
 
     store->Stop();
     CleanupLocalStore(cloud_options);
 
-    // start with term 1', should only read data written by term 1
-    store->Start(1);
-    REQUIRE(tester.CheckKey(50) == eloqstore::KvError::NoError);
-    REQUIRE(tester.CheckKey(200) == eloqstore::KvError::NotFound);
-
-    MapVerifier tester2(test_tbl_id, store);
-    tester2.SetValueSize(40960);
-    tester2.SetStore(store);
-    tester2.SetAutoValidate(false);
-
-    tester2.Upsert(400, 500);
-    tester2.SetAutoClean(false);
-
-    store->Stop();
-    CleanupLocalStore(cloud_options);
-
-    // start with term 7, can read data written by term 1 and term 5,
-    // can't read data written by term 1'
-    store->Start(7);
+    // start with term 7 in the same partition group, can read data written by
+    // term 1 and term 5.
+    REQUIRE(store->Start(7) == eloqstore::KvError::NoError);
     tester.Validate();
-    REQUIRE(tester.CheckKey(450) == eloqstore::KvError::NotFound);
 
     tester.Clean();
     tester.SetAutoClean(false);
 
     store->Stop();
 
-    CleanupStore(cloud_options);
+    CleanupStore(options);
 }

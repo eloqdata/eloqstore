@@ -3,6 +3,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <map>
 #include <memory>
@@ -349,6 +350,57 @@ TEST_CASE("cloud reuse cache enforces budgets across restarts",
                              }));
 
     trimmed_store->Stop();
+    CleanupStore(options);
+}
+
+TEST_CASE("cloud restore removes largest file id across all terms", "[cloud]")
+{
+    namespace fs = std::filesystem;
+
+    eloqstore::KvOptions options = cloud_options;
+    options.local_space_limit = 64ULL << 20;
+    options.allow_reuse_local_caches = true;
+
+    eloqstore::TableIdent tbl_id{"restore_trim_terms", 0};
+    eloqstore::EloqStore *store = InitStore(options);
+    MapVerifier writer(tbl_id, store);
+    writer.SetAutoClean(false);
+    writer.SetValueSize(64 << 10);
+    writer.Upsert(0, 256);
+    writer.Validate();
+    store->Stop();
+
+    const fs::path partition_path =
+        fs::path(options.store_path[0]) / tbl_id.ToString();
+    const fs::path lower_high_term =
+        partition_path / eloqstore::DataFileName(998, 100);
+    const fs::path max_file_low_term =
+        partition_path / eloqstore::DataFileName(999, 1);
+    const fs::path max_file_high_term =
+        partition_path / eloqstore::DataFileName(999, 7);
+
+    {
+        std::ofstream(lower_high_term).put('a');
+        std::ofstream(max_file_low_term).put('b');
+        std::ofstream(max_file_high_term).put('c');
+    }
+
+    REQUIRE(fs::exists(lower_high_term));
+    REQUIRE(fs::exists(max_file_low_term));
+    REQUIRE(fs::exists(max_file_high_term));
+
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    REQUIRE(WaitForCondition(std::chrono::seconds(5),
+                             std::chrono::milliseconds(10),
+                             [&]() { return store->Inited(); }));
+
+    REQUIRE(fs::exists(lower_high_term));
+    REQUIRE(!fs::exists(max_file_low_term));
+    REQUIRE(!fs::exists(max_file_high_term));
+
+    writer.SetStore(store);
+    writer.Validate();
+    store->Stop();
     CleanupStore(options);
 }
 
