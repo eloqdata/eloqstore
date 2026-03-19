@@ -1201,6 +1201,8 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
                                                                  : "delete")
               << " tag=" << tag << ", term=" << term;
 
+    req->result_archive_ = BranchArchiveName(branch_, term_, tag);
+
     std::vector<TableIdent> all_partitions;
     if (options_.cloud_store_path.empty())
     {
@@ -1788,7 +1790,7 @@ void EloqStore::HandleGlobalCreateBranchRequest(GlobalCreateBranchRequest *req)
     std::snprintf(
         salt_buf, sizeof(salt_buf), "%08x", static_cast<uint32_t>(salt_val));
     std::string internal_name = normalized + "-" + salt_buf;
-    req->result_branch = internal_name;
+    req->result_branch_ = internal_name;
 
     LOG(INFO) << "Creating global branch " << req->GetBranchName()
               << " (internal: " << internal_name << ")";

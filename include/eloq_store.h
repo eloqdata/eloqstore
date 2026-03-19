@@ -553,12 +553,20 @@ public:
         return action_;
     }
 
+    // The archive name produced by HandleGlobalArchiveRequest.
+    // Callers should read this after a successful ExecSync.
+    const std::string &ResultArchive() const
+    {
+        return result_archive_;
+    }
+
 private:
     static constexpr uint64_t kUseProcessTerm =
         std::numeric_limits<uint64_t>::max();
     std::string tag_;
     uint64_t term_{kUseProcessTerm};
     Action action_{Action::Create};
+    std::string result_archive_;
     std::vector<std::unique_ptr<ArchiveRequest>> archive_reqs_;
     std::atomic<uint32_t> pending_{0};
     std::atomic<uint8_t> first_error_{static_cast<uint8_t>(KvError::NoError)};
@@ -724,11 +732,15 @@ public:
     // HandleGlobalCreateBranchRequest. Callers should use this after a
     // successful ExecSync to refer to the new branch in subsequent operations
     // (delete, read, etc.).
-    std::string result_branch;
+    const std::string &ResultBranch() const
+    {
+        return result_branch_;
+    }
 
 private:
     std::string branch_name_;
     uint64_t salt_ts_{0};
+    std::string result_branch_;
     std::vector<std::unique_ptr<CreateBranchRequest>> branch_reqs_;
     std::atomic<uint32_t> pending_{0};
     std::atomic<uint8_t> first_error_{static_cast<uint8_t>(KvError::NoError)};
