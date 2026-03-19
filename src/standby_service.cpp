@@ -676,10 +676,6 @@ KvError StandbyService::StartRsyncJob(std::list<InflightJob>::iterator it)
     std::string remote_partition_path = RemotePartitionPath(job->tbl_id);
     std::string remote_manifest_path =
         RemoteArchiveManifestPath(job->tbl_id, job->archive_tag);
-    DLOG(INFO) << "StandbyService::StartRsyncJob begin, table " << job->tbl_id
-               << ", tag " << job->archive_tag << ", remote_partition_path "
-               << remote_partition_path << ", remote_manifest_path "
-               << remote_manifest_path;
     if (remote_partition_path.empty() || remote_manifest_path.empty())
     {
         LOG(ERROR) << "StandbyService: remote partition path missing for "
@@ -1069,8 +1065,6 @@ void StandbyService::HandleExitedChild(std::list<InflightJob>::iterator it,
             FinishInflightJob(it, KvError::NotFound);
             return;
         }
-        DLOG(INFO) << "StandbyService::RsyncJob finish, table " << rsync->tbl_id
-                   << ", tag " << rsync->archive_tag;
         FinishInflightJob(it, KvError::NoError);
         return;
     }

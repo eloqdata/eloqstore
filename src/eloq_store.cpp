@@ -432,18 +432,6 @@ void EloqStore::CleanupRuntime(size_t started_shards)
         DLOG(INFO) << "EloqStore::CleanupRuntime stage=stop_archive_crond";
         archive_crond_->Stop();
     }
-    // Stop external async services before shard task-manager shutdown can
-    // abort stack-backed waiting requests.
-    if (standby_service_)
-    {
-        DLOG(INFO) << "EloqStore::CleanupRuntime stage=stop_standby_service";
-        standby_service_->Stop();
-    }
-    if (cloud_service_)
-    {
-        DLOG(INFO) << "EloqStore::CleanupRuntime stage=stop_cloud_service";
-        cloud_service_->Stop();
-    }
 #ifdef ELOQ_MODULE_ENABLED
     if (module_ != nullptr)
     {
@@ -503,6 +491,18 @@ void EloqStore::CleanupRuntime(size_t started_shards)
         assert(res == 0);
     }
     root_fds_.clear();
+    // Stop external async services before shard task-manager shutdown can
+    // abort stack-backed waiting requests.
+    if (standby_service_)
+    {
+        DLOG(INFO) << "EloqStore::CleanupRuntime stage=stop_standby_service";
+        standby_service_->Stop();
+    }
+    if (cloud_service_)
+    {
+        DLOG(INFO) << "EloqStore::CleanupRuntime stage=stop_cloud_service";
+        cloud_service_->Stop();
+    }
     if (eloq_store == this)
     {
         eloq_store = nullptr;
@@ -1795,6 +1795,7 @@ bool EloqStore::SendRequest(KvRequest *req)
 
 void EloqStore::Stop()
 {
+    LOG(INFO) << "EloqStore stopping.";
     while (true)
     {
         Status current = status_.load(std::memory_order_acquire);
@@ -1804,7 +1805,11 @@ void EloqStore::Stop()
         }
         if (current == Status::Starting)
         {
+#ifdef ELOQ_MODULE_ENABLED
+            bthread_usleep(1000);
+#else
             std::this_thread::yield();
+#endif
             continue;
         }
         if (current == Status::Running &&

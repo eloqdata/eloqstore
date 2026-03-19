@@ -348,8 +348,6 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
 {
     CHECK(eloq_store != nullptr);
     const StoreMode mode = eloq_store->Mode();
-    DLOG(INFO) << "InstallExternalSnapshot begin, table " << tbl_ident
-               << ", mode " << static_cast<int>(mode) << ", tag " << reopen_tag;
     if (mode != StoreMode::Cloud && mode != StoreMode::StandbyReplica)
     {
         LOG(ERROR) << "InstallExternalSnapshot invalid mode, table "

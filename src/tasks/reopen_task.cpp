@@ -15,8 +15,6 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
 {
     CHECK(request_ != nullptr);
     StoreMode mode = shard->store_->Mode();
-    DLOG(INFO) << "Reopen " << tbl_id << " start, mode "
-               << static_cast<int>(mode) << ", tag " << request_->Tag();
     StandbyService *standby_service = nullptr;
     std::string tag;
     if (mode == StoreMode::StandbyReplica)
@@ -39,7 +37,6 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
         }
         KvTask *current_task = ThdTask();
         CHECK(current_task != nullptr);
-        DLOG(INFO) << "Reopen " << tbl_id << " rsync begin, tag " << tag;
         KvError enqueue_err = standby_service->RsyncPartition(tbl_id, tag);
         if (enqueue_err != KvError::NoError)
         {
@@ -58,7 +55,6 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
             request_ = nullptr;
             return sync_err;
         }
-        DLOG(INFO) << "Reopen " << tbl_id << " rsync finished, tag " << tag;
     }
 
     KvError err = shard->IndexManager()->InstallExternalSnapshot(
