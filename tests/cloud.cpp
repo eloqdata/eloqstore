@@ -362,79 +362,6 @@ TEST_CASE("cloud gc removes local cached files after remote truncate",
     CleanupStore(options);
 }
 
-TEST_CASE(
-    "cloud gc waits for an actively referenced local file before deleting "
-    "cache",
-    "[cloud][gc][targeted]")
-{
-    using namespace std::chrono_literals;
-    namespace fs = std::filesystem;
-
-    eloqstore::KvOptions options = cloud_options;
-    options.num_threads = 1;
-    options.pages_per_file_shift = 1;
-    options.local_space_limit = 256ULL << 20;
-
-    CleanupStore(options);
-
-    eloqstore::EloqStore *store = InitStore(options);
-    eloqstore::TableIdent tbl_id{"cloud-gc-open-file", 0};
-    MapVerifier writer(tbl_id, store, false);
-    writer.SetAutoClean(false);
-    writer.SetValueSize(10024);
-
-    writer.Upsert(0, 600);
-
-    const fs::path partition_path =
-        fs::path(options.store_path[0]) / tbl_id.ToString();
-    REQUIRE(WaitForCondition(
-        10s,
-        50ms,
-        [&]()
-        {
-            return FindLowestDataFile(ListLocalPartitionFiles(partition_path))
-                .has_value();
-        }));
-
-    std::optional<std::string> target_name =
-        FindLowestDataFile(ListLocalPartitionFiles(partition_path));
-    REQUIRE(target_name.has_value());
-    const fs::path target_path = partition_path / *target_name;
-    REQUIRE(fs::exists(target_path));
-
-    writer.Read(0);
-
-    auto [type, suffix] = eloqstore::ParseFileName(*target_name);
-    REQUIRE(type == eloqstore::FileNameData);
-    eloqstore::FileId target_file_id = 0;
-    uint64_t target_term = 0;
-    REQUIRE(
-        eloqstore::ParseDataFileSuffix(suffix, target_file_id, target_term));
-
-    eloqstore::Shard *shard = PrimaryShard(store);
-    REQUIRE(shard != nullptr);
-    auto *cloud_mgr =
-        static_cast<eloqstore::CloudStoreMgr *>(shard->IoManager());
-    auto [held_fd, state] = cloud_mgr->GetOpenedFD(tbl_id, target_file_id);
-    REQUIRE(held_fd != nullptr);
-    REQUIRE(held_fd.Get()->term_ == target_term);
-
-    writer.Truncate(0, true);
-
-    REQUIRE(fs::exists(target_path));
-    std::this_thread::sleep_for(200ms);
-    REQUIRE(fs::exists(target_path));
-
-    held_fd = eloqstore::IouringMgr::LruFD::Ref();
-    REQUIRE(WaitForCondition(
-        20s, 100ms, [&]() { return !fs::exists(target_path); }));
-    REQUIRE(WaitForCondition(
-        20s, 100ms, [&]() { return !fs::exists(partition_path); }));
-
-    store->Stop();
-    CleanupStore(options);
-}
-
 TEST_CASE("cloud prewarm respects cache budget", "[cloud][prewarm]")
 {
     using namespace std::chrono_literals;
@@ -631,9 +558,9 @@ TEST_CASE("cloud restore removes largest file id across all terms", "[cloud]")
 TEST_CASE("cloud startup restore removes empty idle partition directories",
           "[cloud][cache]")
 {
-            namespace fs = std::filesystem;
-        
-            eloqstore::KvOptions options = cloud_options;
+    namespace fs = std::filesystem;
+
+    eloqstore::KvOptions options = cloud_options;
 
     options.allow_reuse_local_caches = true;
     options.num_threads = 1;

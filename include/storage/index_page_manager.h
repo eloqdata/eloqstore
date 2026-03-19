@@ -55,7 +55,6 @@ public:
     KvError MakeCowRoot(const TableIdent &tbl_ident, CowRootMeta &cow_meta);
 
     void UpdateRoot(const TableIdent &tbl_ident, CowRootMeta new_meta);
-    void MarkManifestMissing(const TableIdent &tbl_ident);
 
     std::pair<MemIndexPage::Handle, KvError> FindPage(MappingSnapshot *mapping,
                                                       PageId page_id);
