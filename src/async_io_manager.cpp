@@ -1192,18 +1192,13 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
             // This must be data file because manifest should always be
             // created by call WriteSnapshot.
             assert(file_id <= LruFD::kMaxDataFile);
-            DLOG(INFO) << "OpenOrCreateFD dir " << tbl_id;
             auto [dfd_ref, err] =
                 OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, 0);
-            DLOG(INFO) << "OpenOrCreateFD dir " << tbl_id << " refcount "
-                       << dfd_ref.Get()->ref_count_;
             error = err;
             if (dfd_ref != nullptr)
             {
                 TEST_KILL_POINT_WEIGHT("OpenOrCreateFD:CreateFile", 100)
-                DLOG(INFO) << "CreateFile " << tbl_id;
                 fd = CreateFile(std::move(dfd_ref), file_id, term);
-                DLOG(INFO) << "CreateFile " << tbl_id << " finish";
             }
         }
     }
