@@ -491,8 +491,8 @@ void EloqStore::CleanupRuntime(size_t started_shards)
         assert(res == 0);
     }
     root_fds_.clear();
-    // Stop external async services before shard task-manager shutdown can
-    // abort stack-backed waiting requests.
+    // Stop external async services after shards to make sure running tasks
+    // can finish.
     if (standby_service_)
     {
         DLOG(INFO) << "EloqStore::CleanupRuntime stage=stop_standby_service";
