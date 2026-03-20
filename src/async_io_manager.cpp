@@ -4096,7 +4096,6 @@ void CloudStoreMgr::RequestGcLocalCleanup(
 void CloudStoreMgr::RegisterDirBusy(const TableIdent &tbl_id)
 {
     dir_busy_counts_[tbl_id]++;
-    pending_dir_cleanup_.erase(tbl_id);
 }
 
 void CloudStoreMgr::UnregisterDirBusy(const TableIdent &tbl_id)
@@ -4109,7 +4108,7 @@ void CloudStoreMgr::UnregisterDirBusy(const TableIdent &tbl_id)
     if (--it->second == 0)
     {
         dir_busy_counts_.erase(it);
-        pending_dir_cleanup_.insert(tbl_id);
+        pending_dir_cleanup_.push_back(tbl_id);
         if (file_cleaner_.status_ == TaskStatus::Idle)
         {
             file_cleaner_.Resume();
@@ -5542,11 +5541,11 @@ void CloudStoreMgr::FileCleaner::Run()
 
         if (has_pending_dir_cleanup)
         {
-            for (auto it = io_mgr_->pending_dir_cleanup_.begin();
-                 it != io_mgr_->pending_dir_cleanup_.end();)
+            while (!io_mgr_->pending_dir_cleanup_.empty())
             {
-                TableIdent tbl_id = *it;
-                it = io_mgr_->pending_dir_cleanup_.erase(it);
+                TableIdent tbl_id =
+                    std::move(io_mgr_->pending_dir_cleanup_.front());
+                io_mgr_->pending_dir_cleanup_.pop_front();
                 made_progress = true;
                 KvError cleanup_err =
                     io_mgr_->TryCleanupLocalPartitionDir(tbl_id);

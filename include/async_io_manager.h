@@ -1084,7 +1084,7 @@ private:
     };
     std::unordered_map<FileKey, EvictingPath> evicting_paths_;
     std::unordered_set<FileKey> pending_gc_cleanup_;
-    std::unordered_set<TableIdent> pending_dir_cleanup_;
+    std::deque<TableIdent> pending_dir_cleanup_;
     std::unordered_map<TableIdent, uint32_t> dir_busy_counts_;
     CachedFile lru_file_head_;
     CachedFile lru_file_tail_;
