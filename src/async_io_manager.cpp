@@ -4651,14 +4651,18 @@ KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
 
 KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
 {
-    KvError err = IouringMgr::CloseFile(fd);
-    CHECK_KV_ERR(err);
     FileId file_id = fd.Get()->file_id_;
+    uint64_t term = fd.Get()->term_;
+    std::optional<TableIdent> tbl_id;
     if (file_id != LruFD::kDirectory)
     {
-        const TableIdent *tbl_id = fd.Get()->tbl_->tbl_id_;
-        uint64_t term = fd.Get()->term_;
-        EnqueClosedFile(FileKey(*tbl_id, ToFilename(file_id, term)));
+        tbl_id = *fd.Get()->tbl_->tbl_id_;
+    }
+    KvError err = IouringMgr::CloseFile(fd);
+    CHECK_KV_ERR(err);
+    if (tbl_id.has_value())
+    {
+        EnqueClosedFile(FileKey(std::move(*tbl_id), ToFilename(file_id, term)));
     }
     return KvError::NoError;
 }
