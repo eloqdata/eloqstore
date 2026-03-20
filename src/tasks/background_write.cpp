@@ -233,7 +233,7 @@ KvError BackgroundWrite::CompactDataFile()
             {
                 MemIndexPage::Handle handle =
                     cow_meta_.old_mapping_->GetSwizzlingHandle(page_id);
-                if (handle)
+                if (handle && !handle->IsDetached())
                 {
                     auto [_, new_fp_id] = AllocatePage(page_id);
                     FilePageId src_fp_id = handle->GetFilePageId();
