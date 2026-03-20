@@ -902,7 +902,7 @@ size_t IouringMgr::GetOpenFileLimit() const
     return fd_limit_;
 }
 
-KvError IouringMgr::TryCleanupLocalPartitionDir(const TableIdent &tbl_id)
+KvError CloudStoreMgr::TryCleanupLocalPartitionDir(const TableIdent &tbl_id)
 {
     const std::string partition_name = tbl_id.ToString();
     if (HasDirBusy(tbl_id))
@@ -1007,13 +1007,6 @@ void IouringMgr::CleanManifest(const TableIdent &tbl_id)
     {
         LOG(ERROR) << "Failed to open directory for table " << tbl_id
                    << " during cleanup: " << ErrorString(dir_err);
-    }
-
-    KvError cleanup_err = TryCleanupLocalPartitionDir(tbl_id);
-    if (cleanup_err != KvError::NoError)
-    {
-        LOG(WARNING) << "Failed to clean partition directory for table "
-                     << tbl_id << ": " << ErrorString(cleanup_err);
     }
 }
 
@@ -4370,6 +4363,13 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
 
 void CloudStoreMgr::CleanManifest(const TableIdent &tbl_id)
 {
+    IouringMgr::CleanManifest(tbl_id);
+    KvError cleanup_err = TryCleanupLocalPartitionDir(tbl_id);
+    if (cleanup_err != KvError::NoError)
+    {
+        LOG(WARNING) << "Failed to clean partition directory for table "
+                     << tbl_id << ": " << ErrorString(cleanup_err);
+    }
 }
 
 KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,

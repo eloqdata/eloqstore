@@ -500,7 +500,6 @@ public:
         return 0;  // IouringMgr doesn't use local file caching
     }
 
-    KvError TryCleanupLocalPartitionDir(const TableIdent &tbl_id);
     void CleanManifest(const TableIdent &tbl_id) override;
 
     static constexpr uint64_t oflags_dir = O_DIRECTORY | O_RDONLY;
@@ -946,6 +945,7 @@ public:
         const TableIdent &tbl_id) override;
     std::pair<ManifestFilePtr, KvError> RefreshManifest(
         const TableIdent &tbl_id, std::string_view archive_tag);
+    KvError TryCleanupLocalPartitionDir(const TableIdent &tbl_id);
     void RequestGcLocalCleanup(const TableIdent &tbl_id,
                                const std::vector<std::string> &filenames);
     void RegisterDirBusy(const TableIdent &tbl_id) override;
