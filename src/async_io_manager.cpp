@@ -913,11 +913,6 @@ KvError IouringMgr::TryCleanupLocalPartitionDir(const TableIdent &tbl_id)
     }
 
     LruFD::Ref dir_fd = GetOpenedFD(tbl_id, LruFD::kDirectory);
-    DLOG(INFO) << "TryCleanupLocalPartitionDir " << tbl_id << " dir "
-               << dir_fd.Get();
-    if (dir_fd.Get())
-        DLOG(INFO) << "TryCleanupLocalPartitionDir " << tbl_id
-                   << " dir refcount " << dir_fd.Get()->ref_count_;
     const bool directory_active =
         dir_fd != nullptr && dir_fd.Get()->ref_count_ > 1;
     if (directory_active)
@@ -1014,8 +1009,6 @@ void IouringMgr::CleanManifest(const TableIdent &tbl_id)
                    << " during cleanup: " << ErrorString(dir_err);
     }
 
-    DLOG(INFO) << "CleanManifest call TryCleanupLocalPartitionDir of "
-               << tbl_id;
     KvError cleanup_err = TryCleanupLocalPartitionDir(tbl_id);
     if (cleanup_err != KvError::NoError)
     {
@@ -1086,15 +1079,11 @@ IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(const TableIdent &tbl_id,
     auto it_tbl = tables_.find(tbl_id);
     if (it_tbl == tables_.end())
     {
-        if (file_id == LruFD::kDirectory)
-            DLOG(INFO) << "GetOpenedFD not found in tbl " << tbl_id;
         return nullptr;
     }
     auto it_fd = it_tbl->second.fds_.find(file_id);
     if (it_fd == it_tbl->second.fds_.end())
     {
-        if (file_id == LruFD::kDirectory)
-            DLOG(INFO) << "GetOpenedFD not found in fd " << tbl_id;
         return nullptr;
     }
     // This file may be in the process of being closed.
@@ -1104,8 +1093,6 @@ IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(const TableIdent &tbl_id,
                      ? fd_ref.Get()->fd_ == LruFD::FdEmpty
                      : fd_ref.Get()->reg_idx_ < 0;
     fd_ref.Get()->mu_.Unlock();
-    if (file_id == LruFD::kDirectory && empty)
-        DLOG(INFO) << "GetOpenedFD not found fd = empty " << tbl_id;
     return empty ? nullptr : fd_ref;
 }
 
@@ -1195,11 +1182,9 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     {
         FdIdx root_fd = GetRootFD(tbl_id);
         std::string dirname = tbl_id.ToString();
-        DLOG(INFO) << "OpenAt " << tbl_id;
         fd = OpenAt(root_fd, dirname.c_str(), oflags_dir, 0, false);
         if (fd == -ENOENT && create)
         {
-            DLOG(INFO) << "MakeDir " << tbl_id;
             fd = MakeDir(root_fd, dirname.c_str());
         }
     }
@@ -2236,8 +2221,6 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
 KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
                                    std::string_view snapshot)
 {
-    DLOG(INFO) << "SwitchManifest begin tbl_id=" << tbl_id
-               << " snapshot_size=" << snapshot.size();
     LruFD::Ref fd_ref = GetOpenedFD(tbl_id, LruFD::kManifest);
     if (fd_ref != nullptr)
     {
@@ -2246,7 +2229,6 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
         CHECK_KV_ERR(err);
     }
 
-    DLOG(INFO) << "SwitchManifest open dir tbl_id=" << tbl_id;
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
     if (err != KvError::NoError)
     {
@@ -2257,8 +2239,6 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
     uint64_t manifest_term = ProcessTerm();
     SetFileIdTerm(tbl_id, LruFD::kManifest, manifest_term);
     const std::string manifest_name = ManifestFileName(manifest_term);
-    DLOG(INFO) << "SwitchManifest write snapshot tbl_id=" << tbl_id
-               << " manifest=" << manifest_name;
     int res = WriteSnapshot(std::move(dir_fd), manifest_name, snapshot);
     if (res < 0)
     {
@@ -2267,8 +2247,6 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
         return ToKvError(res);
     }
     CloseDirect(res);
-    DLOG(INFO) << "SwitchManifest finish tbl_id=" << tbl_id
-               << " manifest=" << manifest_name;
     return KvError::NoError;
 }
 
@@ -2629,9 +2607,6 @@ IouringMgr::LruFD *IouringMgr::LruFD::Ref::Get() const
 
 void IouringMgr::LruFD::Ref::Clear()
 {
-    if (fd_->file_id_ == kDirectory)
-        DLOG(INFO) << "LruFD clear dir " << *fd_->tbl_->tbl_id_ << " ref count "
-                   << fd_->ref_count_ - 1;
     if (--fd_->ref_count_ == 0)
     {
         PartitionFiles *partition_files = fd_->tbl_;
@@ -2641,14 +2616,9 @@ void IouringMgr::LruFD::Ref::Clear()
         }
         else
         {
-            if (fd_->file_id_ == kDirectory)
-                DLOG(INFO) << "io_mgr_ tables erase dir "
-                           << *partition_files->tbl_id_;
             partition_files->fds_.erase(fd_->file_id_);
             if (partition_files->fds_.empty())
             {
-                DLOG(INFO) << "io_mgr_ tables erase "
-                           << *partition_files->tbl_id_;
                 io_mgr_->tables_.erase(*partition_files->tbl_id_);
             }
         }
@@ -4330,8 +4300,6 @@ std::pair<KvError, int64_t> CloudStoreMgr::CasUpdateTermFileWithEtag(
 KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
                                       std::string_view snapshot)
 {
-    DLOG(INFO) << "Cloud SwitchManifest begin tbl_id=" << tbl_id
-               << " snapshot_size=" << snapshot.size();
     LruFD::Ref fd_ref = GetOpenedFD(tbl_id, LruFD::kManifest);
     if (fd_ref != nullptr)
     {
@@ -4363,8 +4331,6 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
         }
     }
 
-    DLOG(INFO) << "Cloud SwitchManifest open dir tbl_id=" << tbl_id
-               << " manifest_term=" << manifest_term.value();
     auto [dir_fd, err] =
         OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, 0);
     if (err != KvError::NoError)
@@ -4375,8 +4341,6 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
         return err;
     }
     const std::string manifest_name = ManifestFileName(manifest_term.value());
-    DLOG(INFO) << "Cloud SwitchManifest write snapshot tbl_id=" << tbl_id
-               << " manifest=" << manifest_name;
     int res = WriteSnapshot(std::move(dir_fd), manifest_name, snapshot);
     if (res < 0)
     {
@@ -4399,9 +4363,6 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
     {
         LOG(FATAL) << "can not upload manifest: " << ErrorString(err);
     }
-    DLOG(INFO) << "Cloud SwitchManifest finish tbl_id=" << tbl_id
-               << " manifest=" << manifest_name;
-
     IouringMgr::CloseDirect(res);
     EnqueClosedFile(std::move(fkey));
     return KvError::NoError;
@@ -4709,7 +4670,6 @@ void CloudStoreMgr::WaitForEvictingPath(const TableIdent &tbl_id,
                                         FileId file_id,
                                         uint64_t term)
 {
-    DLOG(INFO) << "WaitForEvictingPath " << tbl_id << ", file_id " << file_id;
     WaitForEvictingKey(EvictingPathKey(tbl_id, file_id, term));
 }
 
@@ -4717,7 +4677,6 @@ bool CloudStoreMgr::StartEvictingPath(const TableIdent &tbl_id,
                                       FileId file_id,
                                       uint64_t term)
 {
-    DLOG(INFO) << "StartingEvictingPath " << tbl_id << ", file_id " << file_id;
     return StartEvictingKey(EvictingPathKey(tbl_id, file_id, term));
 }
 
@@ -4725,7 +4684,6 @@ void CloudStoreMgr::FinishEvictingPath(const TableIdent &tbl_id,
                                        FileId file_id,
                                        uint64_t term)
 {
-    DLOG(INFO) << "FinishEvictingPath " << tbl_id << ", file_id " << file_id;
     FinishEvictingKey(EvictingPathKey(tbl_id, file_id, term));
 }
 
@@ -5736,8 +5694,6 @@ void CloudStoreMgr::FileCleaner::Run()
 
         for (const TableIdent &tbl_id : touched_partitions)
         {
-            DLOG(INFO) << "FileCleaner call TryCleanupLocalPartitionDir of "
-                       << tbl_id;
             KvError cleanup_err = io_mgr_->TryCleanupLocalPartitionDir(tbl_id);
             if (cleanup_err != KvError::NoError)
             {
