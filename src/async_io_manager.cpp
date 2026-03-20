@@ -2250,8 +2250,8 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
     if (err != KvError::NoError)
     {
-        LOG(ERROR) << "SwitchManifest open dir failed for " << tbl_id
-                   << ": " << ErrorString(err);
+        LOG(ERROR) << "SwitchManifest open dir failed for " << tbl_id << ": "
+                   << ErrorString(err);
         return err;
     }
     uint64_t manifest_term = ProcessTerm();
@@ -2263,8 +2263,7 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
     if (res < 0)
     {
         LOG(ERROR) << "SwitchManifest WriteSnapshot failed for " << tbl_id
-                   << " manifest=" << manifest_name << " : "
-                   << strerror(-res);
+                   << " manifest=" << manifest_name << " : " << strerror(-res);
         return ToKvError(res);
     }
     CloseDirect(res);
@@ -2631,8 +2630,8 @@ IouringMgr::LruFD *IouringMgr::LruFD::Ref::Get() const
 void IouringMgr::LruFD::Ref::Clear()
 {
     if (fd_->file_id_ == kDirectory)
-        DLOG(INFO) << "LruFD clear dir " << *fd_->tbl_->tbl_id_
-                   << " ref count " << fd_->ref_count_ - 1;
+        DLOG(INFO) << "LruFD clear dir " << *fd_->tbl_->tbl_id_ << " ref count "
+                   << fd_->ref_count_ - 1;
     if (--fd_->ref_count_ == 0)
     {
         PartitionFiles *partition_files = fd_->tbl_;
@@ -4381,9 +4380,8 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
     int res = WriteSnapshot(std::move(dir_fd), manifest_name, snapshot);
     if (res < 0)
     {
-        LOG(ERROR) << "Cloud SwitchManifest WriteSnapshot failed for "
-                   << tbl_id << " manifest=" << manifest_name << " : "
-                   << strerror(-res);
+        LOG(ERROR) << "Cloud SwitchManifest WriteSnapshot failed for " << tbl_id
+                   << " manifest=" << manifest_name << " : " << strerror(-res);
         if (dequed)
         {
             EnqueClosedFile(fkey);
