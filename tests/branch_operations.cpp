@@ -35,7 +35,8 @@ TEST_CASE("create branch from main", "[branch]")
 
     fs::path table_path = fs::path(test_path) / test_tbl_id.ToString();
     REQUIRE(fs::exists(table_path / "manifest_feature1_0"));
-    REQUIRE(fs::exists(table_path / "CURRENT_TERM.feature1"));
+    // CURRENT_TERM is NOT created at branch creation time; it is created
+    // lazily when a store starts with the branch as its active branch.
 
     store->Stop();
 }
@@ -75,7 +76,6 @@ TEST_CASE("create branch - uppercase normalized to lowercase", "[branch]")
 
     fs::path table_path = fs::path(test_path) / test_tbl_id.ToString();
     REQUIRE(fs::exists(table_path / "manifest_featurebranch_0"));
-    REQUIRE(fs::exists(table_path / "CURRENT_TERM.featurebranch"));
 
     store->Stop();
 }
@@ -110,9 +110,6 @@ TEST_CASE("create multiple branches from main", "[branch]")
     REQUIRE(fs::exists(table_path / "manifest_feature1_0"));
     REQUIRE(fs::exists(table_path / "manifest_feature2_0"));
     REQUIRE(fs::exists(table_path / "manifest_hotfix_0"));
-    REQUIRE(fs::exists(table_path / "CURRENT_TERM.feature1"));
-    REQUIRE(fs::exists(table_path / "CURRENT_TERM.feature2"));
-    REQUIRE(fs::exists(table_path / "CURRENT_TERM.hotfix"));
 
     store->Stop();
 }
@@ -133,7 +130,6 @@ TEST_CASE("delete branch", "[branch]")
 
     fs::path table_path = fs::path(test_path) / test_tbl_id.ToString();
     REQUIRE(fs::exists(table_path / "manifest_feature1_0"));
-    REQUIRE(fs::exists(table_path / "CURRENT_TERM.feature1"));
 
     eloqstore::DeleteBranchRequest delete_req;
     delete_req.SetTableId(test_tbl_id);
@@ -142,7 +138,6 @@ TEST_CASE("delete branch", "[branch]")
     REQUIRE(delete_req.Error() == eloqstore::KvError::NoError);
 
     REQUIRE(!fs::exists(table_path / "manifest_feature1_0"));
-    REQUIRE(!fs::exists(table_path / "CURRENT_TERM.feature1"));
 
     store->Stop();
 }
@@ -200,7 +195,6 @@ TEST_CASE("global create branch - creates manifest on single partition",
 
     fs::path table_path = fs::path(test_path) / test_tbl_id.ToString();
     REQUIRE(fs::exists(table_path / ("manifest_" + req.ResultBranch() + "_0")));
-    REQUIRE(fs::exists(table_path / ("CURRENT_TERM." + req.ResultBranch())));
 
     store->Stop();
 }
@@ -274,8 +268,6 @@ TEST_CASE("global create branch - creates manifests on all partitions",
                 fs::path table_path = fs::path(test_path) / tbl_id.ToString();
                 REQUIRE(fs::exists(table_path /
                                    ("manifest_" + req.ResultBranch() + "_0")));
-                REQUIRE(fs::exists(table_path /
-                                   ("CURRENT_TERM." + req.ResultBranch())));
             }
             else
             {
@@ -286,20 +278,15 @@ TEST_CASE("global create branch - creates manifests on all partitions",
                     ListCloudFiles(opts, tbl_prefix);
 
                 bool found_manifest = false;
-                bool found_current_term = false;
                 for (const auto &f : cloud_files)
                 {
                     if (f.find("manifest_" + req.ResultBranch() + "_0") !=
                         std::string::npos)
                         found_manifest = true;
-                    if (f.find("CURRENT_TERM." + req.ResultBranch()) !=
-                        std::string::npos)
-                        found_current_term = true;
                 }
                 INFO("Partition " << tbl_id.ToString()
                                   << " cloud files checked");
                 REQUIRE(found_manifest);
-                REQUIRE(found_current_term);
             }
         }
 
@@ -374,14 +361,17 @@ TEST_CASE("delete branch removes all term manifests", "[branch]")
     REQUIRE(create_req.Error() == eloqstore::KvError::NoError);
 
     fs::path table_path = fs::path(test_path) / test_tbl_id.ToString();
+    fs::path store_root = fs::path(test_path);
     REQUIRE(fs::exists(table_path / "manifest_feature_0"));
-    REQUIRE(fs::exists(table_path / "CURRENT_TERM.feature"));
 
     // Simulate the branch having been written to at higher terms (e.g. after a
-    // failover).  Write placeholder manifests for terms 1–3 and advance
-    // CURRENT_TERM.feature to "3".  DeleteBranchFiles reads CURRENT_TERM to
-    // discover max_term, then unlinks manifests 0..max_term; it never reads the
-    // manifest contents, so placeholder content is fine.
+    // failover).  Write placeholder manifests for terms 1–3 and create
+    // CURRENT_TERM_feature_0 with value "3" (branch creation does not write
+    // the term file; it is normally created at store startup via
+    // BootstrapUpsertTermFile, so we create it manually here).
+    // DeleteBranchFiles reads CURRENT_TERM to discover max_term, then unlinks
+    // manifests 0..max_term; it never reads the manifest contents, so
+    // placeholder content is fine.
     for (int t = 1; t <= 3; ++t)
     {
         std::ofstream mf(table_path /
@@ -389,7 +379,7 @@ TEST_CASE("delete branch removes all term manifests", "[branch]")
         mf << "placeholder";
     }
     {
-        std::ofstream ct(table_path / "CURRENT_TERM.feature",
+        std::ofstream ct(store_root / "CURRENT_TERM_feature_0",
                          std::ios::out | std::ios::trunc);
         ct << "3";
     }
@@ -406,7 +396,7 @@ TEST_CASE("delete branch removes all term manifests", "[branch]")
         REQUIRE(!fs::exists(table_path /
                             ("manifest_feature_" + std::to_string(t))));
     }
-    REQUIRE(!fs::exists(table_path / "CURRENT_TERM.feature"));
+    REQUIRE(!fs::exists(store_root / "CURRENT_TERM_feature_0"));
 
     store->Stop();
 }
@@ -439,7 +429,6 @@ TEST_CASE("branch files persist after restart", "[branch][persist]")
 
         fs::path table_path = fs::path(test_path) / test_tbl_id.ToString();
         REQUIRE(fs::exists(table_path / "manifest_feature1_0"));
-        REQUIRE(fs::exists(table_path / "CURRENT_TERM.feature1"));
 
         fresh_store.Stop();
     }
@@ -1078,7 +1067,6 @@ TEST_CASE("delete branch with mixed-case name is normalized and succeeds",
 
     fs::path table_path = fs::path(test_path) / test_tbl_id.ToString();
     REQUIRE(fs::exists(table_path / "manifest_featurex_0"));
-    REQUIRE(fs::exists(table_path / "CURRENT_TERM.featurex"));
 
     // Delete with mixed-case name — must normalize to "featurex" and succeed.
     eloqstore::DeleteBranchRequest delete_req;
@@ -1088,7 +1076,6 @@ TEST_CASE("delete branch with mixed-case name is normalized and succeeds",
     REQUIRE(delete_req.Error() == eloqstore::KvError::NoError);
 
     REQUIRE(!fs::exists(table_path / "manifest_featurex_0"));
-    REQUIRE(!fs::exists(table_path / "CURRENT_TERM.featurex"));
 
     store->Stop();
 }
@@ -1129,7 +1116,6 @@ TEST_CASE("delete currently active branch is rejected", "[branch]")
     // Branch manifest must still exist.
     fs::path table_path = fs::path(test_path) / test_tbl_id.ToString();
     REQUIRE(fs::exists(table_path / "manifest_activebr_0"));
-    REQUIRE(fs::exists(table_path / "CURRENT_TERM.activebr"));
 
     branch_store.Stop();
 
@@ -1194,6 +1180,8 @@ TEST_CASE("delete branch in cloud mode removes all cloud objects",
 
     // Phase 4: verify no "cloudfeature" objects remain in cloud (manifests,
     // CURRENT_TERM, and data files all deleted).
+    // Note: CURRENT_TERM is at store root, manifests/data under table prefix.
+    // Search both prefixes for any remaining "cloudfeature" objects.
     std::string tbl_prefix = std::string(cloud_options.cloud_store_path) + "/" +
                              test_tbl_id.ToString();
     std::vector<std::string> cloud_files =
@@ -1203,6 +1191,14 @@ TEST_CASE("delete branch in cloud mode removes all cloud objects",
         INFO("Unexpected cloud object still present: " << f);
         REQUIRE(f.find("cloudfeature") == std::string::npos);
     }
+    // Also check store-root for any lingering CURRENT_TERM files.
+    std::vector<std::string> root_files =
+        ListCloudFiles(cloud_options, cloud_options.cloud_store_path);
+    for (const auto &f : root_files)
+    {
+        INFO("Unexpected CURRENT_TERM object still present: " << f);
+        REQUIRE(f.find("CURRENT_TERM_cloudfeature_") == std::string::npos);
+    }
 
     CleanupStore(cloud_options);
 }
@@ -1210,8 +1206,8 @@ TEST_CASE("delete branch in cloud mode removes all cloud objects",
 // ---------------------------------------------------------------------------
 // G6: End-to-end delete across real Raft terms (cloud mode).
 //     Writes real data on the branch across term=1 and term=3, then deletes.
-//     Verifies that manifest_branchname_0, _1, _3 and CURRENT_TERM are all
-//     gone from cloud storage.
+//     Verifies that manifest_branchname_0, _1, _3 and CURRENT_TERM_<branch>_0
+//     are all gone from cloud storage.
 // ---------------------------------------------------------------------------
 TEST_CASE(
     "delete branch removes all term manifests end-to-end across real Raft "
@@ -1245,7 +1241,7 @@ TEST_CASE(
     }
 
     // Phase 3: multitemp@term=1 — write on the branch.
-    // Creates manifest_multitemp_1 on cloud; CURRENT_TERM.multitemp = 1.
+    // Creates manifest_multitemp_1 on cloud; CURRENT_TERM_multitemp_0 = 1.
     {
         eloqstore::EloqStore br_store(cloud_options);
         REQUIRE(br_store.Start("multitemp", 1) == eloqstore::KvError::NoError);
@@ -1261,7 +1257,7 @@ TEST_CASE(
     }
 
     // Phase 4: multitemp@term=3 — write more on the branch.
-    // Creates manifest_multitemp_3 on cloud; CURRENT_TERM.multitemp = 3.
+    // Creates manifest_multitemp_3 on cloud; CURRENT_TERM_multitemp_0 = 3.
     {
         eloqstore::EloqStore br_store(cloud_options);
         REQUIRE(br_store.Start("multitemp", 3) == eloqstore::KvError::NoError);
@@ -1300,6 +1296,14 @@ TEST_CASE(
     {
         INFO("Unexpected cloud object still present: " << f);
         REQUIRE(f.find("multitemp") == std::string::npos);
+    }
+    // Also check store-root for any lingering CURRENT_TERM files.
+    std::vector<std::string> root_files =
+        ListCloudFiles(cloud_options, cloud_options.cloud_store_path);
+    for (const auto &f : root_files)
+    {
+        INFO("Unexpected CURRENT_TERM object still present: " << f);
+        REQUIRE(f.find("CURRENT_TERM_multitemp_") == std::string::npos);
     }
 
     CleanupStore(cloud_options);

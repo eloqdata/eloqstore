@@ -425,31 +425,12 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
     std::string_view snapshot = wal_builder_.Snapshot(
         root, ttl_root, mapping, new_max_fp_id, dict_bytes, branch_metadata);
 
-    KvError err = IoMgr()->WriteBranchManifest(
+    // The CURRENT_TERM file is NOT created here.  It will be created
+    // when a store instance starts with this branch as its active branch
+    // (via BootstrapUpsertTermFile in cloud mode).  Branch deletion and
+    // GC already handle missing term files gracefully.
+    return IoMgr()->WriteBranchManifest(
         tbl_ident_, normalized_branch, 0, snapshot);
-    if (err != KvError::NoError)
-    {
-        return err;
-    }
-
-    err = IoMgr()->WriteBranchCurrentTerm(tbl_ident_, normalized_branch, 0);
-    if (err != KvError::NoError)
-    {
-        // Rollback: remove the manifest we just wrote so we don't leave
-        // a half-created branch.
-        KvError rollback_err =
-            IoMgr()->DeleteBranchFiles(tbl_ident_, normalized_branch, 0);
-        if (rollback_err != KvError::NoError &&
-            rollback_err != KvError::NotFound)
-        {
-            LOG(ERROR) << "CreateBranch: rollback failed for branch "
-                       << normalized_branch << ": "
-                       << ErrorString(rollback_err);
-        }
-        return err;
-    }
-
-    return KvError::NoError;
 }
 
 KvError BackgroundWrite::DeleteBranch(std::string_view branch_name)

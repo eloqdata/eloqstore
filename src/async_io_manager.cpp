@@ -2425,49 +2425,6 @@ KvError IouringMgr::WriteBranchManifest(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError IouringMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
-                                           std::string_view branch_name,
-                                           uint64_t term)
-{
-    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
-    CHECK_KV_ERR(err);
-
-    std::string filename = BranchCurrentTermFileName(branch_name);
-    std::string term_str = TermToString(term);
-
-    int fd = OpenAt(
-        dir_fd.FdPair(), filename.c_str(), O_CREAT | O_TRUNC | O_WRONLY, 0644);
-    if (fd < 0)
-    {
-        LOG(ERROR) << "Failed to create CURRENT_TERM file " << filename << ": "
-                   << strerror(-fd);
-        return ToKvError(fd);
-    }
-
-    // W3: use io_uring Write instead of blocking write(2) syscall.
-    // OpenAt defaults to fixed_target=true, so fd is a registered file index;
-    // use FdIdx{fd, true} (IOSQE_FIXED_FILE) to match.
-    int written = Write(FdIdx{fd, true}, term_str.data(), term_str.size(), 0);
-    if (written < 0 || static_cast<size_t>(written) != term_str.size())
-    {
-        LOG(ERROR) << "Failed to write CURRENT_TERM file " << filename << ": "
-                   << strerror(-written);
-        CloseDirect(fd);
-        return KvError::IoFail;
-    }
-
-    // W2: check fsync result instead of silently ignoring it.
-    int sync_res = Fdatasync(FdIdx{fd, true});
-    CloseDirect(fd);
-    if (sync_res != 0)
-    {
-        LOG(ERROR) << "Failed to fsync CURRENT_TERM file " << filename << ": "
-                   << strerror(-sync_res);
-        return KvError::IoFail;
-    }
-    return KvError::NoError;
-}
-
 KvError IouringMgr::DeleteBranchFiles(
     const TableIdent &tbl_id,
     std::string_view branch_name,
@@ -2476,15 +2433,22 @@ KvError IouringMgr::DeleteBranchFiles(
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
     CHECK_KV_ERR(err);
 
-    std::string current_term_filename = BranchCurrentTermFileName(branch_name);
+    // Store root fd for reading/deleting CURRENT_TERM_<branch>_<pg_id>
+    assert(!eloq_store->root_fds_.empty());
+    int root_fd = eloq_store->root_fds_[0];
+    FdIdx root_fd_idx{root_fd, false};
 
-    // Read CURRENT_TERM.<branch> to find the highest term written for this
-    // branch. If the file is missing, fall back to term 0 so we still delete
-    // manifest_<branch>_0.
+    std::string current_term_filename =
+        CurrentTermFileNameForBranchAndPartitionGroup(
+            branch_name, eloq_store->PartitionGroupId());
+
+    // Read CURRENT_TERM_<branch>_<pg_id> from store root to find the highest
+    // term written for this branch. If the file is missing, fall back to term
+    // 0 so we still delete manifest_<branch>_0.
     uint64_t max_term = 0;
     {
         int ct_fd =
-            OpenAt(dir_fd.FdPair(), current_term_filename.c_str(), O_RDONLY, 0);
+            OpenAt(root_fd_idx, current_term_filename.c_str(), O_RDONLY, 0);
         if (ct_fd >= 0)
         {
             char buf[32] = {};
@@ -2500,28 +2464,26 @@ KvError IouringMgr::DeleteBranchFiles(
         }
     }
 
-    // Build the delete list: manifest_<branch>_0 ..
-    // manifest_<branch>_<max_term> plus CURRENT_TERM.<branch>.  ENOENT is
-    // ignored per file so gaps are safe.
-    std::vector<std::string> files_to_delete;
-    files_to_delete.reserve(max_term + 2);
+    // Build the delete list for manifests (in table directory).
+    // ENOENT is ignored per file so gaps are safe.
+    std::vector<std::string> table_files_to_delete;
+    table_files_to_delete.reserve(max_term + 1);
     for (uint64_t t = 0; t <= max_term; ++t)
     {
-        files_to_delete.push_back(BranchManifestFileName(branch_name, t));
+        table_files_to_delete.push_back(BranchManifestFileName(branch_name, t));
     }
-    files_to_delete.push_back(current_term_filename);
 
-    // Use the directory fd for unlink operations
+    // Use the directory fd for unlink operations on table files
     KvTask *current_task = ThdTask();
     struct UnlinkReq : BaseReq
     {
         std::string path;
     };
     std::vector<UnlinkReq> reqs;
-    reqs.reserve(files_to_delete.size());
+    reqs.reserve(table_files_to_delete.size() + 1);  // +1 for term file
 
     auto dir_fd_pair = dir_fd.FdPair();
-    for (const std::string &file_path : files_to_delete)
+    for (const std::string &file_path : table_files_to_delete)
     {
         reqs.emplace_back();
         reqs.back().task_ = current_task;
@@ -2533,6 +2495,17 @@ KvError IouringMgr::DeleteBranchFiles(
         }
         io_uring_prep_unlinkat(
             unlink_sqe, dir_fd_pair.first, file_path.c_str(), 0);
+    }
+
+    // Also unlink the CURRENT_TERM file from store root
+    {
+        reqs.emplace_back();
+        reqs.back().task_ = current_task;
+        reqs.back().path = current_term_filename;
+        io_uring_sqe *unlink_sqe = GetSQE(UserDataType::BaseReq, &reqs.back());
+        // root_fd is not a registered fd, so don't set IOSQE_FIXED_FILE
+        io_uring_prep_unlinkat(
+            unlink_sqe, root_fd, current_term_filename.c_str(), 0);
     }
 
     current_task->WaitIo();
@@ -3882,12 +3855,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     // Use active branch for all local manifest filenames in this function.
     std::string active_br = std::string(GetActiveBranch());
 
-    // Check and update term file
-    KvError term_err = UpsertTermFile(tbl_id, active_br, process_term);
-    if (term_err != KvError::NoError)
-    {
-        return {nullptr, term_err};
-    }
+    // Term file is updated at startup only (BootstrapUpsertTermFile).
 
     KvError dl_err =
         DownloadFile(tbl_id, LruFD::kManifest, active_br, process_term, false);
@@ -4411,13 +4379,14 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
 }
 
 std::tuple<uint64_t, std::string, KvError> CloudStoreMgr::ReadTermFile(
-    const TableIdent &tbl_id, std::string_view branch_name)
+    std::string_view branch_name)
 {
     KvTask *current_task = ThdTask();
 
-    // Download CURRENT_TERM.<branch> file
-    std::string term_filename = BranchCurrentTermFileName(branch_name);
-    ObjectStore::DownloadTask download_task(&tbl_id, term_filename);
+    // Download CURRENT_TERM_<branch>_<pg_id> file from store root
+    std::string term_filename = CurrentTermFileNameForBranchAndPartitionGroup(
+        branch_name, partition_group_id_);
+    ObjectStore::DownloadTask download_task(term_filename);
     download_task.SetKvTask(current_task);
     AcquireCloudSlot(current_task);
     obj_store_.SubmitTask(&download_task, shard);
@@ -4889,38 +4858,14 @@ KvError CloudStoreMgr::WriteBranchManifest(const TableIdent &tbl_id,
     return err;
 }
 
-KvError CloudStoreMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
-                                              std::string_view branch_name,
-                                              uint64_t term)
-{
-    std::string filename = BranchCurrentTermFileName(branch_name);
-    std::string term_str = TermToString(term);
-
-    KvTask *current_task = ThdTask();
-    ObjectStore::UploadTask upload_task(&tbl_id, filename);
-    upload_task.data_buffer_.append(term_str);
-    upload_task.SetKvTask(current_task);
-
-    AcquireCloudSlot(current_task);
-    obj_store_.SubmitTask(&upload_task, shard);
-    current_task->WaitIo();
-
-    if (upload_task.error_ != KvError::NoError)
-    {
-        LOG(ERROR) << "Failed to upload CURRENT_TERM file " << filename << ": "
-                   << static_cast<int>(upload_task.error_);
-        return upload_task.error_;
-    }
-
-    return KvError::NoError;
-}
-
 KvError CloudStoreMgr::DeleteBranchFiles(const TableIdent &tbl_id,
                                          std::string_view branch_name,
                                          uint64_t /* term (unused) */)
 {
     std::string normalized_branch = NormalizeBranchName(branch_name);
-    std::string current_term_filename = BranchCurrentTermFileName(branch_name);
+    std::string current_term_filename =
+        CurrentTermFileNameForBranchAndPartitionGroup(branch_name,
+                                                      partition_group_id_);
 
     // Helper lambda: list all cloud objects under a given prefix and append
     // matching paths to paths_to_delete.  The full object path stored in
@@ -4991,10 +4936,10 @@ KvError CloudStoreMgr::DeleteBranchFiles(const TableIdent &tbl_id,
                          [](const std::string &) { return true; });
     }
 
-    // 2. Always include CURRENT_TERM.<branch> (may or may not exist; the
-    //    delete task is idempotent — NotFound is silently ignored by the
-    //    object store delete path).
-    paths_to_delete.push_back(tbl_id.ToString() + "/" + current_term_filename);
+    // 2. Always include CURRENT_TERM_<branch>_<pg_id> at store root (may or
+    //    may not exist; the delete task is idempotent — NotFound is silently
+    //    ignored by the object store delete path).
+    paths_to_delete.push_back(current_term_filename);
 
     // 3. Collect all data_<file_id>_<branch>_<term> objects by listing the
     //    "data_" prefix and filtering for the branch marker "_<branch>_".
@@ -6636,46 +6581,17 @@ KvError MemStoreMgr::WriteBranchManifest(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError MemStoreMgr::WriteBranchCurrentTerm(const TableIdent &tbl_id,
-                                            std::string_view branch_name,
-                                            uint64_t term)
-{
-    std::lock_guard lock(manifest_mutex_);
-    std::string key = BranchCurrentTermFileName(branch_name);
-    branch_terms_[tbl_id][std::string(branch_name)] = term;
-    return KvError::NoError;
-}
-
-KvError MemStoreMgr::DeleteBranchFiles(
-    const TableIdent &tbl_id,
-    std::string_view branch_name,
-    uint64_t /* term (unused: we read from branch_terms_) */)
+KvError MemStoreMgr::DeleteBranchFiles(const TableIdent &tbl_id,
+                                       std::string_view branch_name,
+                                       uint64_t /* term (unused) */)
 {
     std::lock_guard lock(manifest_mutex_);
 
-    // Determine the highest term written for this branch.
-    uint64_t max_term = 0;
-    {
-        auto tbl_it = branch_terms_.find(tbl_id);
-        if (tbl_it != branch_terms_.end())
-        {
-            auto br_it = tbl_it->second.find(std::string(branch_name));
-            if (br_it != tbl_it->second.end())
-            {
-                max_term = br_it->second;
-            }
-        }
-    }
-
-    // Erase all manifest entries for this branch (terms 0..max_term).
+    // MemStoreMgr does not persist term files, so we only know about term 0.
+    // Erase the manifest entry for term 0 (the only term used in mem-store
+    // tests).
     auto &tbl_manifests = manifests_[tbl_id];
-    for (uint64_t t = 0; t <= max_term; ++t)
-    {
-        tbl_manifests.erase(BranchManifestFileName(branch_name, t));
-    }
-
-    // Erase the branch term entry.
-    branch_terms_[tbl_id].erase(std::string(branch_name));
+    tbl_manifests.erase(BranchManifestFileName(branch_name, 0));
 
     return KvError::NoError;
 }

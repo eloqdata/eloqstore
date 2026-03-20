@@ -137,16 +137,13 @@ public:
                                   std::string_view snapshot,
                                   std::string_view tag) = 0;
     virtual KvError DeleteArchive(const TableIdent &tbl_id,
-                                   std::string_view branch_name,
-                                   uint64_t term,
-                                   std::string_view tag) = 0;
+                                  std::string_view branch_name,
+                                  uint64_t term,
+                                  std::string_view tag) = 0;
     virtual KvError WriteBranchManifest(const TableIdent &tbl_id,
                                         std::string_view branch_name,
                                         uint64_t term,
                                         std::string_view snapshot) = 0;
-    virtual KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
-                                           std::string_view branch_name,
-                                           uint64_t term) = 0;
     virtual KvError DeleteBranchFiles(const TableIdent &tbl_id,
                                       std::string_view branch_name,
                                       uint64_t term) = 0;
@@ -477,15 +474,11 @@ public:
                                 std::string_view branch_name,
                                 uint64_t term,
                                 std::string_view snapshot) override;
-    KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
-                                   std::string_view branch_name,
-                                   uint64_t term) override;
     KvError DeleteBranchFiles(const TableIdent &tbl_id,
                               std::string_view branch_name,
                               uint64_t term) override;
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
-
 
     // Get branch_name and term for a specific file_id in a table in one lookup.
     bool GetBranchNameAndTerm(const TableIdent &tbl_id,
@@ -784,13 +777,14 @@ public:
      * implementations may return ENOENT directly on local miss and let the
      * caller decide whether to create the file.
      */
-    std::pair<LruFD::Ref, KvError> OpenOrCreateFD(const TableIdent &tbl_id,
-                                                  FileId file_id,
-                                                  bool direct,
-                                                  bool create,
-                                                  std::string_view branch_name,
-                                                  uint64_t term,
-                                                  bool skip_cloud_lookup = false);
+    std::pair<LruFD::Ref, KvError> OpenOrCreateFD(
+        const TableIdent &tbl_id,
+        FileId file_id,
+        bool direct,
+        bool create,
+        std::string_view branch_name,
+        uint64_t term,
+        bool skip_cloud_lookup = false);
     bool EvictFD();
 
     class WriteReqPool
@@ -906,9 +900,6 @@ public:
                                 std::string_view branch_name,
                                 uint64_t term,
                                 std::string_view snapshot) override;
-    KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
-                                   std::string_view branch_name,
-                                   uint64_t term) override;
     KvError DeleteBranchFiles(const TableIdent &tbl_id,
                               std::string_view branch_name,
                               uint64_t term) override;
@@ -1051,24 +1042,6 @@ public:
     KvError SyncPartitionGroupTermFile();
 
 private:
-    // Upsert term file with limited retry logic
-    // Returns NoError on success, ExpiredTerm if condition invalid, other
-    // errors on failure
-    KvError UpsertTermFile(const TableIdent &tbl_id,
-                           std::string_view branch_name,
-                           uint64_t process_term);
-    // CAS create term file (only if doesn't exist)
-    // Returns {error, response_code}
-    std::pair<KvError, int64_t> CasCreateTermFile(const TableIdent &tbl_id,
-                                                  std::string_view branch_name,
-                                                  uint64_t process_term);
-    // CAS update term file with specific ETag
-    // Returns {error, response_code}
-    std::pair<KvError, int64_t> CasUpdateTermFileWithEtag(
-        const TableIdent &tbl_id,
-        std::string_view branch_name,
-        uint64_t process_term,
-        const std::string &etag);
     void WaitForCloudTasksToDrain();
 
 private:
@@ -1316,7 +1289,7 @@ public:
 
     KvError AppendManifest(const TableIdent &tbl_id,
                            std::string_view log,
-                            uint64_t offset) override;
+                           uint64_t offset) override;
     KvError SwitchManifest(const TableIdent &tbl_id,
                            std::string_view snapshot) override;
     KvError CreateArchive(const TableIdent &tbl_id,
@@ -1332,9 +1305,6 @@ public:
                                 std::string_view branch_name,
                                 uint64_t term,
                                 std::string_view snapshot) override;
-    KvError WriteBranchCurrentTerm(const TableIdent &tbl_id,
-                                   std::string_view branch_name,
-                                   uint64_t term) override;
     KvError DeleteBranchFiles(const TableIdent &tbl_id,
                               std::string_view branch_name,
                               uint64_t term) override;
@@ -1383,8 +1353,6 @@ private:
     std::unordered_map<TableIdent, Partition> store_;
     std::unordered_map<TableIdent, std::unordered_map<std::string, std::string>>
         manifests_;
-    std::unordered_map<TableIdent, std::unordered_map<std::string, uint64_t>>
-        branch_terms_;
     std::mutex manifest_mutex_;
 };
 

@@ -510,7 +510,9 @@ void EloqStore::CleanupRuntime(size_t started_shards)
     }
 }
 
-KvError EloqStore::Start(std::string_view branch, uint64_t term, PartitonGroupId partition_group_id)
+KvError EloqStore::Start(std::string_view branch,
+                         uint64_t term,
+                         PartitonGroupId partition_group_id)
 {
     LOG(INFO) << "===Start eloqstore, branch: " << branch << ", term: " << term;
     if (!ValidateOptions(options_))
@@ -749,6 +751,15 @@ KvError EloqStore::InitStoreSpace()
             {
                 if (!ent.is_directory())
                 {
+                    // Skip store-level CURRENT_TERM files
+                    // (CURRENT_TERM_<branch>_<pg_id>)
+                    std::string fname = ent.path().filename().string();
+                    if (fname.compare(0,
+                                      std::size(CurrentTermFileName) - 1,
+                                      CurrentTermFileName) == 0)
+                    {
+                        continue;
+                    }
                     LOG(ERROR) << ent.path() << " is not directory";
                     return KvError::InvalidArgs;
                 }

@@ -35,7 +35,6 @@ static constexpr FileId MaxFileId = UINT64_MAX;
 using PartitonGroupId = uint32_t;
 
 constexpr char FileNameSeparator = '_';
-constexpr char CurrentTermFileNameSeparator = '.';
 static constexpr char FileNameData[] = "data";
 static constexpr char FileNameManifest[] = "manifest";
 static constexpr char CurrentTermFileName[] = "CURRENT_TERM";
@@ -82,13 +81,6 @@ struct BranchManifestMetadata
 };
 
 namespace fs = std::filesystem;
-
-inline std::string CurrentTermFileNameForPartitionGroup(
-    PartitonGroupId partition_group_id)
-{
-    return std::string(CurrentTermFileName) + "_" +
-           std::to_string(partition_group_id);
-}
 
 struct TableIdent
 {

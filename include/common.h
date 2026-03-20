@@ -209,7 +209,8 @@ inline bool ParseDataFileSuffix(std::string_view suffix,
 // Input suffix formats:
 //   "main_5" -> branch_name="main", term=5, tag=nullopt
 //   "feature_5" -> branch_name="feature", term=5, tag=nullopt
-//   "main_5_backup-2026-03-05" -> branch_name="main", term=5, tag="backup-2026-03-05"
+//   "main_5_backup-2026-03-05" -> branch_name="main", term=5,
+//   tag="backup-2026-03-05"
 // Returns true on success, false on parse error
 // Note: branch_name is output as string_view (no allocation)
 inline bool ParseManifestFileSuffix(std::string_view suffix,
@@ -307,7 +308,6 @@ inline uint64_t ManifestTermFromFilename(std::string_view filename)
     return term;
 }
 
-
 inline bool IsArchiveFile(std::string_view filename)
 {
     auto [type, suffix] = ParseFileName(filename);
@@ -325,14 +325,15 @@ inline bool IsArchiveFile(std::string_view filename)
     return tag.has_value();
 }
 
-// ParseCurrentTermFilename: parses CURRENT_TERM filename
+// ParseCurrentTermFilename: parses CURRENT_TERM_<branch>_<pg_id> filename
 // Input formats:
-//   "CURRENT_TERM.main" -> branch_name="main"
-//   "CURRENT_TERM.feature" -> branch_name="feature"
+//   "CURRENT_TERM_main_0" -> branch_name="main", pg_id=0
+//   "CURRENT_TERM_feature_3" -> branch_name="feature", pg_id=3
 // Returns true on success, false on parse error
 // Note: branch_name is output as string_view (no allocation)
 inline bool ParseCurrentTermFilename(std::string_view filename,
-                                     std::string_view &branch_name)
+                                     std::string_view &branch_name,
+                                     PartitonGroupId &pg_id)
 {
     // Check if filename starts with CURRENT_TERM prefix
     constexpr std::string_view prefix = CurrentTermFileName;
@@ -342,23 +343,63 @@ inline bool ParseCurrentTermFilename(std::string_view filename,
         return false;
     }
 
-    // Check for separator (dot)
-    if (filename[prefix.size()] != CurrentTermFileNameSeparator)
+    // Check for underscore separator after CURRENT_TERM
+    if (filename[prefix.size()] != FileNameSeparator)
     {
         return false;
     }
 
-    // Extract branch name after separator
-    std::string_view branch_str = filename.substr(prefix.size() + 1);
+    // Remainder is "<branch>_<pg_id>"
+    std::string_view remainder = filename.substr(prefix.size() + 1);
 
-    // Validate branch_name - files contain already-normalized names
+    // Find the last underscore to split branch from pg_id
+    // Branch names don't contain underscores, so last '_' is the separator
+    auto last_sep = remainder.rfind(FileNameSeparator);
+    if (last_sep == std::string_view::npos || last_sep == 0 ||
+        last_sep == remainder.size() - 1)
+    {
+        return false;
+    }
+
+    std::string_view branch_str = remainder.substr(0, last_sep);
+    std::string_view pg_id_str = remainder.substr(last_sep + 1);
+
+    // Validate branch name
     if (!IsValidBranchName(branch_str))
     {
         return false;
     }
 
+    // Parse pg_id
+    uint32_t parsed_pg_id = 0;
+    for (char c : pg_id_str)
+    {
+        if (c >= '0' && c <= '9')
+        {
+            uint32_t digit = static_cast<uint32_t>(c - '0');
+            if (parsed_pg_id > (UINT32_MAX - digit) / 10)
+            {
+                return false;  // Overflow
+            }
+            parsed_pg_id = parsed_pg_id * 10 + digit;
+        }
+        else
+        {
+            return false;  // Invalid character in pg_id
+        }
+    }
+
     branch_name = branch_str;
+    pg_id = parsed_pg_id;
     return true;
+}
+
+// Convenience overload: parse only the branch name (ignore pg_id)
+inline bool ParseCurrentTermFilename(std::string_view filename,
+                                     std::string_view &branch_name)
+{
+    PartitonGroupId pg_id = 0;
+    return ParseCurrentTermFilename(filename, branch_name, pg_id);
 }
 
 // Branch-aware data file naming: data_<file_id>_<branch_name>_<term>
@@ -427,8 +468,10 @@ inline std::string BranchArchiveName(std::string_view branch_name,
     return name;
 }
 
-// Branch-aware CURRENT_TERM file naming: CURRENT_TERM.<branch_name>
-inline std::string BranchCurrentTermFileName(std::string_view branch_name)
+// Store-level, branch-aware, partition-group-aware CURRENT_TERM file naming:
+// CURRENT_TERM_<branch_name>_<pg_id>
+inline std::string CurrentTermFileNameForBranchAndPartitionGroup(
+    std::string_view branch_name, PartitonGroupId partition_group_id)
 {
     std::string normalized_branch = NormalizeBranchName(branch_name);
     if (normalized_branch.empty())
@@ -437,10 +480,13 @@ inline std::string BranchCurrentTermFileName(std::string_view branch_name)
     }
 
     std::string name;
-    name.reserve(std::size(CurrentTermFileName) + normalized_branch.size() + 1);
+    name.reserve(std::size(CurrentTermFileName) + normalized_branch.size() +
+                 16);
     name.append(CurrentTermFileName);
-    name.push_back(CurrentTermFileNameSeparator);
+    name.push_back(FileNameSeparator);
     name.append(normalized_branch);
+    name.push_back(FileNameSeparator);
+    name.append(std::to_string(partition_group_id));
     return name;
 }
 

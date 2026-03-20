@@ -166,8 +166,8 @@ void CloudStorageService::RunWorker(size_t worker_index)
             err = bootstrap_store == nullptr
                       ? KvError::CloudErr
                       : bootstrap_store->BootstrapUpsertTermFile(
-                            CurrentTermFileNameForPartitionGroup(
-                                store_->PartitionGroupId()),
+                            CurrentTermFileNameForBranchAndPartitionGroup(
+                                store_->Branch(), store_->PartitionGroupId()),
                             store_->Term());
         }
         bootstrap_state_.SetDone(err);

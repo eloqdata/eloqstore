@@ -164,28 +164,31 @@ TEST_CASE("BranchArchiveName - format verification", "[branch][generation]")
             "manifest_feature_10_789012");
 
     // Zero values
-    REQUIRE(eloqstore::BranchArchiveName("main", 0, "0") == "manifest_main_0_0");
+    REQUIRE(eloqstore::BranchArchiveName("main", 0, "0") ==
+            "manifest_main_0_0");
 
     // Large values
     REQUIRE(eloqstore::BranchArchiveName("main", 999, "1234567890123") ==
             "manifest_main_999_1234567890123");
 }
 
-TEST_CASE("BranchCurrentTermFileName - dot separator", "[branch][generation]")
+TEST_CASE("CurrentTermFileNameForBranchAndPartitionGroup",
+          "[branch][generation]")
 {
-    // Verify dot separator (not underscore)
-    REQUIRE(eloqstore::BranchCurrentTermFileName("main") ==
-            "CURRENT_TERM.main");
-    REQUIRE(eloqstore::BranchCurrentTermFileName("feature") ==
-            "CURRENT_TERM.feature");
-    REQUIRE(eloqstore::BranchCurrentTermFileName("dev") == "CURRENT_TERM.dev");
-    REQUIRE(eloqstore::BranchCurrentTermFileName("feature-123") ==
-            "CURRENT_TERM.feature-123");
+    // Verify underscore separator with pg_id
+    REQUIRE(eloqstore::CurrentTermFileNameForBranchAndPartitionGroup(
+                "main", 0) == "CURRENT_TERM_main_0");
+    REQUIRE(eloqstore::CurrentTermFileNameForBranchAndPartitionGroup(
+                "feature", 3) == "CURRENT_TERM_feature_3");
+    REQUIRE(eloqstore::CurrentTermFileNameForBranchAndPartitionGroup(
+                "dev", 42) == "CURRENT_TERM_dev_42");
+    REQUIRE(eloqstore::CurrentTermFileNameForBranchAndPartitionGroup(
+                "feature-123", 0) == "CURRENT_TERM_feature-123_0");
 
     // Verify it starts with CURRENT_TERM constant
-    std::string result = eloqstore::BranchCurrentTermFileName("main");
+    std::string result =
+        eloqstore::CurrentTermFileNameForBranchAndPartitionGroup("main", 0);
     REQUIRE(result.find(eloqstore::CurrentTermFileName) == 0);
-    REQUIRE(result.find('.') != std::string::npos);
 }
 
 // ============================================================================
@@ -440,24 +443,34 @@ TEST_CASE("ParseManifestFileSuffix - invalid formats", "[branch][parsing]")
 TEST_CASE("ParseCurrentTermFilename - valid formats", "[branch][parsing]")
 {
     std::string_view branch_name;
+    eloqstore::PartitonGroupId pg_id = 0;
 
-    // Valid format with dot separator
-    REQUIRE(
-        eloqstore::ParseCurrentTermFilename("CURRENT_TERM.main", branch_name));
+    // Valid format: CURRENT_TERM_<branch>_<pg_id>
+    REQUIRE(eloqstore::ParseCurrentTermFilename(
+        "CURRENT_TERM_main_0", branch_name, pg_id));
     REQUIRE(branch_name == "main");
+    REQUIRE(pg_id == 0);
 
-    REQUIRE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM.feature",
-                                                branch_name));
+    REQUIRE(eloqstore::ParseCurrentTermFilename(
+        "CURRENT_TERM_feature_3", branch_name, pg_id));
     REQUIRE(branch_name == "feature");
+    REQUIRE(pg_id == 3);
 
-    REQUIRE(
-        eloqstore::ParseCurrentTermFilename("CURRENT_TERM.dev", branch_name));
+    REQUIRE(eloqstore::ParseCurrentTermFilename(
+        "CURRENT_TERM_dev_42", branch_name, pg_id));
     REQUIRE(branch_name == "dev");
+    REQUIRE(pg_id == 42);
 
     // Branch with hyphen
-    REQUIRE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM.feature-123",
-                                                branch_name));
+    REQUIRE(eloqstore::ParseCurrentTermFilename(
+        "CURRENT_TERM_feature-123_0", branch_name, pg_id));
     REQUIRE(branch_name == "feature-123");
+    REQUIRE(pg_id == 0);
+
+    // Convenience overload (branch only)
+    REQUIRE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM_main_0",
+                                                branch_name));
+    REQUIRE(branch_name == "main");
 }
 
 TEST_CASE("ParseCurrentTermFilename - case normalization", "[branch][parsing]")
@@ -467,12 +480,12 @@ TEST_CASE("ParseCurrentTermFilename - case normalization", "[branch][parsing]")
     // Note: Normalization happens at file creation time
     // Parsing extracts branch as-is from filename
     // These tests use lowercase since new files should have lowercase names
-    REQUIRE(
-        eloqstore::ParseCurrentTermFilename("CURRENT_TERM.main", branch_name));
+    REQUIRE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM_main_0",
+                                                branch_name));
     REQUIRE(branch_name == "main");
 
     // Mixed case in filename will be returned as-is
-    REQUIRE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM.Feature",
+    REQUIRE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM_Feature_0",
                                                 branch_name));
     REQUIRE(branch_name == "Feature");
 }
@@ -481,34 +494,40 @@ TEST_CASE("ParseCurrentTermFilename - invalid formats", "[branch][parsing]")
 {
     std::string_view branch_name;
 
-    // Old format without branch (no dot separator)
+    // Old format without branch/pg_id (no separators after prefix)
     REQUIRE_FALSE(
         eloqstore::ParseCurrentTermFilename("CURRENT_TERM", branch_name));
 
-    // Wrong separator (underscore instead of dot)
+    // Old dot separator format
+    REQUIRE_FALSE(
+        eloqstore::ParseCurrentTermFilename("CURRENT_TERM.main", branch_name));
+
+    // Missing pg_id (only one segment after prefix)
     REQUIRE_FALSE(
         eloqstore::ParseCurrentTermFilename("CURRENT_TERM_main", branch_name));
 
     // Empty branch name
     REQUIRE_FALSE(
-        eloqstore::ParseCurrentTermFilename("CURRENT_TERM.", branch_name));
+        eloqstore::ParseCurrentTermFilename("CURRENT_TERM__0", branch_name));
 
-    // Invalid branch name (contains invalid char)
+    // Invalid branch name (contains invalid chars)
     REQUIRE_FALSE(eloqstore::ParseCurrentTermFilename(
-        "CURRENT_TERM.main.branch", branch_name));
+        "CURRENT_TERM_main.branch_0", branch_name));
     REQUIRE_FALSE(eloqstore::ParseCurrentTermFilename(
-        "CURRENT_TERM.main branch", branch_name));
-    REQUIRE_FALSE(eloqstore::ParseCurrentTermFilename(
-        "CURRENT_TERM.my_branch", branch_name));  // underscore invalid
+        "CURRENT_TERM_main branch_0", branch_name));
 
     // Wrong prefix
     REQUIRE_FALSE(
-        eloqstore::ParseCurrentTermFilename("TERM.main", branch_name));
-    REQUIRE_FALSE(
-        eloqstore::ParseCurrentTermFilename("current_term.main", branch_name));
+        eloqstore::ParseCurrentTermFilename("TERM_main_0", branch_name));
+    REQUIRE_FALSE(eloqstore::ParseCurrentTermFilename("current_term_main_0",
+                                                      branch_name));
 
     // Empty string
     REQUIRE_FALSE(eloqstore::ParseCurrentTermFilename("", branch_name));
+
+    // Non-numeric pg_id
+    REQUIRE_FALSE(eloqstore::ParseCurrentTermFilename("CURRENT_TERM_main_abc",
+                                                      branch_name));
 }
 
 // ============================================================================
@@ -568,7 +587,8 @@ TEST_CASE("Roundtrip - manifest files", "[branch][roundtrip]")
     // Different branch
     filename = eloqstore::BranchManifestFileName("feature", 10);
     auto [type2, suffix2] = eloqstore::ParseFileName(filename);
-    REQUIRE(eloqstore::ParseManifestFileSuffix(suffix2, branch_name, term, tag));
+    REQUIRE(
+        eloqstore::ParseManifestFileSuffix(suffix2, branch_name, term, tag));
     REQUIRE(branch_name == "feature");
     REQUIRE(term == 10);
     REQUIRE_FALSE(tag.has_value());
@@ -592,7 +612,8 @@ TEST_CASE("Roundtrip - archive files", "[branch][roundtrip]")
     // Different values
     filename = eloqstore::BranchArchiveName("feature", 10, "789012");
     auto [type2, suffix2] = eloqstore::ParseFileName(filename);
-    REQUIRE(eloqstore::ParseManifestFileSuffix(suffix2, branch_name, term, tag));
+    REQUIRE(
+        eloqstore::ParseManifestFileSuffix(suffix2, branch_name, term, tag));
     REQUIRE(branch_name == "feature");
     REQUIRE(term == 10);
     REQUIRE(tag.has_value());
@@ -602,20 +623,27 @@ TEST_CASE("Roundtrip - archive files", "[branch][roundtrip]")
 TEST_CASE("Roundtrip - CURRENT_TERM files", "[branch][roundtrip]")
 {
     // Generate -> Parse -> Verify
-    std::string filename = eloqstore::BranchCurrentTermFileName("main");
+    std::string filename =
+        eloqstore::CurrentTermFileNameForBranchAndPartitionGroup("main", 0);
     std::string_view branch_name;
-    REQUIRE(eloqstore::ParseCurrentTermFilename(filename, branch_name));
+    eloqstore::PartitonGroupId pg_id = 0;
+    REQUIRE(eloqstore::ParseCurrentTermFilename(filename, branch_name, pg_id));
     REQUIRE(branch_name == "main");
+    REQUIRE(pg_id == 0);
 
-    // Different branch
-    filename = eloqstore::BranchCurrentTermFileName("feature");
-    REQUIRE(eloqstore::ParseCurrentTermFilename(filename, branch_name));
+    // Different branch and pg_id
+    filename =
+        eloqstore::CurrentTermFileNameForBranchAndPartitionGroup("feature", 7);
+    REQUIRE(eloqstore::ParseCurrentTermFilename(filename, branch_name, pg_id));
     REQUIRE(branch_name == "feature");
+    REQUIRE(pg_id == 7);
 
     // Branch with special chars
-    filename = eloqstore::BranchCurrentTermFileName("feature-123");
-    REQUIRE(eloqstore::ParseCurrentTermFilename(filename, branch_name));
+    filename = eloqstore::CurrentTermFileNameForBranchAndPartitionGroup(
+        "feature-123", 0);
+    REQUIRE(eloqstore::ParseCurrentTermFilename(filename, branch_name, pg_id));
     REQUIRE(branch_name == "feature-123");
+    REQUIRE(pg_id == 0);
 }
 
 // ============================================================================

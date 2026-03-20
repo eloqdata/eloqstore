@@ -525,11 +525,14 @@ TEST_CASE("cloud restore removes largest file id across all terms", "[cloud]")
     const fs::path partition_path =
         fs::path(options.store_path[0]) / tbl_id.ToString();
     const fs::path lower_high_term =
-        partition_path / eloqstore::DataFileName(998, 100);
+        partition_path /
+        eloqstore::BranchDataFileName(998, eloqstore::MainBranchName, 100);
     const fs::path max_file_low_term =
-        partition_path / eloqstore::DataFileName(999, 1);
+        partition_path /
+        eloqstore::BranchDataFileName(999, eloqstore::MainBranchName, 1);
     const fs::path max_file_high_term =
-        partition_path / eloqstore::DataFileName(999, 7);
+        partition_path /
+        eloqstore::BranchDataFileName(999, eloqstore::MainBranchName, 7);
 
     {
         std::ofstream(lower_high_term).put('a');
@@ -1061,8 +1064,8 @@ TEST_CASE("cloud gc preserves archived data after truncate",
     store->Stop();
 
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
-    std::string backup_name =
-        eloqstore::BranchArchiveName(eloqstore::MainBranchName, 0, std::to_string(backup_ts));
+    std::string backup_name = eloqstore::BranchArchiveName(
+        eloqstore::MainBranchName, 0, std::to_string(backup_ts));
 
     bool backup_ok = MoveCloudFile(
         cloud_archive_opts,
@@ -1135,8 +1138,8 @@ TEST_CASE("cloud archive create is idempotent for an existing tag",
         ListCloudFiles(cloud_archive_opts,
                        cloud_archive_opts.cloud_store_path,
                        test_tbl_id.ToString());
-    const std::string expected_archive =
-        eloqstore::BranchArchiveName(eloqstore::MainBranchName, store->Term(), kArchiveTag);
+    const std::string expected_archive = eloqstore::BranchArchiveName(
+        eloqstore::MainBranchName, store->Term(), kArchiveTag);
     REQUIRE(std::count(
                 cloud_files.begin(), cloud_files.end(), expected_archive) == 1);
 
@@ -1952,8 +1955,8 @@ TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
 
     // Create backup with timestamp.
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
-    std::string backup_name =
-        eloqstore::BranchArchiveName(eloqstore::MainBranchName, 0, std::to_string(backup_ts));
+    std::string backup_name = eloqstore::BranchArchiveName(
+        eloqstore::MainBranchName, 0, std::to_string(backup_ts));
 
     // Move current manifest to backup
     bool backup_success = MoveCloudFile(
@@ -2057,8 +2060,8 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
 
     // Create backup with timestamp.
     uint64_t backup_ts = utils::UnixTs<chrono::seconds>();
-    std::string backup_name =
-        eloqstore::BranchArchiveName(eloqstore::MainBranchName, 0, std::to_string(backup_ts));
+    std::string backup_name = eloqstore::BranchArchiveName(
+        eloqstore::MainBranchName, 0, std::to_string(backup_ts));
 
     // Backup current manifest
     bool backup_ok = MoveCloudFile(
