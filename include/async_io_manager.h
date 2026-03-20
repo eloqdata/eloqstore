@@ -307,6 +307,24 @@ public:
     }
 
     virtual void CleanManifest(const TableIdent &tbl_id) = 0;
+    virtual void RegisterDirBusy(const TableIdent &tbl_id)
+    {
+        (void) tbl_id;
+    }
+    virtual void UnregisterDirBusy(const TableIdent &tbl_id)
+    {
+        (void) tbl_id;
+    }
+    virtual bool HasDirBusy(const TableIdent &tbl_id) const
+    {
+        (void) tbl_id;
+        return false;
+    }
+    virtual bool IsDirEvicting(const TableIdent &tbl_id) const
+    {
+        (void) tbl_id;
+        return false;
+    }
 
     // Get or create FileIdTermMapping for a table (default: nullptr, concrete
     // implementations can override).
@@ -920,6 +938,9 @@ public:
     // Called when append-mode writing switches away from a data file.
     // Upload success marks that file clean; failure aborts the write task.
     KvError OnDataFileSealed(const TableIdent &tbl_id, FileId file_id) override;
+    KvError AppendManifest(const TableIdent &tbl_id,
+                           std::string_view log,
+                           uint64_t offset) override;
 
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
@@ -927,6 +948,10 @@ public:
         const TableIdent &tbl_id, std::string_view archive_tag);
     void RequestGcLocalCleanup(const TableIdent &tbl_id,
                                const std::vector<std::string> &filenames);
+    void RegisterDirBusy(const TableIdent &tbl_id) override;
+    void UnregisterDirBusy(const TableIdent &tbl_id) override;
+    bool HasDirBusy(const TableIdent &tbl_id) const override;
+    bool IsDirEvicting(const TableIdent &tbl_id) const override;
     KvError DownloadFile(const TableIdent &tbl_id,
                          FileId file_id,
                          uint64_t term,
@@ -1059,6 +1084,8 @@ private:
     };
     std::unordered_map<FileKey, EvictingPath> evicting_paths_;
     std::unordered_set<FileKey> pending_gc_cleanup_;
+    std::unordered_set<TableIdent> pending_dir_cleanup_;
+    std::unordered_map<TableIdent, uint32_t> dir_busy_counts_;
     CachedFile lru_file_head_;
     CachedFile lru_file_tail_;
     size_t used_local_space_{0};

@@ -75,6 +75,15 @@ public:
 
     KvError WaitWrite();
     KvError DeleteArchive(uint64_t term, std::string_view tag);
+    void ReleaseDirBusy();
+    bool NeedWaitDirEviction() const
+    {
+        return need_wait_dir_eviction_;
+    }
+    void ClearNeedWaitDirEviction()
+    {
+        need_wait_dir_eviction_ = false;
+    }
     // write_err_ record the result of the last failed write
     // request.
     KvError write_err_{KvError::NoError};
@@ -129,6 +138,8 @@ protected:
     uint32_t inflight_upload_tasks_{0};
     WaitingSeat upload_waiting_;
     std::vector<std::unique_ptr<ObjectStore::UploadTask>> pending_upload_tasks_;
+    bool dir_busy_registered_{false};
+    bool need_wait_dir_eviction_{false};
 };
 
 }  // namespace eloqstore

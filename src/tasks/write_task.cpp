@@ -162,9 +162,24 @@ void WriteTask::ResetUploadState()
     upload_state_.ResetMetadata();
 }
 
+void WriteTask::ReleaseDirBusy()
+{
+    if (!dir_busy_registered_)
+    {
+        return;
+    }
+    IoMgr()->UnregisterDirBusy(tbl_ident_);
+    dir_busy_registered_ = false;
+    need_wait_dir_eviction_ = false;
+}
+
 void WriteTask::Reset(const TableIdent &tbl_id)
 {
+    ReleaseDirBusy();
     tbl_ident_ = tbl_id;
+    IoMgr()->RegisterDirBusy(tbl_ident_);
+    dir_busy_registered_ = true;
+    need_wait_dir_eviction_ = IoMgr()->IsDirEvicting(tbl_ident_);
     write_err_ = KvError::NoError;
     wal_builder_.Reset();
     file_id_term_mapping_dirty_ = false;
@@ -204,6 +219,7 @@ void WriteTask::Abort()
     last_append_file_id_.reset();
     pending_upload_tasks_.clear();
     ResetUploadState();
+    ReleaseDirBusy();
 }
 
 KvError WriteTask::WritePage(DataPage &&page)

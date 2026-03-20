@@ -192,11 +192,13 @@ void TaskManager::FreeTask(KvTask *task)
     case TaskType::BatchWrite:
         assert(num_active_write_ > 0);
         num_active_write_--;
+        static_cast<BatchWriteTask *>(task)->ReleaseDirBusy();
         batch_write_pool_.FreeTask(static_cast<BatchWriteTask *>(task));
         break;
     case TaskType::BackgroundWrite:
         assert(num_active_write_ > 0);
         num_active_write_--;
+        static_cast<BackgroundWrite *>(task)->ReleaseDirBusy();
         bg_write_pool_.FreeTask(static_cast<BackgroundWrite *>(task));
         break;
     case TaskType::ListObject:
@@ -207,6 +209,7 @@ void TaskManager::FreeTask(KvTask *task)
             static_cast<ListStandbyPartitionTask *>(task));
         break;
     case TaskType::Reopen:
+        static_cast<ReopenTask *>(task)->ReleaseDirBusy();
         reopen_pool_.FreeTask(static_cast<ReopenTask *>(task));
         break;
     case TaskType::EvictFile:

@@ -37,6 +37,7 @@
 
 #include "error.h"
 #include "replayer.h"
+#include "tasks/write_task.h"
 #include "utils.h"
 
 #ifdef ELOQ_MODULE_ENABLED
@@ -904,8 +905,19 @@ size_t IouringMgr::GetOpenFileLimit() const
 KvError IouringMgr::TryCleanupLocalPartitionDir(const TableIdent &tbl_id)
 {
     const std::string partition_name = tbl_id.ToString();
+    if (HasDirBusy(tbl_id))
+    {
+        DLOG(INFO) << "Skip cleaning partition directory " << partition_name
+                   << " because directory is busy";
+        return KvError::NoError;
+    }
 
     LruFD::Ref dir_fd = GetOpenedFD(tbl_id, LruFD::kDirectory);
+    DLOG(INFO) << "TryCleanupLocalPartitionDir " << tbl_id << " dir "
+               << dir_fd.Get();
+    if (dir_fd.Get())
+        DLOG(INFO) << "TryCleanupLocalPartitionDir " << tbl_id
+                   << " dir refcount " << dir_fd.Get()->ref_count_;
     const bool directory_active =
         dir_fd != nullptr && dir_fd.Get()->ref_count_ > 1;
     if (directory_active)
@@ -1002,6 +1014,8 @@ void IouringMgr::CleanManifest(const TableIdent &tbl_id)
                    << " during cleanup: " << ErrorString(dir_err);
     }
 
+    DLOG(INFO) << "CleanManifest call TryCleanupLocalPartitionDir of "
+               << tbl_id;
     KvError cleanup_err = TryCleanupLocalPartitionDir(tbl_id);
     if (cleanup_err != KvError::NoError)
     {
@@ -1072,11 +1086,15 @@ IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(const TableIdent &tbl_id,
     auto it_tbl = tables_.find(tbl_id);
     if (it_tbl == tables_.end())
     {
+        if (file_id == LruFD::kDirectory)
+            DLOG(INFO) << "GetOpenedFD not found in tbl " << tbl_id;
         return nullptr;
     }
     auto it_fd = it_tbl->second.fds_.find(file_id);
     if (it_fd == it_tbl->second.fds_.end())
     {
+        if (file_id == LruFD::kDirectory)
+            DLOG(INFO) << "GetOpenedFD not found in fd " << tbl_id;
         return nullptr;
     }
     // This file may be in the process of being closed.
@@ -1086,6 +1104,8 @@ IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(const TableIdent &tbl_id,
                      ? fd_ref.Get()->fd_ == LruFD::FdEmpty
                      : fd_ref.Get()->reg_idx_ < 0;
     fd_ref.Get()->mu_.Unlock();
+    if (file_id == LruFD::kDirectory && empty)
+        DLOG(INFO) << "GetOpenedFD not found fd = empty " << tbl_id;
     return empty ? nullptr : fd_ref;
 }
 
@@ -1103,6 +1123,16 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     uint64_t term,
     bool skip_cloud_lookup)
 {
+    KvTask *current_task = ThdTask();
+    if (current_task != nullptr && !current_task->ReadOnly())
+    {
+        auto *write_task = static_cast<WriteTask *>(current_task);
+        if (write_task->NeedWaitDirEviction())
+        {
+            WaitForEvictingPath(tbl_id, LruFD::kDirectory, 0);
+            write_task->ClearNeedWaitDirEviction();
+        }
+    }
     WaitForEvictingPath(tbl_id, file_id, term);
     auto [it_tbl, inserted] = tables_.try_emplace(tbl_id);
     if (inserted)
@@ -1165,9 +1195,11 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     {
         FdIdx root_fd = GetRootFD(tbl_id);
         std::string dirname = tbl_id.ToString();
+        DLOG(INFO) << "OpenAt " << tbl_id;
         fd = OpenAt(root_fd, dirname.c_str(), oflags_dir, 0, false);
         if (fd == -ENOENT && create)
         {
+            DLOG(INFO) << "MakeDir " << tbl_id;
             fd = MakeDir(root_fd, dirname.c_str());
         }
     }
@@ -1182,13 +1214,18 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
             // This must be data file because manifest should always be
             // created by call WriteSnapshot.
             assert(file_id <= LruFD::kMaxDataFile);
+            DLOG(INFO) << "OpenOrCreateFD dir " << tbl_id;
             auto [dfd_ref, err] =
                 OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, 0);
+            DLOG(INFO) << "OpenOrCreateFD dir " << tbl_id << " refcount "
+                       << dfd_ref.Get()->ref_count_;
             error = err;
             if (dfd_ref != nullptr)
             {
                 TEST_KILL_POINT_WEIGHT("OpenOrCreateFD:CreateFile", 100)
+                DLOG(INFO) << "CreateFile " << tbl_id;
                 fd = CreateFile(std::move(dfd_ref), file_id, term);
+                DLOG(INFO) << "CreateFile " << tbl_id << " finish";
             }
         }
     }
@@ -2101,6 +2138,21 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
     return SyncFile(std::move(fd_ref));
 }
 
+KvError CloudStoreMgr::AppendManifest(const TableIdent &tbl_id,
+                                      std::string_view log,
+                                      uint64_t offset)
+{
+    auto [dir_fd, dir_err] =
+        OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, 0);
+    if (dir_err != KvError::NoError)
+    {
+        LOG(ERROR) << "Cloud AppendManifest ensure dir failed for " << tbl_id
+                   << ": " << ErrorString(dir_err);
+        return dir_err;
+    }
+    return IouringMgr::AppendManifest(tbl_id, log, offset);
+}
+
 int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
                               std::string_view name,
                               std::string_view content)
@@ -2184,6 +2236,8 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
 KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
                                    std::string_view snapshot)
 {
+    DLOG(INFO) << "SwitchManifest begin tbl_id=" << tbl_id
+               << " snapshot_size=" << snapshot.size();
     LruFD::Ref fd_ref = GetOpenedFD(tbl_id, LruFD::kManifest);
     if (fd_ref != nullptr)
     {
@@ -2192,17 +2246,30 @@ KvError IouringMgr::SwitchManifest(const TableIdent &tbl_id,
         CHECK_KV_ERR(err);
     }
 
+    DLOG(INFO) << "SwitchManifest open dir tbl_id=" << tbl_id;
     auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
-    CHECK_KV_ERR(err);
+    if (err != KvError::NoError)
+    {
+        LOG(ERROR) << "SwitchManifest open dir failed for " << tbl_id
+                   << ": " << ErrorString(err);
+        return err;
+    }
     uint64_t manifest_term = ProcessTerm();
     SetFileIdTerm(tbl_id, LruFD::kManifest, manifest_term);
     const std::string manifest_name = ManifestFileName(manifest_term);
+    DLOG(INFO) << "SwitchManifest write snapshot tbl_id=" << tbl_id
+               << " manifest=" << manifest_name;
     int res = WriteSnapshot(std::move(dir_fd), manifest_name, snapshot);
     if (res < 0)
     {
+        LOG(ERROR) << "SwitchManifest WriteSnapshot failed for " << tbl_id
+                   << " manifest=" << manifest_name << " : "
+                   << strerror(-res);
         return ToKvError(res);
     }
     CloseDirect(res);
+    DLOG(INFO) << "SwitchManifest finish tbl_id=" << tbl_id
+               << " manifest=" << manifest_name;
     return KvError::NoError;
 }
 
@@ -2563,6 +2630,9 @@ IouringMgr::LruFD *IouringMgr::LruFD::Ref::Get() const
 
 void IouringMgr::LruFD::Ref::Clear()
 {
+    if (fd_->file_id_ == kDirectory)
+        DLOG(INFO) << "LruFD clear dir " << *fd_->tbl_->tbl_id_
+                   << " ref count " << fd_->ref_count_ - 1;
     if (--fd_->ref_count_ == 0)
     {
         PartitionFiles *partition_files = fd_->tbl_;
@@ -2572,9 +2642,14 @@ void IouringMgr::LruFD::Ref::Clear()
         }
         else
         {
+            if (fd_->file_id_ == kDirectory)
+                DLOG(INFO) << "io_mgr_ tables erase dir "
+                           << *partition_files->tbl_id_;
             partition_files->fds_.erase(fd_->file_id_);
             if (partition_files->fds_.empty())
             {
+                DLOG(INFO) << "io_mgr_ tables erase "
+                           << *partition_files->tbl_id_;
                 io_mgr_->tables_.erase(*partition_files->tbl_id_);
             }
         }
@@ -4061,6 +4136,42 @@ void CloudStoreMgr::RequestGcLocalCleanup(
     }
 }
 
+void CloudStoreMgr::RegisterDirBusy(const TableIdent &tbl_id)
+{
+    dir_busy_counts_[tbl_id]++;
+    pending_dir_cleanup_.erase(tbl_id);
+}
+
+void CloudStoreMgr::UnregisterDirBusy(const TableIdent &tbl_id)
+{
+    auto it = dir_busy_counts_.find(tbl_id);
+    if (it == dir_busy_counts_.end())
+    {
+        return;
+    }
+    if (--it->second == 0)
+    {
+        dir_busy_counts_.erase(it);
+        pending_dir_cleanup_.insert(tbl_id);
+        if (file_cleaner_.status_ == TaskStatus::Idle)
+        {
+            file_cleaner_.Resume();
+        }
+    }
+}
+
+bool CloudStoreMgr::HasDirBusy(const TableIdent &tbl_id) const
+{
+    auto it = dir_busy_counts_.find(tbl_id);
+    return it != dir_busy_counts_.end() && it->second > 0;
+}
+
+bool CloudStoreMgr::IsDirEvicting(const TableIdent &tbl_id) const
+{
+    return evicting_paths_.contains(
+        EvictingPathKey(tbl_id, LruFD::kDirectory, 0));
+}
+
 KvError CloudStoreMgr::UpsertTermFile(uint64_t process_term)
 {
     constexpr uint64_t kMaxAttempts = 10;
@@ -4220,6 +4331,8 @@ std::pair<KvError, int64_t> CloudStoreMgr::CasUpdateTermFileWithEtag(
 KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
                                       std::string_view snapshot)
 {
+    DLOG(INFO) << "Cloud SwitchManifest begin tbl_id=" << tbl_id
+               << " snapshot_size=" << snapshot.size();
     LruFD::Ref fd_ref = GetOpenedFD(tbl_id, LruFD::kManifest);
     if (fd_ref != nullptr)
     {
@@ -4251,12 +4364,26 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
         }
     }
 
-    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, 0);
-    CHECK_KV_ERR(err);
+    DLOG(INFO) << "Cloud SwitchManifest open dir tbl_id=" << tbl_id
+               << " manifest_term=" << manifest_term.value();
+    auto [dir_fd, err] =
+        OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, 0);
+    if (err != KvError::NoError)
+    {
+        LOG(ERROR) << "Cloud SwitchManifest open dir failed for " << tbl_id
+                   << " manifest_term=" << manifest_term.value() << ": "
+                   << ErrorString(err);
+        return err;
+    }
     const std::string manifest_name = ManifestFileName(manifest_term.value());
+    DLOG(INFO) << "Cloud SwitchManifest write snapshot tbl_id=" << tbl_id
+               << " manifest=" << manifest_name;
     int res = WriteSnapshot(std::move(dir_fd), manifest_name, snapshot);
     if (res < 0)
     {
+        LOG(ERROR) << "Cloud SwitchManifest WriteSnapshot failed for "
+                   << tbl_id << " manifest=" << manifest_name << " : "
+                   << strerror(-res);
         if (dequed)
         {
             EnqueClosedFile(fkey);
@@ -4274,6 +4401,8 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
     {
         LOG(FATAL) << "can not upload manifest: " << ErrorString(err);
     }
+    DLOG(INFO) << "Cloud SwitchManifest finish tbl_id=" << tbl_id
+               << " manifest=" << manifest_name;
 
     IouringMgr::CloseDirect(res);
     EnqueClosedFile(std::move(fkey));
@@ -4578,6 +4707,7 @@ void CloudStoreMgr::WaitForEvictingPath(const TableIdent &tbl_id,
                                         FileId file_id,
                                         uint64_t term)
 {
+    DLOG(INFO) << "WaitForEvictingPath " << tbl_id << ", file_id " << file_id;
     WaitForEvictingKey(EvictingPathKey(tbl_id, file_id, term));
 }
 
@@ -4585,6 +4715,7 @@ bool CloudStoreMgr::StartEvictingPath(const TableIdent &tbl_id,
                                       FileId file_id,
                                       uint64_t term)
 {
+    DLOG(INFO) << "StartingEvictingPath " << tbl_id << ", file_id " << file_id;
     return StartEvictingKey(EvictingPathKey(tbl_id, file_id, term));
 }
 
@@ -4592,6 +4723,7 @@ void CloudStoreMgr::FinishEvictingPath(const TableIdent &tbl_id,
                                        FileId file_id,
                                        uint64_t term)
 {
+    DLOG(INFO) << "FinishEvictingPath " << tbl_id << ", file_id " << file_id;
     FinishEvictingKey(EvictingPathKey(tbl_id, file_id, term));
 }
 
@@ -5428,10 +5560,13 @@ void CloudStoreMgr::FileCleaner::Run()
     while (true)
     {
         const bool has_pending_gc = !io_mgr_->pending_gc_cleanup_.empty();
+        const bool has_pending_dir_cleanup =
+            !io_mgr_->pending_dir_cleanup_.empty();
         const bool needs_pressure_eviction =
             io_mgr_->HasEvictableFile() &&
             (io_mgr_->used_local_space_ > threshold || !requesting_.Empty());
-        if (!has_pending_gc && !needs_pressure_eviction)
+        if (!has_pending_gc && !has_pending_dir_cleanup &&
+            !needs_pressure_eviction)
         {
             // No file to evict, or used space is below threshold.
             requesting_.WakeAll();
@@ -5449,6 +5584,27 @@ void CloudStoreMgr::FileCleaner::Run()
         uint16_t req_count = 0;
         bool made_progress = false;
         std::unordered_set<TableIdent> touched_partitions;
+
+        if (has_pending_dir_cleanup)
+        {
+            for (auto it = io_mgr_->pending_dir_cleanup_.begin();
+                 it != io_mgr_->pending_dir_cleanup_.end();)
+            {
+                TableIdent tbl_id = *it;
+                it = io_mgr_->pending_dir_cleanup_.erase(it);
+                made_progress = true;
+                KvError cleanup_err =
+                    io_mgr_->TryCleanupLocalPartitionDir(tbl_id);
+                if (cleanup_err != KvError::NoError)
+                {
+                    LOG(WARNING)
+                        << "Failed to clean local partition directory for "
+                        << "table " << tbl_id
+                        << " after dir busy count reached zero: "
+                        << ErrorString(cleanup_err);
+                }
+            }
+        }
 
         if (has_pending_gc)
         {
@@ -5486,6 +5642,7 @@ void CloudStoreMgr::FileCleaner::Run()
                 io_uring_sqe *sqe =
                     io_mgr_->GetSQE(UserDataType::BaseReq, &req);
                 int root_fd = io_mgr_->GetRootFD(file->key_->tbl_id_).first;
+                DLOG(INFO) << "FileCleaner GC:" << req.path_;
                 io_uring_prep_unlinkat(sqe, root_fd, req.path_.c_str(), 0);
             }
         }
@@ -5523,6 +5680,7 @@ void CloudStoreMgr::FileCleaner::Run()
                     io_mgr_->GetSQE(UserDataType::BaseReq, &req);
                 int root_fd =
                     io_mgr_->GetRootFD(req.file_->key_->tbl_id_).first;
+                DLOG(INFO) << "FileCleaner eviction:" << req.path_;
                 io_uring_prep_unlinkat(sqe, root_fd, req.path_.c_str(), 0);
             }
         }
@@ -5576,6 +5734,8 @@ void CloudStoreMgr::FileCleaner::Run()
 
         for (const TableIdent &tbl_id : touched_partitions)
         {
+            DLOG(INFO) << "FileCleaner call TryCleanupLocalPartitionDir of "
+                       << tbl_id;
             KvError cleanup_err = io_mgr_->TryCleanupLocalPartitionDir(tbl_id);
             if (cleanup_err != KvError::NoError)
             {
