@@ -770,7 +770,9 @@ public:
     EloqStore(const EloqStore &) = delete;
     EloqStore(EloqStore &&) = delete;
     ~EloqStore();
-    KvError Start(std::string_view branch = MainBranchName, uint64_t term = 0, PartitonGroupId partition_group_id = 0);
+    KvError Start(std::string_view branch = MainBranchName,
+                  uint64_t term = 0,
+                  PartitonGroupId partition_group_id = 0);
     void Stop();
     bool IsStopped() const;
     bool Inited() const;

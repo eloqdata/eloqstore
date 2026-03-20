@@ -622,7 +622,8 @@ std::string StandbyService::RemoteArchiveManifestPath(
         return {};
     }
     remote_path.push_back('/');
-    remote_path.append(BranchArchiveName(MainBranchName, store_->Term(), archive_tag));
+    remote_path.append(
+        BranchArchiveName(MainBranchName, store_->Term(), archive_tag));
     return remote_path;
 }
 
@@ -879,8 +880,10 @@ KvError StandbyService::RunPrepareManifestJob(const PrepareManifestJob &job)
     bool mutated = false;
     if (selected_term != job.target_term)
     {
-        const fs::path src = table_dir / BranchManifestFileName(MainBranchName, selected_term);
-        const fs::path dst = table_dir / BranchManifestFileName(MainBranchName, job.target_term);
+        const fs::path src =
+            table_dir / BranchManifestFileName(MainBranchName, selected_term);
+        const fs::path dst =
+            table_dir / BranchManifestFileName(MainBranchName, job.target_term);
         if (fs::exists(dst, ec))
         {
             if (ec)
