@@ -1200,7 +1200,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     {
         // Check for term or branch_name mismatch when not in local mode.
         if (eloq_store->Mode() != StoreMode::Local &&
-            file_id != LruFD::kDirectory && term != 0)
+            file_id != LruFD::kDirectory)
         {
             bool mismatch = false;
             // Check term mismatch (only when term is known).
