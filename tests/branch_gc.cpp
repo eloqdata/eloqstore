@@ -13,7 +13,9 @@
 #include "kv_options.h"
 #include "test_utils.h"
 
-using namespace test_util;
+using ::CleanupLocalStore;
+using ::InitStore;
+using test_util::MapVerifier;
 namespace fs = std::filesystem;
 namespace chrono = std::chrono;
 

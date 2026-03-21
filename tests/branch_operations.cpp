@@ -1,5 +1,6 @@
 #include <glog/logging.h>
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <filesystem>
@@ -14,7 +15,11 @@
 #include "kv_options.h"
 #include "test_utils.h"
 
-using namespace test_util;
+using ::CleanupLocalStore;
+using ::CleanupStore;
+using ::InitStore;
+using ::ListCloudFiles;
+using test_util::MapVerifier;
 
 namespace fs = std::filesystem;
 
