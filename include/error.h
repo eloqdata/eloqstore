@@ -31,7 +31,6 @@ enum struct KvError : uint8_t
     OssInsufficientStorage,  // Object storage out of capacity (HTTP 507).
     AlreadyExists,  // Branch or table already exists (e.g., HTTP 409 or
                     // EEXIST).
-
 };
 
 constexpr const char *ErrorString(KvError err)
