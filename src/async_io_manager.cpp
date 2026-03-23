@@ -902,22 +902,9 @@ size_t IouringMgr::GetOpenFileLimit() const
     return fd_limit_;
 }
 
-KvError CloudStoreMgr::TryCleanupLocalPartitionDir(const TableIdent &tbl_id)
+KvError IouringMgr::TryCleanupLocalPartitionDir(const TableIdent &tbl_id)
 {
     const std::string partition_name = tbl_id.ToString();
-    if (HasDirBusy(tbl_id))
-    {
-        DLOG(INFO) << "Skip cleaning partition directory " << partition_name
-                   << " because directory is busy";
-        return KvError::NoError;
-    }
-
-    if (HasTrackedLocalFiles(tbl_id))
-    {
-        DLOG(INFO) << "Skip cleaning partition directory " << partition_name
-                   << " because local files are still tracked";
-        return KvError::NoError;
-    }
 
     LruFD::Ref dir_fd = GetOpenedFD(tbl_id, LruFD::kDirectory);
     const bool directory_active =
@@ -972,6 +959,26 @@ KvError CloudStoreMgr::TryCleanupLocalPartitionDir(const TableIdent &tbl_id)
     LOG(WARNING) << "Failed to delete partition directory " << partition_name
                  << " for table " << tbl_id << ": " << strerror(-dir_res);
     return ToKvError(dir_res);
+}
+
+KvError CloudStoreMgr::TryCleanupLocalPartitionDir(const TableIdent &tbl_id)
+{
+    const std::string partition_name = tbl_id.ToString();
+    if (HasDirBusy(tbl_id))
+    {
+        DLOG(INFO) << "Skip cleaning partition directory " << partition_name
+                   << " because directory is busy";
+        return KvError::NoError;
+    }
+
+    if (HasTrackedLocalFiles(tbl_id))
+    {
+        DLOG(INFO) << "Skip cleaning partition directory " << partition_name
+                   << " because local files are still tracked";
+        return KvError::NoError;
+    }
+
+    return IouringMgr::TryCleanupLocalPartitionDir(tbl_id);
 }
 
 void IouringMgr::CleanManifest(const TableIdent &tbl_id)
@@ -4803,7 +4810,26 @@ void CloudStoreMgr::DecrementClosedFileCount(const TableIdent &tbl_id)
 
 bool CloudStoreMgr::HasTrackedLocalFiles(const TableIdent &tbl_id) const
 {
-    return tables_.contains(tbl_id) || closed_file_counts_.contains(tbl_id);
+    if (closed_file_counts_.contains(tbl_id))
+    {
+        return true;
+    }
+
+    auto it = tables_.find(tbl_id);
+    if (it == tables_.end())
+    {
+        return false;
+    }
+
+    const auto &fds = it->second.fds_;
+    CHECK(!fds.empty()) << "tables_ contains empty PartitionFiles for table "
+                        << tbl_id;
+    if (fds.size() > 1)
+    {
+        return true;
+    }
+
+    return fds.begin()->first != LruFD::kDirectory;
 }
 
 bool CloudStoreMgr::HasEvictableFile() const
