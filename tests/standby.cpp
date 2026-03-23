@@ -1,7 +1,6 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>  // NOLINT(build/c++17)
-#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -12,7 +11,6 @@
 #include "types.h"
 
 namespace fs = std::filesystem;
-namespace chrono = std::chrono;
 using std::chrono_literals::operator""ms;
 using std::chrono_literals::operator""s;
 using test_util::Key;
@@ -604,5 +602,129 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
     CleanupStore(master_opts);
     CleanupStore(standby_opts);
     CleanupStore(new_master_opts);
+    fs::remove_all(temp_root);
+}
+
+TEST_CASE("standby global reopen truncates local-only partitions",
+          "[standby][reopen]")
+{
+    fs::path temp_root = fs::temp_directory_path() / fs::path("standby-reopen");
+    fs::path master_dir = temp_root / "master";
+    fs::path standby_dir = temp_root / "standby";
+    fs::remove_all(temp_root);
+    fs::create_directories(master_dir);
+    fs::create_directories(standby_dir);
+
+    eloqstore::KvOptions master_opts;
+    master_opts.store_path = {master_dir.string()};
+    master_opts.enable_local_standby = true;
+    master_opts.standby_master_store_paths = {};
+    master_opts.pages_per_file_shift = 0;
+
+    eloqstore::KvOptions standby_opts;
+    standby_opts.store_path = {standby_dir.string()};
+    standby_opts.enable_local_standby = true;
+    standby_opts.standby_master_addr = "local";
+    standby_opts.standby_master_store_paths = {master_dir.string()};
+    standby_opts.pages_per_file_shift = 0;
+
+    const eloqstore::TableIdent tbl_id0{"standby_tbl_reopen", 0};
+    const eloqstore::TableIdent tbl_id1{"standby_tbl_reopen", 1};
+
+    auto upsert_range =
+        [&](eloqstore::EloqStore &store,
+            const eloqstore::TableIdent &tid,
+            uint64_t begin,
+            uint64_t end)
+    {
+        std::vector<eloqstore::WriteDataEntry> entries;
+        for (uint64_t i = begin; i < end; ++i)
+        {
+            entries.emplace_back(Key(i), Value(i), 0, eloqstore::WriteOp::Upsert);
+        }
+        eloqstore::BatchWriteRequest req;
+        req.SetArgs(tid, std::move(entries));
+        store.ExecSync(&req);
+        REQUIRE(req.Error() == eloqstore::KvError::NoError);
+    };
+
+    auto verify_range =
+        [&](eloqstore::EloqStore &store,
+            const eloqstore::TableIdent &tid,
+            uint64_t begin,
+            uint64_t end,
+            bool expect_exists)
+    {
+        for (uint64_t i = begin; i < end; ++i)
+        {
+            eloqstore::ReadRequest req;
+            req.SetArgs(tid, Key(i));
+            store.ExecSync(&req);
+            if (expect_exists)
+            {
+                REQUIRE(req.Error() == eloqstore::KvError::NoError);
+                REQUIRE(req.value_ == Value(i));
+            }
+            else
+            {
+                REQUIRE(req.Error() == eloqstore::KvError::NotFound);
+            }
+        }
+    };
+
+    // 1) Master creates both partitions and archives them.
+    {
+        eloqstore::EloqStore master(master_opts);
+        REQUIRE(master.Start(1) == eloqstore::KvError::NoError);
+        upsert_range(master, tbl_id0, 0, 200);
+        upsert_range(master, tbl_id1, 0, 200);
+        verify_range(master, tbl_id0, 0, 200, true);
+        verify_range(master, tbl_id1, 0, 200, true);
+
+        eloqstore::GlobalArchiveRequest archive_req;
+        archive_req.SetTag(std::to_string(1001));
+        master.ExecSync(&archive_req);
+        REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
+        master.Stop();
+    }
+
+    // 2) Standby loads both partitions, then remote partition 1 disappears.
+    {
+        eloqstore::EloqStore standby(standby_opts);
+        REQUIRE(standby.Start(1) == eloqstore::KvError::NoError);
+
+        Scan(&standby, tbl_id0, 0, 10000);
+        Scan(&standby, tbl_id1, 0, 10000);
+
+        // Load snapshot produced by master's GlobalArchiveRequest.
+        {
+            eloqstore::GlobalReopenRequest initial_reopen_req;
+            initial_reopen_req.SetTag(std::to_string(1001));
+            standby.ExecSync(&initial_reopen_req);
+            REQUIRE(initial_reopen_req.Error() ==
+                    eloqstore::KvError::NoError);
+        }
+        verify_range(standby, tbl_id0, 0, 200, true);
+        verify_range(standby, tbl_id1, 0, 200, true);
+
+        // Simulate master partition deletion.
+        REQUIRE(fs::exists(master_dir / tbl_id1.ToString()));
+        fs::remove_all(master_dir / tbl_id1.ToString());
+
+        // Global reopen should reopen remote partitions (only tbl_id0),
+        // then truncate local-only partitions (tbl_id1).
+        eloqstore::GlobalReopenRequest reopen_req;
+        reopen_req.SetTag(std::to_string(1001));
+        standby.ExecSync(&reopen_req);
+        REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
+
+        verify_range(standby, tbl_id1, 0, 200, false);
+        verify_range(standby, tbl_id0, 0, 200, true);
+
+        standby.Stop();
+    }
+
+    CleanupStore(master_opts);
+    CleanupStore(standby_opts);
     fs::remove_all(temp_root);
 }

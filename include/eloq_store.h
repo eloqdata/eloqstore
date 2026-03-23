@@ -9,7 +9,6 @@
 #include <functional>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <vector>
 
@@ -577,6 +576,9 @@ public:
 private:
     std::string tag_;
     std::vector<std::unique_ptr<ReopenRequest>> reopen_reqs_;
+    // Keep truncate requests alive during async execution triggered by
+    // global reopen completion.
+    std::vector<std::unique_ptr<TruncateRequest>> truncate_reqs_;
     std::atomic<uint32_t> pending_{0};
     std::atomic<uint8_t> first_error_{static_cast<uint8_t>(KvError::NoError)};
 

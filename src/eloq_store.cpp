@@ -15,7 +15,6 @@
 #include <filesystem>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -1435,8 +1434,67 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
                             std::memory_order_relaxed);
     req->pending_.store(0, std::memory_order_relaxed);
     req->reopen_reqs_.clear();
+    req->truncate_reqs_.clear();
 
     std::vector<TableIdent> partitions;
+    std::vector<TableIdent> local_only;
+
+    auto ScanLocalPartitionDirs = [&](auto &&on_valid_partition,
+                                      bool warn_invalid_name) -> bool
+    {
+        std::error_code ec;
+        for (const fs::path root : options_.store_path)
+        {
+            const fs::path db_path(root);
+            fs::directory_iterator dir_it(db_path, ec);
+            if (ec)
+            {
+                req->SetDone(ToKvError(-ec.value()));
+                return false;
+            }
+            fs::directory_iterator end;
+            for (; dir_it != end; dir_it.increment(ec))
+            {
+                if (ec)
+                {
+                    req->SetDone(ToKvError(-ec.value()));
+                    return false;
+                }
+                const fs::directory_entry &ent = *dir_it;
+                const fs::path ent_path = ent.path();
+                bool is_dir = fs::is_directory(ent_path, ec);
+                if (ec)
+                {
+                    req->SetDone(ToKvError(-ec.value()));
+                    return false;
+                }
+                if (!is_dir)
+                {
+                    continue;
+                }
+
+                TableIdent tbl_id = TableIdent::FromString(ent_path.filename());
+                if (tbl_id.tbl_name_.empty())
+                {
+                    if (warn_invalid_name)
+                    {
+                        LOG(WARNING) << "unexpected partition " << ent.path();
+                    }
+                    continue;
+                }
+
+                if (options_.partition_filter &&
+                    !options_.partition_filter(tbl_id))
+                {
+                    continue;
+                }
+
+                on_valid_partition(std::move(tbl_id));
+            }
+        }
+        return true;
+    };
+
     if (Mode() == StoreMode::StandbyReplica)
     {
         std::vector<std::string> names;
@@ -1473,55 +1531,38 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
             }
             partitions.emplace_back(std::move(tbl_id));
         }
+
+        // Phase-2 targets: local partitions that are NOT present in remote.
+        std::unordered_set<TableIdent> remote_set;
+        remote_set.reserve(partitions.size() * 2);
+        for (const TableIdent &tid : partitions)
+        {
+            remote_set.insert(tid);
+        }
+
+        bool ok = ScanLocalPartitionDirs(
+            [&](TableIdent tbl_id)
+            {
+                if (remote_set.find(tbl_id) == remote_set.end())
+                {
+                    local_only.emplace_back(std::move(tbl_id));
+                }
+            },
+            /*warn_invalid_name=*/false);
+        if (!ok)
+        {
+            return;
+        }
     }
     else
     {
-        std::error_code ec;
-        for (const fs::path root : options_.store_path)
+        bool ok = ScanLocalPartitionDirs(
+            [&](TableIdent tbl_id)
+            { partitions.emplace_back(std::move(tbl_id)); },
+            /*warn_invalid_name=*/true);
+        if (!ok)
         {
-            const fs::path db_path(root);
-            fs::directory_iterator dir_it(db_path, ec);
-            if (ec)
-            {
-                req->SetDone(ToKvError(-ec.value()));
-                return;
-            }
-            fs::directory_iterator end;
-            for (; dir_it != end; dir_it.increment(ec))
-            {
-                if (ec)
-                {
-                    req->SetDone(ToKvError(-ec.value()));
-                    return;
-                }
-                const fs::directory_entry &ent = *dir_it;
-                const fs::path ent_path = ent.path();
-                bool is_dir = fs::is_directory(ent_path, ec);
-                if (ec)
-                {
-                    req->SetDone(ToKvError(-ec.value()));
-                    return;
-                }
-                if (!is_dir)
-                {
-                    continue;
-                }
-
-                TableIdent tbl_id = TableIdent::FromString(ent_path.filename());
-                if (tbl_id.tbl_name_.empty())
-                {
-                    LOG(WARNING) << "unexpected partition " << ent.path();
-                    continue;
-                }
-
-                if (options_.partition_filter &&
-                    !options_.partition_filter(tbl_id))
-                {
-                    continue;
-                }
-
-                partitions.emplace_back(std::move(tbl_id));
-            }
+            return;
         }
     }
 
@@ -1555,6 +1596,7 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
     {
         EloqStore *store = nullptr;
         GlobalReopenRequest *req = nullptr;
+        std::vector<TableIdent> standby_local_only;
         size_t total = 0;
         std::atomic<size_t> next_index{0};
 
@@ -1563,18 +1605,34 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
             KvError sub_err = reopen_req->Error();
             if (sub_err != KvError::NoError)
             {
-                LOG(ERROR) << "HandleGlobalReopenRequest sub request failed, "
-                           << "table " << reopen_req->TableId() << ", tag "
-                           << reopen_req->Tag() << ", error "
-                           << static_cast<uint32_t>(sub_err) << ", msg "
-                           << reopen_req->ErrMessage();
-                uint8_t expected = static_cast<uint8_t>(KvError::NoError);
-                uint8_t desired = static_cast<uint8_t>(sub_err);
-                req->first_error_.compare_exchange_strong(
-                    expected,
-                    desired,
-                    std::memory_order_relaxed,
-                    std::memory_order_relaxed);
+                if (store->Mode() == StoreMode::Cloud &&
+                    sub_err == KvError::NotFound)
+                {
+                    // Cloud missing partition will be handled in phase-2 by
+                    // scheduling a TruncateRequest; do not poison the final
+                    // GlobalReopenRequest error.
+                    DLOG(INFO)
+                        << "HandleGlobalReopenRequest sub request cloud "
+                           "missing, ignore NotFound for truncate, table "
+                        << reopen_req->TableId() << ", tag "
+                        << reopen_req->Tag();
+                }
+                else
+                {
+                    LOG(ERROR)
+                        << "HandleGlobalReopenRequest sub request failed, "
+                        << "table " << reopen_req->TableId() << ", tag "
+                        << reopen_req->Tag() << ", error "
+                        << static_cast<uint32_t>(sub_err) << ", msg "
+                        << reopen_req->ErrMessage();
+                    uint8_t expected = static_cast<uint8_t>(KvError::NoError);
+                    uint8_t desired = static_cast<uint8_t>(sub_err);
+                    req->first_error_.compare_exchange_strong(
+                        expected,
+                        desired,
+                        std::memory_order_relaxed,
+                        std::memory_order_relaxed);
+                }
             }
             else
             {
@@ -1589,7 +1647,167 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
                 DLOG(INFO) << "HandleGlobalReopenRequest finish, tag "
                            << req->Tag() << ", final_error "
                            << static_cast<uint32_t>(final_err);
-                req->SetDone(final_err);
+
+                // Phase-2: schedule TruncateRequest for missing partitions.
+                std::vector<TableIdent> truncate_targets;
+                if (store->Mode() == StoreMode::Cloud)
+                {
+                    truncate_targets.reserve(req->reopen_reqs_.size());
+                    for (const auto &sub_reopen : req->reopen_reqs_)
+                    {
+                        if (sub_reopen->Error() == KvError::NotFound)
+                        {
+                            truncate_targets.emplace_back(
+                                sub_reopen->TableId());
+                        }
+                    }
+                }
+                else if (store->Mode() == StoreMode::StandbyReplica)
+                {
+                    truncate_targets = standby_local_only;
+                }
+
+                if (truncate_targets.empty())
+                {
+                    req->SetDone(final_err);
+                    return true;
+                }
+
+                req->truncate_reqs_.clear();
+                req->truncate_reqs_.reserve(truncate_targets.size());
+                for (const TableIdent &tbl_id : truncate_targets)
+                {
+                    DLOG(INFO) << "HandleGlobalReopenRequest phase-2 enqueue "
+                                  "truncate partition "
+                               << tbl_id << ", tag " << req->Tag();
+                    auto trunc_req = std::make_unique<TruncateRequest>();
+                    trunc_req->SetArgs(tbl_id, std::string_view{});
+                    req->truncate_reqs_.push_back(std::move(trunc_req));
+                }
+
+                req->pending_.store(
+                    static_cast<uint32_t>(req->truncate_reqs_.size()),
+                    std::memory_order_relaxed);
+
+                struct TruncateScheduleState
+                    : public std::enable_shared_from_this<TruncateScheduleState>
+                {
+                    EloqStore *store = nullptr;
+                    GlobalReopenRequest *req = nullptr;
+                    size_t total = 0;
+                    std::atomic<size_t> next_index{0};
+
+                    bool HandleTruncateResult(TruncateRequest *trunc_req)
+                    {
+                        KvError sub_err = trunc_req->Error();
+                        if (sub_err != KvError::NoError)
+                        {
+                            if (store->Mode() == StoreMode::Cloud &&
+                                sub_err == KvError::NotFound)
+                            {
+                                // Cloud-missing is expected when we are
+                                // truncating partitions that cannot be
+                                // refreshed from remote.
+                            }
+                            else
+                            {
+                                uint8_t expected =
+                                    static_cast<uint8_t>(KvError::NoError);
+                                uint8_t desired = static_cast<uint8_t>(sub_err);
+                                req->first_error_.compare_exchange_strong(
+                                    expected,
+                                    desired,
+                                    std::memory_order_relaxed,
+                                    std::memory_order_relaxed);
+                            }
+                        }
+
+                        if (req->pending_.fetch_sub(
+                                1, std::memory_order_acq_rel) == 1)
+                        {
+                            KvError final_err =
+                                static_cast<KvError>(req->first_error_.load(
+                                    std::memory_order_relaxed));
+                            // When cloud is missing a partition, the follow-up
+                            // truncate path may still surface NotFound from
+                            // cloud-side cleanup. From GlobalReopenRequest's
+                            // perspective, this is expected and should not fail
+                            // the whole request.
+                            if (store->Mode() == StoreMode::Cloud &&
+                                final_err == KvError::NotFound)
+                            {
+                                final_err = KvError::NoError;
+                            }
+                            req->SetDone(final_err);
+                            return true;
+                        }
+                        return false;
+                    }
+
+                    void OnTruncateDone(KvRequest *sub_req)
+                    {
+                        auto *trunc_req =
+                            static_cast<TruncateRequest *>(sub_req);
+                        if (HandleTruncateResult(trunc_req))
+                        {
+                            return;
+                        }
+                        ScheduleNext();
+                    }
+
+                    void ScheduleNext()
+                    {
+                        while (true)
+                        {
+                            size_t idx = next_index.fetch_add(
+                                1, std::memory_order_relaxed);
+                            if (idx >= total)
+                            {
+                                return;
+                            }
+
+                            TruncateRequest *ptr =
+                                req->truncate_reqs_[idx].get();
+                            auto self = shared_from_this();
+                            auto on_truncate_done = [self](KvRequest *sub_req)
+                            { self->OnTruncateDone(sub_req); };
+
+                            if (store->ExecAsyn(ptr, 0, on_truncate_done))
+                            {
+                                return;
+                            }
+
+                            LOG(ERROR)
+                                << "HandleGlobalReopenRequest enqueue "
+                                   "truncate request fail, partition "
+                                << ptr->TableId() << ", tag " << req->Tag();
+                            ptr->callback_ = nullptr;
+                            ptr->SetDone(KvError::NotRunning);
+                            if (HandleTruncateResult(ptr))
+                            {
+                                return;
+                            }
+                        }
+                    }
+                };
+
+                auto tstate = std::make_shared<TruncateScheduleState>();
+                tstate->store = store;
+                tstate->req = req;
+                tstate->total = req->truncate_reqs_.size();
+
+                size_t max_inflight = std::max<uint32_t>(
+                    store->Options().max_global_request_batch, 1);
+                if (max_inflight > tstate->total)
+                {
+                    max_inflight = tstate->total;
+                }
+                for (size_t i = 0; i < max_inflight; ++i)
+                {
+                    tstate->ScheduleNext();
+                }
+
+                // Phase-2 callbacks will call req->SetDone().
                 return true;
             }
             return false;
@@ -1642,6 +1860,7 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
     auto state = std::make_shared<ReopenScheduleState>();
     state->store = this;
     state->req = req;
+    state->standby_local_only = std::move(local_only);
     state->total = req->reopen_reqs_.size();
 
     size_t max_inflight =

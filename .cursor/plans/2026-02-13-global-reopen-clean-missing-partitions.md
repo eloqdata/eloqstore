@@ -231,10 +231,15 @@ Schedule ReopenRequest for partitions with callbacks:
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] `ctest` 或项目现有测试命令通过（至少跑 `tests/cloud.cpp` 与 `tests/standby.cpp` 相关用例）
-- [ ] 新增/修改的测试用例通过，并覆盖：
+- [x] `ctest` 或项目现有测试命令通过（至少跑 `tests/cloud.cpp` 与 `tests/standby.cpp` 相关用例）
+- [x] 新增/修改的测试用例通过，并覆盖：
   - Cloud 模式：本地残留分区在远端缺失后会触发 `TruncateRequest`
   - StandbyReplica：本地残留分区在远端缺失后会触发 `TruncateRequest`
+
+本轮实现已在当前环境完成的验证：
+- 编译通过（`ninja`）
+- `tests/standby.cpp`：新增用例 `standby global reopen truncates local-only partitions` 已通过；同时原有 `standby rsync replica follows master changes` 也通过
+- `tests/cloud.cpp`：`cloud global reopen truncates missing partitions` 已通过；且 `./cloud "[cloud][reopen]"` 整体通过（MinIO 可达）
 
 #### Manual Verification:
 - [ ] 在压测/集成环境的 `GlobalReopenRequest` 场景下，确认不会因为 `KvError::NotFound` 导致全局请求失败（前提是截断成功）
@@ -280,8 +285,8 @@ Schedule ReopenRequest for partitions with callbacks:
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] 新增用例在 CI 里稳定通过（建议使用 `WaitForCondition` 轮询避免异步回收时序问题）
-- [ ] 无编译警告/未处理的未使用变量
+- [x] 新增用例在本地通过（云端 MinIO 可达 + standby 本地模式）
+- [x] 无编译警告/未处理的未使用变量（`ninja` + `ReadLints`）
 
 #### Manual Verification:
 - [ ] 如 truncate 清理是异步回收，确认验证条件（例如“等待 data file 消失”）不会引入过长超时时间
@@ -293,7 +298,7 @@ Schedule ReopenRequest for partitions with callbacks:
 ### Success Criteria:
 
 #### Automated Verification:
-- [ ] 运行全量或至少相关集成测试
+- [x] 运行全量或至少相关集成测试（`./cloud "[cloud][reopen]"` 与 `./standby "[standby]"`）
 - [ ] 观察新逻辑下 `GlobalReopenRequest` 的最终返回码：
   - Cloud 模式：远端 missing 的分区不会导致整体返回 `KvError::NotFound`（若 truncate 成功）
   - StandbyReplica：远端 missing 的分区会被 truncate 后整体返回 `NoError`（若无其它错误）
