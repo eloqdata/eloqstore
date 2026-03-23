@@ -3209,7 +3209,7 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
     }
 
     const size_t retained_files =
-        cached_files.size() - (has_max_data_file ? 1U : 0U);
+        cached_files.size() - max_data_file_indices.size();
     for (size_t i = 0; i < cached_files.size(); ++i)
     {
         if (has_max_data_file && std::find(max_data_file_indices.begin(),
@@ -4101,6 +4101,10 @@ void CloudStoreMgr::RequestGcLocalCleanup(
     for (const std::string &filename : filenames)
     {
         FileKey key(tbl_id, filename);
+        if (!closed_files_.contains(key) || IsEvictingKey(key))
+        {
+            continue;
+        }
         auto [_, inserted] = pending_gc_cleanup_.insert(key);
         if (!inserted)
         {
@@ -4347,6 +4351,10 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
         OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, 0);
     if (err != KvError::NoError)
     {
+        if (dequed)
+        {
+            EnqueClosedFile(fkey);
+        }
         LOG(ERROR) << "Cloud SwitchManifest open dir failed for " << tbl_id
                    << " manifest_term=" << manifest_term.value() << ": "
                    << ErrorString(err);
@@ -4419,7 +4427,14 @@ KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
 
     auto [dir_fd, err] =
         OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, 0);
-    CHECK_KV_ERR(err);
+    if (err != KvError::NoError)
+    {
+        if (dequed)
+        {
+            EnqueClosedFile(key);
+        }
+        return err;
+    }
     int res = WriteSnapshot(std::move(dir_fd), key.filename_, snapshot);
     if (res < 0)
     {
