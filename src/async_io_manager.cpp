@@ -32,6 +32,7 @@
 #include <thread>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -4382,6 +4383,8 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
 void CloudStoreMgr::CleanManifest(const TableIdent &tbl_id)
 {
     IouringMgr::CleanManifest(tbl_id);
+    (void) DequeClosedFile(
+        FileKey(tbl_id, ManifestFileName(ProcessTerm())));
     if (!HasTrackedLocalFiles(tbl_id))
     {
         KvError cleanup_err = TryCleanupLocalPartitionDir(tbl_id);
@@ -4635,16 +4638,22 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
 {
     FileId file_id = fd.Get()->file_id_;
     uint64_t term = fd.Get()->term_;
-    std::optional<TableIdent> tbl_id;
+    std::optional<FileKey> file_key;
     if (file_id != LruFD::kDirectory)
     {
-        tbl_id = *fd.Get()->tbl_->tbl_id_;
+        file_key.emplace(*fd.Get()->tbl_->tbl_id_,
+                         ToFilename(file_id, term));
     }
     KvError err = IouringMgr::CloseFile(fd);
     CHECK_KV_ERR(err);
-    if (tbl_id.has_value())
+    if (file_key.has_value())
     {
-        EnqueClosedFile(FileKey(std::move(*tbl_id), ToFilename(file_id, term)));
+        EnqueClosedFile(*file_key);
+        if (pending_gc_cleanup_.contains(*file_key) &&
+            file_cleaner_.status_ == TaskStatus::Idle)
+        {
+            file_cleaner_.Resume();
+        }
     }
     return KvError::NoError;
 }
@@ -5635,27 +5644,30 @@ void CloudStoreMgr::FileCleaner::Run()
                  it != io_mgr_->pending_gc_cleanup_.end() &&
                  req_count < batch_size;)
             {
-                FileKey key = *it;
-                it = io_mgr_->pending_gc_cleanup_.erase(it);
-                made_progress = true;
+                const FileKey &key = *it;
 
                 auto file_it = io_mgr_->closed_files_.find(key);
                 if (file_it == io_mgr_->closed_files_.end())
                 {
+                    ++it;
                     continue;
                 }
 
                 CachedFile *file = &file_it->second;
                 if (io_mgr_->IsEvictingKey(*file->key_))
                 {
+                    ++it;
                     continue;
                 }
 
                 FileKey key_copy = *file->key_;
                 if (!io_mgr_->StartEvictingKey(key_copy))
                 {
+                    ++it;
                     continue;
                 }
+                it = io_mgr_->pending_gc_cleanup_.erase(it);
+                made_progress = true;
 
                 UnlinkReq &req = unlink_reqs[req_count++];
                 req.file_ = file;

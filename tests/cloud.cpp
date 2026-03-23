@@ -20,6 +20,8 @@
 
 using namespace test_util;
 namespace chrono = std::chrono;
+using std::chrono_literals::operator""ms;
+using std::chrono_literals::operator""s;
 
 TEST_CASE("simple cloud store", "[cloud]")
 {
@@ -165,7 +167,6 @@ eloqstore::Shard *PrimaryShard(eloqstore::EloqStore *store)
 
 TEST_CASE("cloud prewarm downloads while shards idle", "[cloud][prewarm]")
 {
-    using namespace std::chrono_literals;
     namespace fs = std::filesystem;
 
     eloqstore::KvOptions options = cloud_options;
@@ -222,7 +223,6 @@ TEST_CASE("cloud prewarm downloads while shards idle", "[cloud][prewarm]")
 
 TEST_CASE("cloud prewarm supports writes after restart", "[cloud][prewarm]")
 {
-    using namespace std::chrono_literals;
     namespace fs = std::filesystem;
 
     eloqstore::KvOptions options = cloud_options;
@@ -259,8 +259,6 @@ TEST_CASE("cloud prewarm supports writes after restart", "[cloud][prewarm]")
 
 TEST_CASE("cloud reopen waits on evicting cached file", "[cloud][gc]")
 {
-    using namespace std::chrono_literals;
-
     eloqstore::KvOptions options = cloud_options;
     // Force frequent eviction: allow only ~3 data files worth of cache.
     options.local_space_limit = options.DataFileSize() * 10;
@@ -309,7 +307,6 @@ TEST_CASE("cloud reopen waits on evicting cached file", "[cloud][gc]")
 TEST_CASE("cloud gc removes local cached files after remote truncate",
           "[cloud][gc][targeted]")
 {
-    using namespace std::chrono_literals;
     namespace fs = std::filesystem;
 
     eloqstore::KvOptions options = cloud_options;
@@ -364,7 +361,6 @@ TEST_CASE("cloud gc removes local cached files after remote truncate",
 
 TEST_CASE("cloud prewarm respects cache budget", "[cloud][prewarm]")
 {
-    using namespace std::chrono_literals;
     namespace fs = std::filesystem;
 
     eloqstore::KvOptions options = cloud_options;
@@ -638,7 +634,6 @@ TEST_CASE("cloud startup restore removes partitions cleaned to empty",
 
 TEST_CASE("cloud prewarm honors partition filter", "[cloud][prewarm]")
 {
-    using namespace std::chrono_literals;
     namespace fs = std::filesystem;
 
     eloqstore::KvOptions options = cloud_options;
@@ -710,7 +705,6 @@ TEST_CASE("cloud prewarm honors partition filter", "[cloud][prewarm]")
 TEST_CASE("cloud prewarm handles pagination with 2000+ files",
           "[cloud][prewarm][pagination]")
 {
-    using namespace std::chrono_literals;
     namespace fs = std::filesystem;
 
     eloqstore::KvOptions options = cloud_options;
@@ -805,7 +799,6 @@ TEST_CASE("cloud prewarm handles pagination with 2000+ files",
 TEST_CASE("cloud prewarm queue management with producer blocking",
           "[cloud][prewarm][queue]")
 {
-    using namespace std::chrono_literals;
     namespace fs = std::filesystem;
 
     eloqstore::KvOptions options = cloud_options;
@@ -901,7 +894,6 @@ TEST_CASE("cloud prewarm queue management with producer blocking",
 TEST_CASE("cloud prewarm aborts gracefully when disk fills",
           "[cloud][prewarm][disk]")
 {
-    using namespace std::chrono_literals;
     namespace fs = std::filesystem;
 
     eloqstore::KvOptions options = cloud_options;
@@ -1142,8 +1134,6 @@ TEST_CASE("cloud archive create is idempotent for an existing tag",
 TEST_CASE("cloud global archive shares timestamp and filters partitions",
           "[cloud][archive][global]")
 {
-    using namespace std::chrono_literals;
-
     eloqstore::KvOptions options = cloud_archive_opts;
     const std::string tbl_name = "global_archive_cloud";
     constexpr uint32_t kListPageSize = 1000;
@@ -1551,7 +1541,6 @@ TEST_CASE("cloud reopen refreshes local manifest from remote",
 TEST_CASE("cloud reopen triggers prewarm to download newer remote data files",
           "[cloud][reopen][prewarm]")
 {
-    using namespace std::chrono_literals;
     namespace fs = std::filesystem;
 
     std::atomic<bool> enable_partition_filter{false};
@@ -2119,7 +2108,6 @@ TEST_CASE("enhanced cloud rollback with mix operations", "[cloud][archive]")
 
 TEST_CASE("archive triggers with cloud-only partitions", "[cloud][archive]")
 {
-    using namespace std::chrono_literals;
     constexpr uint32_t kPartitionCount = 10;
     const std::string tbl_name = "remote_archive";
 

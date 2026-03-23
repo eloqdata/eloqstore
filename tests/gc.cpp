@@ -1,8 +1,10 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <filesystem>
+#include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include "common.h"
@@ -13,6 +15,8 @@
 using namespace test_util;
 namespace fs = std::filesystem;
 namespace chrono = std::chrono;
+using std::chrono_literals::operator""ms;
+using std::chrono_literals::operator""s;
 
 // Local mode options for GC testing
 const eloqstore::KvOptions local_gc_opts = {
@@ -137,8 +141,6 @@ bool WaitForCondition(std::chrono::milliseconds timeout,
 
 TEST_CASE("local mode truncate preserves current manifest", "[gc][local]")
 {
-    using namespace std::chrono_literals;
-
     CleanupStore(local_gc_opts);
 
     eloqstore::EloqStore *store = InitStore(local_gc_opts);
@@ -174,8 +176,6 @@ TEST_CASE("local mode truncate preserves current manifest", "[gc][local]")
 TEST_CASE("local mode clean manifest removes empty partition directory",
           "[gc][local]")
 {
-    using namespace std::chrono_literals;
-
     eloqstore::KvOptions opts = local_gc_opts;
     opts.num_threads = 1;
     opts.root_meta_cache_size = 5000;

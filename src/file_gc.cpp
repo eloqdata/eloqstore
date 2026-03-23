@@ -7,6 +7,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -113,6 +114,7 @@ void CollectLocalCleanupTargets(
         {
             if (fd_ref.Get()->ref_count_ > 1)
             {
+                targets.push_back(filename);
                 continue;
             }
 
