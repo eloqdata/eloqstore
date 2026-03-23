@@ -4383,8 +4383,7 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
 void CloudStoreMgr::CleanManifest(const TableIdent &tbl_id)
 {
     IouringMgr::CleanManifest(tbl_id);
-    (void) DequeClosedFile(
-        FileKey(tbl_id, ManifestFileName(ProcessTerm())));
+    (void) DequeClosedFile(FileKey(tbl_id, ManifestFileName(ProcessTerm())));
     if (!HasTrackedLocalFiles(tbl_id))
     {
         KvError cleanup_err = TryCleanupLocalPartitionDir(tbl_id);
@@ -4641,8 +4640,7 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
     std::optional<FileKey> file_key;
     if (file_id != LruFD::kDirectory)
     {
-        file_key.emplace(*fd.Get()->tbl_->tbl_id_,
-                         ToFilename(file_id, term));
+        file_key.emplace(*fd.Get()->tbl_->tbl_id_, ToFilename(file_id, term));
     }
     KvError err = IouringMgr::CloseFile(fd);
     CHECK_KV_ERR(err);
