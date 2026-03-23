@@ -1919,43 +1919,102 @@ void EloqStore::HandleGlobalCreateBranchRequest(GlobalCreateBranchRequest *req)
               << all_partitions.size() << " partitions";
 
     req->branch_reqs_.reserve(all_partitions.size());
-    req->pending_.store(static_cast<uint32_t>(all_partitions.size()),
-                        std::memory_order_relaxed);
-
-    auto on_branch_done = [req](KvRequest *sub_req)
-    {
-        KvError sub_err = sub_req->Error();
-        if (sub_err != KvError::NoError)
-        {
-            uint8_t expected = static_cast<uint8_t>(KvError::NoError);
-            uint8_t desired = static_cast<uint8_t>(sub_err);
-            req->first_error_.compare_exchange_strong(
-                expected,
-                desired,
-                std::memory_order_relaxed,
-                std::memory_order_relaxed);
-        }
-        if (req->pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
-        {
-            KvError final_err = static_cast<KvError>(
-                req->first_error_.load(std::memory_order_relaxed));
-            req->SetDone(final_err);
-        }
-    };
-
     for (const TableIdent &partition : all_partitions)
     {
         auto branch_req = std::make_unique<CreateBranchRequest>();
         branch_req->SetTableId(partition);
         branch_req->SetArgs(internal_name);
-        CreateBranchRequest *ptr = branch_req.get();
         req->branch_reqs_.push_back(std::move(branch_req));
-        if (!ExecAsyn(ptr, 0, on_branch_done))
+    }
+
+    req->pending_.store(static_cast<uint32_t>(req->branch_reqs_.size()),
+                        std::memory_order_relaxed);
+
+    struct BranchScheduleState
+        : public std::enable_shared_from_this<BranchScheduleState>
+    {
+        EloqStore *store = nullptr;
+        GlobalCreateBranchRequest *req = nullptr;
+        size_t total = 0;
+        std::atomic<size_t> next_index{0};
+
+        bool HandleBranchResult(KvError sub_err)
         {
-            LOG(ERROR) << "Handle global create branch request, enqueue "
-                          "create branch request fail";
-            ptr->SetDone(KvError::NotRunning);
+            if (sub_err != KvError::NoError)
+            {
+                uint8_t expected = static_cast<uint8_t>(KvError::NoError);
+                uint8_t desired = static_cast<uint8_t>(sub_err);
+                req->first_error_.compare_exchange_strong(
+                    expected,
+                    desired,
+                    std::memory_order_relaxed,
+                    std::memory_order_relaxed);
+            }
+            if (req->pending_.fetch_sub(1, std::memory_order_acq_rel) == 1)
+            {
+                KvError final_err = static_cast<KvError>(
+                    req->first_error_.load(std::memory_order_relaxed));
+                req->SetDone(final_err);
+                return true;
+            }
+            return false;
         }
+
+        void OnBranchDone(KvRequest *sub_req)
+        {
+            if (HandleBranchResult(sub_req->Error()))
+            {
+                return;
+            }
+            ScheduleNext();
+        }
+
+        void ScheduleNext()
+        {
+            while (true)
+            {
+                size_t idx = next_index.fetch_add(1, std::memory_order_relaxed);
+                if (idx >= total)
+                {
+                    return;
+                }
+                CreateBranchRequest *ptr = req->branch_reqs_[idx].get();
+                auto self = shared_from_this();
+                auto on_branch_done = [self](KvRequest *sub_req)
+                { self->OnBranchDone(sub_req); };
+                if (store->ExecAsyn(ptr, 0, on_branch_done))
+                {
+                    return;
+                }
+
+                LOG(ERROR) << "Handle global create branch request, enqueue "
+                              "create branch request fail";
+                // Clear callback_ first so SetDone doesn't invoke it.
+                ptr->callback_ = nullptr;
+                ptr->SetDone(KvError::NotRunning);
+                if (HandleBranchResult(KvError::NotRunning))
+                {
+                    return;
+                }
+            }
+        }
+    };
+
+    auto state = std::make_shared<BranchScheduleState>();
+    state->store = this;
+    state->req = req;
+    state->total = req->branch_reqs_.size();
+
+    size_t max_inflight =
+        std::max<uint32_t>(options_.max_global_request_batch, 1);
+    if (max_inflight > state->total)
+    {
+        max_inflight = state->total;
+    }
+
+    for (size_t i = 0; i < max_inflight; ++i)
+    {
+        state->ScheduleNext();
     }
 }
 
