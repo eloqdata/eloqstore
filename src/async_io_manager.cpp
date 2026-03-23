@@ -1015,6 +1015,12 @@ void IouringMgr::CleanManifest(const TableIdent &tbl_id)
         LOG(ERROR) << "Failed to open directory for table " << tbl_id
                    << " during cleanup: " << ErrorString(dir_err);
     }
+    KvError cleanup_err = TryCleanupLocalPartitionDir(tbl_id);
+    if (cleanup_err != KvError::NoError)
+    {
+        LOG(WARNING) << "Failed to clean partition directory for table "
+                     << tbl_id << ": " << ErrorString(cleanup_err);
+    }
 }
 
 KvError ToKvError(int err_no)
