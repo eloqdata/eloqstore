@@ -1030,6 +1030,9 @@ private:
                            DirectIoBuffer &buffer,
                            size_t dst_offset);
 
+    void IncrementClosedFileCount(const TableIdent &tbl_id);
+    void DecrementClosedFileCount(const TableIdent &tbl_id);
+    bool HasTrackedLocalFiles(const TableIdent &tbl_id) const;
     bool DequeClosedFile(const FileKey &key);
     void EnqueClosedFile(FileKey key);
     bool HasEvictableFile() const;
@@ -1084,6 +1087,7 @@ private:
     };
     std::unordered_map<FileKey, EvictingPath> evicting_paths_;
     std::unordered_set<FileKey> pending_gc_cleanup_;
+    std::unordered_map<TableIdent, size_t> closed_file_counts_;
     std::deque<TableIdent> pending_dir_cleanup_;
     std::unordered_map<TableIdent, uint32_t> dir_busy_counts_;
     CachedFile lru_file_head_;

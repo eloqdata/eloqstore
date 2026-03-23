@@ -912,6 +912,13 @@ KvError CloudStoreMgr::TryCleanupLocalPartitionDir(const TableIdent &tbl_id)
         return KvError::NoError;
     }
 
+    if (HasTrackedLocalFiles(tbl_id))
+    {
+        DLOG(INFO) << "Skip cleaning partition directory " << partition_name
+                   << " because local files are still tracked";
+        return KvError::NoError;
+    }
+
     LruFD::Ref dir_fd = GetOpenedFD(tbl_id, LruFD::kDirectory);
     const bool directory_active =
         dir_fd != nullptr && dir_fd.Get()->ref_count_ > 1;
@@ -3274,6 +3281,7 @@ std::pair<size_t, size_t> CloudStoreMgr::TrimRestoredCacheUsage()
 
         size_t file_size = EstimateFileSize(key_copy.filename_);
         victim->Deque();
+        DecrementClosedFileCount(key_copy.tbl_id_);
         closed_files_.erase(key_copy);
         used_local_space_ =
             used_local_space_ > file_size ? used_local_space_ - file_size : 0;
@@ -4108,10 +4116,13 @@ void CloudStoreMgr::UnregisterDirBusy(const TableIdent &tbl_id)
     if (--it->second == 0)
     {
         dir_busy_counts_.erase(it);
-        pending_dir_cleanup_.push_back(tbl_id);
-        if (file_cleaner_.status_ == TaskStatus::Idle)
+        if (!HasTrackedLocalFiles(tbl_id))
         {
-            file_cleaner_.Resume();
+            pending_dir_cleanup_.push_back(tbl_id);
+            if (file_cleaner_.status_ == TaskStatus::Idle)
+            {
+                file_cleaner_.Resume();
+            }
         }
     }
 }
@@ -4358,11 +4369,14 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
 void CloudStoreMgr::CleanManifest(const TableIdent &tbl_id)
 {
     IouringMgr::CleanManifest(tbl_id);
-    KvError cleanup_err = TryCleanupLocalPartitionDir(tbl_id);
-    if (cleanup_err != KvError::NoError)
+    if (!HasTrackedLocalFiles(tbl_id))
     {
-        LOG(WARNING) << "Failed to clean partition directory for table "
-                     << tbl_id << ": " << ErrorString(cleanup_err);
+        KvError cleanup_err = TryCleanupLocalPartitionDir(tbl_id);
+        if (cleanup_err != KvError::NoError)
+        {
+            LOG(WARNING) << "Failed to clean partition directory for table "
+                         << tbl_id << ": " << ErrorString(cleanup_err);
+        }
     }
 }
 
@@ -4750,6 +4764,7 @@ bool CloudStoreMgr::DequeClosedFile(const FileKey &key)
     }
     CachedFile *local_file = &it->second;
     local_file->Deque();
+    DecrementClosedFileCount(key.tbl_id_);
     closed_files_.erase(it);
     return true;
 }
@@ -4760,7 +4775,29 @@ void CloudStoreMgr::EnqueClosedFile(FileKey key)
     auto [it, ok] = closed_files_.try_emplace(std::move(key));
     assert(ok);
     it->second.key_ = &it->first;
+    IncrementClosedFileCount(it->first.tbl_id_);
     lru_file_head_.EnqueNext(&it->second);
+}
+
+void CloudStoreMgr::IncrementClosedFileCount(const TableIdent &tbl_id)
+{
+    closed_file_counts_[tbl_id]++;
+}
+
+void CloudStoreMgr::DecrementClosedFileCount(const TableIdent &tbl_id)
+{
+    auto it = closed_file_counts_.find(tbl_id);
+    CHECK(it != closed_file_counts_.end());
+    CHECK_GT(it->second, 0U);
+    if (--it->second == 0)
+    {
+        closed_file_counts_.erase(it);
+    }
+}
+
+bool CloudStoreMgr::HasTrackedLocalFiles(const TableIdent &tbl_id) const
+{
+    return tables_.contains(tbl_id) || closed_file_counts_.contains(tbl_id);
 }
 
 bool CloudStoreMgr::HasEvictableFile() const
@@ -5680,6 +5717,7 @@ void CloudStoreMgr::FileCleaner::Run()
             }
             touched_partitions.insert(file->key_->tbl_id_);
             file->Deque();
+            io_mgr_->DecrementClosedFileCount(file->key_->tbl_id_);
             io_mgr_->closed_files_.erase(key_copy);
             io_mgr_->FinishEvictingKey(key_copy);
 
