@@ -631,16 +631,16 @@ TEST_CASE("standby global reopen truncates local-only partitions",
     const eloqstore::TableIdent tbl_id0{"standby_tbl_reopen", 0};
     const eloqstore::TableIdent tbl_id1{"standby_tbl_reopen", 1};
 
-    auto upsert_range =
-        [&](eloqstore::EloqStore &store,
-            const eloqstore::TableIdent &tid,
-            uint64_t begin,
-            uint64_t end)
+    auto upsert_range = [&](eloqstore::EloqStore &store,
+                            const eloqstore::TableIdent &tid,
+                            uint64_t begin,
+                            uint64_t end)
     {
         std::vector<eloqstore::WriteDataEntry> entries;
         for (uint64_t i = begin; i < end; ++i)
         {
-            entries.emplace_back(Key(i), Value(i), 0, eloqstore::WriteOp::Upsert);
+            entries.emplace_back(
+                Key(i), Value(i), 0, eloqstore::WriteOp::Upsert);
         }
         eloqstore::BatchWriteRequest req;
         req.SetArgs(tid, std::move(entries));
@@ -648,12 +648,11 @@ TEST_CASE("standby global reopen truncates local-only partitions",
         REQUIRE(req.Error() == eloqstore::KvError::NoError);
     };
 
-    auto verify_range =
-        [&](eloqstore::EloqStore &store,
-            const eloqstore::TableIdent &tid,
-            uint64_t begin,
-            uint64_t end,
-            bool expect_exists)
+    auto verify_range = [&](eloqstore::EloqStore &store,
+                            const eloqstore::TableIdent &tid,
+                            uint64_t begin,
+                            uint64_t end,
+                            bool expect_exists)
     {
         for (uint64_t i = begin; i < end; ++i)
         {
@@ -701,8 +700,7 @@ TEST_CASE("standby global reopen truncates local-only partitions",
             eloqstore::GlobalReopenRequest initial_reopen_req;
             initial_reopen_req.SetTag(std::to_string(1001));
             standby.ExecSync(&initial_reopen_req);
-            REQUIRE(initial_reopen_req.Error() ==
-                    eloqstore::KvError::NoError);
+            REQUIRE(initial_reopen_req.Error() == eloqstore::KvError::NoError);
         }
         verify_range(standby, tbl_id0, 0, 200, true);
         verify_range(standby, tbl_id1, 0, 200, true);

@@ -1668,9 +1668,8 @@ TEST_CASE("cloud global reopen truncates missing partitions",
     store->ExecSync(&reopen_req);
     REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
 
-    auto verify_exists = [&](const eloqstore::TableIdent &tid,
-                               uint64_t begin,
-                               uint64_t end)
+    auto verify_exists =
+        [&](const eloqstore::TableIdent &tid, uint64_t begin, uint64_t end)
     {
         for (uint64_t i = begin; i < end; ++i)
         {
@@ -1681,9 +1680,8 @@ TEST_CASE("cloud global reopen truncates missing partitions",
         }
     };
 
-    auto verify_not_found = [&](const eloqstore::TableIdent &tid,
-                                 uint64_t begin,
-                                 uint64_t end)
+    auto verify_not_found =
+        [&](const eloqstore::TableIdent &tid, uint64_t begin, uint64_t end)
     {
         for (uint64_t i = begin; i < end; ++i)
         {
