@@ -799,8 +799,7 @@ bool AsyncHttpManager::SetupUploadRequest(ObjectStore::UploadTask *task,
     }
     std::string content_length =
         "Content-Length: " + std::to_string(task->file_size_);
-    task->headers_ =
-        curl_slist_append(task->headers_, content_length.c_str());
+    task->headers_ = curl_slist_append(task->headers_, content_length.c_str());
     task->headers_ = curl_slist_append(task->headers_, "Expect:");
 
     // Add conditional headers if provided
