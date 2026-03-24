@@ -4792,6 +4792,7 @@ void CloudStoreMgr::InitBackgroundJob()
 bool CloudStoreMgr::DequeClosedFile(const FileKey &key)
 {
     WaitForEvictingKey(key);
+    pending_gc_cleanup_.erase(key);
     auto it = closed_files_.find(key);
     if (it == closed_files_.end())
     {
