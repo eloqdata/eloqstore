@@ -8,8 +8,10 @@
 #include <vector>
 
 #include "coding.h"
+#include "common.h"
 #include "storage/page.h"
 #include "storage/root_meta.h"
+#include "types.h"
 
 namespace
 {
@@ -40,6 +42,122 @@ bool SkipPadding(std::ifstream &file, size_t padding)
     }
     file.seekg(static_cast<std::streamoff>(padding), std::ios::cur);
     return static_cast<bool>(file);
+}
+
+void PrintBranchMetadata(std::string_view data)
+{
+    using namespace eloqstore;
+    BranchManifestMetadata metadata;
+    if (!DeserializeBranchManifestMetadata(data, metadata))
+    {
+        std::cout << "  branch_metadata: PARSE FAILED\n";
+        return;
+    }
+    std::cout << "  branch_name: \"" << metadata.branch_name << "\"\n";
+    std::cout << "  branch_term: " << metadata.term << "\n";
+    std::cout << "  file_ranges: " << metadata.file_ranges.size() << "\n";
+    for (size_t i = 0; i < metadata.file_ranges.size(); ++i)
+    {
+        const auto &r = metadata.file_ranges[i];
+        std::cout << "    [" << i << "] branch=\"" << r.branch_name
+                  << "\" term=" << r.term << " max_file_id=" << r.max_file_id
+                  << "\n";
+    }
+}
+
+void PrintSnapshotPayload(std::string_view payload)
+{
+    using namespace eloqstore;
+
+    uint64_t max_fp_id = 0;
+    if (!GetVarint64(&payload, &max_fp_id))
+    {
+        std::cout << "  payload: PARSE FAILED (max_fp_id)\n";
+        return;
+    }
+    std::cout << "  max_fp_id: " << max_fp_id << "\n";
+
+    uint32_t dict_len = 0;
+    if (!GetVarint32(&payload, &dict_len))
+    {
+        std::cout << "  payload: PARSE FAILED (dict_len)\n";
+        return;
+    }
+    std::cout << "  dict_bytes: " << dict_len << "\n";
+    if (payload.size() < dict_len)
+    {
+        std::cout << "  payload: TRUNCATED (dict)\n";
+        return;
+    }
+    payload = payload.substr(dict_len);
+
+    if (payload.size() < 4)
+    {
+        std::cout << "  payload: TRUNCATED (mapping_len)\n";
+        return;
+    }
+    const uint32_t mapping_len = eloqstore::DecodeFixed32(payload.data());
+    std::cout << "  mapping_bytes: " << mapping_len << "\n";
+    payload = payload.substr(4);
+
+    if (payload.size() < mapping_len)
+    {
+        std::cout << "  payload: TRUNCATED (mapping)\n";
+        return;
+    }
+
+    std::string_view mapping_view = payload.substr(0, mapping_len);
+    uint32_t mapping_count = 0;
+    while (!mapping_view.empty())
+    {
+        uint64_t value;
+        if (!GetVarint64(&mapping_view, &value))
+        {
+            break;
+        }
+        ++mapping_count;
+    }
+    std::cout << "  mapping_entries: " << mapping_count << "\n";
+
+    std::string_view branch_view = payload.substr(mapping_len);
+    PrintBranchMetadata(branch_view);
+}
+
+void PrintLogPayload(std::string_view payload)
+{
+    using namespace eloqstore;
+
+    if (payload.size() < 4)
+    {
+        std::cout << "  payload: TRUNCATED (mapping_len)\n";
+        return;
+    }
+    const uint32_t mapping_len = eloqstore::DecodeFixed32(payload.data());
+    std::cout << "  mapping_bytes: " << mapping_len << "\n";
+    payload = payload.substr(4);
+
+    if (payload.size() < mapping_len)
+    {
+        std::cout << "  payload: TRUNCATED (mapping)\n";
+        return;
+    }
+
+    std::string_view mapping_view = payload.substr(0, mapping_len);
+    uint32_t mapping_count = 0;
+    while (!mapping_view.empty())
+    {
+        uint32_t page_id;
+        uint64_t value;
+        if (!GetVarint32(&mapping_view, &page_id))
+            break;
+        if (!GetVarint64(&mapping_view, &value))
+            break;
+        ++mapping_count;
+    }
+    std::cout << "  mapping_entries: " << mapping_count << "\n";
+
+    std::string_view branch_view = payload.substr(mapping_len);
+    PrintBranchMetadata(branch_view);
 }
 
 }  // namespace
@@ -113,6 +231,21 @@ int main(int argc, char **argv)
         std::cout << "  ttl_root: " << ttl_root << "\n";
         std::cout << "  payload_bytes: " << payload_len << "\n";
         std::cout << "  checksum: " << (checksum_ok ? "OK" : "FAILED") << "\n";
+
+        if (payload_len > 0)
+        {
+            const std::string_view payload_view(record.data() + header_size,
+                                                payload_len);
+            if (log_index == 0)
+            {
+                PrintSnapshotPayload(payload_view);
+            }
+            else
+            {
+                PrintLogPayload(payload_view);
+            }
+        }
+
         if (!checksum_ok)
         {
             const std::string payload_hex = BytesToHex(
