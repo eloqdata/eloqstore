@@ -217,8 +217,11 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
     }
 
     // 3. delete unreferenced data files.
-    err = DeleteUnreferencedLocalFiles(
-        tbl_id, data_files, retained_files, max_file_id_per_branch_term, io_mgr);
+    err = DeleteUnreferencedLocalFiles(tbl_id,
+                                       data_files,
+                                       retained_files,
+                                       max_file_id_per_branch_term,
+                                       io_mgr);
     if (err != KvError::NoError)
     {
         LOG(ERROR)

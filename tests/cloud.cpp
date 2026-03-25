@@ -125,8 +125,7 @@ std::optional<std::string> FindLowestDataFile(
         eloqstore::FileId file_id = 0;
         std::string_view branch_name;
         uint64_t term = 0;
-        if (!eloqstore::ParseDataFileSuffix(
-                suffix, file_id, branch_name, term))
+        if (!eloqstore::ParseDataFileSuffix(suffix, file_id, branch_name, term))
         {
             continue;
         }

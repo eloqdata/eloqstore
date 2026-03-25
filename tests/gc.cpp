@@ -161,22 +161,21 @@ TEST_CASE("local mode truncate preserves current manifest", "[gc][local]")
 
     tester.Truncate(0, true);
 
-    REQUIRE(
-        WaitForCondition(3s,
-                         20ms,
-                         [&]()
-                         {
-                             std::vector<std::string> files =
-                                 ListLocalPartitionFiles(local_gc_opts, tbl_id);
-                             if (files.empty())
-                             {
-                                 return false;
-                             }
-                             return files.size() == 1 &&
-                                    files[0] == eloqstore::BranchManifestFileName(
-                                                    eloqstore::MainBranchName,
-                                                    0);
-                         }));
+    REQUIRE(WaitForCondition(
+        3s,
+        20ms,
+        [&]()
+        {
+            std::vector<std::string> files =
+                ListLocalPartitionFiles(local_gc_opts, tbl_id);
+            if (files.empty())
+            {
+                return false;
+            }
+            return files.size() == 1 &&
+                   files[0] == eloqstore::BranchManifestFileName(
+                                   eloqstore::MainBranchName, 0);
+        }));
 
     store->Stop();
     CleanupStore(local_gc_opts);
