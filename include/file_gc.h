@@ -14,14 +14,15 @@
 
 namespace eloqstore
 {
-using RetainedFiles = absl::flat_hash_set<FileId>;
+using RetainedFiles = absl::flat_hash_set<RetainedFileKey>;
 
 class ObjectStore;
 class IouringMgr;
 class CloudStoreMgr;
 
-void GetRetainedFiles(absl::flat_hash_set<FileId> &file_ids,
+void GetRetainedFiles(absl::flat_hash_set<RetainedFileKey> &file_keys,
                       const MappingSnapshot::MappingTbl &tbl,
+                      const BranchFileMapping &file_ranges,
                       uint8_t pages_per_file_shift);
 
 namespace FileGarbageCollector
@@ -44,7 +45,7 @@ KvError ListLocalFiles(const TableIdent &tbl_id,
 KvError DeleteUnreferencedLocalFiles(
     const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
-    const absl::flat_hash_set<FileId> &retained_files,
+    const absl::flat_hash_set<RetainedFileKey> &retained_files,
     const absl::flat_hash_map<std::string, FileId> &max_file_id_per_branch_term,
     IouringMgr *io_mgr);
 
@@ -72,7 +73,7 @@ KvError DeleteUnreferencedCloudFiles(
     const std::vector<std::string> &data_files,
     const std::vector<uint64_t> &manifest_terms,
     const std::vector<std::string> &manifest_branch_names,
-    const absl::flat_hash_set<FileId> &retained_files,
+    const absl::flat_hash_set<RetainedFileKey> &retained_files,
     const absl::flat_hash_map<std::string, FileId> &max_file_id_per_branch_term,
     CloudStoreMgr *cloud_mgr);
 
@@ -96,7 +97,7 @@ KvError AugmentRetainedFilesFromBranchManifests(
     const std::vector<uint64_t> &manifest_terms,
     const std::vector<std::string> &archive_files,
     const std::vector<std::string> &archive_branch_names,
-    absl::flat_hash_set<FileId> &retained_files,
+    absl::flat_hash_set<RetainedFileKey> &retained_files,
     absl::flat_hash_map<std::string, FileId> &max_file_id_per_branch_term,
     uint8_t pages_per_file_shift,
     IouringMgr *io_mgr);

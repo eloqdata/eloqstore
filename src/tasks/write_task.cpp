@@ -48,15 +48,17 @@ KvError BuildRetainedFiles(const TableIdent &tbl_id,
         snapshot_array.emplace_back(MappingSnapshot::Ref(mapping));
     }
 
-    absl::flat_hash_set<FileId> file_ids;
-    file_ids.reserve(approx_file_cnt);
+    absl::flat_hash_set<RetainedFileKey> file_keys;
+    file_keys.reserve(approx_file_cnt);
+    const BranchFileMapping &file_ranges =
+        IoMgr()->GetBranchFileMapping(tbl_id);
     for (const MappingSnapshot::Ref &mapping : snapshot_array)
     {
-        GetRetainedFiles(file_ids, mapping->mapping_tbl_, shift);
+        GetRetainedFiles(file_keys, mapping->mapping_tbl_, file_ranges, shift);
         ThdTask()->YieldToLowPQ();
     }
 
-    retained_files = std::move(file_ids);
+    retained_files = std::move(file_keys);
     return KvError::NoError;
 }
 }  // namespace

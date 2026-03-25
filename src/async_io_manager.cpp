@@ -1357,7 +1357,7 @@ bool IouringMgr::GetBranchNameAndTerm(const TableIdent &tbl_id,
     bool res =
         ::eloqstore::GetBranchNameAndTerm(mapping, file_id, branch_name, term);
     DLOG(INFO) << "GetBranchNameAndTerm, tbl_id=" << tbl_id
-               << "file_id=" << file_id << " branch_name=" << branch_name
+               << " file_id=" << file_id << " branch_name=" << branch_name
                << " term=" << term;
     return res;
 }
@@ -4293,6 +4293,8 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
     uint64_t selected_term = process_term;
     std::string selected_filename =
         BranchArchiveName(GetActiveBranch(), selected_term, archive_tag);
+    DLOG(INFO) << "CloudStoreMgr::RefreshManifest archive name:"
+               << selected_filename;
     DirectIoBuffer buffer;
     auto download_to_buffer = [&](std::string_view filename) -> KvError
     {
@@ -4329,8 +4331,9 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
         return {nullptr, replay_err};
     }
 
-    std::string tmp_name =
-        BranchManifestFileName(GetActiveBranch(), selected_term) + ".tmp";
+    std::string manifest_name =
+        BranchManifestFileName(GetActiveBranch(), selected_term);
+    std::string tmp_name = manifest_name + ".tmp";
     uint64_t flags = O_WRONLY | O_CREAT | O_DIRECT | O_NOATIME | O_TRUNC;
     KvError write_err = WriteFile(tbl_id, tmp_name, buffer, flags);
     ReleaseCloudBuffer(std::move(buffer));
@@ -4345,8 +4348,6 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
         return {nullptr, dir_err};
     }
 
-    std::string manifest_name =
-        BranchManifestFileName(GetActiveBranch(), selected_term);
     int res = Rename(dir_fd.FdPair(), tmp_name.c_str(), manifest_name.c_str());
     if (res < 0)
     {
@@ -4789,6 +4790,7 @@ KvError CloudStoreMgr::DeleteBranchFiles(const TableIdent &tbl_id,
 
     for (const std::string &path : paths_to_delete)
     {
+        DLOG(INFO) << "DeleteBranchFiles delete " << path;
         delete_tasks.emplace_back(path);
         delete_tasks.back().SetKvTask(current_task);
         AcquireCloudSlot(current_task);

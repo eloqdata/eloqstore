@@ -8,11 +8,10 @@
 #include <iterator>
 #include <memory>
 #include <optional>
-#include <string>
-#include <unordered_set>
 #include <random>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -31,8 +30,9 @@
 #include "utils.h"
 namespace eloqstore
 {
-void GetRetainedFiles(absl::flat_hash_set<FileId> &result,
+void GetRetainedFiles(absl::flat_hash_set<RetainedFileKey> &result,
                       const MappingSnapshot::MappingTbl &tbl,
+                      const BranchFileMapping &file_ranges,
                       uint8_t pages_per_file_shift)
 {
     const size_t tbl_size = tbl.size();
@@ -43,13 +43,43 @@ void GetRetainedFiles(absl::flat_hash_set<FileId> &result,
         {
             FilePageId fp_id = MappingSnapshot::DecodeId(val);
             FileId file_id = fp_id >> pages_per_file_shift;
-            result.emplace(file_id);
+
+            // Look up the branch and term for this file_id
+            std::string branch_name;
+            uint64_t term = 0;
+            if (GetBranchNameAndTerm(file_ranges, file_id, branch_name, term))
+            {
+                result.emplace(
+                    RetainedFileKey{file_id, std::move(branch_name), term});
+            }
+            else
+            {
+                // File ID not in any known branch range; skip it
+                DLOG(WARNING) << "GetRetainedFiles: file_id " << file_id
+                              << " not found in any branch range";
+            }
         }
         else if (MappingSnapshot::IsSwizzlingPointer(val))
         {
             MemIndexPage *idx_page = reinterpret_cast<MemIndexPage *>(val);
             FilePageId fp_id = idx_page->GetFilePageId();
-            result.emplace(fp_id >> pages_per_file_shift);
+            FileId file_id = fp_id >> pages_per_file_shift;
+
+            // Look up the branch and term for this file_id
+            std::string branch_name;
+            uint64_t term = 0;
+            if (GetBranchNameAndTerm(file_ranges, file_id, branch_name, term))
+            {
+                result.emplace(
+                    RetainedFileKey{file_id, std::move(branch_name), term});
+            }
+            else
+            {
+                // File ID not in any known branch range; skip it
+                DLOG(WARNING)
+                    << "GetRetainedFiles: file_id " << file_id
+                    << " not found in any branch range (swizzling pointer)";
+            }
         }
         if ((page_id & 0xFF) == 0)
         {
@@ -167,7 +197,7 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
 
     // 2a. augment retained_files from all branch manifests (regular + archive)
     // on disk; also build max_file_id_per_branch_term map.
-    absl::flat_hash_set<FileId> all_retained(retained_files);
+    absl::flat_hash_set<RetainedFileKey> all_retained(retained_files);
     absl::flat_hash_map<std::string, FileId> max_file_id_per_branch_term;
     err = AugmentRetainedFilesFromBranchManifests(
         tbl_id,
@@ -198,6 +228,7 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
         return err;
     }
 
+    /*
     // 4. delete old archives beyond num_retained_archives per branch.
     // NOTE: this step is intentionally AFTER DeleteUnreferencedLocalFiles so
     // that ALL archives (including those about to be pruned) contribute their
@@ -215,6 +246,7 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
                    << static_cast<int>(err);
         return err;
     }
+    */
 
     return KvError::NoError;
 }
@@ -450,7 +482,7 @@ static KvError ProcessOneManifest(
     const std::string &filename,
     uint64_t term,
     DirectIoBuffer &buf,
-    absl::flat_hash_set<FileId> &retained_files,
+    absl::flat_hash_set<RetainedFileKey> &retained_files,
     absl::flat_hash_map<std::string, FileId> &max_file_id_per_branch_term,
     uint8_t pages_per_file_shift)
 {
@@ -467,8 +499,10 @@ static KvError ProcessOneManifest(
         return replay_err;
     }
 
-    GetRetainedFiles(
-        retained_files, replayer.mapping_tbl_, pages_per_file_shift);
+    GetRetainedFiles(retained_files,
+                     replayer.mapping_tbl_,
+                     replayer.branch_metadata_.file_ranges,
+                     pages_per_file_shift);
 
     // Update max_file_id_per_branch_term from all file_ranges in this manifest.
     for (const BranchFileRange &range : replayer.branch_metadata_.file_ranges)
@@ -493,7 +527,7 @@ KvError AugmentRetainedFilesFromBranchManifests(
     const std::vector<uint64_t> &manifest_terms,
     const std::vector<std::string> &archive_files,
     const std::vector<std::string> &archive_branch_names,
-    absl::flat_hash_set<FileId> &retained_files,
+    absl::flat_hash_set<RetainedFileKey> &retained_files,
     absl::flat_hash_map<std::string, FileId> &max_file_id_per_branch_term,
     uint8_t pages_per_file_shift,
     IouringMgr *io_mgr)
@@ -706,7 +740,7 @@ KvError DeleteUnreferencedCloudFiles(
     const std::vector<std::string> &data_files,
     const std::vector<uint64_t> &manifest_terms,
     const std::vector<std::string> &manifest_branch_names,
-    const absl::flat_hash_set<FileId> &retained_files,
+    const absl::flat_hash_set<RetainedFileKey> &retained_files,
     const absl::flat_hash_map<std::string, FileId> &max_file_id_per_branch_term,
     std::vector<std::string> &deleted_filenames,
     CloudStoreMgr *cloud_mgr)
@@ -742,7 +776,8 @@ KvError DeleteUnreferencedCloudFiles(
             continue;
         }
 
-        if (retained_files.contains(file_id))
+        if (retained_files.contains(
+                RetainedFileKey{file_id, std::string(branch_name), term}))
         {
             DLOG(INFO) << "skip file " << file_name << " (in retained_files)";
             continue;
@@ -818,9 +853,8 @@ KvError DeleteUnreferencedCloudFiles(
                     tbl_id.ToString() + "/" +
                     BranchManifestFileName(manifest_branch_names[i],
                                            manifest_terms[i]));
-                basenames_to_delete.emplace_back(
-                    BranchManifestFileName(manifest_branch_names[i],
-                                           manifest_terms[i]));
+                basenames_to_delete.emplace_back(BranchManifestFileName(
+                    manifest_branch_names[i], manifest_terms[i]));
             }
         }
     }
@@ -897,7 +931,7 @@ KvError DeleteUnreferencedCloudFiles(
 KvError DeleteUnreferencedLocalFiles(
     const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
-    const absl::flat_hash_set<FileId> &retained_files,
+    const absl::flat_hash_set<RetainedFileKey> &retained_files,
     const absl::flat_hash_map<std::string, FileId> &max_file_id_per_branch_term,
     IouringMgr *io_mgr)
 {
@@ -928,7 +962,8 @@ KvError DeleteUnreferencedLocalFiles(
             continue;
         }
 
-        if (retained_files.contains(file_id))
+        if (retained_files.contains(
+                RetainedFileKey{file_id, std::string(branch_name), term}))
         {
             DLOG(INFO) << "ExecuteLocalGC: keep file " << file_name
                        << " (in retained_files)";
@@ -1056,7 +1091,7 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
 
     // 3a. augment retained_files from all branch manifests (regular + archive)
     // in cloud; also build max_file_id_per_branch_term map.
-    absl::flat_hash_set<FileId> all_retained(retained_files);
+    absl::flat_hash_set<RetainedFileKey> all_retained(retained_files);
     absl::flat_hash_map<std::string, FileId> max_file_id_per_branch_term;
     err = AugmentRetainedFilesFromBranchManifests(
         tbl_id,
@@ -1102,6 +1137,7 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
         }
     }
 
+    /*
     // 5. delete old archives beyond num_retained_archives per branch.
     // NOTE: intentionally AFTER DeleteUnreferencedCloudFiles so all archives
     // contribute their file IDs to retained_files before any are pruned.
@@ -1117,6 +1153,7 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
                    << static_cast<int>(err);
         return err;
     }
+    */
 
     return KvError::NoError;
 }

@@ -80,6 +80,28 @@ struct BranchManifestMetadata
         file_ranges;  // per-branch file ranges (sorted by max_file_id)
 };
 
+// RetainedFileKey: identifies a data file uniquely by (file_id, branch, term)
+// Used in GC to correctly distinguish files with the same FileId from
+// different branches (which can happen when sibling branches fork from the
+// same parent at the same time and allocate overlapping FileId ranges).
+struct RetainedFileKey
+{
+    FileId file_id{};
+    std::string branch_name;
+    uint64_t term{};
+
+    bool operator==(const RetainedFileKey &other) const
+    {
+        return file_id == other.file_id && branch_name == other.branch_name &&
+               term == other.term;
+    }
+
+    bool operator!=(const RetainedFileKey &other) const
+    {
+        return !(*this == other);
+    }
+};
+
 namespace fs = std::filesystem;
 
 struct TableIdent
@@ -177,6 +199,19 @@ struct std::hash<eloqstore::FileKey>
     {
         size_t seed = std::hash<eloqstore::TableIdent>()(file_key.tbl_id_);
         boost::hash_combine(seed, file_key.filename_);
+        return seed;
+    }
+};
+
+template <>
+struct std::hash<eloqstore::RetainedFileKey>
+{
+    std::size_t operator()(const eloqstore::RetainedFileKey &key) const
+    {
+        size_t seed = 0;
+        boost::hash_combine(seed, key.file_id);
+        boost::hash_combine(seed, key.branch_name);
+        boost::hash_combine(seed, key.term);
         return seed;
     }
 };

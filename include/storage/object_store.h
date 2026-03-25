@@ -1,6 +1,7 @@
 #pragma once
 
 #include <curl/curl.h>
+#include <glog/logging.h>
 #include <jsoncpp/json/json.h>
 
 #include <atomic>
@@ -234,6 +235,10 @@ public:
         explicit DeleteTask(std::string remote_path)
             : remote_path_(std::move(remote_path))
         {
+            if (remote_path_ == "standby_cloud_tbl.0/manifest_main_2_2002")
+            {
+                DLOG(INFO) << "DeleteTask delete " << remote_path_;
+            }
         }
         Type TaskType() override
         {
