@@ -4293,8 +4293,6 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
     uint64_t selected_term = process_term;
     std::string selected_filename =
         BranchArchiveName(GetActiveBranch(), selected_term, archive_tag);
-    DLOG(INFO) << "CloudStoreMgr::RefreshManifest archive name:"
-               << selected_filename;
     DirectIoBuffer buffer;
     auto download_to_buffer = [&](std::string_view filename) -> KvError
     {
@@ -4790,7 +4788,6 @@ KvError CloudStoreMgr::DeleteBranchFiles(const TableIdent &tbl_id,
 
     for (const std::string &path : paths_to_delete)
     {
-        DLOG(INFO) << "DeleteBranchFiles delete " << path;
         delete_tasks.emplace_back(path);
         delete_tasks.back().SetKvTask(current_task);
         AcquireCloudSlot(current_task);

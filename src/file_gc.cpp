@@ -161,7 +161,7 @@ void CollectLocalCleanupTargets(
 }  // namespace
 
 KvError ExecuteLocalGC(const TableIdent &tbl_id,
-                       const RetainedFiles &retained_files,
+                       RetainedFiles &retained_files,
                        IouringMgr *io_mgr)
 {
     DLOG(INFO) << "ExecuteLocalGC: starting for table " << tbl_id.tbl_name_
@@ -197,7 +197,6 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
 
     // 2a. augment retained_files from all branch manifests (regular + archive)
     // on disk; also build max_file_id_per_branch_term map.
-    absl::flat_hash_set<RetainedFileKey> all_retained(retained_files);
     absl::flat_hash_map<std::string, FileId> max_file_id_per_branch_term;
     err = AugmentRetainedFilesFromBranchManifests(
         tbl_id,
@@ -205,7 +204,7 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
         manifest_terms,
         archive_files,
         archive_branch_names,
-        all_retained,
+        retained_files,
         max_file_id_per_branch_term,
         io_mgr->options_->pages_per_file_shift,
         io_mgr);
@@ -219,7 +218,7 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
 
     // 3. delete unreferenced data files.
     err = DeleteUnreferencedLocalFiles(
-        tbl_id, data_files, all_retained, max_file_id_per_branch_term, io_mgr);
+        tbl_id, data_files, retained_files, max_file_id_per_branch_term, io_mgr);
     if (err != KvError::NoError)
     {
         LOG(ERROR)
@@ -1023,7 +1022,7 @@ KvError DeleteUnreferencedLocalFiles(
 }
 
 KvError ExecuteCloudGC(const TableIdent &tbl_id,
-                       const RetainedFiles &retained_files,
+                       RetainedFiles &retained_files,
                        CloudStoreMgr *cloud_mgr)
 {
     // Check term file before proceeding
@@ -1091,7 +1090,6 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
 
     // 3a. augment retained_files from all branch manifests (regular + archive)
     // in cloud; also build max_file_id_per_branch_term map.
-    absl::flat_hash_set<RetainedFileKey> all_retained(retained_files);
     absl::flat_hash_map<std::string, FileId> max_file_id_per_branch_term;
     err = AugmentRetainedFilesFromBranchManifests(
         tbl_id,
@@ -1099,7 +1097,7 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
         manifest_terms,
         archive_files,
         archive_branch_names,
-        all_retained,
+        retained_files,
         max_file_id_per_branch_term,
         cloud_mgr->options_->pages_per_file_shift,
         static_cast<IouringMgr *>(cloud_mgr));
@@ -1117,7 +1115,7 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
                                        data_files,
                                        manifest_terms,
                                        manifest_branch_names,
-                                       all_retained,
+                                       retained_files,
                                        max_file_id_per_branch_term,
                                        deleted_filenames,
                                        cloud_mgr);

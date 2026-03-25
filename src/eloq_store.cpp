@@ -570,16 +570,7 @@ KvError EloqStore::Start(std::string_view branch,
     }
 #endif
 
-    StoreMode mode = StoreMode::Local;
-    if (options_.enable_local_standby)
-    {
-        mode = options_.standby_master_addr.empty() ? StoreMode::StandbyMaster
-                                                    : StoreMode::StandbyReplica;
-    }
-    else if (!options_.cloud_store_path.empty())
-    {
-        mode = StoreMode::Cloud;
-    }
+    StoreMode mode = DeriveStoreMode(options_);
     const StoreMode prev_mode =
         store_mode_.exchange(mode, std::memory_order_acq_rel);
     LOG(INFO) << "===Start eloqstore, term: " << term

@@ -805,7 +805,7 @@ TEST_CASE("sequential forks capture correct snapshot", "[branch][isolation]")
 }
 
 TEST_CASE(
-    "sibling branches forked from same parent at different Raft terms inherit "
+    "sibling branches forked from same parent at different terms inherit "
     "correct snapshots and are isolated",
     "[branch][cloud]")
 {
@@ -1209,7 +1209,7 @@ TEST_CASE("delete branch in cloud mode removes all cloud objects",
 }
 
 // ---------------------------------------------------------------------------
-// G6: End-to-end delete across real Raft terms (cloud mode).
+// G6: End-to-end delete across real terms (cloud mode).
 //     Writes real data on the branch across term=1 and term=3, then deletes.
 //     Verifies that manifest_branchname_0, _1, _3 and CURRENT_TERM_<branch>_0
 //     are all gone from cloud storage.

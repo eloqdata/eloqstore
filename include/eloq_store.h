@@ -104,6 +104,20 @@ inline const char *RequestTypeToString(RequestType type)
     }
 }
 
+inline StoreMode DeriveStoreMode(const KvOptions &opts)
+{
+    if (opts.enable_local_standby)
+    {
+        return opts.standby_master_addr.empty() ? StoreMode::StandbyMaster
+                                                : StoreMode::StandbyReplica;
+    }
+    if (!opts.cloud_store_path.empty())
+    {
+        return StoreMode::Cloud;
+    }
+    return StoreMode::Local;
+}
+
 class KvRequest
 {
 public:

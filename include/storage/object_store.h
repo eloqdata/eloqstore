@@ -233,13 +233,7 @@ public:
     {
     public:
         explicit DeleteTask(std::string remote_path)
-            : remote_path_(std::move(remote_path))
-        {
-            if (remote_path_ == "standby_cloud_tbl.0/manifest_main_2_2002")
-            {
-                DLOG(INFO) << "DeleteTask delete " << remote_path_;
-            }
-        }
+            : remote_path_(std::move(remote_path)) {};
         Type TaskType() override
         {
             return Type::AsyncDelete;

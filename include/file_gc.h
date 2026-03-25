@@ -29,12 +29,12 @@ namespace FileGarbageCollector
 {
 // Local mode method (direct execution)
 KvError ExecuteLocalGC(const TableIdent &tbl_id,
-                       const RetainedFiles &retained_files,
+                       RetainedFiles &retained_files,
                        IouringMgr *io_mgr);
 
 // Cloud mode method (coroutine-based)
 KvError ExecuteCloudGC(const TableIdent &tbl_id,
-                       const RetainedFiles &retained_files,
+                       RetainedFiles &retained_files,
                        CloudStoreMgr *cloud_mgr);
 
 // Local mode implementation

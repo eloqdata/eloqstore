@@ -280,7 +280,7 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
         // the allocator to the next file boundary to avoid cross-term
         // collisions.
         uint64_t manifest_term = branch_metadata_.term;
-        if (eloq_store->Mode() != StoreMode::Local && expect_term != 0 &&
+        if (DeriveStoreMode(*opts_) != StoreMode::Local && expect_term != 0 &&
             manifest_term != expect_term)
         {
             FileId next_file_id =
