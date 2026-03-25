@@ -173,7 +173,9 @@ TEST_CASE("local mode truncate preserves current manifest", "[gc][local]")
                                  return false;
                              }
                              return files.size() == 1 &&
-                                    files[0] == eloqstore::ManifestFileName(0);
+                                    files[0] == eloqstore::BranchManifestFileName(
+                                                    eloqstore::MainBranchName,
+                                                    0);
                          }));
 
     store->Stop();
@@ -210,7 +212,8 @@ TEST_CASE("local mode clean manifest removes empty partition directory",
                                      ListLocalPartitionFiles(opts, tbl_id);
                                  return files.size() == 1 &&
                                         files[0] ==
-                                            eloqstore::ManifestFileName(0);
+                                            eloqstore::BranchManifestFileName(
+                                                eloqstore::MainBranchName, 0);
                              }));
 
     std::vector<std::unique_ptr<MapVerifier>> evictors;
