@@ -4509,9 +4509,9 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
     // term.
     std::string_view active_br = GetActiveBranch();
     uint64_t manifest_term_val = ProcessTerm();
-    std::string manifest_filename =
+    const std::string manifest_name =
         BranchManifestFileName(active_br, manifest_term_val);
-    FileKey fkey{tbl_id, manifest_filename};
+    FileKey fkey{tbl_id, manifest_name};
     bool dequed = DequeClosedFile(fkey);
     if (!dequed)
     {
@@ -4537,8 +4537,6 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
                    << ErrorString(err);
         return err;
     }
-    const std::string manifest_name =
-        BranchManifestFileName(active_br, manifest_term_val);
     int res = WriteSnapshot(std::move(dir_fd), manifest_name, snapshot);
     if (res < 0)
     {
