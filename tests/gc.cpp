@@ -35,7 +35,7 @@ const eloqstore::KvOptions cloud_gc_opts = {
     .local_space_limit = 200 << 20,  // 200MB
     .store_path = {"/tmp/test-gc-cloud"},
     .cloud_store_path = "eloqstore/gc-test",
-    .cloud_endpoint = "http://store-1:9000",
+    .cloud_endpoint = "http://127.0.0.1:9900",
     .pages_per_file_shift = 8,  // 1MB per datafile
     .data_append_mode = true,
 };
@@ -50,7 +50,7 @@ const eloqstore::KvOptions archive_gc_opts = {
     .local_space_limit = 200 << 20,  // 200MB
     .store_path = {"/tmp/test-gc-archive"},
     .cloud_store_path = "eloqstore/gc-archive-test",
-    .cloud_endpoint = "http://store-1:9000",
+    .cloud_endpoint = "http://127.0.0.1:9900",
     .pages_per_file_shift = 8,
     .data_append_mode = true,
 };
