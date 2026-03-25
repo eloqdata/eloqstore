@@ -1038,8 +1038,7 @@ public:
     // {term_value, etag, error}. If file doesn't exist (404), returns
     // {0, "", NotFound}.
     std::tuple<uint64_t, std::string, KvError> ReadTermFile(
-        const TableIdent &tbl_id, std::string_view branch_name);
-    KvError SyncPartitionGroupTermFile();
+        std::string_view branch_name);
 
 private:
     void WaitForCloudTasksToDrain();

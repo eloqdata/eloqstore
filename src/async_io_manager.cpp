@@ -2253,7 +2253,7 @@ KvError CloudStoreMgr::AppendManifest(const TableIdent &tbl_id,
     if (dir_err != KvError::NoError)
     {
         LOG(ERROR) << "Cloud AppendManifest ensure dir failed for " << tbl_id
-                    << ": " << ErrorString(dir_err);
+                   << ": " << ErrorString(dir_err);
         return dir_err;
     }
     return IouringMgr::AppendManifest(tbl_id, log, offset);
@@ -4492,176 +4492,6 @@ bool CloudStoreMgr::IsDirEvicting(const TableIdent &tbl_id) const
         EvictingPathKey(tbl_id, LruFD::kDirectory, 0));
 }
 
-KvError CloudStoreMgr::UpsertTermFile(const TableIdent &tbl_id,
-                                      std::string_view branch_name,
-                                      uint64_t process_term)
-{
-    constexpr uint64_t kMaxAttempts = 10;
-    uint64_t attempt = 0;
-    while (attempt < kMaxAttempts)
-    {
-        // 1. Read term file (get current_term and ETag)
-        auto [current_term, etag, read_err] = ReadTermFile(tbl_id, branch_name);
-
-        if (read_err == KvError::NotFound)
-        {
-            DLOG(INFO) << "CloudStoreMgr::UpsertTermFile: term file not found "
-                       << "for partition_group_id " << partition_group_id_
-                       << ", create term file with process_term "
-                       << process_term;
-            DLOG(INFO) << "CloudStoreMgr::UpsertTermFile: CasCreateTermFile "
-                       << "partition_group_id=" << partition_group_id_
-                       << ", process_term=" << process_term;
-            auto [create_err, response_code] =
-                CasCreateTermFile(tbl_id, branch_name, process_term);
-            DLOG(INFO) << "CloudStoreMgr::UpsertTermFile: CasCreateTermFile "
-                       << "finished partition_group_id=" << partition_group_id_
-                       << ", err=" << ErrorString(create_err)
-                       << ", response_code=" << response_code;
-            if (create_err == KvError::NoError)
-            {
-                return KvError::NoError;
-            }
-
-            if (create_err == KvError::CloudErr &&
-                (response_code == 412 || response_code == 409))
-            {
-                ++attempt;
-                LOG(WARNING) << "CloudStoreMgr::UpsertTermFile: CAS conflict "
-                             << "(HTTP " << response_code
-                             << ") when creating term file for "
-                             << "partition_group_id " << partition_group_id_
-                             << " (attempt " << attempt << "/" << kMaxAttempts
-                             << "), retrying with backoff";
-                continue;
-            }
-
-            // Non-CAS error - try read again to see if file was created by
-            // another instance
-            std::tie(current_term, etag, read_err) =
-                ReadTermFile(tbl_id, branch_name);
-            if (read_err != KvError::NoError)
-            {
-                LOG(WARNING)
-                    << "CloudStoreMgr::UpsertTermFile: failed to create "
-                    << "term file for partition_group_id "
-                    << partition_group_id_
-                    << ", error: " << ErrorString(create_err);
-                return create_err;
-            }
-        }
-        if (read_err != KvError::NoError)
-        {
-            LOG(ERROR)
-                << "CloudStoreMgr::UpsertTermFile: failed to read term file "
-                << "for partition_group_id " << partition_group_id_ << " : "
-                << ErrorString(read_err);
-            return read_err;
-        }
-
-        if (current_term > process_term)
-        {
-            LOG(ERROR) << "CloudStoreMgr::UpsertTermFile: term file term "
-                       << current_term << " greater than process_term "
-                       << process_term << " for partition_group_id "
-                       << partition_group_id_;
-            return KvError::ExpiredTerm;
-        }
-        if (current_term == process_term)
-        {
-            return KvError::NoError;
-        }
-
-        DLOG(INFO)
-            << "CloudStoreMgr::UpsertTermFile: CasUpdateTermFileWithEtag "
-            << "partition_group_id=" << partition_group_id_
-            << ", current_term=" << current_term
-            << ", process_term=" << process_term << ", etag=" << etag;
-        auto [err, response_code] =
-            CasUpdateTermFileWithEtag(tbl_id, branch_name, process_term, etag);
-        DLOG(INFO)
-            << "CloudStoreMgr::UpsertTermFile: CasUpdateTermFileWithEtag "
-            << "finished partition_group_id=" << partition_group_id_
-            << ", err=" << ErrorString(err)
-            << ", response_code=" << response_code;
-
-        if (err == KvError::NoError)
-        {
-            return KvError::NoError;
-        }
-
-        if (err == KvError::NotFound ||
-            (err == KvError::CloudErr &&
-             (response_code == 412 || response_code == 409 ||
-              response_code == 404)))
-        {
-            ++attempt;
-            LOG(WARNING) << "CloudStoreMgr::UpsertTermFile: CAS conflict "
-                         << "(HTTP " << response_code
-                         << ") for partition_group_id " << partition_group_id_
-                         << " (attempt " << attempt << "/" << kMaxAttempts
-                         << "), current_term=" << current_term
-                         << ", process_term=" << process_term
-                         << ", retrying with backoff";
-
-            continue;
-        }
-
-        LOG(ERROR) << "CloudStoreMgr::UpsertTermFile: non-retryable error "
-                   << ErrorString(err) << " for partition_group_id "
-                   << partition_group_id_;
-        return err;
-    }
-
-    LOG(ERROR) << "CloudStoreMgr::UpsertTermFile: exceeded max attempts ("
-               << kMaxAttempts << ") for partition_group_id "
-               << partition_group_id_;
-    return KvError::CloudErr;
-}
-
-std::pair<KvError, int64_t> CloudStoreMgr::CasCreateTermFile(
-    const TableIdent &tbl_id,
-    std::string_view branch_name,
-    uint64_t process_term)
-{
-    KvTask *current_task = ThdTask();
-    std::string term_str = std::to_string(process_term);
-
-    const std::string term_filename = BranchCurrentTermFileName(branch_name);
-    ObjectStore::UploadTask upload_task(&tbl_id, term_filename);
-    upload_task.data_buffer_.append(term_str);
-    upload_task.if_none_match_ = "*";  // Only create if doesn't exist
-    upload_task.SetKvTask(current_task);
-
-    AcquireCloudSlot(current_task);
-    obj_store_.SubmitTask(&upload_task, shard);
-    current_task->WaitIo();
-
-    return {upload_task.error_, upload_task.response_code_};
-}
-
-std::pair<KvError, int64_t> CloudStoreMgr::CasUpdateTermFileWithEtag(
-    const TableIdent &tbl_id,
-    std::string_view branch_name,
-    uint64_t process_term,
-    const std::string &etag)
-{
-    KvTask *current_task = ThdTask();
-    std::string term_str = std::to_string(process_term);
-
-    const std::string term_filename = BranchCurrentTermFileName(branch_name);
-    ObjectStore::UploadTask upload_task(&tbl_id, term_filename);
-    upload_task.data_buffer_.append(term_str);
-    upload_task.if_match_ = etag;  // Only update if ETag matches
-    upload_task.SetKvTask(current_task);
-
-    AcquireCloudSlot(current_task);
-    obj_store_.SubmitTask(&upload_task, shard);
-    current_task->WaitIo();
-
-    return {upload_task.error_, upload_task.response_code_};
-}
-
 KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
                                       std::string_view snapshot)
 {
@@ -4739,9 +4569,8 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
 void CloudStoreMgr::CleanManifest(const TableIdent &tbl_id)
 {
     IouringMgr::CleanManifest(tbl_id);
-    (void) DequeClosedFile(
-        FileKey(tbl_id,
-                BranchManifestFileName(GetActiveBranch(), ProcessTerm())));
+    (void) DequeClosedFile(FileKey(
+        tbl_id, BranchManifestFileName(GetActiveBranch(), ProcessTerm())));
     if (!HasTrackedLocalFiles(tbl_id))
     {
         KvError cleanup_err = TryCleanupLocalPartitionDir(tbl_id);
@@ -5282,8 +5111,7 @@ FileKey CloudStoreMgr::EvictingPathKey(const TableIdent &tbl_id,
     }
     if (file_id == LruFD::kManifest)
     {
-        return FileKey(tbl_id,
-                       BranchManifestFileName(GetActiveBranch(), term));
+        return FileKey(tbl_id, BranchManifestFileName(GetActiveBranch(), term));
     }
     return FileKey(tbl_id,
                    BranchDataFileName(file_id, GetActiveBranch(), term));
