@@ -5038,12 +5038,10 @@ KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
 KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
 {
     FileId file_id = fd.Get()->file_id_;
-    uint64_t term = fd.Get()->term_;
     std::optional<FileKey> file_key;
 
     if (file_id != LruFD::kDirectory)
     {
-        const TableIdent *tbl_id = fd.Get()->tbl_->tbl_id_;
         uint64_t term = fd.Get()->term_;
         std::string_view branch = fd.Get()->branch_name_;
         std::string filename;
