@@ -3099,7 +3099,8 @@ KvError CloudStoreMgr::OnDataFileSealed(const TableIdent &tbl_id,
                              BranchDataFileName(file_id, branch, term),
                              owner,
                              {},
-                             owner == nullptr);
+                             owner == nullptr,
+                             fd_ref.FdPair());
     if (err != KvError::NoError)
     {
         return err;
