@@ -1179,10 +1179,23 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     // Avoid multiple coroutines from concurrently opening or closing the same
     // file duplicately.
     lru_fd.Get()->mu_.Lock();
+    std::string filename;
+    if (file_id == LruFD::kDirectory)
+    {
+        filename = tbl_id.ToString();
+    }
+    else if (file_id == LruFD::kManifest)
+    {
+        filename = BranchManifestFileName(branch_name, term);
+    }
+    else
+    {
+        filename = BranchDataFileName(file_id, branch_name, term);
+    }
     DLOG(INFO) << "OpenOrCreateFD enter, tbl=" << tbl_id
-               << " file_id=" << file_id << " branch_name=" << branch_name
-               << " term=" << term << " create=" << create
-               << " reg_idx=" << lru_fd.Get()->reg_idx_
+               << " file_id=" << file_id << " filename=" << filename
+               << " branch_name=" << branch_name << " term=" << term
+               << " create=" << create << " reg_idx=" << lru_fd.Get()->reg_idx_
                << " fd=" << lru_fd.Get()->fd_
                << " cached_branch=" << lru_fd.Get()->branch_name_
                << " cached_term=" << lru_fd.Get()->term_;
