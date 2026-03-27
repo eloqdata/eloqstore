@@ -917,10 +917,12 @@ public:
 
     bool NeedPrewarm() const override;
     void RunPrewarm() override;
+    // Writes buffer contents starting at offset within filename.
     KvError WriteFile(const TableIdent &tbl_id,
                       std::string_view filename,
                       const DirectIoBuffer &buffer,
-                      uint64_t flags);
+                      uint64_t flags,
+                      uint64_t offset = 0);
     size_t LocalCacheRemained() const
     {
         return shard_local_space_limit_ - used_local_space_;
@@ -1027,11 +1029,13 @@ public:
     void UnregisterDirBusy(const TableIdent &tbl_id) override;
     bool HasDirBusy(const TableIdent &tbl_id) const override;
     bool IsDirEvicting(const TableIdent &tbl_id) const override;
+    // Downloads the cloud file and writes it into the local file from offset.
     KvError DownloadFile(const TableIdent &tbl_id,
                          FileId file_id,
                          std::string_view branch_name,
                          uint64_t term,
-                         bool download_to_exist = false);
+                         bool download_to_exist = false,
+                         uint64_t offset = 0);
     KvError CloseFile(LruFD::Ref fd) override;
 
     // Read partition-group CURRENT_TERM file from cloud, returns

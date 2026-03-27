@@ -5294,7 +5294,8 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
                                     FileId file_id,
                                     std::string_view branch_name,
                                     uint64_t term,
-                                    bool download_to_exist)
+                                    bool download_to_exist,
+                                    uint64_t offset)
 {
     KvTask *current_task = ThdTask();
     std::string filename = (file_id == LruFD::kManifest)
@@ -5342,8 +5343,8 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
     }
 
     uint64_t flags = O_WRONLY | O_CREAT | O_DIRECT | O_NOATIME;
-    KvError err =
-        WriteFile(tbl_id, tmp_filename, download_task.response_data_, flags);
+    KvError err = WriteFile(
+        tbl_id, tmp_filename, download_task.response_data_, flags, offset);
     ReleaseCloudBuffer(std::move(download_task.response_data_));
     CHECK_KV_ERR(err);
 
@@ -6444,7 +6445,8 @@ KvError MemStoreMgr::Manifest::SkipPadding(size_t n)
 KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
                                  std::string_view filename,
                                  const DirectIoBuffer &buffer,
-                                 uint64_t flags)
+                                 uint64_t flags,
+                                 uint64_t offset)
 {
     auto [dir_fd, dir_err] =
         OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, "", 0);
@@ -6473,11 +6475,11 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
     assert(padded_size > 0);
     assert((reinterpret_cast<uintptr_t>(write_ptr) & (alignment - 1)) == 0);
     assert(logical_size == padded_size);
-    size_t off = 0;
-    while (off < padded_size)
+    assert(offset <= padded_size);
+    while (offset < padded_size)
     {
-        size_t to_write = padded_size - off;
-        int wres = Write(file_fd, write_ptr + off, to_write, off);
+        size_t to_write = padded_size - offset;
+        int wres = Write(file_fd, write_ptr + offset, to_write, offset);
         if (wres < 0)
         {
             status = ToKvError(wres);
@@ -6488,7 +6490,7 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
             status = KvError::IoFail;
             break;
         }
-        off += static_cast<size_t>(wres);
+        offset += static_cast<size_t>(wres);
     }
 
     int close_res = Close(fd);
