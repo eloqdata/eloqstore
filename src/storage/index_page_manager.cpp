@@ -425,6 +425,10 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
             FilePageId max_fp_id =
                 old_meta->mapper_->FilePgAllocator()->MaxFilePageId();
             FileId max_file_id = max_fp_id >> Options()->pages_per_file_shift;
+            const uint64_t page_in_file =
+                max_fp_id &
+                ((uint64_t{1} << Options()->pages_per_file_shift) - 1);
+            const uint64_t offset = page_in_file * Options()->data_page_size;
             if (mode == StoreMode::Cloud &&
                 max_file_id <= IouringMgr::LruFD::kMaxDataFile)
             {
@@ -438,7 +442,7 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
                     term = IoMgr()->ProcessTerm();
                 }
                 KvError sync_err = cloud_mgr->DownloadFile(
-                    tbl_ident, max_file_id, branch_name, term, true);
+                    tbl_ident, max_file_id, branch_name, term, true, offset);
                 if (sync_err != KvError::NoError &&
                     sync_err != KvError::NotFound)
                 {
