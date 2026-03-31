@@ -408,9 +408,20 @@ public:
     {
         return tag_;
     }
+    // `clean=true` means reopen should accept a missing remote snapshot and
+    // replace any existing local partition state with an empty snapshot.
+    void SetClean(bool clean)
+    {
+        clean_ = clean;
+    }
+    bool Clean() const
+    {
+        return clean_;
+    }
 
 private:
     std::string tag_;
+    bool clean_{false};
 
     friend class EloqStore;
     friend class ReopenTask;

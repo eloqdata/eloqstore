@@ -784,9 +784,6 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
     const bool skip_cloud_lookup =
         options_->data_append_mode && !options_->cloud_store_path.empty() &&
         file_id <= LruFD::kMaxDataFile && offset == 0;
-    DLOG(INFO) << "SubmitMergedWrite, tbl=" << tbl_id << " file_id=" << file_id
-               << " branch=" << branch << " term=" << term
-               << " offset=" << offset << " bytes=" << bytes;
     OnFileRangeWritePrepared(tbl_id,
                              file_id,
                              branch,
@@ -796,11 +793,6 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
     auto [fd_ref, err] = OpenOrCreateFD(
         tbl_id, file_id, true, true, branch, term, skip_cloud_lookup);
     CHECK_KV_ERR(err);
-    DLOG(INFO) << "SubmitMergedWrite after OpenOrCreateFD, tbl=" << tbl_id
-               << " file_id=" << file_id
-               << " fd_branch=" << fd_ref.Get()->branch_name_
-               << " fd_term=" << fd_ref.Get()->term_
-               << " reg_idx=" << fd_ref.Get()->reg_idx_;
     fd_ref.Get()->dirty_ = true;
 
     auto *req =
@@ -1007,55 +999,63 @@ KvError CloudStoreMgr::TryCleanupLocalPartitionDir(const TableIdent &tbl_id)
     return IouringMgr::TryCleanupLocalPartitionDir(tbl_id);
 }
 
-void IouringMgr::CleanManifest(const TableIdent &tbl_id)
+KvError IouringMgr::CleanManifest(const TableIdent &tbl_id)
 {
     if (HasOtherFile(tbl_id))
     {
         DLOG(INFO) << "Skip cleaning manifest for " << tbl_id
                    << " because other files are present";
-        return;
+        return KvError::Busy;
     }
 
     uint64_t process_term = ProcessTerm();
     KvError dir_err = KvError::NoError;
+    auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
+    dir_err = err;
+    if (dir_err == KvError::NoError)
     {
-        auto [dir_fd, err] = OpenFD(tbl_id, LruFD::kDirectory, false, "", 0);
-        dir_err = err;
-        if (dir_err == KvError::NoError)
+        const std::string manifest_name =
+            BranchManifestFileName(GetActiveBranch(), process_term);
+        int res = UnlinkAt(dir_fd.FdPair(), manifest_name.c_str(), false);
+        if (res < 0 && res != -ENOENT)
         {
-            const std::string manifest_name =
-                BranchManifestFileName(GetActiveBranch(), process_term);
-            int res = UnlinkAt(dir_fd.FdPair(), manifest_name.c_str(), false);
-            if (res < 0 && res != -ENOENT)
-            {
-                LOG(ERROR) << "Failed to delete manifest file for table "
-                           << tbl_id << ": " << strerror(-res);
-            }
-            else if (res == 0)
-            {
-                DLOG(INFO) << "Successfully deleted manifest file for table "
-                           << tbl_id;
-            }
-
+            LOG(ERROR) << "Failed to delete manifest file for table " << tbl_id
+                       << ": " << strerror(-res);
             KvError close_dir_err = CloseFile(std::move(dir_fd));
             if (close_dir_err != KvError::NoError)
             {
                 LOG(WARNING) << "Failed to close directory handle for table "
                              << tbl_id << ": " << ErrorString(close_dir_err);
             }
+            return ToKvError(res);
+        }
+        else if (res == 0)
+        {
+            DLOG(INFO) << "Successfully deleted manifest file for table "
+                       << tbl_id;
+        }
+
+        KvError close_dir_err = CloseFile(std::move(dir_fd));
+        if (close_dir_err != KvError::NoError)
+        {
+            LOG(WARNING) << "Failed to close directory handle for table "
+                         << tbl_id << ": " << ErrorString(close_dir_err);
         }
     }
     if (dir_err != KvError::NoError && dir_err != KvError::NotFound)
     {
         LOG(ERROR) << "Failed to open directory for table " << tbl_id
                    << " during cleanup: " << ErrorString(dir_err);
+        return dir_err;
     }
     KvError cleanup_err = TryCleanupLocalPartitionDir(tbl_id);
     if (cleanup_err != KvError::NoError)
     {
         LOG(WARNING) << "Failed to clean partition directory for table "
                      << tbl_id << ": " << ErrorString(cleanup_err);
+        return cleanup_err;
     }
+    return KvError::NoError;
 }
 
 KvError ToKvError(int err_no)
@@ -1179,19 +1179,10 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     // Avoid multiple coroutines from concurrently opening or closing the same
     // file duplicately.
     lru_fd.Get()->mu_.Lock();
-    DLOG(INFO) << "OpenOrCreateFD enter, tbl=" << tbl_id
-               << " file_id=" << file_id << " branch_name=" << branch_name
-               << " term=" << term << " create=" << create
-               << " reg_idx=" << lru_fd.Get()->reg_idx_
-               << " fd=" << lru_fd.Get()->fd_
-               << " cached_branch=" << lru_fd.Get()->branch_name_
-               << " cached_term=" << lru_fd.Get()->term_;
     if (file_id == LruFD::kDirectory)
     {
         if (lru_fd.Get()->fd_ != LruFD::FdEmpty)
         {
-            DLOG(INFO) << "OpenOrCreateFD cache hit (directory), tbl=" << tbl_id
-                       << " file_id=" << file_id;
             lru_fd.Get()->mu_.Unlock();
             return {std::move(lru_fd), KvError::NoError};
         }
@@ -1236,8 +1227,6 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
             {
                 // Mismatch detected, close and reopen with correct
                 // term/branch.
-                DLOG(INFO) << "OpenOrCreateFD closing stale FD, tbl=" << tbl_id
-                           << " file_id=" << file_id;
                 int old_idx = lru_fd.Get()->reg_idx_;
                 int res = CloseDirect(old_idx);
                 if (res < 0)
@@ -1251,8 +1240,6 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
             else
             {
                 // No mismatch, use cached FD.
-                DLOG(INFO) << "OpenOrCreateFD cache hit (no mismatch), tbl="
-                           << tbl_id << " file_id=" << file_id;
                 lru_fd.Get()->mu_.Unlock();
                 return {std::move(lru_fd), KvError::NoError};
             }
@@ -1260,8 +1247,6 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
         else
         {
             // Local mode or directory, use cached FD.
-            DLOG(INFO) << "OpenOrCreateFD cache hit (local mode), tbl="
-                       << tbl_id << " file_id=" << file_id;
             lru_fd.Get()->mu_.Unlock();
             return {std::move(lru_fd), KvError::NoError};
         }
@@ -1356,9 +1341,6 @@ bool IouringMgr::GetBranchNameAndTerm(const TableIdent &tbl_id,
     const auto &mapping = it_term_tbl->second;
     bool res =
         ::eloqstore::GetBranchNameAndTerm(mapping, file_id, branch_name, term);
-    DLOG(INFO) << "GetBranchNameAndTerm, tbl_id=" << tbl_id
-               << " file_id=" << file_id << " branch_name=" << branch_name
-               << " term=" << term;
     return res;
 }
 
@@ -1381,9 +1363,6 @@ void IouringMgr::SetBranchFileIdTerm(const TableIdent &tbl_id,
     {
         mapping.push_back({std::string(branch_name), term, file_id});
     }
-    DLOG(INFO) << "SetBranchNameAndTerm, tbl_id=" << tbl_id
-               << "file_id=" << file_id << " branch_name=" << branch_name
-               << " term=" << term;
 }
 
 void IouringMgr::SetBranchFileMapping(const TableIdent &tbl_id,
@@ -3010,10 +2989,6 @@ void CloudStoreMgr::OnFileRangeWritePrepared(const TableIdent &tbl_id,
         (file_id == LruFD::kManifest)
             ? BranchManifestFileName(branch_name, term)
             : BranchDataFileName(file_id, branch_name, term);
-    DLOG(INFO) << "OnFileRangeWritePrepared, tbl=" << tbl_id
-               << " file_id=" << file_id << " branch_name=" << branch_name
-               << " term=" << term << " offset=" << offset
-               << " bytes=" << data.size() << " filename=" << filename;
     WriteTask::UploadState &state = owner->MutableUploadState();
     if (state.invalid)
     {
@@ -4429,7 +4404,81 @@ std::tuple<uint64_t, std::string, KvError> CloudStoreMgr::ReadTermFile(
     return {term, download_task.etag_, KvError::NoError};
 }
 
-void CloudStoreMgr::RequestGcLocalCleanup(
+KvError CloudStoreMgr::CleanupLocalPartitionFiles(const TableIdent &tbl_id)
+{
+    namespace fs = std::filesystem;
+
+    const fs::path table_path =
+        tbl_id.StorePath(options_->store_path, options_->store_path_lut);
+    std::error_code ec;
+    if (!fs::exists(table_path, ec))
+    {
+        return ec ? ToKvError(-ec.value()) : KvError::NoError;
+    }
+
+    std::vector<std::string> cleanup_targets;
+    for (fs::directory_iterator it(table_path, ec), end; it != end;
+         it.increment(ec))
+    {
+        if (ec)
+        {
+            break;
+        }
+        if (!it->is_regular_file())
+        {
+            continue;
+        }
+
+        const std::string filename = it->path().filename().string();
+        auto [prefix, suffix] = ParseFileName(filename);
+        static_cast<void>(suffix);
+        if (prefix == FileNameData)
+        {
+            cleanup_targets.push_back(filename);
+        }
+    }
+
+    CHECK(shard != nullptr);
+    bool empty_mapping = false;
+    RootMetaMgr *root_meta_mgr = shard->IndexManager()->RootMetaManager();
+    auto *entry = root_meta_mgr->Find(tbl_id);
+    if (entry != nullptr)
+    {
+        RootMeta &meta = entry->meta_;
+        empty_mapping = meta.mapper_ != nullptr && meta.root_id_ == MaxPageId &&
+                        meta.ttl_root_id_ == MaxPageId &&
+                        meta.mapper_->MappingCount() == 0;
+    }
+
+    if (empty_mapping)
+    {
+        const std::string manifest_name =
+            BranchManifestFileName(GetActiveBranch(), ProcessTerm());
+        const fs::path manifest_path = table_path / manifest_name;
+        if (fs::exists(manifest_path, ec) && !ec)
+        {
+            FileKey manifest_key{tbl_id, manifest_name};
+            if (!closed_files_.contains(manifest_key))
+            {
+                EnqueClosedFile(manifest_key);
+            }
+            cleanup_targets.push_back(manifest_name);
+        }
+    }
+
+    if (!cleanup_targets.empty())
+    {
+        ScheduleLocalFileCleanup(tbl_id, cleanup_targets);
+    }
+    else
+    {
+        return TryCleanupLocalPartitionDir(tbl_id);
+    }
+
+    return KvError::NoError;
+}
+
+void CloudStoreMgr::ScheduleLocalFileCleanup(
     const TableIdent &tbl_id, const std::vector<std::string> &filenames)
 {
     bool queued = false;
@@ -4564,9 +4613,13 @@ KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-void CloudStoreMgr::CleanManifest(const TableIdent &tbl_id)
+KvError CloudStoreMgr::CleanManifest(const TableIdent &tbl_id)
 {
-    IouringMgr::CleanManifest(tbl_id);
+    KvError err = IouringMgr::CleanManifest(tbl_id);
+    if (err != KvError::NoError)
+    {
+        return err;
+    }
     (void) DequeClosedFile(FileKey(
         tbl_id, BranchManifestFileName(GetActiveBranch(), ProcessTerm())));
     if (!HasTrackedLocalFiles(tbl_id))
@@ -4576,8 +4629,10 @@ void CloudStoreMgr::CleanManifest(const TableIdent &tbl_id)
         {
             LOG(WARNING) << "Failed to clean partition directory for table "
                          << tbl_id << ": " << ErrorString(cleanup_err);
+            return cleanup_err;
         }
     }
+    return KvError::NoError;
 }
 
 KvError CloudStoreMgr::CreateArchive(const TableIdent &tbl_id,
@@ -5274,8 +5329,7 @@ int CloudStoreMgr::ReserveCacheSpace(size_t size)
             LOG(WARNING) << "Cannot reserve " << size
                          << " bytes: used=" << used_local_space_
                          << " limit=" << shard_local_space_limit_
-                         << " no evictable files"
-                         << " task=" << current_task;
+                         << " no evictable files" << " task=" << current_task;
             return -ENOSPC;
         }
 
@@ -6336,8 +6390,9 @@ KvError MemStoreMgr::AbortWrite(const TableIdent &tbl_id)
     return KvError::NoError;
 }
 
-void MemStoreMgr::CleanManifest(const TableIdent &tbl_id)
+KvError MemStoreMgr::CleanManifest(const TableIdent &tbl_id)
 {
+    return KvError::NoError;
 }
 
 KvError MemStoreMgr::AppendManifest(const TableIdent &tbl_id,

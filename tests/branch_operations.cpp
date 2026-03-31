@@ -1215,8 +1215,7 @@ TEST_CASE("delete branch in cloud mode removes all cloud objects",
 //     are all gone from cloud storage.
 // ---------------------------------------------------------------------------
 TEST_CASE(
-    "delete branch removes all term manifests end-to-end across real Raft "
-    "terms",
+    "delete branch removes all term manifests end-to-end across real terms",
     "[branch][cloud]")
 {
     // Phase 1: clean slate.

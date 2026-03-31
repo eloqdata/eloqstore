@@ -1001,11 +1001,12 @@ void StandbyService::HandleExitedChild(std::list<InflightJob>::iterator it,
 {
     InflightJob &job = *it;
     const Step step = job.step;
+    const std::string log_target = job.log_target;
     ReleaseProcessHandles(&job);
 
     if (step == Step::RsyncData)
     {
-        KvError result = InterpretRsyncStatus(status, job.log_target);
+        KvError result = InterpretRsyncStatus(status, log_target);
         if (result != KvError::NoError)
         {
             FinishInflightJob(it, result);
@@ -1053,7 +1054,7 @@ void StandbyService::HandleExitedChild(std::list<InflightJob>::iterator it,
 
     if (step == Step::RsyncManifest)
     {
-        KvError result = InterpretRsyncStatus(status, job.log_target);
+        KvError result = InterpretRsyncStatus(status, log_target);
         if (result != KvError::NoError)
         {
             FinishInflightJob(it, result);
@@ -1076,7 +1077,7 @@ void StandbyService::HandleExitedChild(std::list<InflightJob>::iterator it,
 
     if (step == Step::ListPartitions)
     {
-        KvError result = InterpretCommandStatus(status, job.log_target);
+        KvError result = InterpretCommandStatus(status, log_target);
         if (result != KvError::NoError)
         {
             LOG(ERROR) << "StandbyService: failed to list partitions under "

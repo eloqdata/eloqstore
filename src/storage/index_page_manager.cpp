@@ -402,6 +402,54 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
     root_meta_mgr_.EvictIfNeeded();
 }
 
+KvError IndexPageManager::InstallEmptySnapshot(const TableIdent &tbl_ident,
+                                               CowRootMeta &cow_meta)
+{
+    auto [entry, inserted] = RootMetaManager()->GetOrCreate(tbl_ident);
+    static_cast<void>(inserted);
+    RootMeta &meta = entry->meta_;
+    auto mapper = std::make_unique<PageMapper>(this, &entry->tbl_id_);
+    MappingSnapshot *mapping = mapper->GetMapping();
+    auto it = meta.mapping_snapshots_.insert(mapping);
+    CHECK(it.second);
+
+    cow_meta = CowRootMeta();
+    cow_meta.root_id_ = MaxPageId;
+    cow_meta.ttl_root_id_ = MaxPageId;
+    cow_meta.mapper_ = std::move(mapper);
+    cow_meta.next_expire_ts_ = 0;
+    cow_meta.compression_ = std::make_shared<compression::DictCompression>();
+
+    BranchManifestMetadata branch_metadata;
+    branch_metadata.branch_name = IoMgr()->GetActiveBranch();
+    branch_metadata.term = IoMgr()->ProcessTerm();
+    branch_metadata.file_ranges = {};
+
+    ManifestBuilder manifest_builder;
+    FilePageId max_fp_id = cow_meta.mapper_->FilePgAllocator()->MaxFilePageId();
+    std::string_view snapshot =
+        manifest_builder.Snapshot(cow_meta.root_id_,
+                                  cow_meta.ttl_root_id_,
+                                  cow_meta.mapper_->GetMapping(),
+                                  max_fp_id,
+                                  {},
+                                  branch_metadata);
+    // Use the base local manifest rewrite path here. The cloud override also
+    // uploads the manifest, but an empty snapshot should only replace local
+    // state for reopen/cleanup.
+    auto *io_mgr = static_cast<IouringMgr *>(IoMgr());
+    KvError err = io_mgr->IouringMgr::SwitchManifest(tbl_ident, snapshot);
+    if (err != KvError::NoError)
+    {
+        return err;
+    }
+    cow_meta.manifest_size_ = snapshot.size();
+
+    UpdateRoot(tbl_ident, std::move(cow_meta));
+    IoMgr()->SetBranchFileMapping(entry->tbl_id_, {});
+    return KvError::NoError;
+}
+
 KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
                                                   CowRootMeta &cow_meta,
                                                   std::string_view reopen_tag)
@@ -470,6 +518,12 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
     }
     if (err != KvError::NoError)
     {
+        if (err == KvError::NotFound)
+        {
+            LOG(INFO) << "InstallExternalSnapshot missing remote state for "
+                      << "table " << tbl_ident << ", tag " << reopen_tag;
+            return InstallEmptySnapshot(tbl_ident, cow_meta);
+        }
         LOG(ERROR) << "InstallExternalSnapshot RefreshManifest failed, table "
                    << tbl_ident << ", mode " << static_cast<int>(mode)
                    << ", tag " << reopen_tag << ", error "

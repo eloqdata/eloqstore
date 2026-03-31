@@ -53,6 +53,62 @@ namespace
 {
 constexpr uint64_t kStorePathWeightGranularity = 1ULL << 20;  // 1 MiB
 constexpr size_t kMaxStorePathLutEntries = kDefaultStorePathLutEntries;
+
+KvError CollectLocalPartitions(const KvOptions &options,
+                               std::vector<TableIdent> &partitions)
+{
+    partitions.clear();
+    std::error_code ec;
+#ifndef NDEBUG
+    std::unordered_set<TableIdent> seen;
+#endif
+    for (const std::string &root_str : options.store_path)
+    {
+        const fs::path root(root_str);
+        fs::directory_iterator dir_it(root, ec);
+        if (ec)
+        {
+            return ToKvError(-ec.value());
+        }
+        fs::directory_iterator end;
+        for (; dir_it != end; dir_it.increment(ec))
+        {
+            if (ec)
+            {
+                return ToKvError(-ec.value());
+            }
+            const fs::directory_entry &entry = *dir_it;
+            bool is_dir = entry.is_directory(ec);
+            if (ec)
+            {
+                return ToKvError(-ec.value());
+            }
+            if (!is_dir)
+            {
+                continue;
+            }
+
+            TableIdent tbl_id = TableIdent::FromString(entry.path().filename());
+            if (!tbl_id.IsValid())
+            {
+                LOG(WARNING) << "unexpected partition " << entry.path();
+                continue;
+            }
+            if (options.partition_filter && !options.partition_filter(tbl_id))
+            {
+                continue;
+            }
+#ifndef NDEBUG
+            if (!seen.insert(tbl_id).second)
+            {
+                LOG(FATAL) << "Duplicated partition directory: " << tbl_id;
+            }
+#endif
+            partitions.emplace_back(std::move(tbl_id));
+        }
+    }
+    return KvError::NoError;
+}
 }  // namespace
 
 bool EloqStore::ValidateOptions(KvOptions &opts)
@@ -214,7 +270,7 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
             if (remote_path.empty() || remote_path.front() != '/')
             {
                 LOG(ERROR) << "standby_master_store_paths must be "
-                           << "absolute paths";
+                           << "absolute paths, wrong path:" << remote_path;
                 return false;
             }
         }
@@ -1448,6 +1504,7 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
     req->reopen_reqs_.clear();
 
     std::vector<TableIdent> partitions;
+    std::unordered_set<TableIdent> remote_partitions;
     if (Mode() == StoreMode::StandbyReplica)
     {
         std::vector<std::string> names;
@@ -1482,57 +1539,33 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
             {
                 continue;
             }
+            remote_partitions.insert(tbl_id);
+            partitions.emplace_back(std::move(tbl_id));
+        }
+
+        std::vector<TableIdent> local_partitions;
+        KvError local_err = CollectLocalPartitions(options_, local_partitions);
+        if (local_err != KvError::NoError)
+        {
+            req->SetDone(local_err);
+            return;
+        }
+        for (TableIdent &tbl_id : local_partitions)
+        {
+            if (remote_partitions.contains(tbl_id))
+            {
+                continue;
+            }
             partitions.emplace_back(std::move(tbl_id));
         }
     }
     else
     {
-        std::error_code ec;
-        for (const fs::path root : options_.store_path)
+        KvError local_err = CollectLocalPartitions(options_, partitions);
+        if (local_err != KvError::NoError)
         {
-            const fs::path db_path(root);
-            fs::directory_iterator dir_it(db_path, ec);
-            if (ec)
-            {
-                req->SetDone(ToKvError(-ec.value()));
-                return;
-            }
-            fs::directory_iterator end;
-            for (; dir_it != end; dir_it.increment(ec))
-            {
-                if (ec)
-                {
-                    req->SetDone(ToKvError(-ec.value()));
-                    return;
-                }
-                const fs::directory_entry &ent = *dir_it;
-                const fs::path ent_path = ent.path();
-                bool is_dir = fs::is_directory(ent_path, ec);
-                if (ec)
-                {
-                    req->SetDone(ToKvError(-ec.value()));
-                    return;
-                }
-                if (!is_dir)
-                {
-                    continue;
-                }
-
-                TableIdent tbl_id = TableIdent::FromString(ent_path.filename());
-                if (tbl_id.tbl_name_.empty())
-                {
-                    LOG(WARNING) << "unexpected partition " << ent.path();
-                    continue;
-                }
-
-                if (options_.partition_filter &&
-                    !options_.partition_filter(tbl_id))
-                {
-                    continue;
-                }
-
-                partitions.emplace_back(std::move(tbl_id));
-            }
+            req->SetDone(local_err);
+            return;
         }
     }
 
@@ -1557,6 +1590,11 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
         if (!req->Tag().empty())
         {
             reopen_req->SetTag(req->Tag());
+        }
+        if (Mode() == StoreMode::StandbyReplica &&
+            !remote_partitions.contains(partition))
+        {
+            reopen_req->SetClean(true);
         }
         req->reopen_reqs_.push_back(std::move(reopen_req));
     }
@@ -2441,6 +2479,7 @@ void ReopenRequest::SetArgs(TableIdent tbl_id)
 {
     SetTableId(std::move(tbl_id));
     tag_.clear();
+    clean_ = false;
 }
 
 void DropTableRequest::SetArgs(std::string table_name)

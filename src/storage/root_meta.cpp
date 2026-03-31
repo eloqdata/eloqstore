@@ -294,7 +294,12 @@ bool RootMetaMgr::EvictRootForCache(Entry *entry)
         meta.locked_ = true;
         LOG(INFO) << "Evicting manifest for table " << tbl_id << " size "
                   << meta.manifest_size_;
-        owner_->IoMgr()->CleanManifest(tbl_id);
+        KvError err = owner_->IoMgr()->CleanManifest(tbl_id);
+        if (err != KvError::NoError)
+        {
+            LOG(WARNING) << "Failed to clean manifest for table " << tbl_id
+                         << ": " << ErrorString(err);
+        }
         meta.waiting_.WakeAll();
     }
 

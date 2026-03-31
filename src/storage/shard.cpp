@@ -524,8 +524,6 @@ bool Shard::ProcessReq(KvRequest *req)
     {
         ListStandbyPartitionTask *task =
             task_mgr_.GetListStandbyPartitionTask();
-        DLOG(INFO) << "Shard::ProcessReq ListStandbyPartition start, shard_id="
-                   << shard_id_ << ", req=" << req << ", task=" << task;
         auto lbd = [req]() -> KvError
         {
             StandbyService *standby = shard->store_->GetStandbyService();
@@ -536,18 +534,10 @@ bool Shard::ProcessReq(KvRequest *req)
             auto *list_req = static_cast<ListStandbyPartitionRequest *>(req);
             KvTask *current_task = ThdTask();
             CHECK(current_task != nullptr);
-            DLOG(INFO) << "Shard::ProcessReq ListStandbyPartition enqueue, req="
-                       << req << ", task=" << current_task;
             KvError enqueue_err =
                 standby->ListRemotePartitions(list_req->GetPartitions());
-            if (enqueue_err != KvError::NoError)
-            {
-                return enqueue_err;
-            }
+            CHECK_KV_ERR(enqueue_err);
             current_task->WaitIo();
-            DLOG(INFO) << "Shard::ProcessReq ListStandbyPartition done, req="
-                       << req << ", task=" << current_task
-                       << ", io_res=" << current_task->io_res_;
             return static_cast<KvError>(current_task->io_res_);
         };
         StartTask(task, req, lbd);

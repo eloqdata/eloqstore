@@ -321,7 +321,7 @@ public:
                    // implementations
     }
 
-    virtual void CleanManifest(const TableIdent &tbl_id) = 0;
+    virtual KvError CleanManifest(const TableIdent &tbl_id) = 0;
     virtual void RegisterDirBusy(const TableIdent &tbl_id)
     {
         (void) tbl_id;
@@ -551,7 +551,7 @@ public:
     }
 
     virtual KvError TryCleanupLocalPartitionDir(const TableIdent &tbl_id);
-    void CleanManifest(const TableIdent &tbl_id) override;
+    KvError CleanManifest(const TableIdent &tbl_id) override;
 
     static constexpr uint64_t oflags_dir = O_DIRECTORY | O_RDONLY;
 
@@ -904,7 +904,7 @@ public:
                               std::string_view branch_name,
                               uint64_t term) override;
     KvError AbortWrite(const TableIdent &tbl_id) override;
-    void CleanManifest(const TableIdent &tbl_id) override;
+    KvError CleanManifest(const TableIdent &tbl_id) override;
 
     ObjectStore &GetObjectStore()
     {
@@ -1023,8 +1023,9 @@ public:
     std::pair<ManifestFilePtr, KvError> RefreshManifest(
         const TableIdent &tbl_id, std::string_view archive_tag);
     KvError TryCleanupLocalPartitionDir(const TableIdent &tbl_id) override;
-    void RequestGcLocalCleanup(const TableIdent &tbl_id,
-                               const std::vector<std::string> &filenames);
+    KvError CleanupLocalPartitionFiles(const TableIdent &tbl_id);
+    void ScheduleLocalFileCleanup(const TableIdent &tbl_id,
+                                  const std::vector<std::string> &filenames);
     void RegisterDirBusy(const TableIdent &tbl_id) override;
     void UnregisterDirBusy(const TableIdent &tbl_id) override;
     bool HasDirBusy(const TableIdent &tbl_id) const override;
@@ -1334,7 +1335,7 @@ public:
         return 0;  // MemStoreMgr doesn't use local file caching
     }
 
-    void CleanManifest(const TableIdent &tbl_id) override;
+    KvError CleanManifest(const TableIdent &tbl_id) override;
 
     class Manifest : public ManifestFile
     {

@@ -230,6 +230,75 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
         return err;
     }
 
+    // If the partition is now empty except for the current manifest, clean the
+    // manifest as well so the local directory can be removed without waiting
+    // for later root-meta eviction.
+    local_files.clear();
+    err = ListLocalFiles(tbl_id, local_files, io_mgr);
+    if (err != KvError::NoError)
+    {
+        LOG(ERROR) << "ExecuteLocalGC: post-delete ListLocalFiles failed, "
+                   << "error=" << static_cast<int>(err);
+        return err;
+    }
+
+    archive_files.clear();
+    archive_tags.clear();
+    archive_branch_names.clear();
+    data_files.clear();
+    manifest_terms.clear();
+    manifest_branch_names.clear();
+    ClassifyFiles(local_files,
+                  archive_files,
+                  archive_tags,
+                  archive_branch_names,
+                  data_files,
+                  manifest_terms,
+                  manifest_branch_names);
+
+    if (data_files.empty() && archive_files.empty())
+    {
+        const StoreMode mode = eloq_store->Mode();
+        if (mode == StoreMode::Cloud)
+        {
+            auto *cloud_mgr = static_cast<CloudStoreMgr *>(io_mgr);
+            err = cloud_mgr->CleanupLocalPartitionFiles(tbl_id);
+            if (err != KvError::NoError)
+            {
+                LOG(ERROR)
+                    << "ExecuteLocalGC: CleanupLocalPartitionFiles failed, "
+                    << "error=" << static_cast<int>(err);
+                return err;
+            }
+        }
+        else
+        {
+            err = io_mgr->CleanManifest(tbl_id);
+            if (err != KvError::NoError)
+            {
+                LOG(ERROR) << "ExecuteLocalGC: CleanManifest failed, error="
+                           << static_cast<int>(err);
+                return err;
+            }
+
+            CHECK(shard != nullptr);
+            RootMetaMgr *root_meta_mgr =
+                shard->IndexManager()->RootMetaManager();
+            auto *entry = root_meta_mgr->Find(tbl_id);
+            if (entry != nullptr)
+            {
+                RootMeta &meta = entry->meta_;
+                if (meta.mapper_ != nullptr && meta.manifest_size_ != 0 &&
+                    meta.root_id_ == MaxPageId &&
+                    meta.ttl_root_id_ == MaxPageId &&
+                    meta.mapper_->MappingCount() == 0)
+                {
+                    meta.manifest_size_ = 0;
+                }
+            }
+        }
+    }
+
     /*
     // 4. delete old archives beyond num_retained_archives per branch.
     // NOTE: this step is intentionally AFTER DeleteUnreferencedLocalFiles so
@@ -561,24 +630,26 @@ KvError AugmentRetainedFilesFromBranchManifests(
             err = io_mgr->ReadFile(tbl_id, filename, buf);
         }
 
-        if (err != KvError::NoError)
+        if (err == KvError::NoError)
         {
-            LOG(WARNING)
-                << "AugmentRetainedFilesFromBranchManifests: failed to read "
-                   "manifest "
-                << filename << " for branch " << branch << " term " << term
-                << ", error=" << static_cast<int>(err);
-            return err;
+            err = ProcessOneManifest(filename,
+                                     term,
+                                     buf,
+                                     retained_files,
+                                     max_file_id_per_branch_term,
+                                     pages_per_file_shift);
+            if (err != KvError::NoError)
+            {
+                return err;
+            }
         }
-
-        err = ProcessOneManifest(filename,
-                                 term,
-                                 buf,
-                                 retained_files,
-                                 max_file_id_per_branch_term,
-                                 pages_per_file_shift);
-        if (err != KvError::NoError)
+        else if (err != KvError::NotFound)
         {
+            LOG(WARNING) << "AugmentRetainedFilesFromBranchManifests: "
+                            "failed to read "
+                            "manifest "
+                         << filename << " for branch " << branch << " term "
+                         << term << ", error=" << static_cast<int>(err);
             return err;
         }
     }
@@ -1134,7 +1205,7 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
             tbl_id, deleted_filenames, cloud_mgr, local_cleanup_targets);
         if (!local_cleanup_targets.empty())
         {
-            cloud_mgr->RequestGcLocalCleanup(tbl_id, local_cleanup_targets);
+            cloud_mgr->ScheduleLocalFileCleanup(tbl_id, local_cleanup_targets);
         }
     }
 
