@@ -16,7 +16,10 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
     CHECK(request_ != nullptr);
     StoreMode mode = shard->store_->Mode();
     if (mode == StoreMode::Local)
+    {
+        request_ = nullptr;
         return KvError::InvalidArgs;
+    }
     StandbyService *standby_service = nullptr;
     std::string tag;
     if (mode == StoreMode::StandbyReplica)
@@ -79,6 +82,7 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
                    << " InstallExternalSnapshot failed, tag " << request_->Tag()
                    << ", mode " << static_cast<int>(mode) << ", error "
                    << static_cast<uint32_t>(err);
+        request_ = nullptr;
         return err;
     }
     if (mode == StoreMode::Cloud && Options()->prewarm_cloud_cache)

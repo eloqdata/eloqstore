@@ -409,9 +409,6 @@ KvError IndexPageManager::InstallEmptySnapshot(const TableIdent &tbl_ident,
     static_cast<void>(inserted);
     RootMeta &meta = entry->meta_;
     auto mapper = std::make_unique<PageMapper>(this, &entry->tbl_id_);
-    MappingSnapshot *mapping = mapper->GetMapping();
-    auto it = meta.mapping_snapshots_.insert(mapping);
-    CHECK(it.second);
 
     cow_meta = CowRootMeta();
     cow_meta.root_id_ = MaxPageId;
@@ -439,10 +436,9 @@ KvError IndexPageManager::InstallEmptySnapshot(const TableIdent &tbl_ident,
     // state for reopen/cleanup.
     auto *io_mgr = static_cast<IouringMgr *>(IoMgr());
     KvError err = io_mgr->IouringMgr::SwitchManifest(tbl_ident, snapshot);
-    if (err != KvError::NoError)
-    {
-        return err;
-    }
+    CHECK_KV_ERR(err);
+    auto it = meta.mapping_snapshots_.insert(cow_meta.mapper_->GetMapping());
+    CHECK(it.second);
     cow_meta.manifest_size_ = snapshot.size();
 
     UpdateRoot(tbl_ident, std::move(cow_meta));
