@@ -65,8 +65,7 @@ void ClassifyFiles(const std::vector<std::string> &files,
 KvError ReadCloudFile(const TableIdent &tbl_id,
                       const std::string &cloud_file,
                       DirectIoBuffer &content,
-                      CloudStoreMgr *cloud_mgr,
-                      const KvOptions *options);
+                      CloudStoreMgr *cloud_mgr);
 
 KvError DeleteUnreferencedCloudFiles(
     const TableIdent &tbl_id,

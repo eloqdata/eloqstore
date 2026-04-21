@@ -8,7 +8,6 @@
 #include <iterator>
 #include <memory>
 #include <optional>
-#include <random>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -461,29 +460,10 @@ void ClassifyFiles(const std::vector<std::string> &files,
     }
 }
 
-// Generate a random string of given length
-static std::string GenerateRandomString(size_t length)
-{
-    static const char alphanum[] =
-        "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
-    static thread_local std::mt19937 rng{std::random_device{}()};
-    static thread_local std::uniform_int_distribution<size_t> dist(
-        0, sizeof(alphanum) - 2);
-
-    std::string result;
-    result.reserve(length);
-    for (size_t i = 0; i < length; ++i)
-    {
-        result += alphanum[dist(rng)];
-    }
-    return result;
-}
-
 KvError ReadCloudFile(const TableIdent &tbl_id,
                       const std::string &cloud_file,
                       DirectIoBuffer &content,
-                      CloudStoreMgr *cloud_mgr,
-                      const KvOptions *options)
+                      CloudStoreMgr *cloud_mgr)
 {
     KvTask *current_task = ThdTask();
 
@@ -503,44 +483,7 @@ KvError ReadCloudFile(const TableIdent &tbl_id,
                    << ", error: " << static_cast<int>(download_task.error_);
         return download_task.error_;
     }
-
-    // Generate a unique temporary filename to avoid conflicts with existing
-    // files
-    std::string temp_filename = cloud_file + ".tmp_" + GenerateRandomString(8);
-    fs::path temp_local_path =
-        tbl_id.StorePath(options->store_path, options->store_path_lut) /
-        temp_filename;
-
-    uint64_t flags = O_WRONLY | O_CREAT | O_DIRECT | O_NOATIME | O_TRUNC;
-    KvError write_err = cloud_mgr->WriteFile(
-        tbl_id, temp_filename, download_task.response_data_, flags);
-    cloud_mgr->RecycleBuffer(std::move(download_task.response_data_));
-    if (write_err != KvError::NoError)
-    {
-        LOG(ERROR) << "Failed to persist cloud file to temp path: "
-                   << temp_local_path
-                   << ", error: " << static_cast<int>(write_err);
-        return write_err;
-    }
-
-    // Read the temp file and then delete it
-    KvError err = cloud_mgr->ReadFile(tbl_id, temp_filename, content);
-    if (err != KvError::NoError)
-    {
-        LOG(ERROR) << "Failed to read temp file: " << temp_local_path
-                   << ", error: " << static_cast<int>(err);
-        // Try to clean up the temp file even if read failed
-        cloud_mgr->DeleteFiles({temp_local_path.string()});
-        return err;
-    }
-
-    // Delete the temp file
-    KvError delete_err = cloud_mgr->DeleteFiles({temp_local_path.string()});
-    if (delete_err != KvError::NoError)
-    {
-        LOG(WARNING) << "Failed to delete temp file: " << temp_local_path
-                     << ", error: " << static_cast<int>(delete_err);
-    }
+    content = std::move(download_task.response_data_);
 
     DLOG(INFO) << "Successfully downloaded and read cloud file: " << cloud_file;
     return KvError::NoError;
@@ -622,8 +565,7 @@ KvError AugmentRetainedFilesFromBranchManifests(
 
         if (is_cloud)
         {
-            err = ReadCloudFile(
-                tbl_id, filename, buf, cloud_mgr, cloud_mgr->options_);
+            err = ReadCloudFile(tbl_id, filename, buf, cloud_mgr);
         }
         else
         {
@@ -674,8 +616,7 @@ KvError AugmentRetainedFilesFromBranchManifests(
 
         if (is_cloud)
         {
-            err = ReadCloudFile(
-                tbl_id, filename, buf, cloud_mgr, cloud_mgr->options_);
+            err = ReadCloudFile(tbl_id, filename, buf, cloud_mgr);
         }
         else
         {
