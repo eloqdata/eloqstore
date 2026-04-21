@@ -606,7 +606,7 @@ KvError AugmentRetainedFilesFromBranchManifests(
     assert(manifest_branch_names.size() == manifest_terms.size());
     assert(archive_files.size() == archive_branch_names.size());
 
-    bool is_cloud = !io_mgr->options_->cloud_store_path.empty();
+    bool is_cloud = eloq_store->Mode() == StoreMode::Cloud;
     CloudStoreMgr *cloud_mgr =
         is_cloud ? static_cast<CloudStoreMgr *>(io_mgr) : nullptr;
 
@@ -651,6 +651,14 @@ KvError AugmentRetainedFilesFromBranchManifests(
                          << filename << " for branch " << branch << " term "
                          << term << ", error=" << static_cast<int>(err);
             return err;
+        }
+        else
+        {
+            LOG(ERROR) << "AugmentRetainedFilesFromBranchManifests: manifest "
+                       << filename << " for branch " << branch << " term "
+                       << term
+                       << " not found during GC scan, skipping retained-file "
+                          "augmentation for this manifest";
         }
     }
 
