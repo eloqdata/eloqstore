@@ -566,7 +566,7 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
             : BaseReq(task),
               offset_(offset),
               fd_ref_(std::move(fd)),
-              page_(true) {};
+              page_(true){};
 
         bool done_{false};
         uint32_t offset_;
@@ -1714,7 +1714,7 @@ KvError IouringMgr::FdatasyncFiles(const TableIdent &tbl_id,
     struct FsyncReq : BaseReq
     {
         FsyncReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
     };
 
@@ -1771,7 +1771,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     struct CloseReq : BaseReq
     {
         CloseReq(KvTask *task, LruFD::Ref fd)
-            : BaseReq(task), fd_ref_(std::move(fd)) {};
+            : BaseReq(task), fd_ref_(std::move(fd)){};
         LruFD::Ref fd_ref_;
         int reg_idx_{-1};
         int fd_{LruFD::FdEmpty};
@@ -4620,8 +4620,14 @@ KvError CloudStoreMgr::CleanManifest(const TableIdent &tbl_id)
     {
         return err;
     }
-    (void) DequeClosedFile(FileKey(
-        tbl_id, BranchManifestFileName(GetActiveBranch(), ProcessTerm())));
+    if (DequeClosedFile(FileKey(
+            tbl_id, BranchManifestFileName(GetActiveBranch(), ProcessTerm()))))
+    {
+        const size_t manifest_size = options_->manifest_limit;
+        used_local_space_ = used_local_space_ > manifest_size
+                                ? used_local_space_ - manifest_size
+                                : 0;
+    }
     if (!HasTrackedLocalFiles(tbl_id))
     {
         KvError cleanup_err = TryCleanupLocalPartitionDir(tbl_id);
@@ -6296,7 +6302,7 @@ void CloudStoreMgr::FileCleaner::Shutdown()
     coro_ = coro_.resume();
 }
 
-MemStoreMgr::MemStoreMgr(const KvOptions *opts) : AsyncIoManager(opts) {};
+MemStoreMgr::MemStoreMgr(const KvOptions *opts) : AsyncIoManager(opts){};
 
 KvError MemStoreMgr::Init(Shard *shard)
 {
