@@ -6,6 +6,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstddef>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -44,7 +45,7 @@ DEFINE_uint64(max_processing_time_microseconds,
               "Max processing time in microseconds for low priority tasks.");
 #endif
 
-Shard::Shard(const EloqStore *store, size_t shard_id, uint32_t fd_limit)
+Shard::Shard(EloqStore *store, size_t shard_id, uint32_t fd_limit)
     : store_(store),
       shard_id_(shard_id),
       page_pool_(&store->options_),
@@ -245,6 +246,56 @@ bool Shard::AddKvRequest(KvRequest *req)
     return ret;
 }
 
+void Shard::EnqueueForAutoReopen(KvRequest *req)
+{
+    const TableIdent tbl_id = req->TableId();
+    auto &state = pending_reopens_[tbl_id];
+    state.waiters.push_back(req);
+    if (state.inflight)
+    {
+        return;
+    }
+    state.inflight = true;
+
+    auto [it_q, inserted] = pending_queues_.try_emplace(tbl_id);
+    PendingWriteQueue &pending_q = it_q->second;
+    if (state.request == nullptr)
+    {
+        state.request = std::make_unique<ReopenRequest>();
+    }
+    ReopenRequest *reopen_req = state.request.get();
+    reopen_req->SetArgs(tbl_id);
+    reopen_req->SetTag("");
+    reopen_req->SetClean(false);
+    reopen_req->callback_ = [this, tbl_id](KvRequest *done_req)
+    {
+        KvError reopen_err = done_req->Error();
+        EloqStore *store = store_;
+        std::vector<KvRequest *> waiters;
+        std::unique_ptr<ReopenRequest> owned_req;
+        auto it = pending_reopens_.find(tbl_id);
+        if (it != pending_reopens_.end())
+        {
+            waiters = std::move(it->second.waiters);
+            owned_req = std::move(it->second.request);
+            pending_reopens_.erase(it);
+        }
+        for (KvRequest *pending_req : waiters)
+        {
+            if (reopen_err != KvError::NoError)
+            {
+                pending_req->SetDone(reopen_err);
+            }
+            else if (!store->SendRequest(pending_req))
+            {
+                pending_req->SetDone(KvError::NotRunning);
+            }
+        }
+    };
+    pending_q.PushFront(reopen_req);
+    TryStartPendingWrite(tbl_id);
+}
+
 void Shard::AddPendingCompact(const TableIdent &tbl_id)
 {
     // Send CompactRequest from internal.
@@ -377,10 +428,6 @@ void Shard::OnReceivedReq(KvRequest *req)
     {
         auto *wreq = reinterpret_cast<WriteRequest *>(req);
         auto [it, inserted] = pending_queues_.try_emplace(req->tbl_id_);
-        if (inserted)
-        {
-            ++running_writing_tasks_;
-        }
         it->second.PushBack(wreq);
         TryStartPendingWrite(req->tbl_id_);
         return;
@@ -546,7 +593,6 @@ bool Shard::ProcessReq(KvRequest *req)
     case RequestType::Reopen:
     {
         ReopenTask *task = task_mgr_.GetReopenTask(req->TableId());
-        task->SetRequest(static_cast<ReopenRequest *>(req));
         auto lbd = [task, req]() -> KvError
         { return task->Reopen(req->TableId()); };
         StartTask(task, req, lbd);
@@ -757,6 +803,11 @@ finish:
 
 void Shard::OnTaskFinished(KvTask *task)
 {
+    KvRequest *req = task->req_;
+    const bool auto_reopen = task->needs_auto_reopen_;
+    task->req_ = nullptr;
+    task->needs_auto_reopen_ = false;
+
     if (!task->ReadOnly())
     {
         auto wtask = reinterpret_cast<WriteTask *>(task);
@@ -769,7 +820,6 @@ void Shard::OnTaskFinished(KvTask *task)
         {
             // No more write requests, remove the pending queue.
             pending_queues_.erase(it);
-            --running_writing_tasks_;
         }
         TryDispatchPendingWrites();
     }
@@ -777,6 +827,13 @@ void Shard::OnTaskFinished(KvTask *task)
     {
         task_mgr_.FreeTask(task);
     }
+
+    if (__builtin_expect(!auto_reopen, 1))
+    {
+        return;
+    }
+
+    EnqueueForAutoReopen(req);
 }
 
 #ifdef ELOQ_MODULE_ENABLED
@@ -850,7 +907,6 @@ void Shard::WorkOneRound()
     {
         ExecuteReadyTasks();
     }
-
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: end of round
     if (store_->EnableMetrics() && !is_idle_round)

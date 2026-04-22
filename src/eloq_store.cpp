@@ -988,6 +988,7 @@ bool EloqStore::ExecAsyn(KvRequest *req)
 {
     req->user_data_ = 0;
     req->callback_ = nullptr;
+    req->reopen_retry_remaining_ = options_.auto_reopen_retry_times;
     return SendRequest(req);
 }
 
@@ -995,6 +996,7 @@ void EloqStore::ExecSync(KvRequest *req)
 {
     req->user_data_ = 0;
     req->callback_ = nullptr;
+    req->reopen_retry_remaining_ = options_.auto_reopen_retry_times;
     if (SendRequest(req))
     {
         req->Wait();
@@ -2535,13 +2537,15 @@ void KvRequest::SetDone(KvError err)
     }
     if (has_async_cb)
     {
-        callback_(this);
+        auto callback = std::move(callback_);
+        callback(this);
     }
 #else
     done_.store(true, std::memory_order_release);
     if (callback_)
     {
-        callback_(this);
+        auto callback = std::move(callback_);
+        callback(this);
     }
     else
     {

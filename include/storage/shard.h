@@ -5,7 +5,9 @@
 #include <cstdio>
 #include <ctime>
 #include <memory>
+#include <unordered_map>
 #include <utility>  // NOLINT(build/include_order)
+#include <vector>
 
 #include "circular_queue.h"
 #include "eloq_store.h"
@@ -32,7 +34,7 @@ class CloudStoreMgr;
 class Shard
 {
 public:
-    Shard(const EloqStore *store, size_t shard_id, uint32_t fd_limit);
+    Shard(EloqStore *store, size_t shard_id, uint32_t fd_limit);
     KvError Init();
     void Start();
     void Stop();
@@ -67,14 +69,13 @@ public:
 #ifdef ELOQ_MODULE_ENABLED
     std::atomic<ShardStatus> running_status_{ShardStatus::Running};
 #endif
-    const EloqStore *store_;
+    EloqStore *store_;
     const size_t shard_id_{0};
     boost::context::continuation main_;
     uint64_t ts_{};
     KvTask *running_{};
     CircularQueue<KvTask *> ready_tasks_;
     CircularQueue<KvTask *> low_priority_ready_tasks_;
-    size_t running_writing_tasks_{};
 
 private:
     void WorkLoop();
@@ -83,6 +84,7 @@ private:
     void OnTaskFinished(KvTask *task);
     void OnReceivedReq(KvRequest *req);
     bool ProcessReq(KvRequest *req);
+    void EnqueueForAutoReopen(KvRequest *req);
     void TryStartPendingWrite(const TableIdent &tbl_id);
     void TryDispatchPendingWrites();
 
@@ -113,8 +115,8 @@ private:
     {
         task->req_ = req;
         task->status_ = TaskStatus::Ongoing;
+        task->needs_auto_reopen_ = false;
         running_ = task;
-
         task->coro_ = boost::context::callcc(
             std::allocator_arg,
             stack_allocator_,
@@ -147,13 +149,35 @@ private:
                 // Save request type before SetDone
                 RequestType request_type = task->req_->Type();
 #endif
-                task->req_->SetDone(err);
-                task->req_ = nullptr;
+                KvRequest *req = task->req_;
+                bool request_completed = true;
+                if (__builtin_expect(err != KvError::ResourceMissing, 1))
+                {
+                    req->SetDone(err);
+                }
+                else
+                {
+                    const StoreMode mode = shard->store_->Mode();
+                    if (req->AutoReopenRetry() &&
+                        req->reopen_retry_remaining_ > 0 &&
+                        (mode == StoreMode::Cloud ||
+                         mode == StoreMode::StandbyReplica))
+                    {
+                        CHECK(req->TableId().IsValid());
+                        --req->reopen_retry_remaining_;
+                        task->needs_auto_reopen_ = true;
+                    }
+                    request_completed = !task->needs_auto_reopen_;
+                    if (request_completed)
+                    {
+                        req->SetDone(err);
+                    }
+                }
                 task->status_ = TaskStatus::Finished;
 
 #ifdef ELOQSTORE_WITH_TXSERVICE
                 // Collect latency metric when request completes
-                if (this->store_->EnableMetrics())
+                if (request_completed && this->store_->EnableMetrics())
                 {
                     const char *request_type_str =
                         RequestTypeToString(request_type);
@@ -246,6 +270,14 @@ private:
     };
     std::unordered_map<TableIdent, PendingWriteQueue> pending_queues_;
 
+    struct PendingReopenState
+    {
+        bool inflight{false};
+        std::vector<KvRequest *> waiters;
+        std::unique_ptr<ReopenRequest> request;
+    };
+    std::unordered_map<TableIdent, PendingReopenState> pending_reopens_;
+
 #ifdef ELOQ_MODULE_ENABLED
     std::atomic<size_t> req_queue_size_{0};
 #endif
@@ -262,5 +294,6 @@ private:
 
     friend class EloqStoreModule;
     friend class EloqStore;
+    friend class KvRequest;
 };
 }  // namespace eloqstore

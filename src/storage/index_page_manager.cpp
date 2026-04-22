@@ -488,7 +488,8 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
                 KvError sync_err = cloud_mgr->DownloadFile(
                     tbl_ident, max_file_id, branch_name, term, true, offset);
                 if (sync_err != KvError::NoError &&
-                    sync_err != KvError::NotFound)
+                    sync_err != KvError::NotFound &&
+                    sync_err != KvError::ResourceMissing)
                 {
                     return sync_err;
                 }
@@ -514,7 +515,7 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
     }
     if (err != KvError::NoError)
     {
-        if (err == KvError::NotFound)
+        if (err == KvError::NotFound || err == KvError::ResourceMissing)
         {
             LOG(INFO) << "InstallExternalSnapshot missing remote state for "
                       << "table " << tbl_ident << ", tag " << reopen_tag;

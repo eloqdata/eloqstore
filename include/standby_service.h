@@ -147,8 +147,8 @@ private:
 
     fs::path TablePath(const TableIdent &tbl_id) const;
     std::string RemotePartitionPath(const TableIdent &tbl_id) const;
-    std::string RemoteArchiveManifestPath(const TableIdent &tbl_id,
-                                          std::string_view archive_tag) const;
+    std::string RemoteManifestPath(const TableIdent &tbl_id,
+                                   std::string_view archive_tag) const;
     std::string RemoteSpec(const std::string &path, bool directory) const;
 
     EloqStore *store_{nullptr};

@@ -13,11 +13,11 @@ namespace eloqstore
 
 KvError ReopenTask::Reopen(const TableIdent &tbl_id)
 {
-    CHECK(request_ != nullptr);
+    auto *request = static_cast<ReopenRequest *>(req_);
+    CHECK(request != nullptr);
     StoreMode mode = shard->store_->Mode();
     if (mode == StoreMode::Local)
     {
-        request_ = nullptr;
         return KvError::InvalidArgs;
     }
     StandbyService *standby_service = nullptr;
@@ -29,18 +29,11 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
         {
             LOG(ERROR) << "Reopen " << tbl_id
                        << " failed: standby_service is null, tag "
-                       << request_->Tag();
-            request_ = nullptr;
+                       << request->Tag();
             return KvError::InvalidArgs;
         }
-        tag = request_->Tag();
-        if (tag.empty())
-        {
-            LOG(ERROR) << "Reopen " << tbl_id << " failed: empty tag";
-            request_ = nullptr;
-            return KvError::InvalidArgs;
-        }
-        if (!request_->Clean())
+        tag = request->Tag();
+        if (!request->Clean())
         {
             KvTask *current_task = ThdTask();
             CHECK(current_task != nullptr);
@@ -50,39 +43,37 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
                 LOG(ERROR) << "Reopen " << tbl_id
                            << " rsync enqueue failed, tag " << tag << ", error "
                            << static_cast<uint32_t>(enqueue_err);
-                request_ = nullptr;
                 return enqueue_err;
             }
             current_task->WaitIo();
             KvError sync_err = static_cast<KvError>(current_task->io_res_);
-            if (sync_err != KvError::NoError && sync_err != KvError::NotFound)
+            if (sync_err != KvError::NoError && sync_err != KvError::NotFound &&
+                sync_err != KvError::ResourceMissing)
             {
                 LOG(ERROR) << "Reopen " << tbl_id << " rsync failed, tag "
                            << tag << ", error "
                            << static_cast<uint32_t>(sync_err);
-                request_ = nullptr;
                 return sync_err;
             }
         }
     }
 
     KvError err = KvError::NoError;
-    if (request_->Clean())
+    if (request->Clean())
     {
         err = shard->IndexManager()->InstallEmptySnapshot(tbl_id, cow_meta_);
     }
     else
     {
         err = shard->IndexManager()->InstallExternalSnapshot(
-            tbl_id, cow_meta_, request_->Tag());
+            tbl_id, cow_meta_, request->Tag());
     }
     if (err != KvError::NoError)
     {
         LOG(ERROR) << "Reopen " << tbl_id
-                   << " InstallExternalSnapshot failed, tag " << request_->Tag()
+                   << " InstallExternalSnapshot failed, tag " << request->Tag()
                    << ", mode " << static_cast<int>(mode) << ", error "
                    << static_cast<uint32_t>(err);
-        request_ = nullptr;
         return err;
     }
     if (mode == StoreMode::Cloud && Options()->prewarm_cloud_cache)
@@ -103,9 +94,8 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
         {
             LOG(ERROR) << "Reopen " << tbl_id
                        << " failed to cleanup local partition files, tag "
-                       << request_->Tag() << ", error "
+                       << request->Tag() << ", error "
                        << static_cast<uint32_t>(err);
-            request_ = nullptr;
             return err;
         }
     }
@@ -113,7 +103,6 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
     {
         shard->AddPendingLocalGc(tbl_id);
     }
-    request_ = nullptr;
     return err;
 }
 

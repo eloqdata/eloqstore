@@ -13,12 +13,5 @@ public:
         return TaskType::Reopen;
     }
     KvError Reopen(const TableIdent &tbl_id);
-    void SetRequest(ReopenRequest *req)
-    {
-        request_ = req;
-    }
-
-private:
-    ReopenRequest *request_{nullptr};
 };
 }  // namespace eloqstore

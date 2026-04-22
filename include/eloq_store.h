@@ -33,6 +33,7 @@ struct CloudObjectInfo;
 namespace eloqstore
 {
 class Shard;
+class EloqStore;
 
 enum class RequestType : uint8_t
 {
@@ -123,6 +124,10 @@ class KvRequest
 public:
     virtual ~KvRequest() = default;
     virtual RequestType Type() const = 0;
+    virtual bool AutoReopenRetry() const
+    {
+        return false;
+    }
     bool ReadOnly() const;
     KvError Error() const;
     bool RetryableErr() const;
@@ -143,6 +148,7 @@ protected:
     TableIdent tbl_id_;
     uint64_t user_data_{0};
     std::function<void(KvRequest *)> callback_{nullptr};
+    uint8_t reopen_retry_remaining_{0};
 #ifdef ELOQ_MODULE_ENABLED
     mutable bthread::ConditionVariable cv_;
     mutable bthread::Mutex mutex_;
@@ -164,6 +170,10 @@ public:
     RequestType Type() const override
     {
         return RequestType::Read;
+    }
+    bool AutoReopenRetry() const override
+    {
+        return true;
     }
     void SetArgs(TableIdent tbl_id, const char *key);
     void SetArgs(TableIdent tbl_id, std::string_view key);
@@ -191,6 +201,10 @@ public:
     {
         return RequestType::Floor;
     }
+    bool AutoReopenRetry() const override
+    {
+        return true;
+    }
     void SetArgs(TableIdent tbl_id, const char *key);
     void SetArgs(TableIdent tid, std::string_view key);
     void SetArgs(TableIdent tid, std::string key);
@@ -213,6 +227,10 @@ public:
     RequestType Type() const override
     {
         return RequestType::Scan;
+    }
+    bool AutoReopenRetry() const override
+    {
+        return true;
     }
     /**
      * @brief Set the scan range.
@@ -857,6 +875,7 @@ public:
     {
         req->user_data_ = data;
         req->callback_ = std::move(callback);
+        req->reopen_retry_remaining_ = options_.auto_reopen_retry_times;
         return SendRequest(req);
     }
 
@@ -919,6 +938,7 @@ private:
     std::atomic<StoreMode> store_mode_{StoreMode::Local};
 
     friend class Shard;
+    friend class KvRequest;
     friend class AsyncIoManager;
     friend class IouringMgr;
     friend class WriteTask;

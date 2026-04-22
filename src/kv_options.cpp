@@ -412,6 +412,7 @@ bool KvOptions::operator==(const KvOptions &other) const
            allow_reuse_local_caches == other.allow_reuse_local_caches &&
            prewarm_cloud_cache == other.prewarm_cloud_cache &&
            prewarm_task_count == other.prewarm_task_count &&
+           auto_reopen_retry_times == other.auto_reopen_retry_times &&
            store_path == other.store_path &&
            store_path_weights == other.store_path_weights &&
            cloud_store_path == other.cloud_store_path &&

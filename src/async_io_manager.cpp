@@ -488,10 +488,19 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
     auto [file_id, offset] = ConvFilePageId(fp_id);
     std::string branch_name;
     uint64_t term;
-    CHECK(GetBranchNameAndTerm(tbl_id, file_id, branch_name, term))
-        << "ReadPage, not found branch/term for file id " << file_id
-        << " in table " << tbl_id;
+    if (!GetBranchNameAndTerm(tbl_id, file_id, branch_name, term))
+    {
+        LOG(WARNING) << "ReadPage missing branch/term for fp_id=" << fp_id
+                     << ", file_id=" << file_id << ", shift="
+                     << static_cast<uint32_t>(options_->pages_per_file_shift)
+                     << " in table " << tbl_id;
+        return {std::move(page), KvError::ResourceMissing};
+    }
     auto [fd_ref, err] = OpenFD(tbl_id, file_id, true, branch_name, term);
+    if (err == KvError::NotFound)
+    {
+        err = KvError::ResourceMissing;
+    }
     if (err != KvError::NoError)
     {
         return {std::move(page), err};
@@ -584,14 +593,16 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
         auto [file_id, offset] = ConvFilePageId(fp_id);
         std::string branch_name;
         uint64_t term;
-        CHECK(GetBranchNameAndTerm(tbl_id, file_id, branch_name, term))
-            << "ReadPages, not found branch/term for file id " << file_id
-            << " in table " << tbl_id;
-        auto [fd_ref, err] = OpenFD(tbl_id, file_id, true, branch_name, term);
-        if (err != KvError::NoError)
+        if (!GetBranchNameAndTerm(tbl_id, file_id, branch_name, term))
         {
-            return err;
+            LOG(WARNING) << "ReadPages missing branch/term for file id "
+                         << file_id << " in table " << tbl_id;
+            return KvError::ResourceMissing;
         }
+        auto [fd_ref, err] = OpenFD(tbl_id, file_id, true, branch_name, term);
+        if (err == KvError::NotFound)
+            err = KvError::ResourceMissing;
+        CHECK_KV_ERR(err);
         reqs[i] = ReadReq(ThdTask(), std::move(fd_ref), offset);
         i++;
     }
@@ -1294,7 +1305,8 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
         {
             error = ToKvError(fd);
         }
-        if (file_id == LruFD::kManifest && error == KvError::NotFound)
+        if (file_id == LruFD::kManifest &&
+            (error == KvError::NotFound || error == KvError::ResourceMissing))
         {
             // Manifest not found, this is normal so don't log it.
         }
@@ -1339,9 +1351,8 @@ bool IouringMgr::GetBranchNameAndTerm(const TableIdent &tbl_id,
         return false;
     }
     const auto &mapping = it_term_tbl->second;
-    bool res =
-        ::eloqstore::GetBranchNameAndTerm(mapping, file_id, branch_name, term);
-    return res;
+    return ::eloqstore::GetBranchNameAndTerm(
+        mapping, file_id, branch_name, term);
 }
 
 void IouringMgr::SetBranchFileIdTerm(const TableIdent &tbl_id,

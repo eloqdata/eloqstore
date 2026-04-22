@@ -613,7 +613,7 @@ std::string StandbyService::RemotePartitionPath(const TableIdent &tbl_id) const
     return remote_path;
 }
 
-std::string StandbyService::RemoteArchiveManifestPath(
+std::string StandbyService::RemoteManifestPath(
     const TableIdent &tbl_id, std::string_view archive_tag) const
 {
     std::string remote_path = RemotePartitionPath(tbl_id);
@@ -622,8 +622,16 @@ std::string StandbyService::RemoteArchiveManifestPath(
         return {};
     }
     remote_path.push_back('/');
-    remote_path.append(
-        BranchArchiveName(MainBranchName, store_->Term(), archive_tag));
+    if (archive_tag.empty())
+    {
+        remote_path.append(
+            BranchManifestFileName(MainBranchName, store_->Term()));
+    }
+    else
+    {
+        remote_path.append(
+            BranchArchiveName(MainBranchName, store_->Term(), archive_tag));
+    }
     return remote_path;
 }
 
@@ -667,16 +675,9 @@ KvError StandbyService::StartRsyncJob(std::list<InflightJob>::iterator it)
     {
         return KvError::InvalidArgs;
     }
-    if (job->archive_tag.empty())
-    {
-        LOG(ERROR) << "StandbyService::StartRsyncJob empty archive tag for "
-                   << job->tbl_id;
-        return KvError::InvalidArgs;
-    }
-
     std::string remote_partition_path = RemotePartitionPath(job->tbl_id);
     std::string remote_manifest_path =
-        RemoteArchiveManifestPath(job->tbl_id, job->archive_tag);
+        RemoteManifestPath(job->tbl_id, job->archive_tag);
     if (remote_partition_path.empty() || remote_manifest_path.empty())
     {
         LOG(ERROR) << "StandbyService: remote partition path missing for "
@@ -1019,8 +1020,7 @@ void StandbyService::HandleExitedChild(std::list<InflightJob>::iterator it,
         fs::path manifest_tmp = table_dir / kManifestTmp;
         std::string manifest_tmp_path = manifest_tmp.string();
         std::string remote_manifest_spec = RemoteSpec(
-            RemoteArchiveManifestPath(rsync->tbl_id, rsync->archive_tag),
-            false);
+            RemoteManifestPath(rsync->tbl_id, rsync->archive_tag), false);
         std::vector<const char *> argv = {"rsync",
                                           "-a",
                                           "--inplace",
