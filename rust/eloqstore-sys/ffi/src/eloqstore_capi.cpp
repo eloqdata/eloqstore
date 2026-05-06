@@ -897,12 +897,11 @@ extern "C"
             }
             // Apply range: call SetArgs again with currently set table, write
             // begin/end
-            cpp_req->SetArgs(
-                cpp_req->TableId(),
-                begin_str,
-                end_str,
-                begin_inclusive,
-                end_inclusive);
+            cpp_req->SetArgs(cpp_req->TableId(),
+                             begin_str,
+                             end_str,
+                             begin_inclusive,
+                             end_inclusive);
         }
     }
 
