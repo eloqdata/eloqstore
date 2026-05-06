@@ -236,21 +236,25 @@ public:
      * @brief Set the scan range.
      * @param tbl_id Table partition identifier.
      * @param begin The begin key of the scan range.
-     * @param end The end key of the scan range (not inclusive).
+     * @param end The end key of the scan range.
      * @param begin_inclusive Whether the begin key is inclusive.
+     * @param end_inclusive Whether the end key is inclusive.
      */
     void SetArgs(TableIdent tbl_id,
                  std::string_view begin,
                  std::string_view end,
-                 bool begin_inclusive = true);
+                 bool begin_inclusive = true,
+                 bool end_inclusive = false);
     void SetArgs(TableIdent tbl_id,
                  std::string begin,
                  std::string end,
-                 bool begin_inclusive = true);
+                 bool begin_inclusive = true,
+                 bool end_inclusive = false);
     void SetArgs(TableIdent tbl_id,
                  const char *begin,
                  const char *end,
-                 bool begin_inclusive = true);
+                 bool begin_inclusive = true,
+                 bool end_inclusive = false);
 
     /**
      * @brief Set the pagination of the scan result.
@@ -288,6 +292,7 @@ public:
 private:
     // input
     bool begin_inclusive_;
+    bool end_inclusive_{false};
     // output
     bool has_remaining_;
     // input

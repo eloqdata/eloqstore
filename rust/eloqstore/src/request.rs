@@ -161,7 +161,7 @@ impl Request for ScanRequest {
                     self.begin_inclusive,
                     self.end.as_ptr(),
                     self.end.len(),
-                    true,
+                    false,
                 );
             }
 
@@ -193,10 +193,7 @@ impl Request for ScanRequest {
                     // Save has_more before freeing the result
                     let has_more = result.has_more;
                     eloqstore_sys::CEloqStore_FreeScanResult(&mut result);
-                    ScanResponse {
-                        entries,
-                        has_more,
-                    }
+                    ScanResponse { entries, has_more }
                 }
                 _ => {
                     eloqstore_sys::CEloqStore_ScanRequest_Destroy(req);

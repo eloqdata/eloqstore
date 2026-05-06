@@ -314,7 +314,9 @@ KvError ScanTask::Scan()
 
     std::string value_storage;
     while (req->EndKey().empty() ||
-           Comp()->Compare(iter.Key(), req->EndKey()) < 0)
+           Comp()->Compare(iter.Key(), req->EndKey()) < 0 ||
+           (req->end_inclusive_ &&
+            Comp()->Compare(iter.Key(), req->EndKey()) == 0))
     {
         // Check entries number limit.
         if (req->num_entries_ == req->page_entries_)

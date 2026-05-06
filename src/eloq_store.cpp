@@ -2338,33 +2338,39 @@ std::string_view FloorRequest::Key() const
 void ScanRequest::SetArgs(TableIdent tbl_id,
                           std::string_view begin,
                           std::string_view end,
-                          bool begin_inclusive)
+                          bool begin_inclusive,
+                          bool end_inclusive)
 {
     SetTableId(std::move(tbl_id));
     begin_key_.emplace<std::string_view>(begin);
     end_key_.emplace<std::string_view>(end);
     begin_inclusive_ = begin_inclusive;
+    end_inclusive_ = end_inclusive;
 }
 
 void ScanRequest::SetArgs(TableIdent tbl_id,
                           std::string begin,
                           std::string end,
-                          bool begin_inclusive)
+                          bool begin_inclusive,
+                          bool end_inclusive)
 {
     SetTableId(std::move(tbl_id));
     begin_key_.emplace<std::string>(std::move(begin));
     end_key_.emplace<std::string>(std::move(end));
     begin_inclusive_ = begin_inclusive;
+    end_inclusive_ = end_inclusive;
 }
 
 void ScanRequest::SetArgs(TableIdent tbl_id,
                           const char *begin,
                           const char *end,
-                          bool begin_inclusive)
+                          bool begin_inclusive,
+                          bool end_inclusive)
 {
     std::string_view begin_key = begin == nullptr ? std::string_view{} : begin;
-    std::string_view end_key = begin == nullptr ? std::string_view{} : end;
-    SetArgs(std::move(tbl_id), begin_key, end_key, begin_inclusive);
+    std::string_view end_key = end == nullptr ? std::string_view{} : end;
+    SetArgs(
+        std::move(tbl_id), begin_key, end_key, begin_inclusive, end_inclusive);
 }
 
 void ScanRequest::SetPagination(size_t entries, size_t size)

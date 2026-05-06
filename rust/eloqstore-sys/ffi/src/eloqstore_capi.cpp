@@ -869,7 +869,7 @@ extern "C"
         if (req && table)
         {
             reinterpret_cast<ScanRequest *>(req)->SetArgs(
-                *reinterpret_cast<TableIdent *>(table), "", "", true);
+                *reinterpret_cast<TableIdent *>(table), "", "", true, false);
         }
     }
 
@@ -898,7 +898,11 @@ extern "C"
             // Apply range: call SetArgs again with currently set table, write
             // begin/end
             cpp_req->SetArgs(
-                cpp_req->TableId(), begin_str, end_str, begin_inclusive);
+                cpp_req->TableId(),
+                begin_str,
+                end_str,
+                begin_inclusive,
+                end_inclusive);
         }
     }
 
