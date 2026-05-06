@@ -1061,17 +1061,18 @@ extern "C"
         if (req && key && key_len > 0)
         {
             auto *cpp_req = reinterpret_cast<BatchWriteRequest *>(req);
-            std::string key_str(reinterpret_cast<const char *>(key), key_len);
-            std::string value_str;
+            WriteDataEntry entry;
+            entry.key_ =
+                std::string(reinterpret_cast<const char *>(key), key_len);
             if (value && value_len > 0)
             {
-                value_str = std::string(reinterpret_cast<const char *>(value),
-                                        value_len);
+                entry.val_ = std::string(reinterpret_cast<const char *>(value),
+                                         value_len);
             }
-            cpp_req->AddWrite(std::move(key_str),
-                              std::move(value_str),
-                              timestamp,
-                              static_cast<WriteOp>(op));
+            entry.timestamp_ = timestamp;
+            entry.op_ = static_cast<WriteOp>(op);
+            entry.expire_ts_ = expire_ts;
+            cpp_req->batch_.push_back(std::move(entry));
         }
     }
 

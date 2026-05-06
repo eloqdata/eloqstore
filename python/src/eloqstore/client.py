@@ -22,6 +22,14 @@ def _ok(status: int) -> None:
         raise EloqStoreError(status, last_error())
 
 
+def _validate_uint(name: str, value: int, max_value: int) -> int:
+    if not isinstance(value, int):
+        raise TypeError(f"{name} must be an int, got {type(value)!r}")
+    if value < 0 or value > max_value:
+        raise ValueError(f"{name} must be between 0 and {max_value}, got {value}")
+    return value
+
+
 @dataclass(slots=True)
 class Options:
     # ── required ──
@@ -75,15 +83,20 @@ class Client:
 
             if options.num_threads is not None:
                 self._lib.CEloqStore_Options_SetNumThreads(
-                    self._opts_handle, options.num_threads
+                    self._opts_handle,
+                    _validate_uint("num_threads", options.num_threads, 65535),
                 )
             if options.data_page_size is not None:
                 self._lib.CEloqStore_Options_SetDataPageSize(
-                    self._opts_handle, options.data_page_size
+                    self._opts_handle,
+                    _validate_uint("data_page_size", options.data_page_size, 65535),
                 )
             if options.pages_per_file_shift is not None:
                 self._lib.CEloqStore_Options_SetPagesPerFileShift(
-                    self._opts_handle, options.pages_per_file_shift
+                    self._opts_handle,
+                    _validate_uint(
+                        "pages_per_file_shift", options.pages_per_file_shift, 255
+                    ),
                 )
             if options.data_append_mode is not None:
                 self._lib.CEloqStore_Options_SetDataAppendMode(
@@ -91,7 +104,8 @@ class Client:
                 )
             if options.overflow_pointers is not None:
                 self._lib.CEloqStore_Options_SetOverflowPointers(
-                    self._opts_handle, options.overflow_pointers
+                    self._opts_handle,
+                    _validate_uint("overflow_pointers", options.overflow_pointers, 128),
                 )
             if options.enable_compression is not None:
                 self._lib.CEloqStore_Options_SetEnableCompression(
@@ -99,15 +113,20 @@ class Client:
                 )
             if options.buffer_pool_size is not None:
                 self._lib.CEloqStore_Options_SetBufferPoolSize(
-                    self._opts_handle, options.buffer_pool_size
+                    self._opts_handle,
+                    _validate_uint(
+                        "buffer_pool_size", options.buffer_pool_size, 2**64 - 1
+                    ),
                 )
             if options.manifest_limit is not None:
                 self._lib.CEloqStore_Options_SetManifestLimit(
-                    self._opts_handle, options.manifest_limit
+                    self._opts_handle,
+                    _validate_uint("manifest_limit", options.manifest_limit, 2**32 - 1),
                 )
             if options.fd_limit is not None:
                 self._lib.CEloqStore_Options_SetFdLimit(
-                    self._opts_handle, options.fd_limit
+                    self._opts_handle,
+                    _validate_uint("fd_limit", options.fd_limit, 2**32 - 1),
                 )
 
             if options.validate and not self._lib.CEloqStore_Options_Validate(

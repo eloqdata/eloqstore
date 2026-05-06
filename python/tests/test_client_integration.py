@@ -104,3 +104,28 @@ def test_close_is_idempotent():
     client = Client(Options(table_name="demo", partition_id=0, num_threads=1))
     client.close()
     client.close()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("data_page_size", -1),
+        ("data_page_size", 65536),
+        ("pages_per_file_shift", -1),
+        ("pages_per_file_shift", 256),
+        ("overflow_pointers", -1),
+        ("overflow_pointers", 129),
+        ("manifest_limit", -1),
+        ("manifest_limit", 2**32),
+        ("fd_limit", -1),
+        ("fd_limit", 2**32),
+        ("buffer_pool_size", -1),
+        ("buffer_pool_size", 2**64),
+        ("num_threads", -1),
+        ("num_threads", 65536),
+    ],
+)
+def test_invalid_numeric_options_raise_value_error(field: str, value: int):
+    kwargs = {"table_name": "demo", "partition_id": 0, field: value}
+    with pytest.raises(ValueError):
+        Client(Options(**kwargs))

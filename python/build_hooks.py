@@ -27,6 +27,7 @@ class CustomBuildHook(BuildHookInterface):
                 str(repo_root),
                 "-B",
                 str(cmake_dir),
+                "-DCMAKE_BUILD_TYPE=Release",
                 "-DWITH_UNIT_TESTS=OFF",
                 "-DWITH_EXAMPLE=OFF",
                 "-DWITH_DB_STRESS=OFF",
