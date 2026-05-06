@@ -350,9 +350,13 @@ else()
     endif()
 endif()
 
-# vendor/{src,include,external} are soft-linked to repository root.
-# FFI sources now live in the repository root so Rust and Python share one C API.
-set(ROOT_FFI_DIR "${PROJECT_SOURCE_DIR}/../../../ffi")
+# Prefer the crate-local ffi/ copy so cargo package/publish works from the
+# packaged tarball. Fall back to the repository-root ffi/ during normal
+# workspace development.
+set(ROOT_FFI_DIR "${PROJECT_SOURCE_DIR}/../ffi")
+if (NOT EXISTS "${ROOT_FFI_DIR}/src/eloqstore_capi.cpp")
+    set(ROOT_FFI_DIR "${PROJECT_SOURCE_DIR}/../../../ffi")
+endif ()
 
 # Skip git submodule update for Rust FFI build - build.rs runs it from repo root
 if (NOT BUILD_FOR_RUST)

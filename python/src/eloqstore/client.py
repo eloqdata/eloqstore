@@ -24,15 +24,28 @@ def _ok(status: int) -> None:
 
 @dataclass(slots=True)
 class Options:
+    # ── required ──
     store_paths: Sequence[str] = field(default_factory=list)
+    # ── table / branch ──
     options_path: str | None = None
     table_name: str = "default"
     partition_id: int = 0
     branch: str = "main"
     term: int = 0
     partition_group_id: int = 0
-    num_threads: int | None = None
     validate: bool = True
+    # ── engine ──
+    num_threads: int | None = None
+    # ── B+Tree storage ──
+    data_page_size: int | None = None  # bytes, max 65535 (uint16)
+    pages_per_file_shift: int | None = None  # data file = page_size << shift
+    data_append_mode: bool | None = None
+    overflow_pointers: int | None = None  # max 128
+    enable_compression: bool | None = None
+    # ── resource limits ──
+    buffer_pool_size: int | None = None  # bytes, index page cache per shard
+    manifest_limit: int | None = None  # bytes, WAL file size limit
+    fd_limit: int | None = None  # max open files
 
 
 class Client:
@@ -63,6 +76,38 @@ class Client:
             if options.num_threads is not None:
                 self._lib.CEloqStore_Options_SetNumThreads(
                     self._opts_handle, options.num_threads
+                )
+            if options.data_page_size is not None:
+                self._lib.CEloqStore_Options_SetDataPageSize(
+                    self._opts_handle, options.data_page_size
+                )
+            if options.pages_per_file_shift is not None:
+                self._lib.CEloqStore_Options_SetPagesPerFileShift(
+                    self._opts_handle, options.pages_per_file_shift
+                )
+            if options.data_append_mode is not None:
+                self._lib.CEloqStore_Options_SetDataAppendMode(
+                    self._opts_handle, options.data_append_mode
+                )
+            if options.overflow_pointers is not None:
+                self._lib.CEloqStore_Options_SetOverflowPointers(
+                    self._opts_handle, options.overflow_pointers
+                )
+            if options.enable_compression is not None:
+                self._lib.CEloqStore_Options_SetEnableCompression(
+                    self._opts_handle, options.enable_compression
+                )
+            if options.buffer_pool_size is not None:
+                self._lib.CEloqStore_Options_SetBufferPoolSize(
+                    self._opts_handle, options.buffer_pool_size
+                )
+            if options.manifest_limit is not None:
+                self._lib.CEloqStore_Options_SetManifestLimit(
+                    self._opts_handle, options.manifest_limit
+                )
+            if options.fd_limit is not None:
+                self._lib.CEloqStore_Options_SetFdLimit(
+                    self._opts_handle, options.fd_limit
                 )
 
             if options.validate and not self._lib.CEloqStore_Options_Validate(

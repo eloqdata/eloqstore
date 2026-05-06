@@ -16,7 +16,8 @@ vendor/
 
 1. **Minimize Duplication**: `vendor/` stores only Rust-specific build files
 2. **Soft Link Reuse**: `src/`, `include/`, `external/` are all soft-linked to repository root
-3. **Shared FFI Boundary**: Rust and Python both build against the repository root `ffi/` directory
+3. **Shared FFI Boundary**: Rust and Python both build against the same FFI source, with
+   `rust/eloqstore-sys/ffi/` carrying the packaged copy needed for `cargo package/publish`
 
 ## Maintenance Guide
 
@@ -27,9 +28,11 @@ Modify directly in **repository root**, no need to sync to vendor:
 - Modify `/external/*` → vendor automatically (soft link)
 
 ### Modify FFI-Specific Code
-Modify in repository root:
+Keep these two locations in sync:
 - `ffi/src/eloqstore_capi.cpp`
 - `ffi/include/eloqstore_capi.h`
+- `rust/eloqstore-sys/ffi/src/eloqstore_capi.cpp`
+- `rust/eloqstore-sys/ffi/include/eloqstore_capi.h`
 
 ### Update Submodule
 Execute in repository root:
@@ -43,6 +46,7 @@ Or directly run `cargo build` (build.rs will automatically execute)
 `build.rs` will:
 1. Automatically execute `git submodule update --init --recursive`
 2. Use CMake to build `vendor/` directory
-3. Automatically use the latest source code from repository root via soft links and shared `ffi/`
+3. Use the crate-local `ffi/` copy when building from a packaged crate tarball
+4. Fall back to the repository-root `ffi/` tree during workspace development
 
 No need to manually sync files!

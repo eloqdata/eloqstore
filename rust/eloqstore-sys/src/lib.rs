@@ -154,6 +154,10 @@ mod ffi {
         pub fn CEloqStore_Options_SetNumThreads(opts: CEloqStoreHandle, n: c_ushort);
         pub fn CEloqStore_Options_SetBufferPoolSize(opts: CEloqStoreHandle, size: c_ulonglong);
         pub fn CEloqStore_Options_SetDataPageSize(opts: CEloqStoreHandle, size: c_ushort);
+        pub fn CEloqStore_Options_SetManifestLimit(opts: CEloqStoreHandle, limit: c_uint);
+        pub fn CEloqStore_Options_SetFdLimit(opts: CEloqStoreHandle, limit: c_uint);
+        pub fn CEloqStore_Options_SetPagesPerFileShift(opts: CEloqStoreHandle, shift: c_uchar);
+        pub fn CEloqStore_Options_SetOverflowPointers(opts: CEloqStoreHandle, n: c_uchar);
         pub fn CEloqStore_Options_AddStorePath(opts: CEloqStoreHandle, path: *const c_char);
         pub fn CEloqStore_Options_SetDataAppendMode(opts: CEloqStoreHandle, enable: bool);
         pub fn CEloqStore_Options_SetEnableCompression(opts: CEloqStoreHandle, enable: bool);
@@ -322,7 +326,11 @@ pub use self::ffi::CEloqStore_Options_SetCloudVerifySsl;
 pub use self::ffi::CEloqStore_Options_SetDataAppendMode;
 pub use self::ffi::CEloqStore_Options_SetDataPageSize;
 pub use self::ffi::CEloqStore_Options_SetEnableCompression;
+pub use self::ffi::CEloqStore_Options_SetFdLimit;
+pub use self::ffi::CEloqStore_Options_SetManifestLimit;
 pub use self::ffi::CEloqStore_Options_SetNumThreads;
+pub use self::ffi::CEloqStore_Options_SetOverflowPointers;
+pub use self::ffi::CEloqStore_Options_SetPagesPerFileShift;
 pub use self::ffi::CEloqStore_Options_Validate;
 
 pub use self::ffi::CEloqStore_Create;

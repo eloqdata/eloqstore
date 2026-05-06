@@ -72,6 +72,26 @@ impl Options {
         unsafe { eloqstore_sys::CEloqStore_Options_SetEnableCompression(self.ptr, enable) }
     }
 
+    pub fn set_manifest_limit(&mut self, limit: u32) {
+        unsafe { eloqstore_sys::CEloqStore_Options_SetManifestLimit(self.ptr, limit) }
+    }
+
+    pub fn set_fd_limit(&mut self, limit: u32) {
+        unsafe { eloqstore_sys::CEloqStore_Options_SetFdLimit(self.ptr, limit) }
+    }
+
+    pub fn set_pages_per_file_shift(&mut self, shift: u8) {
+        unsafe { eloqstore_sys::CEloqStore_Options_SetPagesPerFileShift(self.ptr, shift) }
+    }
+
+    pub fn set_overflow_pointers(&mut self, n: u8) -> Result<(), KvError> {
+        if n > 128 {
+            return Err(KvError::InvalidArgs);
+        }
+        unsafe { eloqstore_sys::CEloqStore_Options_SetOverflowPointers(self.ptr, n) }
+        Ok(())
+    }
+
     pub fn set_cloud_store_path(&mut self, path: &str) -> Result<(), KvError> {
         // CString is created here and passed to C API. The C++ code copies the string
         // into a std::string, so it's safe for the CString to be dropped when this
