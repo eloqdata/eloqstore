@@ -1,0 +1,106 @@
+from pathlib import Path
+import tempfile
+
+import pytest
+
+from eloqstore import Client, EloqStoreError, Options
+
+
+def test_in_memory_client_roundtrip():
+    client = Client(Options(table_name="demo", partition_id=0, num_threads=1))
+    try:
+        client.put("hello", b"world")
+        assert client.exists("hello") is True
+        assert client.get("hello") == b"world"
+
+        client.delete("hello")
+        assert client.exists("hello") is False
+        assert client.get("hello") is None
+
+        client.batch_put({"k1": b"v1", "k2": b"v2"})
+        assert client.batch_get(["k1", "k2", "missing"]) == [b"v1", b"v2", None]
+
+        client.batch_delete(["k1", "k2"])
+        assert client.batch_get(["k1", "k2"]) == [None, None]
+    finally:
+        client.close()
+
+
+def test_disk_mode_roundtrip_and_reopen():
+    root = Path(tempfile.mkdtemp(prefix="eloqstore-py-disk-"))
+    store_path = root / "data"
+    store_path.mkdir(parents=True, exist_ok=True)
+
+    client = Client(
+        Options(
+            store_paths=[str(store_path)],
+            table_name="demo",
+            partition_id=0,
+            num_threads=1,
+        )
+    )
+    try:
+        client.put("hello", b"world")
+        assert client.get("hello") == b"world"
+    finally:
+        client.close()
+
+    reopened = Client(
+        Options(
+            store_paths=[str(store_path)],
+            table_name="demo",
+            partition_id=0,
+            num_threads=1,
+        )
+    )
+    try:
+        assert reopened.exists("hello") is True
+        assert reopened.get("hello") == b"world"
+    finally:
+        reopened.close()
+
+
+def test_options_path_and_branch_start():
+    root = Path(tempfile.mkdtemp(prefix="eloqstore-py-ini-"))
+    store_path = root / "data"
+    store_path.mkdir(parents=True, exist_ok=True)
+    ini_path = root / "eloqstore.ini"
+    ini_path.write_text(
+        "[run]\nnum_threads = 1\nbuffer_pool_size = 4MB\n\n"
+        "[permanent]\ndata_page_size = 4KB\n",
+        encoding="utf-8",
+    )
+
+    client = Client(
+        Options(
+            store_paths=[str(store_path)],
+            options_path=str(ini_path),
+            table_name="demo",
+            partition_id=0,
+            branch="feature-x",
+            term=7,
+            partition_group_id=3,
+        )
+    )
+    try:
+        client.put("branch-key", b"value")
+        assert client.get("branch-key") == b"value"
+    finally:
+        client.close()
+
+
+def test_bad_ini_path_raises():
+    with pytest.raises(EloqStoreError):
+        Client(
+            Options(
+                options_path="/tmp/does-not-exist-eloqstore.ini",
+                table_name="demo",
+                partition_id=0,
+            )
+        )
+
+
+def test_close_is_idempotent():
+    client = Client(Options(table_name="demo", partition_id=0, num_threads=1))
+    client.close()
+    client.close()

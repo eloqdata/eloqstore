@@ -1,4 +1,6 @@
 use eloqstore::{EloqStore, Options, ReadRequest, ScanRequest, TableIdentifier, WriteRequest};
+use std::fs;
+use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 fn timestamp() -> u64 {
@@ -8,6 +10,12 @@ fn timestamp() -> u64 {
         .as_millis() as u64
 }
 
+fn temp_path(prefix: &str) -> PathBuf {
+    let mut path = std::env::temp_dir();
+    path.push(format!("{}-{}", prefix, timestamp()));
+    path
+}
+
 #[test]
 fn test_all_apis() {
     println!("\nEloqStore Rust FFI Demo");
@@ -15,7 +23,6 @@ fn test_all_apis() {
 
     let mut opts = Options::new().expect("Failed to create options");
     opts.set_num_threads(1).expect("Failed to set num threads");
-    opts.add_store_path("tmp/eloqstore_demo").expect("Failed to add store path");
     let mut store = EloqStore::new(&opts).expect("Failed to create store");
     store.start().expect("Failed to start store");
 
@@ -32,11 +39,15 @@ fn test_all_apis() {
     store.put(&table, key, value, ts).expect("PUT");
     println!("✓ put(key={:?}, value={:?})", key, value);
 
+    assert!(store.exists(&table, key));
+    println!("✓ exists(key={:?}) -> true", key);
+
     let v = store.get(&table, key).expect("GET").expect("not found");
     assert_eq!(v, value);
     println!("✓ get(key={:?}) -> {:?}", key, String::from_utf8_lossy(&v));
 
     store.delete(&table, key, ts + 1).expect("DELETE");
+    assert!(!store.exists(&table, key));
     assert!(store.get(&table, key).expect("GET after DELETE").is_none());
     println!("✓ delete(key={:?})", key);
 
@@ -158,4 +169,67 @@ fn test_all_apis() {
     println!("  - Floor: floor() for range queries");
     println!("  - Request Trait: ReadRequest, WriteRequest with exec_sync()");
     println!("  - Paginated Scan: ScanRequest with pagination support");
+}
+
+#[test]
+fn test_start_with_branch_api() {
+    let mut opts = Options::new().expect("Failed to create options");
+    opts.set_num_threads(1).expect("Failed to set num threads");
+
+    let mut store = EloqStore::new(&opts).expect("Failed to create store");
+    store
+        .start_with_branch("feature-x", 7, 3)
+        .expect("Failed to start with branch");
+
+    let table = TableIdentifier::new("branch_table", 0).expect("Failed to create table");
+    let ts = timestamp();
+    store.put(&table, b"hello", b"world", ts).expect("PUT");
+    assert_eq!(
+        store.get(&table, b"hello").expect("GET"),
+        Some(b"world".to_vec())
+    );
+    store.stop();
+}
+
+#[test]
+fn test_load_from_ini_and_disk_persistence() {
+    let root = temp_path("eloqstore-rust-ini");
+    let store_path = root.join("data");
+    fs::create_dir_all(&store_path).expect("Failed to create store path");
+
+    let ini_path = root.join("eloqstore.ini");
+    fs::write(
+        &ini_path,
+        "[run]\nnum_threads = 1\nbuffer_pool_size = 4MB\n\n[permanent]\ndata_page_size = 4KB\n",
+    )
+    .expect("Failed to write ini file");
+
+    let table = TableIdentifier::new("disk_table", 0).expect("Failed to create table");
+    let ts = timestamp();
+
+    let mut opts = Options::new().expect("Failed to create options");
+    opts.load_from_ini(&ini_path).expect("Failed to load ini");
+    opts.add_store_path(&store_path).expect("Failed to add store path");
+
+    let mut store = EloqStore::new(&opts).expect("Failed to create store");
+    store.start().expect("Failed to start store");
+    store.put(&table, b"persist", b"value", ts).expect("PUT");
+    store.stop();
+
+    let mut reopened_opts = Options::new().expect("Failed to create options");
+    reopened_opts
+        .load_from_ini(&ini_path)
+        .expect("Failed to load ini");
+    reopened_opts
+        .add_store_path(&store_path)
+        .expect("Failed to add store path");
+
+    let mut reopened = EloqStore::new(&reopened_opts).expect("Failed to create reopened store");
+    reopened.start().expect("Failed to restart store");
+    assert!(reopened.exists(&table, b"persist"));
+    assert_eq!(
+        reopened.get(&table, b"persist").expect("GET"),
+        Some(b"value".to_vec())
+    );
+    reopened.stop();
 }

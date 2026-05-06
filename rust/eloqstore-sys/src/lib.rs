@@ -5,7 +5,7 @@
 mod embedded_lib;
 
 use std::os::raw::{c_char, c_uchar, c_uint, c_ulonglong, c_ushort, c_void};
-use std::sync::{Once, Mutex};
+use std::sync::{Mutex, Once};
 
 // Ensure embedded library is available at startup
 static INIT: Once = Once::new();
@@ -18,26 +18,30 @@ static INIT_RESULT: Mutex<Option<Result<(), String>>> = Mutex::new(None);
 pub fn ensure_library_loaded() -> Result<(), String> {
     // Check if we've already initialized (success or failure)
     {
-        let result_guard = INIT_RESULT.lock().map_err(|e| format!("Mutex poison: {}", e))?;
+        let result_guard = INIT_RESULT
+            .lock()
+            .map_err(|e| format!("Mutex poison: {}", e))?;
         if let Some(ref result) = *result_guard {
             return result.clone();
         }
     }
-    
+
     // Initialize (only runs once)
     INIT.call_once(|| {
         let result = embedded_lib::ensure_library_available()
             .map(|_| ())
             .map_err(|e| e);
-        
+
         // Store the result for future calls
         if let Ok(mut guard) = INIT_RESULT.lock() {
             *guard = Some(result);
         }
     });
-    
+
     // Retrieve and return the stored result
-    let result_guard = INIT_RESULT.lock().map_err(|e| format!("Mutex poison: {}", e))?;
+    let result_guard = INIT_RESULT
+        .lock()
+        .map_err(|e| format!("Mutex poison: {}", e))?;
     result_guard
         .as_ref()
         .expect("Initialization should have completed")
@@ -161,16 +165,20 @@ mod ffi {
             access_key: *const c_char,
             secret_key: *const c_char,
         );
-        pub fn CEloqStore_Options_SetCloudAutoCredentials(
-            opts: CEloqStoreHandle,
-            enable: bool,
-        );
+        pub fn CEloqStore_Options_SetCloudAutoCredentials(opts: CEloqStoreHandle, enable: bool);
         pub fn CEloqStore_Options_SetCloudVerifySsl(opts: CEloqStoreHandle, verify: bool);
+        pub fn CEloqStore_Options_LoadFromIni(opts: CEloqStoreHandle, path: *const c_char) -> bool;
         pub fn CEloqStore_Options_Validate(opts: CEloqStoreHandle) -> bool;
 
         pub fn CEloqStore_Create(options: CEloqStoreHandle) -> CEloqStoreHandle;
         pub fn CEloqStore_Destroy(store: CEloqStoreHandle);
         pub fn CEloqStore_Start(store: CEloqStoreHandle) -> CEloqStoreStatus;
+        pub fn CEloqStore_StartWithBranch(
+            store: CEloqStoreHandle,
+            branch: *const c_char,
+            term: u64,
+            partition_group_id: c_uint,
+        ) -> CEloqStoreStatus;
         pub fn CEloqStore_Stop(store: CEloqStoreHandle);
         pub fn CEloqStore_IsStopped(store: CEloqStoreHandle) -> bool;
 
@@ -234,6 +242,12 @@ mod ffi {
             key_len: usize,
             out_result: *mut super::CGetResult,
         ) -> CEloqStoreStatus;
+        pub fn CEloqStore_Exists(
+            store: CEloqStoreHandle,
+            table: CTableIdentHandle,
+            key: *const c_uchar,
+            key_len: usize,
+        ) -> bool;
 
         pub fn CEloqStore_Floor(
             store: CEloqStoreHandle,
@@ -297,9 +311,10 @@ mod ffi {
 pub use self::ffi::CEloqStore_Options_AddStorePath;
 pub use self::ffi::CEloqStore_Options_Create;
 pub use self::ffi::CEloqStore_Options_Destroy;
+pub use self::ffi::CEloqStore_Options_LoadFromIni;
 pub use self::ffi::CEloqStore_Options_SetBufferPoolSize;
-pub use self::ffi::CEloqStore_Options_SetCloudCredentials;
 pub use self::ffi::CEloqStore_Options_SetCloudAutoCredentials;
+pub use self::ffi::CEloqStore_Options_SetCloudCredentials;
 pub use self::ffi::CEloqStore_Options_SetCloudProvider;
 pub use self::ffi::CEloqStore_Options_SetCloudRegion;
 pub use self::ffi::CEloqStore_Options_SetCloudStorePath;
@@ -312,8 +327,10 @@ pub use self::ffi::CEloqStore_Options_Validate;
 
 pub use self::ffi::CEloqStore_Create;
 pub use self::ffi::CEloqStore_Destroy;
+pub use self::ffi::CEloqStore_Exists;
 pub use self::ffi::CEloqStore_IsStopped;
 pub use self::ffi::CEloqStore_Start;
+pub use self::ffi::CEloqStore_StartWithBranch;
 pub use self::ffi::CEloqStore_Stop;
 
 pub use self::ffi::CEloqStore_TableIdent_Create;

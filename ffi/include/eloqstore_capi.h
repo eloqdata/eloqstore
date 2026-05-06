@@ -160,6 +160,8 @@ extern "C"
                                                     bool enable);
     void CEloqStore_Options_SetCloudVerifySsl(CEloqStoreHandle opts,
                                               bool verify);
+    bool CEloqStore_Options_LoadFromIni(CEloqStoreHandle opts,
+                                        const char *path);
 
     bool CEloqStore_Options_Validate(CEloqStoreHandle opts);
 
@@ -171,6 +173,10 @@ extern "C"
     void CEloqStore_Destroy(CEloqStoreHandle store);
 
     CEloqStoreStatus CEloqStore_Start(CEloqStoreHandle store);
+    CEloqStoreStatus CEloqStore_StartWithBranch(CEloqStoreHandle store,
+                                                const char *branch,
+                                                uint64_t term,
+                                                uint32_t partition_group_id);
     void CEloqStore_Stop(CEloqStoreHandle store);
     bool CEloqStore_IsStopped(CEloqStoreHandle store);
 
@@ -252,6 +258,10 @@ extern "C"
                                     const uint8_t *key,
                                     size_t key_len,
                                     CGetResult *out_result);
+    bool CEloqStore_Exists(CEloqStoreHandle store,
+                           CTableIdentHandle table,
+                           const uint8_t *key,
+                           size_t key_len);
 
     CEloqStoreStatus CEloqStore_Floor(CEloqStoreHandle store,
                                       CTableIdentHandle table,

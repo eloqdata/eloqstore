@@ -250,6 +250,25 @@ extern "C"
             reinterpret_cast<KvOptions *>(opts)->cloud_verify_ssl = verify;
     }
 
+    bool CEloqStore_Options_LoadFromIni(CEloqStoreHandle opts, const char *path)
+    {
+        clear_last_error();
+        if (!opts || !path)
+        {
+            set_last_error("Invalid options or ini path");
+            return false;
+        }
+        try
+        {
+            return reinterpret_cast<KvOptions *>(opts)->LoadFromIni(path) == 0;
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return false;
+        }
+    }
+
     bool CEloqStore_Options_Validate(CEloqStoreHandle opts)
     {
         if (!opts)
@@ -301,6 +320,36 @@ extern "C"
         {
             auto err = reinterpret_cast<EloqStore *>(store)->Start(
                 eloqstore::MainBranchName, 0);
+            if (err != KvError::NoError)
+            {
+                set_last_error("Failed to start store");
+            }
+            return kv_error_to_c(err);
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return CEloqStoreStatus_InvalidArgs;
+        }
+    }
+
+    CEloqStoreStatus CEloqStore_StartWithBranch(CEloqStoreHandle store,
+                                                const char *branch,
+                                                uint64_t term,
+                                                uint32_t partition_group_id)
+    {
+        clear_last_error();
+        if (!store)
+        {
+            return CEloqStoreStatus_InvalidArgs;
+        }
+        try
+        {
+            std::string_view branch_name =
+                branch != nullptr ? std::string_view(branch)
+                                  : std::string_view(eloqstore::MainBranchName);
+            auto err = reinterpret_cast<EloqStore *>(store)->Start(
+                branch_name, term, partition_group_id);
             if (err != KvError::NoError)
             {
                 set_last_error("Failed to start store");
@@ -690,6 +739,36 @@ extern "C"
         {
             set_last_error(e.what());
             return CEloqStoreStatus_InvalidArgs;
+        }
+    }
+
+    bool CEloqStore_Exists(CEloqStoreHandle store,
+                           CTableIdentHandle table,
+                           const uint8_t *key,
+                           size_t key_len)
+    {
+        clear_last_error();
+        if (!store || !table || !key || key_len == 0)
+        {
+            return false;
+        }
+
+        auto *cpp_store = reinterpret_cast<EloqStore *>(store);
+        auto *cpp_table = reinterpret_cast<TableIdent *>(table);
+
+        try
+        {
+            ReadRequest req;
+            req.SetArgs(
+                *cpp_table,
+                std::string(reinterpret_cast<const char *>(key), key_len));
+            cpp_store->ExecSync(&req);
+            return req.Error() == KvError::NoError;
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return false;
         }
     }
 

@@ -1,0 +1,84 @@
+name: SDK Checks
+
+on:
+  pull_request:
+    paths:
+      - "python/**"
+      - "rust/**"
+      - "ffi/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/sdk-checks.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "python/**"
+      - "rust/**"
+      - "ffi/**"
+      - "CMakeLists.txt"
+      - ".github/workflows/sdk-checks.yml"
+  workflow_dispatch:
+
+jobs:
+  sdk-checks:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: eloqdata/eloq-dev-ci-ubuntu2404:latest
+      options: --user root --security-opt seccomp=unconfined
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Fix permissions
+        run: chmod -R a+rwx "$GITHUB_WORKSPACE" || true
+
+      - name: Configure Git safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Python wheel
+        run: |
+          python3 -m pip install build
+          python3 -m build --wheel
+        working-directory: ${{ github.workspace }}/python
+
+      - name: Run Python tests
+        run: |
+          ELOQSTORE_PY_LIB="$GITHUB_WORKSPACE/python/build/native/libeloqstore_capi.so" \
+          PYTHONPATH="$GITHUB_WORKSPACE/python/src" \
+          python3 -m pytest \
+            "$GITHUB_WORKSPACE/python/tests/test_import.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_client_integration.py"
+        working-directory: ${{ github.workspace }}
+
+      - name: Verify Python wheel install
+        run: |
+          python3 -m pip install --no-deps --target /tmp/eloqstore-wheel-test python/dist/*.whl
+          PYTHONPATH=/tmp/eloqstore-wheel-test python3 - <<'PY'
+          from eloqstore import Client, Options
+          client = Client(Options(table_name="demo", partition_id=0, num_threads=1))
+          client.put("k", b"v")
+          assert client.get("k") == b"v"
+          client.close()
+          PY
+        working-directory: ${{ github.workspace }}
+
+      - name: Run Rust integration tests
+        run: cargo test -p eloqstore --test integration_test -- --nocapture
+        working-directory: ${{ github.workspace }}/rust
+
+      - name: Check Rust FFI package
+        run: cargo package -p eloqstore-sys --allow-dirty --no-verify
+        working-directory: ${{ github.workspace }}/rust

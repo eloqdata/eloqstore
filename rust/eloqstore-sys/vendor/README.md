@@ -10,19 +10,13 @@ vendor/
 ├── external -> ../../../external  # Soft link: external dependencies (submodules + tool files)
 ├── src -> ../../../src            # Soft link: C++ core source code
 ├── include -> ../../../include    # Soft link: C++ header files
-├── ffi/                           # FFI dedicated files (only 2 files)
-    ├── src/
-    │   └── eloqstore_capi.cpp    # Rust FFI C API implementation
-    └── include/
-        └── eloqstore_capi.h      # Rust FFI C API header file
-
 ```
 
 ## Design Principles
 
-1. **Minimize Duplication**: `vendor/` actually stores only **4 files** (CMakeLists.txt + 2 FFI files + 1 tool)
+1. **Minimize Duplication**: `vendor/` stores only Rust-specific build files
 2. **Soft Link Reuse**: `src/`, `include/`, `external/` are all soft-linked to repository root
-3. **FFI Isolation**: Rust-specific C API files (`eloqstore_capi.*`) are stored separately in `ffi/` directory
+3. **Shared FFI Boundary**: Rust and Python both build against the repository root `ffi/` directory
 
 ## Maintenance Guide
 
@@ -33,9 +27,9 @@ Modify directly in **repository root**, no need to sync to vendor:
 - Modify `/external/*` → vendor automatically (soft link)
 
 ### Modify FFI-Specific Code
-Modify in `vendor/ffi/` directory:
-- `vendor/ffi/src/eloqstore_capi.cpp`
-- `vendor/ffi/include/eloqstore_capi.h`
+Modify in repository root:
+- `ffi/src/eloqstore_capi.cpp`
+- `ffi/include/eloqstore_capi.h`
 
 ### Update Submodule
 Execute in repository root:
@@ -49,6 +43,6 @@ Or directly run `cargo build` (build.rs will automatically execute)
 `build.rs` will:
 1. Automatically execute `git submodule update --init --recursive`
 2. Use CMake to build `vendor/` directory
-3. Automatically use the latest source code from repository root via soft links
+3. Automatically use the latest source code from repository root via soft links and shared `ffi/`
 
 No need to manually sync files!

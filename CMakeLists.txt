@@ -7,6 +7,7 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Coverage option
 option(WITH_COVERAGE "Enable code coverage" OFF)
@@ -136,9 +137,29 @@ set(ELOQ_STORE_SOURCES
         src/types.cpp)
 
 add_library(eloqstore STATIC ${ELOQ_STORE_SOURCES} ${INI_SOURCES})
+set_target_properties(eloqstore PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(eloqstore PUBLIC ${ELOQ_STORE_INCLUDE})
 target_link_libraries(eloqstore PRIVATE ${URING_LIB} glog::glog absl::flat_hash_map ${BOOST_CONTEXT_TARGET} ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} ${AWSSDK_LINK_LIBRARIES} OpenSSL::Crypto)
+
+set(ELOQ_STORE_CAPI_INCLUDE
+        ${ELOQ_STORE_INCLUDE}
+        ${PROJECT_SOURCE_DIR}/ffi/include)
+
+add_library(eloqstore_capi SHARED ffi/src/eloqstore_capi.cpp)
+set_target_properties(eloqstore_capi PROPERTIES
+        OUTPUT_NAME "eloqstore_capi"
+        POSITION_INDEPENDENT_CODE ON)
+target_include_directories(eloqstore_capi PUBLIC ${ELOQ_STORE_CAPI_INCLUDE})
+target_link_libraries(eloqstore_capi PRIVATE eloqstore)
+
+install(TARGETS eloqstore eloqstore_capi
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin)
+install(FILES include/eloq_store.h include/kv_options.h include/types.h
+              ffi/include/eloqstore_capi.h
+        DESTINATION include)
 
 add_executable(page_checksum_tool tools/page_checksum_tool.cpp)
 target_include_directories(page_checksum_tool PUBLIC ${ELOQ_STORE_INCLUDE})

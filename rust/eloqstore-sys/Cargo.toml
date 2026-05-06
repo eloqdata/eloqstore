@@ -3,6 +3,48 @@ name = "eloqstore-sys"
 version = "0.1.0"
 edition = "2024"
 build = "build.rs"
+description = "Low-level Rust FFI bindings for EloqStore"
+readme = "README.md"
+license = "BSL-2.0 OR AGPL-3.0-only"
+repository = "https://github.com/eloqdata/eloqstore"
+homepage = "https://www.eloqdata.com"
+keywords = ["storage", "ffi", "kv", "io-uring", "embedded"]
+categories = ["api-bindings", "database"]
+links = "eloqstore_combine"
+include = [
+  "Cargo.toml",
+  "README.md",
+  "build.rs",
+  "src/**",
+  "vendor/CMakeLists.txt",
+  "vendor/README.md",
+  "vendor/src/**",
+  "vendor/include/**",
+  "vendor/external/.clang-format",
+  "vendor/external/likely.h",
+  "vendor/external/random.cc",
+  "vendor/external/random.h",
+  "vendor/external/rocksdb_namespace.h",
+  "vendor/external/span.hpp",
+  "vendor/external/xxhash.c",
+  "vendor/external/xxhash.h",
+  "vendor/external/abseil/CMake/**",
+  "vendor/external/abseil/CMakeLists.txt",
+  "vendor/external/abseil/LICENSE",
+  "vendor/external/abseil/AUTHORS",
+  "vendor/external/abseil/absl/**",
+  "vendor/external/concurrentqueue/CMakeLists.txt",
+  "vendor/external/concurrentqueue/LICENSE.md",
+  "vendor/external/concurrentqueue/blockingconcurrentqueue.h",
+  "vendor/external/concurrentqueue/concurrentqueue.h",
+  "vendor/external/concurrentqueue/concurrentqueueConfig.cmake.in",
+  "vendor/external/concurrentqueue/lightweightsemaphore.h",
+  "vendor/external/concurrentqueue/internal/**",
+  "vendor/external/inih/ini.c",
+  "vendor/external/inih/ini.h",
+  "vendor/external/inih/cpp/INIReader.cpp",
+  "vendor/external/inih/cpp/INIReader.h",
+]
 
 [dependencies]
 libc = "0.2"

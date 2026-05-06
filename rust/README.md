@@ -12,6 +12,7 @@ This repository is a Cargo workspace with:
 ### Getting started
 
 - **🚀 Run the example**: `cargo run --example basic_usage` (see [eloqstore/examples/basic_usage.rs](eloqstore/examples/basic_usage.rs))
+- **Branch + ini example**: `cargo run --example embedded_branch_ini`
 - **Quick Start**: [docs/QUICK_START.md](docs/QUICK_START.md)
   - Local Ubuntu 24.04 setup (dependency install script)
   - CI Docker image workflow: [eloqdata/eloq-dev-ci-ubuntu2404](https://hub.docker.com/r/eloqdata/eloq-dev-ci-ubuntu2404)
@@ -30,6 +31,12 @@ cargo run --example basic_usage
 ```
 
 Or check out the [full example code](eloqstore/examples/basic_usage.rs).
+
+Additional examples:
+
+- [eloqstore/examples/basic_usage.rs](eloqstore/examples/basic_usage.rs)
+- [eloqstore/examples/embedded_branch_ini.rs](eloqstore/examples/embedded_branch_ini.rs)
+- [eloqstore/examples/cloud_storage.rs](eloqstore/examples/cloud_storage.rs)
 
 For a minimal snippet, the core flow looks like this:
 

@@ -2,6 +2,20 @@
 name = "eloqstore"
 version = "0.1.0"
 edition = "2024"
+description = "High-level Rust SDK for EloqStore"
+readme = "README.md"
+license = "BSL-2.0 OR AGPL-3.0-only"
+repository = "https://github.com/eloqdata/eloqstore"
+homepage = "https://www.eloqdata.com"
+keywords = ["storage", "kv", "database", "embedded", "io-uring"]
+categories = ["database", "api-bindings"]
+include = [
+  "Cargo.toml",
+  "README.md",
+  "src/**",
+  "examples/**",
+  "tests/**",
+]
 
 [dependencies]
-eloqstore-sys = { path = "../eloqstore-sys" }
+eloqstore-sys = { version = "0.1.0", path = "../eloqstore-sys" }

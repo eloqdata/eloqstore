@@ -1,0 +1,101 @@
+name: SDK Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: "Which SDK release flow to run"
+        required: true
+        default: "all"
+        type: choice
+        options:
+          - python
+          - rust
+          - all
+
+jobs:
+  python-release:
+    if: ${{ inputs.target == 'python' || inputs.target == 'all' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    container:
+      image: eloqdata/eloq-dev-ci-ubuntu2404:latest
+      options: --user root --security-opt seccomp=unconfined
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Fix permissions
+        run: chmod -R a+rwx "$GITHUB_WORKSPACE" || true
+
+      - name: Configure Git safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build Python wheel
+        run: |
+          python3 -m pip install build
+          python3 -m build --wheel
+        working-directory: ${{ github.workspace }}/python
+
+      - name: Publish Python package
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python/dist/
+
+  rust-release:
+    if: ${{ inputs.target == 'rust' || inputs.target == 'all' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: eloqdata/eloq-dev-ci-ubuntu2404:latest
+      options: --user root --security-opt seccomp=unconfined
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Fix permissions
+        run: chmod -R a+rwx "$GITHUB_WORKSPACE" || true
+
+      - name: Configure Git safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish eloqstore-sys
+        run: cargo publish -p eloqstore-sys --token "${CRATES_IO_TOKEN}"
+        working-directory: ${{ github.workspace }}/rust
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+      - name: Wait for crates.io index
+        run: |
+          for i in $(seq 1 30); do
+            if cargo search eloqstore-sys --limit 1 | grep -q "eloqstore-sys"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "eloqstore-sys did not appear in crates.io index in time" >&2
+          exit 1
+        working-directory: ${{ github.workspace }}/rust
+
+      - name: Publish eloqstore
+        run: cargo publish -p eloqstore --token "${CRATES_IO_TOKEN}"
+        working-directory: ${{ github.workspace }}/rust
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
