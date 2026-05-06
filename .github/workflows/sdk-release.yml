@@ -76,21 +76,37 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Read Rust crate versions
+        id: rust_versions
+        run: |
+          SYS_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' rust/eloqstore-sys/Cargo.toml | head -n1)
+          SDK_VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' rust/eloqstore/Cargo.toml | head -n1)
+          echo "sys_version=$SYS_VERSION" >> "$GITHUB_OUTPUT"
+          echo "sdk_version=$SDK_VERSION" >> "$GITHUB_OUTPUT"
+        working-directory: ${{ github.workspace }}
+
+      - name: Verify eloqstore-sys publish tarball
+        run: cargo publish -p eloqstore-sys --dry-run --allow-dirty --token "${CRATES_IO_TOKEN}"
+        working-directory: ${{ github.workspace }}/rust
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
       - name: Publish eloqstore-sys
         run: cargo publish -p eloqstore-sys --token "${CRATES_IO_TOKEN}"
         working-directory: ${{ github.workspace }}/rust
         env:
           CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
 
-      - name: Wait for crates.io index
+      - name: Wait for eloqstore-sys in crates.io index
         run: |
-          for i in $(seq 1 30); do
-            if cargo search eloqstore-sys --limit 1 | grep -q "eloqstore-sys"; then
+          VERSION="${{ steps.rust_versions.outputs.sys_version }}"
+          for i in $(seq 1 60); do
+            if cargo info eloqstore-sys | grep -Fq "version: ${VERSION}"; then
               exit 0
             fi
             sleep 10
           done
-          echo "eloqstore-sys did not appear in crates.io index in time" >&2
+          echo "eloqstore-sys ${VERSION} did not appear in crates.io index in time" >&2
           exit 1
         working-directory: ${{ github.workspace }}/rust
 
