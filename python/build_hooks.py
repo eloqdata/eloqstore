@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import shutil
 import subprocess
 import sysconfig
@@ -20,21 +21,26 @@ class CustomBuildHook(BuildHookInterface):
         native_dir.mkdir(parents=True, exist_ok=True)
         cmake_dir.mkdir(parents=True, exist_ok=True)
 
-        subprocess.run(
-            [
-                "cmake",
-                "-S",
-                str(repo_root),
-                "-B",
-                str(cmake_dir),
-                "-DCMAKE_BUILD_TYPE=Release",
-                "-DWITH_UNIT_TESTS=OFF",
-                "-DWITH_EXAMPLE=OFF",
-                "-DWITH_DB_STRESS=OFF",
-                "-DWITH_BENCHMARK=OFF",
-            ],
-            check=True,
-        )
+        cmake_args = [
+            "cmake",
+            "-S",
+            str(repo_root),
+            "-B",
+            str(cmake_dir),
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DWITH_UNIT_TESTS=OFF",
+            "-DWITH_EXAMPLE=OFF",
+            "-DWITH_DB_STRESS=OFF",
+            "-DWITH_BENCHMARK=OFF",
+        ]
+        if os.environ.get("CCACHE_DIR") and shutil.which("ccache"):
+            cmake_args.extend(
+                [
+                    "-DCMAKE_C_COMPILER_LAUNCHER=ccache",
+                    "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
+                ]
+            )
+        subprocess.run(cmake_args, check=True)
         subprocess.run(
             [
                 "cmake",

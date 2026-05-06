@@ -21,6 +21,17 @@ fn add_usr_local_link_search_paths_if_needed() {
     }
 }
 
+fn has_ccache() -> bool {
+    if std::env::var_os("CCACHE_DIR").is_none() {
+        return false;
+    }
+    Command::new("ccache")
+        .arg("--version")
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
+}
+
 fn main() {
     // Initialize and update git submodule before build
     // vendor/{src,include,external} are soft-linked to repository root
@@ -48,7 +59,8 @@ fn main() {
         .max(1);
 
     // Enable static linking of all dependencies
-    let dst = Config::new("vendor")
+    let mut config = Config::new("vendor");
+    config
         .define("CMAKE_CXX_STANDARD", "20")
         .define("BUILD_FOR_RUST", "ON")
         .define("STATIC_ALL_DEPS", "ON")
@@ -57,8 +69,15 @@ fn main() {
         .define("WITH_DB_STRESS", "OFF")
         .define("WITH_BENCHMARK", "OFF")
         .define("ELOQ_MODULE_ENABLED", "OFF")
-        .build_arg(format!("-j{}", num_jobs))
-        .build();
+        .build_arg(format!("-j{}", num_jobs));
+
+    if has_ccache() {
+        config
+            .define("CMAKE_C_COMPILER_LAUNCHER", "ccache")
+            .define("CMAKE_CXX_COMPILER_LAUNCHER", "ccache");
+    }
+
+    let dst = config.build();
 
     let build_dir = dst.join("build");
     let lib_dir = dst.join("lib");
