@@ -50,7 +50,7 @@ jobs:
 
       - name: Build Python wheel
         run: |
-          python3 -m pip install build
+          python3 -m pip install build pytest
           python3 -m build --wheel
         working-directory: ${{ github.workspace }}/python
 
