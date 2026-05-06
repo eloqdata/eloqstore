@@ -4,8 +4,8 @@
 #include <memory>
 #include <mutex>
 #include <string>
-#include <utility>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "eloq_store.h"
