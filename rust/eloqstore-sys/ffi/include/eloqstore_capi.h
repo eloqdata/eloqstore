@@ -258,6 +258,13 @@ extern "C"
                                     const uint8_t *key,
                                     size_t key_len,
                                     CGetResult *out_result);
+    CEloqStoreStatus CEloqStore_GetInto(CEloqStoreHandle store,
+                                        CTableIdentHandle table,
+                                        const uint8_t *key,
+                                        size_t key_len,
+                                        uint8_t *out_value,
+                                        size_t out_capacity,
+                                        CGetResult *out_result);
     bool CEloqStore_Exists(CEloqStoreHandle store,
                            CTableIdentHandle table,
                            const uint8_t *key,

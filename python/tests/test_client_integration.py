@@ -26,6 +26,37 @@ def test_in_memory_client_roundtrip():
         client.close()
 
 
+def test_buffer_inputs_and_get_into_roundtrip():
+    client = Client(Options(table_name="demo", partition_id=0, num_threads=1))
+    try:
+        payload = bytearray(b"buffer-payload")
+        client.put("hello", payload)
+
+        out = bytearray(len(payload))
+        written = client.get_into("hello", out)
+        assert written == len(payload)
+        assert bytes(out) == bytes(payload)
+
+        batch_payload = bytearray(b"batch-payload")
+        client.batch_put([("k1", memoryview(batch_payload)), ("k2", b"v2")])
+        out2 = bytearray(len(batch_payload))
+        written2 = client.get_into("k1", out2)
+        assert written2 == len(batch_payload)
+        assert bytes(out2) == bytes(batch_payload)
+        assert client.batch_get(["k1", "k2"]) == [bytes(batch_payload), b"v2"]
+    finally:
+        client.close()
+
+
+def test_get_into_missing_key_returns_none():
+    client = Client(Options(table_name="demo", partition_id=0, num_threads=1))
+    try:
+        out = bytearray(8)
+        assert client.get_into("missing", out) is None
+    finally:
+        client.close()
+
+
 def test_disk_mode_roundtrip_and_reopen():
     root = Path(tempfile.mkdtemp(prefix="eloqstore-py-disk-"))
     store_path = root / "data"

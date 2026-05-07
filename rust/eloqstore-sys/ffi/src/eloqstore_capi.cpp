@@ -743,6 +743,81 @@ extern "C"
         }
     }
 
+    CEloqStoreStatus CEloqStore_GetInto(CEloqStoreHandle store,
+                                        CTableIdentHandle table,
+                                        const uint8_t *key,
+                                        size_t key_len,
+                                        uint8_t *out_value,
+                                        size_t out_capacity,
+                                        CGetResult *out_result)
+    {
+        clear_last_error();
+        if (!store || !table || !key || key_len == 0 || !out_result)
+        {
+            return CEloqStoreStatus_InvalidArgs;
+        }
+
+        auto *cpp_store = reinterpret_cast<EloqStore *>(store);
+        auto *cpp_table = reinterpret_cast<TableIdent *>(table);
+
+        try
+        {
+            ReadRequest req;
+            req.SetArgs(
+                *cpp_table,
+                std::string(reinterpret_cast<const char *>(key), key_len));
+
+            cpp_store->ExecSync(&req);
+            auto err = req.Error();
+
+            if (err == KvError::NoError)
+            {
+                out_result->value_len = req.value_.size();
+                out_result->timestamp = req.ts_;
+                out_result->expire_ts = req.expire_ts_;
+                out_result->found = true;
+
+                if (req.value_.size() > out_capacity)
+                {
+                    out_result->value = nullptr;
+                    set_last_error("output buffer too small for value");
+                    return CEloqStoreStatus_OutOfSpace;
+                }
+
+                if (req.value_.size() > 0)
+                {
+                    if (!out_value)
+                    {
+                        set_last_error(
+                            "output buffer is null for non-empty value");
+                        return CEloqStoreStatus_InvalidArgs;
+                    }
+                    std::memcpy(
+                        out_value, req.value_.data(), req.value_.size());
+                }
+                out_result->value = out_value;
+            }
+            else if (err == KvError::NotFound)
+            {
+                out_result->value = nullptr;
+                out_result->value_len = 0;
+                out_result->timestamp = 0;
+                out_result->expire_ts = 0;
+                out_result->found = false;
+            }
+            else
+            {
+                return kv_error_to_c(err);
+            }
+            return CEloqStoreStatus_Ok;
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return CEloqStoreStatus_InvalidArgs;
+        }
+    }
+
     bool CEloqStore_Exists(CEloqStoreHandle store,
                            CTableIdentHandle table,
                            const uint8_t *key,

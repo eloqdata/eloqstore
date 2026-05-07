@@ -51,14 +51,17 @@ fn main() -> Result<(), eloqstore::KvError> {
     // Step 4: Basic operations (put/get/delete)
     // ============================================================
     println!("4. Basic operations (put/get/delete):");
-    
+
     // Put a key-value pair
     store.put(&table, b"user:1", b"Alice", ts)?;
     println!("   ✓ put(\"user:1\", \"Alice\")");
 
     // Get a value
     if let Some(value) = store.get(&table, b"user:1")? {
-        println!("   ✓ get(\"user:1\") -> {}", String::from_utf8_lossy(&value));
+        println!(
+            "   ✓ get(\"user:1\") -> {}",
+            String::from_utf8_lossy(&value)
+        );
     }
 
     // Put more data
@@ -73,16 +76,18 @@ fn main() -> Result<(), eloqstore::KvError> {
     println!("5. Batch operations:");
     let keys: Vec<&[u8]> = vec![b"user:4", b"user:5", b"user:6"];
     let values: Vec<&[u8]> = vec![b"David", b"Eve", b"Frank"];
-    
+
     store.put_batch(&table, &keys, &values, ts + 10)?;
     println!("   ✓ put_batch(3 entries)");
 
     // Verify batch insert
     for key in &keys {
         if let Some(value) = store.get(&table, key)? {
-            println!("   ✓ get({:?}) -> {}", 
+            println!(
+                "   ✓ get({:?}) -> {}",
                 String::from_utf8_lossy(key),
-                String::from_utf8_lossy(&value));
+                String::from_utf8_lossy(&value)
+            );
         }
     }
     println!();
@@ -92,11 +97,16 @@ fn main() -> Result<(), eloqstore::KvError> {
     // ============================================================
     println!("6. Scan operations (range query):");
     let entries = store.scan(&table, b"user:1", b"user:5")?;
-    println!("   ✓ scan(\"user:1\", \"user:5\") -> {} entries", entries.len());
+    println!(
+        "   ✓ scan(\"user:1\", \"user:5\") -> {} entries",
+        entries.len()
+    );
     for entry in entries {
-        println!("     - {}: {}", 
+        println!(
+            "     - {}: {}",
             String::from_utf8_lossy(&entry.key),
-            String::from_utf8_lossy(&entry.value));
+            String::from_utf8_lossy(&entry.value)
+        );
     }
     println!();
 
@@ -105,9 +115,11 @@ fn main() -> Result<(), eloqstore::KvError> {
     // ============================================================
     println!("7. Floor operation:");
     if let Some((key, value)) = store.floor(&table, b"user:3")? {
-        println!("   ✓ floor(\"user:3\") -> {}: {}", 
+        println!(
+            "   ✓ floor(\"user:3\") -> {}: {}",
             String::from_utf8_lossy(&key),
-            String::from_utf8_lossy(&value));
+            String::from_utf8_lossy(&value)
+        );
     }
     println!();
 
@@ -117,7 +129,7 @@ fn main() -> Result<(), eloqstore::KvError> {
     println!("8. Delete operations:");
     store.delete(&table, b"user:1", ts + 100)?;
     println!("   ✓ delete(\"user:1\")");
-    
+
     // Verify deletion
     if store.get(&table, b"user:1")?.is_none() {
         println!("   ✓ Verified: \"user:1\" no longer exists\n");

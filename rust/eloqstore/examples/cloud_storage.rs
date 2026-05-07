@@ -28,15 +28,20 @@ fn main() -> Result<(), eloqstore::KvError> {
 
     // Basic configuration
     opts.set_num_threads(4).expect("Failed to set num threads");
-    opts.add_store_path("/tmp/eloqstore_cloud_cache").expect("Failed to add store path");
+    opts.add_store_path("/tmp/eloqstore_cloud_cache")
+        .expect("Failed to add store path");
     opts.set_data_append_mode(true); // Required for cloud storage
     opts.set_enable_compression(true);
 
     // Cloud storage configuration
-    opts.set_cloud_store_path("eloqstore/example_bucket").expect("Failed to set cloud store path");
-    opts.set_cloud_provider("aws").expect("Failed to set cloud provider");
-    opts.set_cloud_region("us-east-1").expect("Failed to set cloud region");
-    opts.set_cloud_credentials("minioadmin", "minioadmin").expect("Failed to set cloud credentials");
+    opts.set_cloud_store_path("eloqstore/example_bucket")
+        .expect("Failed to set cloud store path");
+    opts.set_cloud_provider("aws")
+        .expect("Failed to set cloud provider");
+    opts.set_cloud_region("us-east-1")
+        .expect("Failed to set cloud region");
+    opts.set_cloud_credentials("minioadmin", "minioadmin")
+        .expect("Failed to set cloud credentials");
     opts.set_cloud_verify_ssl(false);
 
     // Note: The following cloud options are not yet exposed in the C API:
@@ -92,8 +97,12 @@ fn main() -> Result<(), eloqstore::KvError> {
     }
 
     // Batch operations
-    let keys :Vec<&[u8]> = vec![b"log:1", b"log:2", b"log:3"];
-    let values :Vec<&[u8]> = vec![b"error: connection failed", b"info: user logged in", b"debug: cache hit"];
+    let keys: Vec<&[u8]> = vec![b"log:1", b"log:2", b"log:3"];
+    let values: Vec<&[u8]> = vec![
+        b"error: connection failed",
+        b"info: user logged in",
+        b"debug: cache hit",
+    ];
 
     store.put_batch(&log_table, &keys, &values, ts + 10)?;
     println!("Wrote 3 logs in batch to cloud storage");

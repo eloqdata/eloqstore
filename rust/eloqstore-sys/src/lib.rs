@@ -246,6 +246,15 @@ mod ffi {
             key_len: usize,
             out_result: *mut super::CGetResult,
         ) -> CEloqStoreStatus;
+        pub fn CEloqStore_GetInto(
+            store: CEloqStoreHandle,
+            table: CTableIdentHandle,
+            key: *const c_uchar,
+            key_len: usize,
+            out_value: *mut c_uchar,
+            out_capacity: usize,
+            out_result: *mut super::CGetResult,
+        ) -> CEloqStoreStatus;
         pub fn CEloqStore_Exists(
             store: CEloqStoreHandle,
             table: CTableIdentHandle,
@@ -350,6 +359,7 @@ pub use self::ffi::CEloqStore_Delete;
 pub use self::ffi::CEloqStore_DeleteBatch;
 pub use self::ffi::CEloqStore_Floor;
 pub use self::ffi::CEloqStore_Get;
+pub use self::ffi::CEloqStore_GetInto;
 pub use self::ffi::CEloqStore_Put;
 pub use self::ffi::CEloqStore_PutBatch;
 pub use self::ffi::CEloqStore_PutEntries;

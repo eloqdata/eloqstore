@@ -97,7 +97,9 @@ impl std::convert::From<KvError> for std::io::Error {
             KvError::CloudErr => Self::new(Other, "cloud error"),
             KvError::IoFail => Self::new(Other, "I/O failure"),
             KvError::ExpiredTerm => Self::new(Other, "expired term"),
-            KvError::OssInsufficientStorage => Self::new(StorageFull, "object storage insufficient storage"),
+            KvError::OssInsufficientStorage => {
+                Self::new(StorageFull, "object storage insufficient storage")
+            }
             KvError::AlreadyExists => Self::new(AlreadyExists, "resource already exists"),
             KvError::Unknown => Self::new(Other, "unknown error"),
         }

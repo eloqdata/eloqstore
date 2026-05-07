@@ -13,8 +13,7 @@ fn add_usr_local_link_search_paths_if_needed() {
             continue;
         }
         let has_glog = d.join("libglog.so").exists() || d.join("libglog.so.1").exists();
-        let has_gflags =
-            d.join("libgflags.so").exists() || d.join("libgflags.so.2").exists();
+        let has_gflags = d.join("libgflags.so").exists() || d.join("libgflags.so.2").exists();
         if has_glog || has_gflags {
             println!("cargo:rustc-link-search=native={}", d.display());
         }
@@ -44,7 +43,9 @@ fn main() {
                 .status();
             if let Ok(s) = status {
                 if !s.success() {
-                    panic!("git submodule update --init --recursive failed, please manually execute in repository root");
+                    panic!(
+                        "git submodule update --init --recursive failed, please manually execute in repository root"
+                    );
                 }
             }
         }
@@ -54,7 +55,11 @@ fn main() {
     let num_jobs = std::env::var("NUM_JOBS")
         .ok()
         .and_then(|s| s.parse::<u32>().ok())
-        .or_else(|| std::thread::available_parallelism().ok().map(|p| p.get() as u32))
+        .or_else(|| {
+            std::thread::available_parallelism()
+                .ok()
+                .map(|p| p.get() as u32)
+        })
         .unwrap_or(1)
         .max(1);
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 from ctypes import (
     POINTER,
     Structure,
+    c_char,
     byref,
     c_bool,
     c_char_p,
@@ -16,6 +17,7 @@ from ctypes import (
 )
 from pathlib import Path
 import os
+from typing import Any
 
 
 class CGetResult(Structure):
@@ -122,6 +124,16 @@ def _configure_library(lib) -> None:
         POINTER(CGetResult),
     ]
     lib.CEloqStore_Get.restype = c_uint32
+    lib.CEloqStore_GetInto.argtypes = [
+        c_void_p,
+        c_void_p,
+        POINTER(c_uint8),
+        c_size_t,
+        POINTER(c_uint8),
+        c_size_t,
+        POINTER(CGetResult),
+    ]
+    lib.CEloqStore_GetInto.restype = c_uint32
 
     lib.CEloqStore_Exists.argtypes = [c_void_p, c_void_p, POINTER(c_uint8), c_size_t]
     lib.CEloqStore_Exists.restype = c_bool
@@ -173,3 +185,45 @@ def alloc_bytes(data: bytes):
         return arr, arr, 0
     arr = (_c_uint8 * len(data)).from_buffer_copy(data)
     return arr, arr, len(data)
+
+
+def as_input_buffer(data: Any):
+    from ctypes import c_uint8 as _c_uint8
+
+    if isinstance(data, str):
+        data = data.encode("utf-8")
+    if isinstance(data, bytes):
+        return alloc_bytes(data)
+
+    view = memoryview(data)
+    if view.ndim != 1:
+        raise TypeError("buffer must be 1-dimensional")
+    if not view.contiguous:
+        raise TypeError("buffer must be contiguous")
+    byte_view = view.cast("B")
+    if len(byte_view) == 0:
+        arr = (_c_uint8 * 1)()
+        return arr, arr, 0
+    if byte_view.readonly:
+        arr = (_c_uint8 * len(byte_view)).from_buffer_copy(byte_view)
+        return (view, arr), arr, len(byte_view)
+    arr = (_c_uint8 * len(byte_view)).from_buffer(byte_view)
+    return (view, arr), arr, len(byte_view)
+
+
+def as_output_buffer(data: Any):
+    from ctypes import c_uint8 as _c_uint8
+
+    view = memoryview(data)
+    if view.ndim != 1:
+        raise TypeError("output buffer must be 1-dimensional")
+    if not view.contiguous:
+        raise TypeError("output buffer must be contiguous")
+    if view.readonly:
+        raise TypeError("output buffer must be writable")
+    byte_view = view.cast("B")
+    if len(byte_view) == 0:
+        arr = (_c_uint8 * 1)()
+        return (view, arr), arr, 0
+    arr = (_c_uint8 * len(byte_view)).from_buffer(byte_view)
+    return (view, arr), arr, len(byte_view)

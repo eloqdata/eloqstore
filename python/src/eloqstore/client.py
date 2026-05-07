@@ -3,17 +3,26 @@ from __future__ import annotations
 from ctypes import POINTER, c_size_t, c_uint8, c_uint64
 from dataclasses import dataclass, field
 from time import time_ns
-from typing import Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from ._errors import EloqStoreError
-from ._ffi import CGetResult, alloc_bytes, lib, last_error
+from ._ffi import (
+    CGetResult,
+    alloc_bytes,
+    as_input_buffer,
+    as_output_buffer,
+    lib,
+    last_error,
+)
 
 
-def _to_bytes(data: str | bytes) -> bytes:
-    if isinstance(data, bytes):
+def _to_bytes(data: str | bytes | bytearray | memoryview) -> bytes:
+    if isinstance(data, (bytes, bytearray)):
         return data
     if isinstance(data, str):
         return data.encode("utf-8")
+    if isinstance(data, memoryview):
+        return data.tobytes()
     raise TypeError(f"Expected str or bytes, got {type(data)!r}")
 
 
@@ -178,11 +187,15 @@ class Client:
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
 
-    def put(self, key: str | bytes, value: bytes, *, timestamp: int | None = None) -> None:
-        key_b = _to_bytes(key)
-        value_b = _to_bytes(value)
-        key_arr, key_ptr, key_len = alloc_bytes(key_b)
-        value_arr, value_ptr, value_len = alloc_bytes(value_b)
+    def put(
+        self,
+        key: str | bytes,
+        value: str | bytes | bytearray | memoryview | Any,
+        *,
+        timestamp: int | None = None,
+    ) -> None:
+        key_arr, key_ptr, key_len = alloc_bytes(_to_bytes(key))
+        value_arr, value_ptr, value_len = as_input_buffer(value)
         _ok(
             self._lib.CEloqStore_Put(
                 self._store_handle,
@@ -196,8 +209,7 @@ class Client:
         )
 
     def get(self, key: str | bytes) -> bytes | None:
-        key_b = _to_bytes(key)
-        key_arr, key_ptr, key_len = alloc_bytes(key_b)
+        key_arr, key_ptr, key_len = alloc_bytes(_to_bytes(key))
         result = CGetResult()
         status = self._lib.CEloqStore_Get(
             self._store_handle, self._table_handle, key_ptr, key_len, result
@@ -209,6 +221,24 @@ class Client:
             return bytes(result.value[: result.value_len])
         finally:
             self._lib.CEloqStore_FreeGetResult(result)
+
+    def get_into(self, key: str | bytes, out_buffer: Any) -> int | None:
+        key_arr, key_ptr, key_len = alloc_bytes(_to_bytes(key))
+        out_arr, out_ptr, out_len = as_output_buffer(out_buffer)
+        result = CGetResult()
+        status = self._lib.CEloqStore_GetInto(
+            self._store_handle,
+            self._table_handle,
+            key_ptr,
+            key_len,
+            out_ptr,
+            out_len,
+            result,
+        )
+        _ok(status)
+        if not result.found:
+            return None
+        return int(result.value_len)
 
     def exists(self, key: str | bytes) -> bool:
         key_b = _to_bytes(key)
@@ -234,7 +264,7 @@ class Client:
 
     def batch_put(
         self,
-        items: Mapping[str | bytes, bytes] | Iterable[tuple[str | bytes, bytes]],
+        items: Mapping[str | bytes, Any] | Iterable[tuple[str | bytes, Any]],
         *,
         timestamp: int | None = None,
     ) -> None:
@@ -251,7 +281,7 @@ class Client:
 
         for key, value in pairs:
             key_arr, key_ptr, key_len = alloc_bytes(_to_bytes(key))
-            value_arr, value_ptr, value_len = alloc_bytes(_to_bytes(value))
+            value_arr, value_ptr, value_len = as_input_buffer(value)
             key_arrays.append(key_arr)
             value_arrays.append(value_arr)
             key_ptrs.append(key_ptr)

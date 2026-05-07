@@ -21,8 +21,8 @@
 //!   ELOQ_BENCH_WORKLOAD     write | read | scan | write-read | write-scan | load
 
 use eloqstore::{EloqStore, Options, ScanRequest, TableIdentifier};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -38,7 +38,6 @@ fn timestamp_ms() -> u64 {
 fn encode_key(key: u64) -> [u8; 8] {
     key.to_be_bytes()
 }
-
 
 fn env_u32(name: &str, default: u32) -> u32 {
     std::env::var(name)
@@ -137,8 +136,10 @@ fn run_write(
                 // C++ BatchWrite requires keys to be strictly sorted and unique
                 let mut indices: Vec<usize> = (0..keys.len()).collect();
                 indices.sort_by(|a, b| keys[*a].cmp(&keys[*b]));
-                let mut keys_sorted: Vec<Vec<u8>> = indices.iter().map(|&i| keys[i].clone()).collect();
-                let mut values_sorted: Vec<Vec<u8>> = indices.iter().map(|&i| values[i].clone()).collect();
+                let mut keys_sorted: Vec<Vec<u8>> =
+                    indices.iter().map(|&i| keys[i].clone()).collect();
+                let mut values_sorted: Vec<Vec<u8>> =
+                    indices.iter().map(|&i| values[i].clone()).collect();
                 let mut j = 0;
                 for i in 1..keys_sorted.len() {
                     if keys_sorted[i] != keys_sorted[j] {
@@ -157,7 +158,7 @@ fn run_write(
                 let batch_start = Instant::now();
                 store.put_batch(&tbl, &key_refs, &value_refs, ts)?;
                 let batch_latency_us = batch_start.elapsed().as_micros() as u64;
-                
+
                 if show_perf {
                     latencies.lock().unwrap().push(batch_latency_us);
                 }
@@ -176,7 +177,8 @@ fn run_write(
                         let num_kvs = batches_in_window * batch_size as u64;
                         let kvs_per_sec = (num_kvs as f64 * 1000.0) / window_elapsed_ms;
                         let upsert_ratio = if load_only { 1.0 } else { 0.75 };
-                        let mb_per_sec = (kvs_per_sec * upsert_ratio * kv_size as f64) / (1024.0 * 1024.0);
+                        let mb_per_sec =
+                            (kvs_per_sec * upsert_ratio * kv_size as f64) / (1024.0 * 1024.0);
                         println!(
                             "write speed {:.0} kvs/s | cost {:.0} ms | {:.2} MiB/s",
                             kvs_per_sec, window_elapsed_ms, mb_per_sec
@@ -352,7 +354,7 @@ fn run_read_multi(
     let total = total_reads.load(Ordering::Relaxed);
     let elapsed = Duration::from_secs(read_secs);
     let qps = total as f64 / elapsed.as_secs_f64();
-    
+
     // Final summary
     let latencies_guard = latencies.lock().unwrap();
     if !latencies_guard.is_empty() {
@@ -366,7 +368,7 @@ fn run_read_multi(
         let p999 = sorted_latencies[(len * 999 / 1000).min(len - 1)];
         let p9999 = sorted_latencies[(len * 9999 / 10000).min(len - 1)];
         let max_latency = *sorted_latencies.last().unwrap();
-        
+
         println!(
             "[read] {} total reads in {} s | {:.0} QPS | average latency {} microseconds | p50 {} microseconds | p90 {} microseconds | p99 {} microseconds | p99.9 {} microseconds | p99.99 {} microseconds | max latency {} microseconds",
             total, read_secs, qps, average, p50, p90, p99, p999, p9999, max_latency
@@ -374,9 +376,7 @@ fn run_read_multi(
     } else {
         println!(
             "[read] {} total reads in {} s | {:.0} QPS",
-            total,
-            read_secs,
-            qps
+            total, read_secs, qps
         );
     }
     Ok(())
@@ -478,8 +478,10 @@ fn simple_bench() {
     let path = dir.to_string_lossy();
 
     let mut opts = Options::new().expect("options");
-    opts.set_num_threads(partitions.max(1)).expect("Failed to set num threads");
-    opts.add_store_path(path.as_ref()).expect("Failed to add store path");
+    opts.set_num_threads(partitions.max(1))
+        .expect("Failed to set num threads");
+    opts.add_store_path(path.as_ref())
+        .expect("Failed to add store path");
     let mut store = EloqStore::new(&opts).expect("store");
     store.start().expect("start");
 
@@ -519,12 +521,27 @@ fn simple_bench() {
             .expect("load");
         }
         "read" => {
-            run_read_multi(store_arc.clone(), partitions, max_key, read_secs, read_thds, read_per_part, read_stats_interval)
-                .expect("read");
+            run_read_multi(
+                store_arc.clone(),
+                partitions,
+                max_key,
+                read_secs,
+                read_thds,
+                read_per_part,
+                read_stats_interval,
+            )
+            .expect("read");
         }
         "scan" => {
-            run_scan_multi(store_arc.clone(), partitions, max_key, read_secs, 256, read_thds)
-                .expect("scan");
+            run_scan_multi(
+                store_arc.clone(),
+                partitions,
+                max_key,
+                read_secs,
+                256,
+                read_thds,
+            )
+            .expect("scan");
         }
         "write-read" => {
             run_write(
@@ -539,8 +556,16 @@ fn simple_bench() {
                 write_stats_interval,
             )
             .expect("write");
-            run_read_multi(store_arc.clone(), partitions, max_key, read_secs, read_thds, read_per_part, read_stats_interval)
-                .expect("read");
+            run_read_multi(
+                store_arc.clone(),
+                partitions,
+                max_key,
+                read_secs,
+                read_thds,
+                read_per_part,
+                read_stats_interval,
+            )
+            .expect("read");
         }
         "write-scan" => {
             run_write(
@@ -555,8 +580,15 @@ fn simple_bench() {
                 write_stats_interval,
             )
             .expect("write");
-            run_scan_multi(store_arc.clone(), partitions, max_key, read_secs, 256, read_thds)
-                .expect("scan");
+            run_scan_multi(
+                store_arc.clone(),
+                partitions,
+                max_key,
+                read_secs,
+                256,
+                read_thds,
+            )
+            .expect("scan");
         }
         _ => {
             println!("unknown workload '{}', defaulting to write-read", workload);
@@ -572,8 +604,16 @@ fn simple_bench() {
                 write_stats_interval,
             )
             .expect("write");
-            run_read_multi(store_arc.clone(), partitions, max_key, read_secs, read_thds, read_per_part, read_stats_interval)
-                .expect("read");
+            run_read_multi(
+                store_arc.clone(),
+                partitions,
+                max_key,
+                read_secs,
+                read_thds,
+                read_per_part,
+                read_stats_interval,
+            )
+            .expect("read");
         }
     }
 

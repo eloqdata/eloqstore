@@ -44,7 +44,7 @@ pub(crate) fn ensure_library_available() -> Result<PathBuf, String> {
             }
         }
     });
-    
+
     EXTRACTED_LIB_PATH
         .lock()
         .map_err(|e| format!("Mutex poison: {}", e))?
@@ -70,7 +70,7 @@ fn extract_embedded_library() -> Result<Option<PathBuf>, Box<dyn std::error::Err
     // We use include_bytes! to embed it at compile time
     // Note: include_bytes! reads the file at compile time, not runtime
     let embedded_data = include_bytes!(concat!(env!("OUT_DIR"), "/libeloqstore_combine.so"));
-    
+
     // Create a unique temporary directory for the extracted library
     // Using tempfile::Builder ensures a unique, unpredictable path to prevent
     // symlink hijacking and TOCTOU race conditions
@@ -78,9 +78,9 @@ fn extract_embedded_library() -> Result<Option<PathBuf>, Box<dyn std::error::Err
         .prefix("eloqstore_libs_")
         .tempdir()
         .map_err(|e| format!("Failed to create temp directory: {}", e))?;
-    
+
     let lib_path = temp_dir.path().join("libeloqstore_combine.so");
-    
+
     // Atomically create the file using create_new(true) to prevent TOCTOU races
     // This ensures the file is created atomically and fails if it already exists
     let mut file = fs::OpenOptions::new()
@@ -88,13 +88,13 @@ fn extract_embedded_library() -> Result<Option<PathBuf>, Box<dyn std::error::Err
         .create_new(true)
         .open(&lib_path)
         .map_err(|e| format!("Failed to create library file atomically: {}", e))?;
-    
+
     file.write_all(embedded_data)
         .map_err(|e| format!("Failed to write library data: {}", e))?;
     file.sync_all()
         .map_err(|e| format!("Failed to sync library file: {}", e))?;
     drop(file);
-    
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -102,7 +102,7 @@ fn extract_embedded_library() -> Result<Option<PathBuf>, Box<dyn std::error::Err
         perms.set_mode(0o755);
         fs::set_permissions(&lib_path, perms)?;
     }
-    
+
     // Keep the temp directory alive for the lifetime of the process
     // This prevents the directory from being deleted while the library is in use
     if let Ok(mut guard) = TEMP_DIR.lock() {
@@ -110,14 +110,14 @@ fn extract_embedded_library() -> Result<Option<PathBuf>, Box<dyn std::error::Err
     }
     // If we can't store the temp dir, we'll leak it to ensure the library remains available
     // This is acceptable since the directory will be cleaned up when the process exits
-    
+
     // On Unix: load the extracted .so with dlopen so symbols are available before FFI resolution.
     #[cfg(unix)]
     {
         use std::ffi::CString;
         let lib_path_cstr = CString::new(lib_path.to_string_lossy().as_ref())
             .map_err(|e| format!("Invalid library path: {}", e))?;
-        
+
         unsafe {
             const RTLD_LAZY: c_int = 1;
             const RTLD_GLOBAL: c_int = 0x00100; // Expose symbols to later-loaded libraries
@@ -127,15 +127,18 @@ fn extract_embedded_library() -> Result<Option<PathBuf>, Box<dyn std::error::Err
                 let error_msg = if err.is_null() {
                     "Unknown error".to_string()
                 } else {
-                    std::ffi::CStr::from_ptr(err)
-                        .to_string_lossy()
-                        .into_owned()
+                    std::ffi::CStr::from_ptr(err).to_string_lossy().into_owned()
                 };
-                return Err(format!("Failed to dlopen library {}: {}", lib_path.display(), error_msg).into());
+                return Err(format!(
+                    "Failed to dlopen library {}: {}",
+                    lib_path.display(),
+                    error_msg
+                )
+                .into());
             }
         }
     }
-    
+
     Ok(Some(lib_path))
 }
 
@@ -160,7 +163,7 @@ fn find_library_in_standard_paths() -> Option<PathBuf> {
             }
         }
     }
-    
+
     // Check system paths
     for path in ["/usr/local/lib", "/usr/lib"] {
         let lib = PathBuf::from(path).join("libeloqstore_combine.so");
@@ -168,6 +171,6 @@ fn find_library_in_standard_paths() -> Option<PathBuf> {
             return Some(lib);
         }
     }
-    
+
     None
 }
