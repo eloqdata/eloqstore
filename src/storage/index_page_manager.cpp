@@ -189,6 +189,14 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
         MappingSnapshot *mapping = mapper->GetMapping();
         meta->mapper_ = std::move(mapper);
         meta->mapping_snapshots_.insert(mapping);
+        auto seg_mapper =
+            replayer.GetSegmentMapper(this, &entry_tbl, IoMgr()->ProcessTerm());
+        if (seg_mapper != nullptr)
+        {
+            MappingSnapshot *seg_mapping = seg_mapper->GetMapping();
+            meta->segment_mapper_ = std::move(seg_mapper);
+            meta->segment_mapping_snapshots_.insert(seg_mapping);
+        }
         root_meta_mgr_.UpdateBytes(entry, RootMetaBytes(*meta));
         err = root_meta_mgr_.EvictIfNeeded();
         CHECK_KV_ERR(err);
@@ -210,31 +218,24 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
         if (!replayer.branch_metadata_.file_ranges.empty())
         {
             const auto &ranges = replayer.branch_metadata_.file_ranges;
-            // Validate invariants restored from the manifest:
-            //   1. max_file_id is strictly ascending across all entries.
-            //   2. All entries for the same branch_name are contiguous
-            //      (no other branch's entries interleaved within a branch's
-            //      block).
-            //   3. For each branch, term is non-decreasing in max_file_id
-            //      order.
             std::unordered_map<std::string, uint64_t> branch_last_term;
             std::string last_branch_name;
             for (size_t i = 0; i < ranges.size(); ++i)
             {
-                if (i > 0 && ranges[i].max_file_id <= ranges[i - 1].max_file_id)
+                if (i > 0 &&
+                    ranges[i].max_file_id_ <= ranges[i - 1].max_file_id_)
                 {
                     LOG(ERROR)
                         << "branch_metadata file_ranges: max_file_id not "
                            "strictly ascending at index "
-                        << i << " (prev=" << ranges[i - 1].max_file_id
-                        << ", cur=" << ranges[i].max_file_id << ")";
+                        << i << " (prev=" << ranges[i - 1].max_file_id_
+                        << ", cur=" << ranges[i].max_file_id_ << ")";
                     return KvError::Corrupted;
                 }
-                const std::string &bn = ranges[i].branch_name;
+                const std::string &bn = ranges[i].branch_name_;
                 auto it = branch_last_term.find(bn);
                 if (it != branch_last_term.end())
                 {
-                    // Branch seen before — entries must be contiguous.
                     if (bn != last_branch_name)
                     {
                         LOG(ERROR)
@@ -244,22 +245,21 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
                             << last_branch_name << "')";
                         return KvError::Corrupted;
                     }
-                    // Term must not decrease within the branch's block.
-                    if (ranges[i].term < it->second)
+                    if (ranges[i].term_ < it->second)
                     {
                         LOG(ERROR)
                             << "branch_metadata file_ranges: term decreases "
                                "for branch '"
                             << bn << "' at index " << i
                             << " (prev_term=" << it->second
-                            << ", cur_term=" << ranges[i].term << ")";
+                            << ", cur_term=" << ranges[i].term_ << ")";
                         return KvError::Corrupted;
                     }
-                    it->second = ranges[i].term;
+                    it->second = ranges[i].term_;
                 }
                 else
                 {
-                    branch_last_term.emplace(bn, ranges[i].term);
+                    branch_last_term.emplace(bn, ranges[i].term_);
                 }
                 last_branch_name = bn;
             }
@@ -342,6 +342,14 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
             assert(cow_meta.manifest_size_ == 0);
         }
         cow_meta.compression_ = meta->compression_;
+        // Copy segment mapper if present.
+        if (meta->segment_mapper_ != nullptr)
+        {
+            cow_meta.segment_mapper_ =
+                std::make_unique<PageMapper>(*meta->segment_mapper_);
+            cow_meta.old_segment_mapping_ =
+                meta->segment_mapper_->GetMappingSnapshot();
+        }
     }
     else if (err == KvError::NotFound)
     {
@@ -377,6 +385,12 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
     }
     auto it = meta->mapping_snapshots_.insert(cow_meta.mapper_->GetMapping());
     CHECK(it.second);
+    if (cow_meta.segment_mapper_ != nullptr)
+    {
+        auto seg_it = meta->segment_mapping_snapshots_.insert(
+            cow_meta.segment_mapper_->GetMapping());
+        CHECK(seg_it.second);
+    }
     return KvError::NoError;
 }
 
@@ -395,6 +409,12 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
         prev_snapshot->next_snapshot_ = new_meta.mapper_->GetMappingSnapshot();
     }
     meta.mapper_ = std::move(new_meta.mapper_);
+    // Update segment mapper if present in the new meta.
+    // Segment mapping is always append-only, so no snapshot chaining needed.
+    if (new_meta.segment_mapper_ != nullptr)
+    {
+        meta.segment_mapper_ = std::move(new_meta.segment_mapper_);
+    }
     meta.manifest_size_ = new_meta.manifest_size_;
     meta.next_expire_ts_ = new_meta.next_expire_ts_;
     meta.compression_ = std::move(new_meta.compression_);
@@ -480,13 +500,18 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
                 std::string branch_name;
                 uint64_t term;
                 if (!IoMgr()->GetBranchNameAndTerm(
-                        tbl_ident, max_file_id, branch_name, term))
+                        tbl_ident, DataFileKey(max_file_id), branch_name, term))
                 {
                     branch_name = IoMgr()->GetActiveBranch();
                     term = IoMgr()->ProcessTerm();
                 }
-                KvError sync_err = cloud_mgr->DownloadFile(
-                    tbl_ident, max_file_id, branch_name, term, true, offset);
+                KvError sync_err =
+                    cloud_mgr->DownloadFile(tbl_ident,
+                                            DataFileKey(max_file_id),
+                                            branch_name,
+                                            term,
+                                            true,
+                                            offset);
                 if (sync_err != KvError::NoError &&
                     sync_err != KvError::NotFound &&
                     sync_err != KvError::ResourceMissing)
@@ -661,7 +686,8 @@ void IndexPageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
         return;
     }
     RootMeta &meta = entry->meta_;
-    // Puts back file pages freed in this mapping snapshot
+    // Puts back file pages freed in this mapping snapshot.
+    // Only applicable to non-append-mode page mappings.
     if (!mapping->to_free_file_pages_.empty())
     {
         assert(meta.mapper_ != nullptr);
@@ -671,6 +697,12 @@ void IndexPageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
         pool->Free(std::move(mapping->to_free_file_pages_));
     }
     auto n = meta.mapping_snapshots_.erase(mapping);
+    if (n == 0)
+    {
+        // If the input mapping is a segment mapping, removes it from the
+        // segment mapping collection.
+        n = meta.segment_mapping_snapshots_.erase(mapping);
+    }
     CHECK(n == 1);
 }
 

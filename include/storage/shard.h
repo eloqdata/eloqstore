@@ -30,6 +30,7 @@ class EloqStoreModule;
 #endif
 
 class CloudStoreMgr;
+class GlobalRegisteredMemory;
 
 class Shard
 {
@@ -63,6 +64,7 @@ public:
     IndexPageManager *IndexManager();
     TaskManager *TaskMgr();
     PagesPool *PagePool();
+    GlobalRegisteredMemory *GlobalRegMem();
 
     std::atomic<bool> io_mgr_and_page_pool_inited_{false};
 
@@ -247,6 +249,7 @@ private:
     boost::context::pooled_fixedsize_stack stack_allocator_;
 #endif
     std::unique_ptr<AsyncIoManager> io_mgr_;
+    GlobalRegisteredMemory *global_reg_mem_{nullptr};
     IndexPageManager index_mgr_;
 
     class PendingWriteQueue

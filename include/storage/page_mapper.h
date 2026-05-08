@@ -254,6 +254,10 @@ public:
     static std::unique_ptr<FilePageAllocator> Instance(const KvOptions *opts);
 
     FilePageAllocator(const KvOptions *opts, FilePageId max_id = 0);
+    FilePageAllocator(uint8_t shift, FilePageId max_id)
+        : pages_per_file_shift_(shift), max_fp_id_(max_id)
+    {
+    }
     FilePageAllocator(const FilePageAllocator &rhs) = default;
     virtual ~FilePageAllocator() = default;
     virtual FilePageId Allocate();
@@ -288,6 +292,13 @@ public:
                     FilePageId max_fp_id,
                     uint32_t empty_cnt)
         : FilePageAllocator(opts, max_fp_id),
+          min_file_id_(min_file_id),
+          empty_file_cnt_(empty_cnt) {};
+    AppendAllocator(uint8_t shift,
+                    FileId min_file_id,
+                    FilePageId max_fp_id,
+                    uint32_t empty_cnt)
+        : FilePageAllocator(shift, max_fp_id),
           min_file_id_(min_file_id),
           empty_file_cnt_(empty_cnt) {};
     AppendAllocator(const AppendAllocator &rhs) = default;
@@ -378,6 +389,7 @@ private:
     std::unique_ptr<FilePageAllocator> file_page_allocator_{nullptr};
 
     friend class Replayer;
+    friend class BatchWriteTask;
 };
 
 }  // namespace eloqstore

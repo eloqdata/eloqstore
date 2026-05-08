@@ -155,6 +155,25 @@ private:
     KvError DelOverflowValue(std::string_view encoded_ptrs);
 
     /**
+     * @brief Write a very large value to segment files.
+     * Allocates logical segment IDs, writes segments via WriteSegments,
+     * and encodes the value content as segment ID pointers into
+     * large_value_content_.
+     * @param entry The write data entry containing the large value.
+     */
+    KvError WriteLargeValue(const WriteDataEntry &entry);
+    /**
+     * @brief Free logical segments for a deleted/overwritten large value.
+     * @param encoded_content The encoded large value content from the data
+     * page.
+     */
+    void DelLargeValue(std::string_view encoded_content);
+
+    void EnsureSegmentMapper();
+
+    std::string large_value_content_;
+
+    /**
      * @brief Truncate the data page at page_id from the trunc_pos.
      * @return true if the page is empty after truncation.
      */

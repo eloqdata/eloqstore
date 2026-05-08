@@ -30,8 +30,10 @@ KvError Replayer::Replay(ManifestFile *file)
     ttl_root_ = MaxPageId;
     mapping_tbl_.clear();
     mapping_tbl_.reserve(opts_->init_page_count);
+    segment_mapping_tbl_.clear();
     file_size_ = 0;
     max_fp_id_ = MaxFilePageId;
+    max_segment_fp_id_ = 0;
     dict_bytes_.clear();
 
     KvError err = ParseNextRecord(file);
@@ -163,15 +165,15 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
         dict_bytes_.clear();
     }
 
-    // Read mapping_len (Fixed32, 4 bytes) - it's before mapping_tbl
+    // Read page_mapping_len (Fixed32, 4 bytes) - it's before mapping_tbl
     CHECK(snapshot.size() >= 4)
-        << "DeserializeSnapshot failed, insufficient data for mapping_len, "
-           "expect >= 4, got "
+        << "DeserializeSnapshot failed, insufficient data for "
+           "page_mapping_len, expect >= 4, got "
         << snapshot.size();
     const uint32_t mapping_len = DecodeFixed32(snapshot.data());
 
     CHECK(mapping_len < snapshot.size() - 4)
-        << "DeserializeSnapshot failed, mapping_len " << mapping_len
+        << "DeserializeSnapshot failed, page_mapping_len " << mapping_len
         << " exceeds available data " << snapshot.size() - 4;
     std::string_view mapping_view = snapshot.substr(4, mapping_len);
 
@@ -184,13 +186,47 @@ void Replayer::DeserializeSnapshot(std::string_view snapshot)
         mapping_tbl_.PushBack(value);
     }
 
-    // Deserialize BranchManifestMetadata section
-    std::string_view branch_metadata_view = snapshot.substr(4 + mapping_len);
-    if (!DeserializeBranchManifestMetadata(branch_metadata_view,
-                                           branch_metadata_))
+    // Deserialize BranchManifestMetadata section (Fixed32 length prefix).
+    std::string_view remaining = snapshot.substr(4 + mapping_len);
+    if (remaining.size() >= 4)
     {
-        LOG(FATAL)
-            << "Failed to deserialize BranchManifestMetadata from snapshot.";
+        uint32_t branch_meta_len = DecodeFixed32(remaining.data());
+        remaining = remaining.substr(4);
+        if (branch_meta_len > 0 && remaining.size() >= branch_meta_len)
+        {
+            std::string_view branch_view = remaining.substr(0, branch_meta_len);
+            if (!DeserializeBranchManifestMetadata(branch_view,
+                                                   branch_metadata_))
+            {
+                LOG(FATAL) << "Failed to deserialize BranchManifestMetadata "
+                              "from snapshot.";
+            }
+            remaining = remaining.substr(branch_meta_len);
+        }
+    }
+
+    // Deserialize segment mapping section (if present).
+    // Format: max_segment_fp_id(varint64) | seg_mapping_bytes_len(Fixed32) |
+    //         seg_mapping_tbl(varint64...)
+    if (remaining.size() >= 4)
+    {
+        [[maybe_unused]] bool seg_ok =
+            GetVarint64(&remaining, &max_segment_fp_id_);
+        assert(seg_ok);
+        CHECK(remaining.size() >= 4)
+            << "DeserializeSnapshot failed, insufficient data for "
+               "segment_mapping_len, expect >= 4, got "
+            << remaining.size();
+        uint32_t seg_mapping_len = DecodeFixed32(remaining.data());
+        std::string_view seg_view = remaining.substr(4, seg_mapping_len);
+        segment_mapping_tbl_.clear();
+        while (!seg_view.empty())
+        {
+            uint64_t value;
+            seg_ok = GetVarint64(&seg_view, &value);
+            assert(seg_ok);
+            segment_mapping_tbl_.PushBack(value);
+        }
     }
 }
 
@@ -199,7 +235,6 @@ void Replayer::ReplayLog()
     assert(payload_.size() > 4);
     uint32_t mapping_len = DecodeFixed32(payload_.data());
     std::string_view mapping_view = payload_.substr(4, mapping_len);
-    std::string_view branch_metadata_view = payload_.substr(4 + mapping_len);
 
     while (!mapping_view.empty())
     {
@@ -221,11 +256,49 @@ void Replayer::ReplayLog()
         }
     }
 
-    // Deserialize BranchManifestMetadata section
-    if (!DeserializeBranchManifestMetadata(branch_metadata_view,
-                                           branch_metadata_))
+    // Deserialize BranchManifestMetadata section (Fixed32 length prefix).
+    std::string_view remaining = payload_.substr(4 + mapping_len);
+    if (remaining.size() >= 4)
     {
-        LOG(FATAL) << "Failed to deserialize BranchManifestMetadata from log.";
+        uint32_t branch_meta_len = DecodeFixed32(remaining.data());
+        remaining = remaining.substr(4);
+        if (branch_meta_len > 0 && remaining.size() >= branch_meta_len)
+        {
+            std::string_view branch_view = remaining.substr(0, branch_meta_len);
+            if (!DeserializeBranchManifestMetadata(branch_view,
+                                                   branch_metadata_))
+            {
+                LOG(FATAL)
+                    << "Failed to deserialize BranchManifestMetadata from log.";
+            }
+            remaining = remaining.substr(branch_meta_len);
+        }
+    }
+
+    // Deserialize segment mapping deltas (if present).
+    if (remaining.size() >= 4)
+    {
+        uint32_t seg_delta_len = DecodeFixed32(remaining.data());
+        std::string_view seg_view = remaining.substr(4, seg_delta_len);
+        while (!seg_view.empty())
+        {
+            PageId seg_page_id;
+            [[maybe_unused]] bool seg_ok = GetVarint32(&seg_view, &seg_page_id);
+            assert(seg_ok);
+            while (seg_page_id >= segment_mapping_tbl_.size())
+            {
+                segment_mapping_tbl_.PushBack(MappingSnapshot::InvalidValue);
+            }
+            uint64_t value;
+            seg_ok = GetVarint64(&seg_view, &value);
+            assert(seg_ok);
+            segment_mapping_tbl_.Set(seg_page_id, value);
+            if (MappingSnapshot::IsFilePageId(value))
+            {
+                FilePageId fp_id = MappingSnapshot::DecodeId(value);
+                max_segment_fp_id_ = std::max(max_segment_fp_id_, fp_id + 1);
+            }
+        }
     }
 }
 
@@ -299,7 +372,7 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
             std::sort(using_fp_ids.begin(), using_fp_ids.end());
             FileId min_file_id =
                 using_fp_ids.front() >> opts_->pages_per_file_shift;
-            uint32_t hole_cnt = 0;
+            uint32_t empty_file_cnt = 0;
             for (FileId cur_file_id = min_file_id;
                  FilePageId fp_id : using_fp_ids)
             {
@@ -307,14 +380,14 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
                 assert(file_id >= cur_file_id);
                 if (file_id > cur_file_id + 1)
                 {
-                    hole_cnt += file_id - cur_file_id - 1;
+                    empty_file_cnt += file_id - cur_file_id - 1;
                 }
                 cur_file_id = file_id;
             }
 
             assert(using_fp_ids.back() < max_fp_id_);
             mapper->file_page_allocator_ = std::make_unique<AppendAllocator>(
-                opts_, min_file_id, max_fp_id_, hole_cnt);
+                opts_, min_file_id, max_fp_id_, empty_file_cnt);
         }
     }
     else
@@ -342,7 +415,7 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
             if (!ranges.empty())
             {
                 FileId fid = i >> opts_->pages_per_file_shift;
-                if (!FileIdInBranch(ranges, fid, active_branch))
+                if (!FileIdInBranch(ranges, DataFileKey(fid), active_branch))
                 {
                     continue;
                 }
@@ -355,4 +428,80 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
 
     return mapper;
 }
+std::unique_ptr<PageMapper> Replayer::GetSegmentMapper(
+    IndexPageManager *idx_mgr,
+    const TableIdent *tbl_ident,
+    uint64_t expect_term)
+{
+    if (segment_mapping_tbl_.size() == 0 && max_segment_fp_id_ == 0)
+    {
+        return nullptr;
+    }
+
+    auto mapping = MappingSnapshot::Ref(new MappingSnapshot(
+        idx_mgr,
+        tbl_ident,
+        MappingSnapshot::MappingTbl(std::move(segment_mapping_tbl_))));
+    auto mapper = std::make_unique<PageMapper>(std::move(mapping));
+    auto &m_table = mapper->GetMapping()->mapping_tbl_;
+
+    std::vector<FilePageId> using_fp_ids;
+    using_fp_ids.reserve(m_table.size());
+
+    for (PageId page_id = 0; page_id < m_table.size(); page_id++)
+    {
+        uint64_t val = m_table.Get(page_id);
+        if (!MappingSnapshot::IsFilePageId(val))
+        {
+            mapper->FreePage(page_id);
+            continue;
+        }
+        FilePageId fp_id = MappingSnapshot::DecodeId(val);
+        using_fp_ids.emplace_back(fp_id);
+    }
+
+    // Segment files are always append-only.
+    const uint8_t shift = opts_->segments_per_file_shift;
+
+    // In cloud mode, bump allocator to next file boundary when the manifest
+    // term differs from the current process term, same as GetMapper().
+    const bool cloud_mode = !opts_->cloud_store_path.empty();
+    if (cloud_mode && expect_term != 0)
+    {
+        uint64_t manifest_term = branch_metadata_.term;
+        if (manifest_term != expect_term)
+        {
+            FileId next_file_id = (max_segment_fp_id_ >> shift) + 1;
+            max_segment_fp_id_ = next_file_id << shift;
+        }
+    }
+    if (using_fp_ids.empty())
+    {
+        FileId min_file_id = max_segment_fp_id_ >> shift;
+        mapper->file_page_allocator_ = std::make_unique<AppendAllocator>(
+            shift, min_file_id, max_segment_fp_id_, 0);
+    }
+    else
+    {
+        std::sort(using_fp_ids.begin(), using_fp_ids.end());
+        FileId min_file_id = using_fp_ids.front() >> shift;
+        uint32_t empty_file_cnt = 0;
+        for (FileId cur_file_id = min_file_id; FilePageId fp_id : using_fp_ids)
+        {
+            FileId file_id = fp_id >> shift;
+            assert(file_id >= cur_file_id);
+            if (file_id > cur_file_id + 1)
+            {
+                empty_file_cnt += file_id - cur_file_id - 1;
+            }
+            cur_file_id = file_id;
+        }
+        assert(using_fp_ids.back() < max_segment_fp_id_);
+        mapper->file_page_allocator_ = std::make_unique<AppendAllocator>(
+            shift, min_file_id, max_segment_fp_id_, empty_file_cnt);
+    }
+
+    return mapper;
+}
+
 }  // namespace eloqstore

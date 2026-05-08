@@ -37,6 +37,7 @@
 #include <vector>
 
 #include "error.h"
+#include "global_registered_memory.h"
 #include "replayer.h"
 #include "tasks/write_task.h"
 #include "utils.h"
@@ -208,7 +209,8 @@ KvError IouringMgr::Init(Shard *shard)
     return KvError::NoError;
 }
 
-KvError IouringMgr::BootstrapRing(Shard *shard)
+KvError IouringMgr::BootstrapRing(Shard *shard,
+                                  GlobalRegisteredMemory *global_reg_mem)
 {
     if (ring_inited_)
     {
@@ -368,6 +370,17 @@ KvError IouringMgr::BootstrapRing(Shard *shard)
         }
     }
 
+    global_reg_mem_ = global_reg_mem;
+    global_reg_mem_index_base_ = 0;
+    if (global_reg_mem != nullptr)
+    {
+        global_reg_mem_index_base_ = static_cast<uint16_t>(iovecs.size());
+        for (const auto &chunk : global_reg_mem->MemChunks())
+        {
+            iovecs.emplace_back(chunk.base_, chunk.size_);
+        }
+    }
+
     if (!iovecs.empty())
     {
         if (iovecs.size() > std::numeric_limits<uint16_t>::max())
@@ -473,7 +486,7 @@ void IouringMgr::InitBackgroundJob()
     Shard *target_shard = shard;
     CHECK(target_shard != nullptr)
         << "Shard must be set before initializing io_uring";
-    KvError err = BootstrapRing(target_shard);
+    KvError err = BootstrapRing(target_shard, target_shard->GlobalRegMem());
     if (err != KvError::NoError)
     {
         LOG(FATAL) << "failed to initialize io queue in background thread: "
@@ -488,7 +501,7 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
     auto [file_id, offset] = ConvFilePageId(fp_id);
     std::string branch_name;
     uint64_t term;
-    if (!GetBranchNameAndTerm(tbl_id, file_id, branch_name, term))
+    if (!GetBranchNameAndTerm(tbl_id, DataFileKey(file_id), branch_name, term))
     {
         LOG(WARNING) << "ReadPage missing branch/term for fp_id=" << fp_id
                      << ", file_id=" << file_id << ", shift="
@@ -496,7 +509,8 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
                      << " in table " << tbl_id;
         return {std::move(page), KvError::ResourceMissing};
     }
-    auto [fd_ref, err] = OpenFD(tbl_id, file_id, true, branch_name, term);
+    auto [fd_ref, err] =
+        OpenFD(tbl_id, DataFileKey(file_id), true, branch_name, term);
     if (err == KvError::NotFound)
     {
         err = KvError::ResourceMissing;
@@ -593,13 +607,15 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
         auto [file_id, offset] = ConvFilePageId(fp_id);
         std::string branch_name;
         uint64_t term;
-        if (!GetBranchNameAndTerm(tbl_id, file_id, branch_name, term))
+        if (!GetBranchNameAndTerm(
+                tbl_id, DataFileKey(file_id), branch_name, term))
         {
             LOG(WARNING) << "ReadPages missing branch/term for file id "
                          << file_id << " in table " << tbl_id;
             return KvError::ResourceMissing;
         }
-        auto [fd_ref, err] = OpenFD(tbl_id, file_id, true, branch_name, term);
+        auto [fd_ref, err] =
+            OpenFD(tbl_id, DataFileKey(file_id), true, branch_name, term);
         if (err == KvError::NotFound)
             err = KvError::ResourceMissing;
         CHECK_KV_ERR(err);
@@ -684,9 +700,9 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
         {
             if (!ValidateChecksum({req.page_.Ptr(), options_->data_page_size}))
             {
-                FileId file_id = req.fd_ref_.Get()->file_id_;
-                LOG(ERROR) << "corrupted " << tbl_id << " file " << file_id
-                           << " at " << req.offset_;
+                TypedFileId file_id = req.fd_ref_.Get()->file_id_;
+                LOG(ERROR) << "corrupted " << tbl_id << " file "
+                           << file_id.ToString() << " at " << req.offset_;
                 return KvError::Corrupted;
             }
         }
@@ -747,7 +763,7 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
     uint64_t term = ProcessTerm();
     std::string_view branch = GetActiveBranch();
     auto [fd_ref, err] =
-        OpenOrCreateFD(tbl_id, file_id, true, true, branch, term);
+        OpenOrCreateFD(tbl_id, DataFileKey(file_id), true, true, branch, term);
     CHECK_KV_ERR(err);
     fd_ref.Get()->dirty_ = true;
     TEST_KILL_POINT_WEIGHT("WritePage", 1000)
@@ -774,8 +790,229 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
+KvError IouringMgr::ReadSegments(const TableIdent &tbl_id,
+                                 std::span<const FilePageId> segment_ids,
+                                 std::span<char *> dst_ptrs,
+                                 std::span<const uint16_t> buf_indices)
+{
+    assert(segment_ids.size() <= max_segments_batch);
+    assert(segment_ids.size() == dst_ptrs.size());
+    assert(segment_ids.size() == buf_indices.size());
+
+    struct SegReadReq : BaseReq
+    {
+        SegReadReq() = default;
+        SegReadReq(KvTask *task,
+                   LruFD::Ref fd,
+                   uint32_t offset,
+                   char *dst,
+                   uint16_t buf_index)
+            : BaseReq(task),
+              offset_(offset),
+              fd_ref_(std::move(fd)),
+              dst_(dst),
+              buf_index_(buf_index) {};
+
+        bool done_{false};
+        uint32_t offset_;
+        LruFD::Ref fd_ref_;
+        char *dst_{nullptr};
+        uint16_t buf_index_{0};
+    };
+
+    std::array<SegReadReq, max_segments_batch> reqs_buf;
+    std::span<SegReadReq> reqs(reqs_buf.data(), segment_ids.size());
+
+    // Prepare requests.
+    for (size_t i = 0; i < segment_ids.size(); ++i)
+    {
+        auto [file_id, offset] = ConvFileSegmentId(segment_ids[i]);
+        std::string branch_name;
+        uint64_t term;
+        if (!GetBranchNameAndTerm(
+                tbl_id, SegmentFileKey(file_id), branch_name, term))
+        {
+            LOG(WARNING) << "ReadSegments missing branch/term for file id "
+                         << file_id << " in table " << tbl_id;
+            return KvError::ResourceMissing;
+        }
+        auto [fd_ref, err] =
+            OpenFD(tbl_id, SegmentFileKey(file_id), true, branch_name, term);
+        if (err == KvError::NotFound)
+        {
+            err = KvError::ResourceMissing;
+        }
+        if (err != KvError::NoError)
+        {
+            return err;
+        }
+        reqs[i] = SegReadReq(
+            ThdTask(), std::move(fd_ref), offset, dst_ptrs[i], buf_indices[i]);
+    }
+
+    const uint32_t seg_size = options_->segment_size;
+
+    auto send_req = [this, seg_size](SegReadReq *req)
+    {
+        auto [fd, registered] = req->fd_ref_.FdPair();
+        io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, req);
+        if (registered)
+        {
+            sqe->flags |= IOSQE_FIXED_FILE;
+        }
+        io_uring_prep_read_fixed(
+            sqe, fd, req->dst_, seg_size, req->offset_, req->buf_index_);
+    };
+
+    // Send and retry loop.
+    while (true)
+    {
+        bool all_finished = true;
+        for (SegReadReq &req : reqs)
+        {
+            if (req.done_)
+            {
+                continue;
+            }
+
+            int res = req.res_;
+            KvError err = ToKvError(res);
+            if ((res >= 0 && static_cast<uint32_t>(res) < seg_size) ||
+                err == KvError::TryAgain)
+            {
+                send_req(&req);
+                all_finished = false;
+            }
+            else if (err != KvError::NoError)
+            {
+                ThdTask()->WaitIo();
+                return err;
+            }
+            else
+            {
+                assert(static_cast<uint32_t>(res) == seg_size);
+                req.done_ = true;
+            }
+        }
+        if (all_finished)
+        {
+            break;
+        }
+        ThdTask()->WaitIo();
+    }
+
+    return KvError::NoError;
+}
+
+KvError IouringMgr::WriteSegments(const TableIdent &tbl_id,
+                                  std::span<const FilePageId> segment_ids,
+                                  std::span<const char *> src_ptrs,
+                                  std::span<const uint16_t> buf_indices)
+{
+    assert(segment_ids.size() <= max_segments_batch);
+    assert(segment_ids.size() == src_ptrs.size());
+    assert(segment_ids.size() == buf_indices.size());
+
+    struct SegWriteReq : BaseReq
+    {
+        SegWriteReq() = default;
+        SegWriteReq(KvTask *task,
+                    LruFD::Ref fd,
+                    uint32_t offset,
+                    const char *src,
+                    uint16_t buf_index)
+            : BaseReq(task),
+              offset_(offset),
+              fd_ref_(std::move(fd)),
+              src_(src),
+              buf_index_(buf_index) {};
+
+        bool done_{false};
+        uint32_t offset_;
+        LruFD::Ref fd_ref_;
+        const char *src_{nullptr};
+        uint16_t buf_index_{0};
+    };
+
+    std::array<SegWriteReq, max_segments_batch> reqs_buf;
+    std::span<SegWriteReq> reqs(reqs_buf.data(), segment_ids.size());
+
+    // Prepare requests.
+    for (size_t i = 0; i < segment_ids.size(); ++i)
+    {
+        auto [file_id, offset] = ConvFileSegmentId(segment_ids[i]);
+        auto [fd_ref, err] = OpenOrCreateFD(tbl_id,
+                                            SegmentFileKey(file_id),
+                                            true,
+                                            true,
+                                            GetActiveBranch(),
+                                            ProcessTerm());
+        if (err != KvError::NoError)
+        {
+            return err;
+        }
+        fd_ref.Get()->dirty_ = true;
+        reqs[i] = SegWriteReq(
+            ThdTask(), std::move(fd_ref), offset, src_ptrs[i], buf_indices[i]);
+    }
+
+    const uint32_t seg_size = options_->segment_size;
+
+    auto send_req = [this, seg_size](SegWriteReq *req)
+    {
+        auto [fd, registered] = req->fd_ref_.FdPair();
+        io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, req);
+        if (registered)
+        {
+            sqe->flags |= IOSQE_FIXED_FILE;
+        }
+        io_uring_prep_write_fixed(
+            sqe, fd, req->src_, seg_size, req->offset_, req->buf_index_);
+    };
+
+    // Send and retry loop.
+    while (true)
+    {
+        bool all_finished = true;
+        for (SegWriteReq &req : reqs)
+        {
+            if (req.done_)
+            {
+                continue;
+            }
+
+            int res = req.res_;
+            KvError err = ToKvError(res);
+            if ((res >= 0 && static_cast<uint32_t>(res) < seg_size) ||
+                err == KvError::TryAgain)
+            {
+                send_req(&req);
+                all_finished = false;
+            }
+            else if (err != KvError::NoError)
+            {
+                ThdTask()->WaitIo();
+                return err;
+            }
+            else
+            {
+                assert(static_cast<uint32_t>(res) == seg_size);
+                req.done_ = true;
+            }
+        }
+        if (all_finished)
+        {
+            break;
+        }
+        ThdTask()->WaitIo();
+    }
+
+    TEST_KILL_POINT_WEIGHT("WriteSegments", 100)
+    return KvError::NoError;
+}
+
 KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
-                                      FileId file_id,
+                                      TypedFileId file_id,
                                       uint64_t offset,
                                       char *buf_ptr,
                                       size_t bytes,
@@ -785,16 +1022,14 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
                                       std::vector<uint16_t> &release_indices,
                                       bool use_fixed)
 {
-    uint64_t term = ProcessTerm();
-    std::string branch_str;
-    GetBranchNameAndTerm(tbl_id, file_id, branch_str, term);
-    std::string_view branch =
-        branch_str.empty() ? GetActiveBranch() : branch_str;
+    const uint64_t term = ProcessTerm();
+    const std::string_view branch = GetActiveBranch();
     // In append mode, offset 0 means this merged write targets a brand-new
-    // data file, so cloud mode can skip the remote not-found probe.
+    // data file, so cloud mode can skip the remote not-found probe. Only
+    // applies to actual data/segment files, not the manifest sentinel.
     const bool skip_cloud_lookup =
         options_->data_append_mode && !options_->cloud_store_path.empty() &&
-        file_id <= LruFD::kMaxDataFile && offset == 0;
+        file_id.value_ < TypedFileId::kMaxReserved && offset == 0;
     OnFileRangeWritePrepared(tbl_id,
                              file_id,
                              branch,
@@ -852,7 +1087,7 @@ KvError IouringMgr::SyncData(const TableIdent &tbl_id)
     }
 
     // Scan all dirty files/directory.
-    std::vector<FileId> dirty_ids;
+    std::vector<TypedFileId> dirty_ids;
     dirty_ids.reserve(32);
     for (auto &[file_id, fd] : it_tbl->second.fds_)
     {
@@ -863,7 +1098,7 @@ KvError IouringMgr::SyncData(const TableIdent &tbl_id)
     }
     std::vector<LruFD::Ref> fds;
     fds.reserve(dirty_ids.size());
-    for (FileId file_id : dirty_ids)
+    for (TypedFileId file_id : dirty_ids)
     {
         LruFD::Ref fd_ref = GetOpenedFD(tbl_id, file_id);
         if (fd_ref == nullptr)
@@ -895,7 +1130,7 @@ KvError IouringMgr::AbortWrite(const TableIdent &tbl_id)
 }
 
 KvError IouringMgr::CloseFiles(const TableIdent &tbl_id,
-                               const std::span<FileId> file_ids)
+                               const std::span<TypedFileId> file_ids)
 {
     if (file_ids.empty())
     {
@@ -904,7 +1139,7 @@ KvError IouringMgr::CloseFiles(const TableIdent &tbl_id,
 
     std::vector<LruFD::Ref> fd_refs;
     fd_refs.reserve(file_ids.size());
-    for (FileId file_id : file_ids)
+    for (TypedFileId file_id : file_ids)
     {
         LruFD::Ref fd_ref = GetOpenedFD(tbl_id, file_id);
         if (fd_ref != nullptr)
@@ -945,7 +1180,7 @@ KvError IouringMgr::TryCleanupLocalPartitionDir(const TableIdent &tbl_id)
         return KvError::NoError;
     }
 
-    if (!StartEvictingPath(tbl_id, LruFD::kDirectory, 0))
+    if (!StartEvictingPath(tbl_id, LruFD::kDirectory, "", 0))
     {
         DLOG(INFO) << "Skip cleaning partition directory " << partition_name
                    << " because directory cleanup is already in progress";
@@ -973,13 +1208,13 @@ KvError IouringMgr::TryCleanupLocalPartitionDir(const TableIdent &tbl_id)
     KvError close_err = close_idle_fd(dir_fd, "directory");
     if (close_err != KvError::NoError)
     {
-        FinishEvictingPath(tbl_id, LruFD::kDirectory, 0);
+        FinishEvictingPath(tbl_id, LruFD::kDirectory, "", 0);
         return close_err;
     }
 
     FdIdx root_fd = GetRootFD(tbl_id);
     int dir_res = UnlinkAt(root_fd, partition_name.c_str(), true);
-    FinishEvictingPath(tbl_id, LruFD::kDirectory, 0);
+    FinishEvictingPath(tbl_id, LruFD::kDirectory, "", 0);
     if (dir_res == 0 || dir_res == -ENOENT || dir_res == -ENOTEMPTY)
     {
         return KvError::NoError;
@@ -1126,7 +1361,7 @@ IouringMgr::FdIdx IouringMgr::GetRootFD(const TableIdent &tbl_id)
 }
 
 IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(const TableIdent &tbl_id,
-                                               FileId file_id)
+                                               TypedFileId file_id)
 {
     auto it_tbl = tables_.find(tbl_id);
     if (it_tbl == tables_.end())
@@ -1150,7 +1385,7 @@ IouringMgr::LruFD::Ref IouringMgr::GetOpenedFD(const TableIdent &tbl_id,
 
 std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenFD(
     const TableIdent &tbl_id,
-    FileId file_id,
+    TypedFileId file_id,
     bool direct,
     std::string_view branch_name,
     uint64_t term)
@@ -1160,24 +1395,89 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenFD(
 
 std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     const TableIdent &tbl_id,
-    FileId file_id,
+    TypedFileId file_id,
     bool direct,
     bool create,
     std::string_view branch_name,
     uint64_t term,
     bool skip_cloud_lookup)
 {
+    // Tristate result for an existing LruFD slot, computed under the slot's
+    // mutex. CachedHit -> reuse as-is. CachedMismatch -> non-local mode only,
+    // close the registered FD and reopen under the requested branch/term.
+    // Empty -> open/create from scratch.
+    enum class CacheState
+    {
+        Empty,
+        CachedHit,
+        CachedMismatch,
+    };
+    auto classify = [&](const LruFD *fd) -> CacheState
+    {
+        if (file_id == LruFD::kDirectory)
+        {
+            return fd->fd_ != LruFD::FdEmpty ? CacheState::CachedHit
+                                             : CacheState::Empty;
+        }
+        if (fd->reg_idx_ < 0)
+        {
+            return CacheState::Empty;
+        }
+        if (eloq_store->Mode() == StoreMode::Local)
+        {
+            return CacheState::CachedHit;
+        }
+        if (term != 0)
+        {
+            uint64_t cached_term = fd->term_;
+            if (cached_term != 0 && cached_term != term)
+            {
+                return CacheState::CachedMismatch;
+            }
+        }
+        std::string_view cached_branch = fd->branch_name_;
+        if (!cached_branch.empty() && cached_branch != branch_name)
+        {
+            return CacheState::CachedMismatch;
+        }
+        return CacheState::CachedHit;
+    };
+
+    // Fast path: lookup-only, no inserts and no eviction waits. The common
+    // case is a CachedHit; in that case the slow-path bookkeeping below
+    // (eviction waits, try_emplace, dir-eviction handshake) is pure overhead.
+    {
+        auto it_tbl = tables_.find(tbl_id);
+        if (it_tbl != tables_.end())
+        {
+            auto it_fd = it_tbl->second.fds_.find(file_id);
+            if (it_fd != it_tbl->second.fds_.end())
+            {
+                LruFD::Ref lru_fd(&it_fd->second, this);
+                lru_fd.Get()->mu_.Lock();
+                if (classify(lru_fd.Get()) == CacheState::CachedHit)
+                {
+                    lru_fd.Get()->mu_.Unlock();
+                    return {std::move(lru_fd), KvError::NoError};
+                }
+                lru_fd.Get()->mu_.Unlock();
+                // Drop Ref; slow path will re-acquire via try_emplace and
+                // handle Empty/CachedMismatch from there.
+            }
+        }
+    }
+
     KvTask *current_task = ThdTask();
     if (current_task != nullptr && !current_task->ReadOnly())
     {
         auto *write_task = static_cast<WriteTask *>(current_task);
         if (write_task->NeedWaitDirEviction())
         {
-            WaitForEvictingPath(tbl_id, LruFD::kDirectory, 0);
+            WaitForEvictingPath(tbl_id, LruFD::kDirectory, "", 0);
             write_task->ClearNeedWaitDirEviction();
         }
     }
-    WaitForEvictingPath(tbl_id, file_id, term);
+    WaitForEvictingPath(tbl_id, file_id, branch_name, term);
     auto [it_tbl, inserted] = tables_.try_emplace(tbl_id);
     if (inserted)
     {
@@ -1190,77 +1490,35 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     // Avoid multiple coroutines from concurrently opening or closing the same
     // file duplicately.
     lru_fd.Get()->mu_.Lock();
-    if (file_id == LruFD::kDirectory)
+    switch (classify(lru_fd.Get()))
     {
-        if (lru_fd.Get()->fd_ != LruFD::FdEmpty)
+    case CacheState::CachedHit:
+        // Race recovery: another coroutine populated the slot between the
+        // fast-path lookup and now.
+        lru_fd.Get()->mu_.Unlock();
+        return {std::move(lru_fd), KvError::NoError};
+    case CacheState::CachedMismatch:
+    {
+        assert(file_id != LruFD::kDirectory);
+        assert(eloq_store->Mode() != StoreMode::Local);
+        DLOG(INFO) << "OpenOrCreateFD branch/term mismatch, tbl=" << tbl_id
+                   << " file_id=" << file_id.ToString()
+                   << " cached_branch=" << lru_fd.Get()->branch_name_
+                   << " cached_term=" << lru_fd.Get()->term_
+                   << " requested_branch=" << branch_name
+                   << " requested_term=" << term;
+        int old_idx = lru_fd.Get()->reg_idx_;
+        int res = CloseDirect(old_idx);
+        if (res < 0)
         {
             lru_fd.Get()->mu_.Unlock();
-            return {std::move(lru_fd), KvError::NoError};
+            return {nullptr, ToKvError(res)};
         }
+        lru_fd.Get()->reg_idx_ = -1;
+        break;  // fall through to open/create
     }
-    else if (lru_fd.Get()->reg_idx_ >= 0)
-    {
-        // Check for term or branch_name mismatch when not in local mode.
-        if (eloq_store->Mode() != StoreMode::Local &&
-            file_id != LruFD::kDirectory)
-        {
-            bool mismatch = false;
-            // Check term mismatch (only when term is known).
-            if (term != 0)
-            {
-                uint64_t cached_term = lru_fd.Get()->term_;
-                if (cached_term != 0 && cached_term != term)
-                {
-                    mismatch = true;
-                    DLOG(INFO) << "OpenOrCreateFD term mismatch, tbl=" << tbl_id
-                               << " file_id=" << file_id
-                               << " cached_term=" << cached_term
-                               << " requested_term=" << term;
-                }
-            }
-            // Check branch_name mismatch (always, regardless of term).
-            if (!mismatch)
-            {
-                assert(!branch_name.empty());
-                std::string_view cached_branch = lru_fd.Get()->branch_name_;
-                if (!cached_branch.empty() && cached_branch != branch_name)
-                {
-                    mismatch = true;
-                    DLOG(INFO)
-                        << "OpenOrCreateFD branch mismatch, tbl=" << tbl_id
-                        << " file_id=" << file_id
-                        << " cached_branch=" << cached_branch
-                        << " requested_branch=" << branch_name;
-                }
-            }
-
-            if (mismatch)
-            {
-                // Mismatch detected, close and reopen with correct
-                // term/branch.
-                int old_idx = lru_fd.Get()->reg_idx_;
-                int res = CloseDirect(old_idx);
-                if (res < 0)
-                {
-                    lru_fd.Get()->mu_.Unlock();
-                    return {nullptr, ToKvError(res)};
-                }
-                lru_fd.Get()->reg_idx_ = -1;
-                // Fall through to open/create with correct term and branch
-            }
-            else
-            {
-                // No mismatch, use cached FD.
-                lru_fd.Get()->mu_.Unlock();
-                return {std::move(lru_fd), KvError::NoError};
-            }
-        }
-        else
-        {
-            // Local mode or directory, use cached FD.
-            lru_fd.Get()->mu_.Unlock();
-            return {std::move(lru_fd), KvError::NoError};
-        }
+    case CacheState::Empty:
+        break;  // fall through to open/create
     }
 
     int fd;
@@ -1284,9 +1542,9 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
             tbl_id, file_id, flags, mode, branch_name, term, skip_cloud_lookup);
         if (fd == -ENOENT && create)
         {
-            // This must be data file because manifest should always be
-            // created by call WriteSnapshot.
-            assert(file_id <= LruFD::kMaxDataFile);
+            // This must be data or segment file because manifest should
+            // always be created by call WriteSnapshot.
+            assert(file_id.value_ < TypedFileId::kMaxReserved);
             auto [dfd_ref, err] =
                 OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, "", 0);
             error = err;
@@ -1312,8 +1570,8 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
         }
         else
         {
-            LOG(ERROR) << "open failed " << tbl_id << " file id " << file_id
-                       << " : " << ErrorString(error);
+            LOG(ERROR) << "open failed " << tbl_id << " file id "
+                       << file_id.ToString() << " : " << ErrorString(error);
         }
         lru_fd.Get()->mu_.Unlock();
         return {nullptr, error};
@@ -1341,7 +1599,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
 }
 
 bool IouringMgr::GetBranchNameAndTerm(const TableIdent &tbl_id,
-                                      FileId file_id,
+                                      TypedFileId file_id,
                                       std::string &branch_name,
                                       uint64_t &term)
 {
@@ -1356,24 +1614,56 @@ bool IouringMgr::GetBranchNameAndTerm(const TableIdent &tbl_id,
 }
 
 void IouringMgr::SetBranchFileIdTerm(const TableIdent &tbl_id,
-                                     FileId file_id,
+                                     TypedFileId file_id,
                                      std::string_view branch_name,
                                      uint64_t term)
 {
     auto &mapping = branch_file_mapping_[tbl_id];
+    const FileId raw_id = file_id.ToFileId();
+    const bool is_segment = file_id.IsSegmentFile();
 
-    if (!mapping.empty() && mapping.back().branch_name == branch_name &&
-        mapping.back().term == term)
+    if (!mapping.empty() && mapping.back().branch_name_ == branch_name &&
+        mapping.back().term_ == term)
     {
-        CHECK(file_id >= mapping.back().max_file_id)
-            << "file_id must be allocated in ascending order for the same "
-               "branch and term";
-        mapping.back().max_file_id = file_id;
+        // Same (branch, term) generation — extend the existing entry's
+        // max for the appropriate file class.
+        BranchFileRange &back = mapping.back();
+        if (is_segment)
+        {
+            CHECK(raw_id >= back.max_segment_file_id_)
+                << "segment file_id must be allocated in ascending order "
+                   "for the same branch and term";
+            back.max_segment_file_id_ = raw_id;
+        }
+        else
+        {
+            CHECK(raw_id >= back.max_file_id_)
+                << "data file_id must be allocated in ascending order for "
+                   "the same branch and term";
+            back.max_file_id_ = raw_id;
+        }
+        return;
+    }
+
+    // New (branch, term) — inherit the *other* class's running max from
+    // the previous entry so the per-field non-decreasing invariants hold.
+    BranchFileRange entry;
+    entry.branch_name_ = std::string(branch_name);
+    entry.term_ = term;
+    if (!mapping.empty())
+    {
+        entry.max_file_id_ = mapping.back().max_file_id_;
+        entry.max_segment_file_id_ = mapping.back().max_segment_file_id_;
+    }
+    if (is_segment)
+    {
+        entry.max_segment_file_id_ = raw_id;
     }
     else
     {
-        mapping.push_back({std::string(branch_name), term, file_id});
+        entry.max_file_id_ = raw_id;
     }
+    mapping.push_back(std::move(entry));
 }
 
 void IouringMgr::SetBranchFileMapping(const TableIdent &tbl_id,
@@ -1434,6 +1724,16 @@ std::pair<FileId, uint32_t> IouringMgr::ConvFilePageId(
         (file_page_id & ((1 << options_->pages_per_file_shift) - 1)) *
         options_->data_page_size;
     assert(!(offset & (page_align - 1)));
+    return {file_id, offset};
+}
+
+std::pair<FileId, uint32_t> IouringMgr::ConvFileSegmentId(
+    FilePageId file_segment_id) const
+{
+    FileId file_id = file_segment_id >> options_->segments_per_file_shift;
+    uint32_t offset =
+        (file_segment_id & ((1 << options_->segments_per_file_shift) - 1)) *
+        options_->segment_size;
     return {file_id, offset};
 }
 
@@ -1592,13 +1892,16 @@ int IouringMgr::MakeDir(FdIdx dir_fd, const char *path)
 }
 
 int IouringMgr::CreateFile(LruFD::Ref dir_fd,
-                           FileId file_id,
+                           TypedFileId file_id,
                            std::string_view branch_name,
                            uint64_t term)
 {
-    assert(file_id <= LruFD::kMaxDataFile);
+    assert(file_id.value_ < TypedFileId::kMaxReserved);
     uint64_t flags = O_CREAT | O_RDWR | O_DIRECT;
-    std::string filename = BranchDataFileName(file_id, branch_name, term);
+    FileId real_id = file_id.ToFileId();
+    std::string filename = file_id.IsSegmentFile()
+                               ? SegmentFileName(real_id, branch_name, term)
+                               : BranchDataFileName(real_id, branch_name, term);
     int fd = OpenAt(dir_fd.FdPair(), filename.c_str(), flags, 0644);
     if (fd >= 0)
     {
@@ -1607,7 +1910,13 @@ int IouringMgr::CreateFile(LruFD::Ref dir_fd,
         // be marked as dirty every time, but only fsync
         // it once when SyncData.
         dir_fd.Get()->dirty_ = true;
-        if (options_->data_append_mode)
+        if (file_id.IsSegmentFile())
+        {
+            // Segment files are always append-only; pre-allocate to avoid
+            // frequent metadata updates.
+            Fallocate({fd, true}, options_->SegmentFileSize());
+        }
+        else if (options_->data_append_mode)
         {
             // Avoid update metadata (file size) of file frequently in append
             // write mode.
@@ -1618,7 +1927,7 @@ int IouringMgr::CreateFile(LruFD::Ref dir_fd,
 }
 
 int IouringMgr::OpenFile(const TableIdent &tbl_id,
-                         FileId file_id,
+                         TypedFileId file_id,
                          uint64_t flags,
                          uint64_t mode,
                          std::string_view branch_name,
@@ -1633,11 +1942,18 @@ int IouringMgr::OpenFile(const TableIdent &tbl_id,
     }
     else
     {
-        // Data file is always opened with O_DIRECT.
+        // Data/segment file is always opened with O_DIRECT.
         assert((flags & O_DIRECT) == O_DIRECT);
-        assert(file_id <= LruFD::kMaxDataFile);
-        std::string filename = BranchDataFileName(file_id, branch_name, term);
-        path.append(filename);
+        assert(file_id.value_ < TypedFileId::kMaxReserved);
+        FileId real_id = file_id.ToFileId();
+        if (file_id.IsSegmentFile())
+        {
+            path.append(SegmentFileName(real_id, branch_name, term));
+        }
+        else
+        {
+            path.append(BranchDataFileName(real_id, branch_name, term));
+        }
     }
     FdIdx root_fd = GetRootFD(tbl_id);
     return OpenAt(root_fd, path.c_str(), flags, mode);
@@ -1755,7 +2071,7 @@ KvError IouringMgr::FdatasyncFiles(const TableIdent &tbl_id,
         {
             err = ToKvError(req.res_);
             LOG(ERROR) << "fsync file failed " << tbl_id << '@'
-                       << req.fd_ref_.Get()->file_id_ << " : "
+                       << req.fd_ref_.Get()->file_id_.ToString() << " : "
                        << strerror(-req.res_);
         }
     }
@@ -1895,7 +2211,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
             if (req.res_ < 0)
             {
                 LOG(ERROR) << "close file failed file_id="
-                           << req.fd_ref_.Get()->file_id_ << " : "
+                           << req.fd_ref_.Get()->file_id_.ToString() << " : "
                            << strerror(-req.res_);
                 if (close_err == KvError::NoError)
                 {
@@ -2724,7 +3040,9 @@ KvError IouringMgr::Manifest::SkipPadding(size_t n)
     return KvError::NoError;
 }
 
-IouringMgr::LruFD::LruFD(PartitionFiles *tbl, FileId file_id, uint64_t term)
+IouringMgr::LruFD::LruFD(PartitionFiles *tbl,
+                         TypedFileId file_id,
+                         uint64_t term)
     : tbl_(tbl), file_id_(file_id), term_(term)
 {
 }
@@ -2980,7 +3298,7 @@ KvError CloudStoreMgr::RestoreStartupState()
 }
 
 void CloudStoreMgr::OnFileRangeWritePrepared(const TableIdent &tbl_id,
-                                             FileId file_id,
+                                             TypedFileId file_id,
                                              std::string_view branch_name,
                                              uint64_t term,
                                              uint64_t offset,
@@ -2996,10 +3314,19 @@ void CloudStoreMgr::OnFileRangeWritePrepared(const TableIdent &tbl_id,
         return;
     }
 
-    const std::string filename =
-        (file_id == LruFD::kManifest)
-            ? BranchManifestFileName(branch_name, term)
-            : BranchDataFileName(file_id, branch_name, term);
+    std::string filename;
+    if (file_id == LruFD::kManifest)
+    {
+        filename = BranchManifestFileName(branch_name, term);
+    }
+    else if (file_id.IsSegmentFile())
+    {
+        filename = SegmentFileName(file_id.ToFileId(), branch_name, term);
+    }
+    else
+    {
+        filename = BranchDataFileName(file_id.ToFileId(), branch_name, term);
+    }
     WriteTask::UploadState &state = owner->MutableUploadState();
     if (state.invalid)
     {
@@ -3063,30 +3390,18 @@ void CloudStoreMgr::OnFileRangeWritePrepared(const TableIdent &tbl_id,
 }
 
 KvError CloudStoreMgr::OnDataFileSealed(const TableIdent &tbl_id,
-                                        FileId file_id)
+                                        TypedFileId file_id)
 {
-    assert(file_id <= LruFD::kMaxDataFile);
     LruFD::Ref fd_ref = GetOpenedFD(tbl_id, file_id);
     WriteTask *owner = CurrentWriteTask();
-    uint64_t term = ProcessTerm();
-    std::string_view branch;
-    std::string branch_str;
-    if (fd_ref != nullptr)
-    {
-        term = fd_ref.Get()->term_;
-        branch = fd_ref.Get()->branch_name_;
-    }
-    else
-    {
-        GetBranchNameAndTerm(tbl_id, file_id, branch_str, term);
-        branch = branch_str.empty() ? GetActiveBranch() : branch_str;
-    }
-    KvError err = UploadFile(tbl_id,
-                             BranchDataFileName(file_id, branch, term),
-                             owner,
-                             {},
-                             owner == nullptr,
-                             fd_ref.FdPair());
+    const uint64_t term = ProcessTerm();
+    const std::string_view branch = GetActiveBranch();
+    const std::string filename =
+        file_id.IsSegmentFile()
+            ? SegmentFileName(file_id.ToFileId(), branch, term)
+            : BranchDataFileName(file_id.ToFileId(), branch, term);
+    KvError err = UploadFile(
+        tbl_id, filename, owner, {}, owner == nullptr, fd_ref.FdPair());
     if (err != KvError::NoError)
     {
         return err;
@@ -3423,7 +3738,8 @@ KvError CloudStoreMgr::RestoreFilesForTable(const TableIdent &tbl_id,
         auto [prefix, suffix] = ParseFileName(filename);
         bool is_data_file = prefix == FileNameData;
         bool is_manifest_file = prefix == FileNameManifest;
-        if (!is_data_file && !is_manifest_file)
+        bool is_segment_file = prefix == FileNameSegment;
+        if (!is_data_file && !is_manifest_file && !is_segment_file)
         {
             LOG(ERROR) << "Unknown cached file type " << file_it->path() << " ("
                        << filename << ") encountered during cache restore";
@@ -4553,8 +4869,12 @@ bool CloudStoreMgr::HasDirBusy(const TableIdent &tbl_id) const
 
 bool CloudStoreMgr::IsDirEvicting(const TableIdent &tbl_id) const
 {
+    if (evicting_paths_.empty())
+    {
+        return false;
+    }
     return evicting_paths_.contains(
-        EvictingPathKey(tbl_id, LruFD::kDirectory, 0));
+        EvictingPathKey(tbl_id, LruFD::kDirectory, "", 0));
 }
 
 KvError CloudStoreMgr::SwitchManifest(const TableIdent &tbl_id,
@@ -4913,11 +5233,12 @@ KvError CloudStoreMgr::AbortWrite(const TableIdent &tbl_id)
 }
 
 int CloudStoreMgr::CreateFile(LruFD::Ref dir_fd,
-                              FileId file_id,
+                              TypedFileId file_id,
                               std::string_view branch_name,
                               uint64_t term)
 {
-    size_t size = options_->DataFileSize();
+    size_t size = file_id.IsSegmentFile() ? options_->SegmentFileSize()
+                                          : options_->DataFileSize();
     int res = ReserveCacheSpace(size);
     if (res < 0)
     {
@@ -4932,16 +5253,26 @@ int CloudStoreMgr::CreateFile(LruFD::Ref dir_fd,
 }
 
 int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
-                            FileId file_id,
+                            TypedFileId file_id,
                             uint64_t flags,
                             uint64_t mode,
                             std::string_view branch_name,
                             uint64_t term,
                             bool skip_cloud_lookup)
 {
-    std::string filename = (file_id == LruFD::kManifest)
-                               ? BranchManifestFileName(branch_name, term)
-                               : BranchDataFileName(file_id, branch_name, term);
+    std::string filename;
+    if (file_id == LruFD::kManifest)
+    {
+        filename = BranchManifestFileName(branch_name, term);
+    }
+    else if (file_id.IsSegmentFile())
+    {
+        filename = SegmentFileName(file_id.ToFileId(), branch_name, term);
+    }
+    else
+    {
+        filename = BranchDataFileName(file_id.ToFileId(), branch_name, term);
+    }
     FileKey key{tbl_id, filename};
     pending_gc_cleanup_.erase(key);
     if (DequeClosedFile(key))
@@ -4995,9 +5326,9 @@ int CloudStoreMgr::OpenFile(const TableIdent &tbl_id,
 
 KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
 {
-    FileId file_id = fd.Get()->file_id_;
+    TypedFileId file_id = fd.Get()->file_id_;
     KvError err = KvError::NoError;
-    if (file_id != LruFD::kDirectory)
+    if (!(file_id == LruFD::kDirectory))
     {
         const TableIdent &tbl_id = *fd.Get()->tbl_->tbl_id_;
         uint64_t term = fd.Get()->term_;
@@ -5011,10 +5342,18 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
         else
         {
             std::string_view branch = fd.Get()->branch_name_;
-            filename = BranchDataFileName(file_id, branch, term);
+            if (file_id.IsSegmentFile())
+            {
+                filename = SegmentFileName(file_id.ToFileId(), branch, term);
+            }
+            else
+            {
+                filename = BranchDataFileName(file_id.ToFileId(), branch, term);
+            }
             DLOG(INFO) << "SyncFile data, tbl=" << tbl_id
-                       << " file_id=" << file_id << " fd_branch=" << branch
-                       << " fd_term=" << term << " filename=" << filename
+                       << " file_id=" << file_id.ToString()
+                       << " fd_branch=" << branch << " fd_term=" << term
+                       << " filename=" << filename
                        << " reg_idx=" << fd.Get()->reg_idx_;
         }
         err = UploadFile(
@@ -5059,8 +5398,8 @@ KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
         size_t dirty_data_files = 0;
         for (LruFD::Ref fd : fds)
         {
-            FileId file_id = fd.Get()->file_id_;
-            if (file_id <= LruFD::kMaxDataFile)
+            TypedFileId file_id = fd.Get()->file_id_;
+            if (file_id.IsDataFile())
             {
                 ++dirty_data_files;
             }
@@ -5077,8 +5416,8 @@ KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
     std::vector<std::pair<std::string, FdIdx>> files;
     for (LruFD::Ref fd : fds)
     {
-        FileId file_id = fd.Get()->file_id_;
-        if (file_id != LruFD::kDirectory)
+        TypedFileId file_id = fd.Get()->file_id_;
+        if (!(file_id == LruFD::kDirectory))
         {
             uint64_t term = fd.Get()->term_;
             std::string filename;
@@ -5090,7 +5429,16 @@ KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
             else
             {
                 std::string_view branch = fd.Get()->branch_name_;
-                filename = BranchDataFileName(file_id, branch, term);
+                if (file_id.IsSegmentFile())
+                {
+                    filename =
+                        SegmentFileName(file_id.ToFileId(), branch, term);
+                }
+                else
+                {
+                    filename =
+                        BranchDataFileName(file_id.ToFileId(), branch, term);
+                }
             }
             files.emplace_back(std::move(filename), fd.FdPair());
         }
@@ -5114,7 +5462,7 @@ KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
 
 KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
 {
-    FileId file_id = fd.Get()->file_id_;
+    TypedFileId file_id = fd.Get()->file_id_;
     std::optional<FileKey> file_key;
 
     if (file_id != LruFD::kDirectory)
@@ -5126,9 +5474,13 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
         {
             filename = BranchManifestFileName(branch, term);
         }
+        else if (file_id.IsSegmentFile())
+        {
+            filename = SegmentFileName(file_id.ToFileId(), branch, term);
+        }
         else
         {
-            filename = BranchDataFileName(file_id, branch, term);
+            filename = BranchDataFileName(file_id.ToFileId(), branch, term);
         }
         file_key.emplace(*fd.Get()->tbl_->tbl_id_, filename);
     }
@@ -5147,15 +5499,36 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
     return KvError::NoError;
 }
 
-size_t CloudStoreMgr::EstimateFileSize(FileId file_id) const
+std::string CloudStoreMgr::ToFilename(TypedFileId file_id, uint64_t term)
+{
+    if (file_id == LruFD::kManifest)
+    {
+        return ManifestFileName(term);
+    }
+    else if (file_id.IsSegmentFile())
+    {
+        return SegmentFileName(file_id.ToFileId(), MainBranchName, term);
+    }
+    else
+    {
+        assert(file_id.value_ < TypedFileId::kMaxReserved);
+        return DataFileName(file_id.ToFileId(), term);
+    }
+}
+
+size_t CloudStoreMgr::EstimateFileSize(TypedFileId file_id) const
 {
     if (file_id == LruFD::kManifest)
     {
         return options_->manifest_limit;
     }
+    else if (file_id.IsSegmentFile())
+    {
+        return options_->SegmentFileSize();
+    }
     else
     {
-        assert(file_id <= LruFD::kMaxDataFile);
+        assert(file_id.value_ < TypedFileId::kMaxReserved);
         return options_->DataFileSize();
     }
 }
@@ -5166,6 +5539,8 @@ size_t CloudStoreMgr::EstimateFileSize(std::string_view filename) const
     {
     case 'd':  // data_xxx
         return options_->DataFileSize();
+    case 's':  // segment_xxx
+        return options_->SegmentFileSize();
     case 'm':  // manifest or manifest_xxx
         return options_->manifest_limit;
     default:
@@ -5175,7 +5550,8 @@ size_t CloudStoreMgr::EstimateFileSize(std::string_view filename) const
 }
 
 FileKey CloudStoreMgr::EvictingPathKey(const TableIdent &tbl_id,
-                                       FileId file_id,
+                                       TypedFileId file_id,
+                                       std::string_view branch_name,
                                        uint64_t term) const
 {
     if (file_id == LruFD::kDirectory)
@@ -5184,31 +5560,47 @@ FileKey CloudStoreMgr::EvictingPathKey(const TableIdent &tbl_id,
     }
     if (file_id == LruFD::kManifest)
     {
-        return FileKey(tbl_id, BranchManifestFileName(GetActiveBranch(), term));
+        return FileKey(tbl_id, BranchManifestFileName(branch_name, term));
+    }
+    if (file_id.IsSegmentFile())
+    {
+        return FileKey(tbl_id,
+                       SegmentFileName(file_id.ToFileId(), branch_name, term));
     }
     return FileKey(tbl_id,
-                   BranchDataFileName(file_id, GetActiveBranch(), term));
+                   BranchDataFileName(file_id.ToFileId(), branch_name, term));
 }
 
 void CloudStoreMgr::WaitForEvictingPath(const TableIdent &tbl_id,
-                                        FileId file_id,
+                                        TypedFileId file_id,
+                                        std::string_view branch_name,
                                         uint64_t term)
 {
-    WaitForEvictingKey(EvictingPathKey(tbl_id, file_id, term));
+    // Fast path: if no eviction is in flight, skip the FileKey construction
+    // (which builds a filename string and hits the heap). The foreground
+    // open path goes through here on every OpenOrCreateFD.
+    if (evicting_paths_.empty())
+    {
+        return;
+    }
+    WaitForEvictingKey(EvictingPathKey(tbl_id, file_id, branch_name, term));
 }
 
 bool CloudStoreMgr::StartEvictingPath(const TableIdent &tbl_id,
-                                      FileId file_id,
+                                      TypedFileId file_id,
+                                      std::string_view branch_name,
                                       uint64_t term)
 {
-    return StartEvictingKey(EvictingPathKey(tbl_id, file_id, term));
+    return StartEvictingKey(
+        EvictingPathKey(tbl_id, file_id, branch_name, term));
 }
 
 void CloudStoreMgr::FinishEvictingPath(const TableIdent &tbl_id,
-                                       FileId file_id,
+                                       TypedFileId file_id,
+                                       std::string_view branch_name,
                                        uint64_t term)
 {
-    FinishEvictingKey(EvictingPathKey(tbl_id, file_id, term));
+    FinishEvictingKey(EvictingPathKey(tbl_id, file_id, branch_name, term));
 }
 
 void CloudStoreMgr::WaitForEvictingKey(const FileKey &key)
@@ -5367,16 +5759,26 @@ int CloudStoreMgr::ReserveCacheSpace(size_t size)
 }
 
 KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
-                                    FileId file_id,
+                                    TypedFileId file_id,
                                     std::string_view branch_name,
                                     uint64_t term,
                                     bool download_to_exist,
                                     uint64_t offset)
 {
     KvTask *current_task = ThdTask();
-    std::string filename = (file_id == LruFD::kManifest)
-                               ? BranchManifestFileName(branch_name, term)
-                               : BranchDataFileName(file_id, branch_name, term);
+    std::string filename;
+    if (file_id == LruFD::kManifest)
+    {
+        filename = BranchManifestFileName(branch_name, term);
+    }
+    else if (file_id.IsSegmentFile())
+    {
+        filename = SegmentFileName(file_id.ToFileId(), branch_name, term);
+    }
+    else
+    {
+        filename = BranchDataFileName(file_id.ToFileId(), branch_name, term);
+    }
 
     ObjectStore::DownloadTask download_task(&tbl_id, filename);
 
@@ -5672,7 +6074,10 @@ std::pair<ManifestFilePtr, KvError> StandbyStoreMgr::RefreshManifest(
         return {nullptr, ToKvError(sync_res)};
     }
 
-    SetBranchFileIdTerm(tbl_id, LruFD::kManifest, branch, term);
+    // Manifest term is captured by BranchManifestMetadata inside the manifest
+    // file itself; no need to record it in branch_file_mapping_.
+    (void) branch;
+    (void) term;
     return IouringMgr::GetManifest(tbl_id);
 }
 
@@ -5722,9 +6127,10 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
                              DirectIoBuffer &buffer)
 {
     auto [type, id_term_view] = ParseFileName(filename);
-    bool is_data_file = type == FileNameData;
+    const bool is_data_file = type == FileNameData;
+    const bool is_segment_file = type == FileNameSegment;
 
-    if (!is_data_file && type != FileNameManifest)
+    if (!is_data_file && !is_segment_file && type != FileNameManifest)
     {
         LOG(ERROR) << "Unsupported file for upload: " << filename;
         return KvError::InvalidArgs;
@@ -5738,6 +6144,17 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
         if (!ParseDataFileSuffix(id_term_view, file_id, branch_name, term))
         {
             LOG(ERROR) << "Invalid data file name: " << filename;
+            return KvError::InvalidArgs;
+        }
+    }
+    else if (is_segment_file)
+    {
+        FileId file_id = 0;
+        std::string_view branch_name;
+        uint64_t term = 0;
+        if (!ParseSegmentFileSuffix(id_term_view, file_id, branch_name, term))
+        {
+            LOG(ERROR) << "Invalid segment file name: " << filename;
             return KvError::InvalidArgs;
         }
     }
@@ -5758,12 +6175,18 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
         return ToKvError(fd);
     }
 
-    size_t file_size = is_data_file ? options_->DataFileSize() : 0;
-    if (!is_data_file)
+    size_t file_size = 0;
+    if (is_data_file)
     {
-        struct statx stx
-        {
-        };
+        file_size = options_->DataFileSize();
+    }
+    else if (is_segment_file)
+    {
+        file_size = options_->SegmentFileSize();
+    }
+    if (!is_data_file && !is_segment_file)
+    {
+        struct statx stx{};
         FdIdx stat_fd{fd, false};
         int stat_res = Statx(stat_fd, "", &stx);
         if (stat_res < 0)
@@ -5859,6 +6282,7 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
 
     auto [prefix, suffix] = ParseFileName(upload_task->filename_);
     const bool is_data_file = (prefix == FileNameData);
+    const bool is_segment_file = (prefix == FileNameSegment);
     if (is_data_file)
     {
         FileId file_id = 0;
@@ -5867,6 +6291,18 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
         if (!ParseDataFileSuffix(suffix, file_id, branch_name, term))
         {
             LOG(ERROR) << "Invalid data filename for upload: "
+                       << upload_task->filename_;
+            return KvError::InvalidArgs;
+        }
+    }
+    else if (is_segment_file)
+    {
+        FileId file_id = 0;
+        std::string_view branch_name;
+        uint64_t term = 0;
+        if (!ParseSegmentFileSuffix(suffix, file_id, branch_name, term))
+        {
+            LOG(ERROR) << "Invalid segment filename for upload: "
                        << upload_task->filename_;
             return KvError::InvalidArgs;
         }
@@ -5936,8 +6372,18 @@ KvError CloudStoreMgr::UploadFile(const TableIdent &tbl_id,
             cleanup();
             return KvError::InvalidArgs;
         }
-        file_size = is_data_file ? options_->DataFileSize()
-                                 : static_cast<size_t>(end_offset);
+        if (is_data_file)
+        {
+            file_size = options_->DataFileSize();
+        }
+        else if (is_segment_file)
+        {
+            file_size = options_->SegmentFileSize();
+        }
+        else
+        {
+            file_size = static_cast<size_t>(end_offset);
+        }
     }
     else if (!payload.empty())
     {

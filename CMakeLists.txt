@@ -108,8 +108,10 @@ set(ELOQ_STORE_SOURCES
         src/eloq_store.cpp
         src/eloqstore_module.cpp
         src/file_gc.cpp
+        src/global_registered_memory.cpp
         src/kill_point.cpp
         src/kv_options.cpp
+        src/io_string_buffer.cpp
         src/replayer.cpp
         src/storage/data_page.cpp
         src/storage/data_page_builder.cpp

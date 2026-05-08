@@ -5,6 +5,7 @@
 #include <string>
 #include <utility>
 
+#include "coding.h"
 #include "comparator.h"
 #include "compression.h"
 #include "kv_options.h"
@@ -22,6 +23,74 @@ enum class ValLenBit : uint8_t
     StandaloneCompressed,
     BitsCount
 };
+
+/**
+ * @brief Check if the compression bits (bits 2-3 of value_length) indicate
+ * a very large string stored in segment files. When both bits are set (0b11),
+ * the value content is an array of segment IDs rather than inline data.
+ */
+inline bool IsLargeValueEncoding(uint32_t stored_val_len)
+{
+    uint8_t comp_bits =
+        (stored_val_len >> uint8_t(ValLenBit::DictionaryCompressed)) & 0b11;
+    return comp_bits == 0b11;
+}
+
+/**
+ * @brief Encode large value content: [actual_length(4B) | segment_ids(4B
+ * each)].
+ * @param actual_length The true byte length of the very large value.
+ * @param segment_ids Logical segment IDs allocated from the segment mapping.
+ * @param dst Output buffer to append encoded content to.
+ */
+inline void EncodeLargeValueContent(uint32_t actual_length,
+                                    std::span<const PageId> segment_ids,
+                                    std::string &dst)
+{
+    size_t offset = dst.size();
+    dst.resize(offset + sizeof(uint32_t) + segment_ids.size() * sizeof(PageId));
+    char *p = dst.data() + offset;
+    EncodeFixed32(p, actual_length);
+    p += sizeof(uint32_t);
+    for (PageId id : segment_ids)
+    {
+        EncodeFixed32(p, id);
+        p += sizeof(PageId);
+    }
+}
+
+/**
+ * @brief Decode large value content encoded by EncodeLargeValueContent.
+ * @param encoded The encoded value content from the data page.
+ * @param[out] actual_length The true byte length of the very large value.
+ * @param[out] segment_ids Output span to receive decoded segment IDs.
+ * @return Number of segment IDs decoded, or 0 on error.
+ */
+inline uint32_t DecodeLargeValueContent(std::string_view encoded,
+                                        uint32_t &actual_length,
+                                        std::span<PageId> segment_ids)
+{
+    if (encoded.size() < sizeof(uint32_t))
+    {
+        return 0;
+    }
+    actual_length = DecodeFixed32(encoded.data());
+    encoded = encoded.substr(sizeof(uint32_t));
+
+    uint32_t num_segments =
+        static_cast<uint32_t>(encoded.size() / sizeof(PageId));
+    if (num_segments > segment_ids.size())
+    {
+        return 0;
+    }
+
+    for (uint32_t i = 0; i < num_segments; ++i)
+    {
+        segment_ids[i] = DecodeFixed32(encoded.data());
+        encoded = encoded.substr(sizeof(PageId));
+    }
+    return num_segments;
+}
 
 /**
  * Format:
@@ -85,6 +154,7 @@ public:
     std::string_view Key() const;
     std::string_view Value() const;
     bool IsOverflow() const;
+    bool IsLargeValue() const;
     compression::CompressionType CompressionType() const;
     uint64_t ExpireTs() const;
     uint64_t Timestamp() const;
@@ -126,6 +196,7 @@ private:
         uint32_t *value_length,
         bool *overflow,
         bool *expire,
+        bool *large_value,
         compression::CompressionType *compression_kind);
 
     const Comparator *const cmp_;
@@ -139,6 +210,7 @@ private:
     std::string key_;
     std::string_view value_;
     bool overflow_;
+    bool large_value_{false};
     compression::CompressionType compression_type_{
         compression::CompressionType::None};
     uint64_t timestamp_;

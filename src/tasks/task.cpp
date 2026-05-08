@@ -7,7 +7,10 @@
 #include <utility>
 
 #include "compression.h"
+#include "global_registered_memory.h"
+#include "io_string_buffer.h"
 #include "storage/index_page_manager.h"
+#include "storage/page_mapper.h"
 #include "storage/shard.h"
 
 namespace eloqstore
@@ -114,9 +117,10 @@ std::pair<OverflowPage, KvError> LoadOverflowPage(const TableIdent &tbl_id,
     return {OverflowPage(page_id, std::move(page)), KvError::NoError};
 }
 
-std::pair<std::string, KvError> GetOverflowValue(const TableIdent &tbl_id,
-                                                 const MappingSnapshot *mapping,
-                                                 std::string_view encoded_ptrs)
+KvError GetOverflowValue(const TableIdent &tbl_id,
+                         const MappingSnapshot *mapping,
+                         std::string_view encoded_ptrs,
+                         std::string &value)
 {
     std::array<FilePageId, max_overflow_pointers> ids_buf;
     // Decode and convert overflow pointers (logical) to file page ids.
@@ -129,14 +133,14 @@ std::pair<std::string, KvError> GetOverflowValue(const TableIdent &tbl_id,
 
     std::span<FilePageId> page_ids = to_file_page_ids(encoded_ptrs);
     std::vector<Page> pages;
-    std::string value;
+    value.clear();
     value.reserve(page_ids.size() * OverflowPage::Capacity(Options(), false));
     while (!page_ids.empty())
     {
         KvError err = IoMgr()->ReadPages(tbl_id, page_ids, pages);
         if (err != KvError::NoError)
         {
-            return {{}, err};
+            return err;
         }
         uint8_t i = 0;
         for (Page &pg : pages)
@@ -151,58 +155,138 @@ std::pair<std::string, KvError> GetOverflowValue(const TableIdent &tbl_id,
         }
     }
 
-    return {std::move(value), KvError::NoError};
+    return KvError::NoError;
 }
 
-std::pair<std::string_view, KvError> ResolveValue(
-    const TableIdent &tbl_id,
-    MappingSnapshot *mapping,
-    DataPageIter &iter,
-    std::string &storage,
-    const compression::DictCompression *compression)
+KvError GetLargeValue(const TableIdent &tbl_id,
+                      const MappingSnapshot *seg_mapping,
+                      std::string_view encoded_content,
+                      IoStringBuffer &large_value,
+                      GlobalRegisteredMemory *global_mem,
+                      uint16_t reg_mem_index_base,
+                      std::function<void()> yield)
 {
-    storage.clear();
-    std::string_view raw_value;
+    assert(seg_mapping != nullptr);
+    assert(global_mem != nullptr);
 
+    uint32_t actual_length;
+    uint32_t max_segments =
+        (encoded_content.size() - sizeof(uint32_t)) / sizeof(PageId);
+    std::vector<PageId> segment_ids(max_segments);
+    uint32_t num_segments =
+        DecodeLargeValueContent(encoded_content, actual_length, segment_ids);
+    if (num_segments == 0)
+    {
+        return KvError::Corrupted;
+    }
+
+    // Resolve logical segment IDs to physical file segment IDs.
+    std::vector<FilePageId> physical_ids(num_segments);
+    for (uint32_t i = 0; i < num_segments; ++i)
+    {
+        physical_ids[i] = seg_mapping->ToFilePage(segment_ids[i]);
+    }
+
+    // Allocate memory segments and build IoStringBuffer.
+    for (uint32_t i = 0; i < num_segments; ++i)
+    {
+        auto [ptr, chunk_index] = global_mem->GetSegment(yield);
+        uint16_t buf_index =
+            reg_mem_index_base + static_cast<uint16_t>(chunk_index);
+        large_value.Append({ptr, buf_index});
+    }
+    large_value.SetSize(actual_length);
+
+    // Read segments in batches.
+    const auto &fragments = large_value.Fragments();
+    for (uint32_t offset = 0; offset < num_segments;
+         offset += max_segments_batch)
+    {
+        uint32_t batch_size =
+            std::min(uint32_t(max_segments_batch), num_segments - offset);
+        std::array<FilePageId, max_segments_batch> batch_fp_ids;
+        std::array<char *, max_segments_batch> batch_ptrs;
+        std::array<uint16_t, max_segments_batch> batch_buf_indices;
+        for (uint32_t i = 0; i < batch_size; ++i)
+        {
+            batch_fp_ids[i] = physical_ids[offset + i];
+            batch_ptrs[i] = fragments[offset + i].data_;
+            batch_buf_indices[i] = fragments[offset + i].buf_index_;
+        }
+        KvError err =
+            IoMgr()->ReadSegments(tbl_id,
+                                  {batch_fp_ids.data(), batch_size},
+                                  {batch_ptrs.data(), batch_size},
+                                  {batch_buf_indices.data(), batch_size});
+        if (err != KvError::NoError)
+        {
+            large_value.Recycle(global_mem, reg_mem_index_base);
+            return err;
+        }
+    }
+    return KvError::NoError;
+}
+
+KvError ResolveValue(const TableIdent &tbl_id,
+                     MappingSnapshot *mapping,
+                     DataPageIter &iter,
+                     std::string &value,
+                     const compression::DictCompression *compression,
+                     MappingSnapshot *seg_mapping,
+                     IoStringBuffer *large_value,
+                     GlobalRegisteredMemory *global_mem,
+                     uint16_t reg_mem_index_base,
+                     std::function<void()> yield)
+{
+    if (iter.IsLargeValue())
+    {
+        if (large_value == nullptr || global_mem == nullptr)
+        {
+            return KvError::InvalidArgs;
+        }
+        return GetLargeValue(tbl_id,
+                             seg_mapping,
+                             iter.Value(),
+                             *large_value,
+                             global_mem,
+                             reg_mem_index_base,
+                             std::move(yield));
+    }
+
+    compression::CompressionType comp_type = iter.CompressionType();
+    if (comp_type == compression::CompressionType::None)
+    {
+        if (iter.IsOverflow())
+        {
+            return GetOverflowValue(tbl_id, mapping, iter.Value(), value);
+        }
+        value.assign(iter.Value().data(), iter.Value().size());
+        return KvError::NoError;
+    }
+
+    // Compressed case: obtain raw compressed bytes, then decompress into value.
+    std::string_view raw_value;
+    std::string overflow_storage;
     if (iter.IsOverflow())
     {
-        auto ret = GetOverflowValue(tbl_id, mapping, iter.Value());
-        if (ret.second != KvError::NoError)
+        KvError err =
+            GetOverflowValue(tbl_id, mapping, iter.Value(), overflow_storage);
+        if (err != KvError::NoError)
         {
-            return {{}, ret.second};
+            return err;
         }
-        storage = std::move(ret.first);
-        raw_value = storage;
+        raw_value = overflow_storage;
     }
     else
     {
         raw_value = iter.Value();
     }
 
-    if (iter.CompressionType() == compression::CompressionType::None)
-    {
-        return {raw_value, KvError::NoError};
-    }
-    else if (iter.CompressionType() == compression::CompressionType::Dictionary)
-    {
-        std::string uncompressed_value;
-        if (!compression->Decompress(raw_value, uncompressed_value))
-        {
-            return {{}, KvError::Corrupted};
-        }
-        storage = std::move(uncompressed_value);
-        return {storage, KvError::NoError};
-    }
-    else
-    {
-        std::string uncompressed_value;
-        if (!compression::DecompressRaw(raw_value, uncompressed_value))
-        {
-            return {{}, KvError::Corrupted};
-        }
-        storage = std::move(uncompressed_value);
-        return {storage, KvError::NoError};
-    }
+    value.clear();
+    bool ok = (comp_type == compression::CompressionType::Dictionary)
+                  ? compression->Decompress(raw_value, value)
+                  : compression::DecompressRaw(raw_value, value);
+    return ok ? KvError::NoError : KvError::Corrupted;
 }
 
 uint8_t DecodeOverflowPointers(

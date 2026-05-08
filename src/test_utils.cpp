@@ -1006,6 +1006,11 @@ void ManifestVerifier::Finish()
             std::string branch_metadata_buf =
                 eloqstore::SerializeBranchManifestMetadata(branch_metadata);
             builder_.AppendBranchManifestMetadata(branch_metadata_buf);
+            // Empty segment mapping deltas: just a Fixed32 zero length prefix.
+            std::string empty_seg;
+            empty_seg.resize(4);
+            eloqstore::EncodeFixed32(empty_seg.data(), 0);
+            builder_.AppendSegmentMapping(empty_seg);
             std::string_view sv =
                 builder_.Finalize(root_id_, eloqstore::MaxPageId);
             file_.append(sv);

@@ -160,6 +160,11 @@ bool DataPageIter::IsOverflow() const
     return overflow_;
 }
 
+bool DataPageIter::IsLargeValue() const
+{
+    return large_value_;
+}
+
 compression::CompressionType DataPageIter::CompressionType() const
 {
     return compression_type_;
@@ -288,7 +293,7 @@ std::pair<bool, uint16_t> DataPageIter::SearchRegion(std::string_view key) const
         size_t mid = left + step;
         uint16_t region_offset = RestartOffset(mid);
         uint32_t shared, non_shared, val_len;
-        bool overflow, expire;
+        bool overflow, expire, large_val;
         compression::CompressionType compression_kind;
         const char *key_ptr = DecodeEntry(page_.data() + region_offset,
                                           page_.data() + restart_offset_,
@@ -297,6 +302,7 @@ std::pair<bool, uint16_t> DataPageIter::SearchRegion(std::string_view key) const
                                           &val_len,
                                           &overflow,
                                           &expire,
+                                          &large_val,
                                           &compression_kind);
         assert(key_ptr != nullptr && shared == 0);
 
@@ -360,6 +366,7 @@ bool DataPageIter::ParseNextKey()
                      &value_len,
                      &overflow_,
                      &has_expire_ts,
+                     &large_value_,
                      &compression_type_);
 
     if (pt == nullptr || key_.size() < shared)
@@ -418,6 +425,7 @@ void DataPageIter::Invalidate()
     expire_ts_ = 0;
     timestamp_ = 0;
     overflow_ = false;
+    large_value_ = false;
     compression_type_ = compression::CompressionType::None;
 }
 
@@ -429,6 +437,7 @@ const char *DataPageIter::DecodeEntry(
     uint32_t *value_length,
     bool *overflow,
     bool *expire,
+    bool *large_value,
     compression::CompressionType *compression_type)
 {
     if (limit - p < 3)
@@ -456,8 +465,18 @@ const char *DataPageIter::DecodeEntry(
     uint8_t compressed =
         *value_length >> uint8_t(ValLenBit::DictionaryCompressed) & 0b11;
 
-    CHECK(compressed != 0b11) << "Data is corrupted";
-    *compression_type = static_cast<compression::CompressionType>(compressed);
+    // 0b11 denotes a very large string stored in segment files.
+    if (compressed == 0b11)
+    {
+        *large_value = true;
+        *compression_type = compression::CompressionType::None;
+    }
+    else
+    {
+        *large_value = false;
+        *compression_type =
+            static_cast<compression::CompressionType>(compressed);
+    }
 
     *value_length >>= uint8_t(ValLenBit::BitsCount);
 

@@ -31,8 +31,9 @@ enum struct KvError : uint8_t
     IoFail,           // Unclassified local I/O error.
     ExpiredTerm,      // Cloud term file indicates stale process term.
     OssInsufficientStorage,  // Object storage out of capacity (HTTP 507).
-    AlreadyExists,  // Branch or table already exists (e.g., HTTP 409 or
-                    // EEXIST).
+    AlreadyExists,          // Branch or table already exists (e.g., HTTP 409 or
+                            // EEXIST).
+    LargeValueUnsupported,  // Operation does not support very large values.
 };
 
 constexpr const char *ErrorString(KvError err)
@@ -77,6 +78,8 @@ constexpr const char *ErrorString(KvError err)
         return "Object storage insufficient storage";
     case KvError::AlreadyExists:
         return "Resource already exists";
+    case KvError::LargeValueUnsupported:
+        return "Operation does not support very large values";
     }
     return "Unknown error";
 }

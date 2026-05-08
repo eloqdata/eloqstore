@@ -59,8 +59,8 @@ void PrintBranchMetadata(std::string_view data)
     for (size_t i = 0; i < metadata.file_ranges.size(); ++i)
     {
         const auto &r = metadata.file_ranges[i];
-        std::cout << "    [" << i << "] branch=\"" << r.branch_name
-                  << "\" term=" << r.term << " max_file_id=" << r.max_file_id
+        std::cout << "    [" << i << "] branch=\"" << r.branch_name_
+                  << "\" term=" << r.term_ << " max_file_id=" << r.max_file_id_
                   << "\n";
     }
 }

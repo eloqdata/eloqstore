@@ -1,6 +1,7 @@
 #pragma once
 
 #include <boost/context/continuation.hpp>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -17,6 +18,7 @@ class KvRequest;
 class KvTask;
 class IndexPageManager;
 class AsyncIoManager;
+class IoStringBuffer;
 struct KvOptions;
 class TaskManager;
 class PagesPool;
@@ -67,17 +69,50 @@ std::pair<OverflowPage, KvError> LoadOverflowPage(const TableIdent &tbl_id,
  * @param tbl_id The table partition identifier.
  * @param mapping The mapping snapshot of this table partition.
  * @param encoded_ptrs The encoded overflow pointers.
+ * @param[out] value Output string to receive the assembled overflow value.
  */
-std::pair<std::string, KvError> GetOverflowValue(const TableIdent &tbl_id,
-                                                 const MappingSnapshot *mapping,
-                                                 std::string_view encoded_ptrs);
+KvError GetOverflowValue(const TableIdent &tbl_id,
+                         const MappingSnapshot *mapping,
+                         std::string_view encoded_ptrs,
+                         std::string &value);
 
-std::pair<std::string_view, KvError> ResolveValue(
-    const TableIdent &tbl_id,
-    MappingSnapshot *mapping,
-    DataPageIter &iter,
-    std::string &storage,
-    const compression::DictCompression *compression);
+class GlobalRegisteredMemory;
+
+/**
+ * @brief Read a large value stored in segment files.
+ * @param tbl_id The table partition identifier.
+ * @param seg_mapping The segment mapping snapshot.
+ * @param encoded_content The encoded large value content from the data page.
+ * @param large_value Output IoStringBuffer to receive the segments.
+ * @param global_mem The global registered memory for segment allocation.
+ * @param reg_mem_index_base The io_uring buffer index base for global memory.
+ * @param yield Yield function for coroutine context when allocating segments.
+ */
+KvError GetLargeValue(const TableIdent &tbl_id,
+                      const MappingSnapshot *seg_mapping,
+                      std::string_view encoded_content,
+                      IoStringBuffer &large_value,
+                      GlobalRegisteredMemory *global_mem,
+                      uint16_t reg_mem_index_base,
+                      std::function<void()> yield);
+
+/**
+ * @brief Resolve the value at the iterator's current position.
+ *
+ * Writes the decoded value bytes directly into @p value. If the entry is a
+ * large value, @p large_value is populated instead and @p value is left
+ * unchanged.
+ */
+KvError ResolveValue(const TableIdent &tbl_id,
+                     MappingSnapshot *mapping,
+                     DataPageIter &iter,
+                     std::string &value,
+                     const compression::DictCompression *compression,
+                     MappingSnapshot *seg_mapping = nullptr,
+                     IoStringBuffer *large_value = nullptr,
+                     GlobalRegisteredMemory *global_mem = nullptr,
+                     uint16_t reg_mem_index_base = 0,
+                     std::function<void()> yield = nullptr);
 /**
  * @brief Decode overflow pointers.
  * @param encoded The encoded overflow pointers.

@@ -15,6 +15,10 @@
 
 namespace eloqstore
 {
+// Scan does not support very-large values (those stored in segment files via
+// IoStringBuffer). Encountering such a row produces
+// KvError::LargeValueUnsupported; callers must fetch those keys through
+// ReadTask instead. See docs/zero_copy_read.md.
 class ScanIterator
 {
 public:
@@ -27,7 +31,7 @@ public:
     KvError Next();
 
     std::string_view Key() const;
-    std::pair<std::string_view, KvError> ResolveValue(std::string &storage);
+    KvError ResolveValue(std::string &value);
     uint64_t ExpireTs() const;
     uint64_t Timestamp() const;
 

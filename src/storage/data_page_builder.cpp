@@ -159,7 +159,8 @@ bool DataPageBuilder::Add(std::string_view key,
                           bool overflow,
                           uint64_t ts,
                           uint64_t expire_ts,
-                          compression::CompressionType compression_kind)
+                          compression::CompressionType compression_kind,
+                          bool large_value)
 {
 #ifndef NDEBUG
     size_t buf_prev_size = buffer_.size();
@@ -173,9 +174,18 @@ bool DataPageBuilder::Add(std::string_view key,
 
     size_t stored_val_len = value.size() << uint8_t(ValLenBit::BitsCount);
     stored_val_len |= (overflow << uint8_t(ValLenBit::Overflow));
-    auto comp_bits = static_cast<uint8_t>(compression_kind);
-    assert(comp_bits < 0b11);
-    stored_val_len |= comp_bits << uint8_t(ValLenBit::DictionaryCompressed);
+    if (large_value)
+    {
+        // Large value: set bits 2-3 to 0b11.
+        assert(!overflow);
+        stored_val_len |= 0b11 << uint8_t(ValLenBit::DictionaryCompressed);
+    }
+    else
+    {
+        auto comp_bits = static_cast<uint8_t>(compression_kind);
+        assert(comp_bits < 0b11);
+        stored_val_len |= comp_bits << uint8_t(ValLenBit::DictionaryCompressed);
+    }
     if (expire_ts != 0)
     {
         stored_val_len |= (1 << uint8_t(ValLenBit::Expire));

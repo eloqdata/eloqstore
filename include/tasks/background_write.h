@@ -7,6 +7,8 @@
 
 namespace eloqstore
 {
+class MovingCachedPages;
+
 class BackgroundWrite : public WriteTask
 {
 public:
@@ -14,11 +16,22 @@ public:
     {
         return TaskType::BackgroundWrite;
     }
+
     /**
-     * @brief Compact data files with a low utilization rate. Copy all pages
-     * referenced by the latest mapping and append them to the latest data file.
+     * @brief Run compaction on data files and segment files in a single pass:
+     * one `MakeCowRoot`, up to two rewrite passes (data pages, then segments),
+     * one `UpdateMeta` flushing a single manifest record, and one
+     * `TriggerFileGC`.
+     *
+     * This method is unconditional -- callers are responsible for deciding
+     * that compaction is warranted. The pending-compact dispatch path is
+     * already gated by `WriteTask::CompactIfNeeded`; `CreateArchive` runs its
+     * own per-mapper amplification check before invoking.
+     *
+     * Per-file under-utilization is re-evaluated inside each rewrite pass, so
+     * files above their amplification threshold are skipped cheaply.
      */
-    KvError CompactDataFile();
+    KvError Compact();
 
     KvError CreateArchive(std::string_view tag = {});
 
@@ -31,5 +44,19 @@ public:
 private:
     void HeapSortFpIdsWithYield(
         std::vector<std::pair<FilePageId, PageId>> &fp_ids);
+
+    /**
+     * @brief Rewrite loop for under-utilized data files. Operates on
+     * `cow_meta_.mapper_`; does NOT call UpdateMeta or TriggerFileGC -- the
+     * caller (`Compact`) batches the flush across both passes.
+     */
+    KvError DoCompactDataFile(MovingCachedPages &moving_cached);
+
+    /**
+     * @brief Rewrite loop for under-utilized segment files. Operates on
+     * `cow_meta_.segment_mapper_`; does NOT call UpdateMeta or TriggerFileGC
+     * for the same reason as DoCompactDataFile.
+     */
+    KvError DoCompactSegmentFile();
 };
 }  // namespace eloqstore

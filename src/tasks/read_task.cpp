@@ -4,8 +4,10 @@
 #include <utility>
 
 #include "error.h"
+#include "io_string_buffer.h"
 #include "storage/mem_index_page.h"
 #include "storage/page_mapper.h"
+#include "storage/root_meta.h"
 #include "storage/shard.h"
 
 namespace eloqstore
@@ -15,7 +17,8 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
                        std::string_view search_key,
                        std::string &value,
                        uint64_t &timestamp,
-                       uint64_t &expire_ts)
+                       uint64_t &expire_ts,
+                       IoStringBuffer *large_value)
 {
     auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_id);
     CHECK_KV_ERR(err);
@@ -25,6 +28,11 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
         return KvError::NotFound;
     }
     auto mapping = meta->mapper_->GetMappingSnapshot();
+    MappingSnapshot::Ref seg_mapping_ref{nullptr};
+    if (meta->segment_mapper_ != nullptr)
+    {
+        seg_mapping_ref = meta->segment_mapper_->GetMappingSnapshot();
+    }
 
     PageId page_id;
     err = shard->IndexManager()->SeekIndex(
@@ -41,11 +49,18 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
         return KvError::NotFound;
     }
 
-    std::string value_storage;
-    auto [val_view, fetch_err] = ResolveValue(
-        tbl_id, mapping.Get(), iter, value_storage, meta->compression_.get());
+    auto yield_fn = [this]() { Yield(); };
+    KvError fetch_err = ResolveValue(tbl_id,
+                                     mapping.Get(),
+                                     iter,
+                                     value,
+                                     meta->compression_.get(),
+                                     seg_mapping_ref.Get(),
+                                     large_value,
+                                     IoMgr()->GetGlobalRegisteredMemory(),
+                                     IoMgr()->GlobalRegMemIndexBase(),
+                                     yield_fn);
     CHECK_KV_ERR(fetch_err);
-    value = value_storage.empty() ? val_view : std::move(value_storage);
     timestamp = iter.Timestamp();
     expire_ts = iter.ExpireTs();
     return KvError::NoError;
@@ -56,7 +71,8 @@ KvError ReadTask::Floor(const TableIdent &tbl_id,
                         std::string &floor_key,
                         std::string &value,
                         uint64_t &timestamp,
-                        uint64_t &expire_ts)
+                        uint64_t &expire_ts,
+                        IoStringBuffer *large_value)
 {
     auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_id);
     CHECK_KV_ERR(err);
@@ -66,6 +82,11 @@ KvError ReadTask::Floor(const TableIdent &tbl_id,
         return KvError::NotFound;
     }
     auto mapping = meta->mapper_->GetMappingSnapshot();
+    MappingSnapshot::Ref seg_mapping_ref{nullptr};
+    if (meta->segment_mapper_ != nullptr)
+    {
+        seg_mapping_ref = meta->segment_mapper_->GetMappingSnapshot();
+    }
 
     PageId page_id;
     err = shard->IndexManager()->SeekIndex(
@@ -92,11 +113,18 @@ KvError ReadTask::Floor(const TableIdent &tbl_id,
         CHECK(found);
     }
     floor_key = iter.Key();
-    std::string value_storage;
-    auto [val_view, fetch_err] = ResolveValue(
-        tbl_id, mapping.Get(), iter, value_storage, meta->compression_.get());
+    auto yield_fn = [this]() { Yield(); };
+    KvError fetch_err = ResolveValue(tbl_id,
+                                     mapping.Get(),
+                                     iter,
+                                     value,
+                                     meta->compression_.get(),
+                                     seg_mapping_ref.Get(),
+                                     large_value,
+                                     IoMgr()->GetGlobalRegisteredMemory(),
+                                     IoMgr()->GlobalRegMemIndexBase(),
+                                     yield_fn);
     CHECK_KV_ERR(fetch_err);
-    value = value_storage.empty() ? val_view : std::move(value_storage);
     timestamp = iter.Timestamp();
     expire_ts = iter.ExpireTs();
     return KvError::NoError;

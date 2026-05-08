@@ -164,14 +164,32 @@ void Prewarmer::Run()
             continue;
         }
 
+        const char *file_kind_str = file.is_manifest  ? "manifest"
+                                    : file.is_segment ? "segment"
+                                                      : "data";
+        std::string log_filename;
+        TypedFileId typed_id;
+        if (file.is_manifest)
+        {
+            log_filename = BranchManifestFileName(file.branch_name, file.term);
+            typed_id = IouringMgr::LruFD::kManifest;
+        }
+        else if (file.is_segment)
+        {
+            log_filename =
+                SegmentFileName(file.file_id, file.branch_name, file.term);
+            typed_id = SegmentFileKey(file.file_id);
+        }
+        else
+        {
+            log_filename =
+                BranchDataFileName(file.file_id, file.branch_name, file.term);
+            typed_id = DataFileKey(file.file_id);
+        }
         DLOG(INFO) << "Prewarm downloading: " << file.tbl_id.ToString() << "/"
-                   << (file.is_manifest
-                           ? BranchManifestFileName(file.branch_name, file.term)
-                           : BranchDataFileName(
-                                 file.file_id, file.branch_name, file.term))
-                   << ", size: " << file.file_size << " bytes)";
+                   << log_filename << ", size: " << file.file_size << " bytes)";
         auto [fd_ref, err] = io_mgr_->OpenFD(
-            file.tbl_id, file.file_id, true, file.branch_name, file.term);
+            file.tbl_id, typed_id, true, file.branch_name, file.term);
         if (err == KvError::NoError)
         {
             fd_ref = nullptr;
@@ -181,9 +199,8 @@ void Prewarmer::Run()
             // Track skipped files
             io_mgr_->GetPrewarmStats().files_skipped_missing++;
 
-            LOG(WARNING) << "Prewarm skip missing "
-                         << (file.is_manifest ? "manifest" : "data file")
-                         << " for " << file.tbl_id;
+            LOG(WARNING) << "Prewarm skip missing " << file_kind_str
+                         << " file for " << file.tbl_id;
         }
         else
         {
@@ -516,7 +533,7 @@ void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
                     total_files_skipped++;
                     continue;
                 }
-                file.file_id = IouringMgr::LruFD::kManifest;
+                file.file_id = IouringMgr::LruFD::kManifest.value_;
                 file.term = term;
                 file.branch_name = std::string(branch_name);
                 file.is_manifest = true;
@@ -534,6 +551,20 @@ void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
                 }
                 file.branch_name = std::string(branch_name);
                 file.is_manifest = false;
+                file.is_segment = false;
+            }
+            else if (file_type == FileNameSegment)
+            {
+                std::string_view branch_name;
+                if (!ParseSegmentFileSuffix(
+                        suffix, file.file_id, branch_name, file.term))
+                {
+                    total_files_skipped++;
+                    continue;
+                }
+                file.branch_name = std::string(branch_name);
+                file.is_manifest = false;
+                file.is_segment = true;
             }
             else
             {

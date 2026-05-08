@@ -9,6 +9,7 @@
 namespace eloqstore
 {
 class IndexPageManager;
+class IoStringBuffer;
 class MemIndexPage;
 class MappingSnapshot;
 
@@ -19,7 +20,8 @@ public:
                  std::string_view search_key,
                  std::string &value,
                  uint64_t &timestamp,
-                 uint64_t &expire_ts);
+                 uint64_t &expire_ts,
+                 IoStringBuffer *large_value = nullptr);
 
     /**
      * @brief Read the biggest key not greater than the search key.
@@ -29,7 +31,8 @@ public:
                   std::string &floor_key,
                   std::string &value,
                   uint64_t &timestamp,
-                  uint64_t &expire_ts);
+                  uint64_t &expire_ts,
+                  IoStringBuffer *large_value = nullptr);
 
     TaskType Type() const override
     {

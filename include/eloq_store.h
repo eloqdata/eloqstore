@@ -182,6 +182,7 @@ public:
 
     // output
     std::string value_;
+    IoStringBuffer large_value_;
     uint64_t ts_;
     uint64_t expire_ts_;
 
@@ -213,6 +214,7 @@ public:
     // output
     std::string floor_key_;
     std::string value_;
+    IoStringBuffer large_value_;
     uint64_t ts_;
     uint64_t expire_ts_;
 
@@ -871,6 +873,18 @@ public:
     KvError UpdateStandbyMasterStorePaths(std::vector<std::string> paths,
                                           std::vector<uint64_t> weights);
     KvError UpdateStandbyMasterAddr(std::string standby_master_addr);
+
+    /**
+     * @brief Returns the io_uring buffer index base added to a
+     * GlobalRegisteredMemory chunk index when the shard registered its
+     * global registered memory. Callers integrating their own
+     * GlobalRegisteredMemory need this value to populate
+     * IoBufferRef::buf_index_ when building user-supplied IoStringBuffers
+     * for very-large-value writes, and to pass it to IoStringBuffer::Recycle
+     * after a read.
+     * @return 0 if the shard does not own a GlobalRegisteredMemory.
+     */
+    uint16_t GlobalRegMemIndexBase(size_t shard_id) const;
 
     bool ExecAsyn(KvRequest *req);
     void ExecSync(KvRequest *req);

@@ -17,6 +17,7 @@
 
 #include "async_io_manager.h"
 #include "error.h"
+#include "global_registered_memory.h"
 #include "standby_service.h"
 #include "tasks/list_object_task.h"
 #include "tasks/list_standby_partition_task.h"
@@ -52,7 +53,15 @@ Shard::Shard(EloqStore *store, size_t shard_id, uint32_t fd_limit)
       task_mgr_(&store->options_),
       stack_allocator_(store->options_.coroutine_stack_size),
       io_mgr_(AsyncIoManager::Instance(store, fd_limit)),
-      index_mgr_(io_mgr_.get()) {};
+      index_mgr_(io_mgr_.get())
+{
+    const auto &opts = store_->options_;
+    if (!opts.global_registered_memories.empty())
+    {
+        assert(shard_id_ < opts.global_registered_memories.size());
+        global_reg_mem_ = opts.global_registered_memories[shard_id_];
+    }
+}
 
 KvError Shard::Init()
 {
@@ -422,6 +431,11 @@ PagesPool *Shard::PagePool()
     return &page_pool_;
 }
 
+GlobalRegisteredMemory *Shard::GlobalRegMem()
+{
+    return global_reg_mem_;
+}
+
 void Shard::OnReceivedReq(KvRequest *req)
 {
     if (!req->ReadOnly())
@@ -492,7 +506,8 @@ bool Shard::ProcessReq(KvRequest *req)
                                      read_req->Key(),
                                      read_req->value_,
                                      read_req->ts_,
-                                     read_req->expire_ts_);
+                                     read_req->expire_ts_,
+                                     &read_req->large_value_);
             return err;
         };
         StartTask(task, req, lbd);
@@ -509,7 +524,8 @@ bool Shard::ProcessReq(KvRequest *req)
                                       floor_req->floor_key_,
                                       floor_req->value_,
                                       floor_req->ts_,
-                                      floor_req->expire_ts_);
+                                      floor_req->expire_ts_,
+                                      &floor_req->large_value_);
             return err;
         };
         StartTask(task, req, lbd);
@@ -686,7 +702,7 @@ bool Shard::ProcessReq(KvRequest *req)
         {
             return false;
         }
-        auto lbd = [task]() -> KvError { return task->CompactDataFile(); };
+        auto lbd = [task]() -> KvError { return task->Compact(); };
         StartTask(task, req, lbd);
         return true;
     }

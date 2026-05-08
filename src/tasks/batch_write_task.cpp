@@ -459,7 +459,8 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             std::string_view val,
             bool is_ptr,
             uint64_t ts,
-            uint64_t expire_ts) -> KvError
+            uint64_t expire_ts,
+            bool large_value = false) -> KvError
         {
             if (expire_ts != 0 && expire_ts <= now_ms)
             {
@@ -469,16 +470,21 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
                     err = DelOverflowValue(val);
                     CHECK_KV_ERR(err);
                 }
+                else if (large_value)
+                {
+                    DelLargeValue(val);
+                }
                 UpdateTTL(expire_ts, key, WriteOp::Delete);
                 return KvError::NoError;
             }
 
             bool success = data_page_builder_.Add(
-                key, val, is_ptr, ts, expire_ts, compression_type);
+                key, val, is_ptr, ts, expire_ts, compression_type, large_value);
             if (!success)
             {
-                if (!is_ptr && DataPageBuilder::IsOverflowKV(
-                                   key, val.size(), ts, expire_ts, Options()))
+                if (!is_ptr && !large_value &&
+                    DataPageBuilder::IsOverflowKV(
+                        key, val.size(), ts, expire_ts, Options()))
                 {
                     // The key-value pair is too large to fit in a single
                     // data page. Split it into multiple overflow pages.
@@ -495,8 +501,13 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
                     {prev_key.data(), prev_key.size()}, key);
                 assert(!prev_key.empty() && prev_key < curr_page_key);
                 data_page_builder_.Reset();
-                success = data_page_builder_.Add(
-                    key, val, is_ptr, ts, expire_ts, compression_type);
+                success = data_page_builder_.Add(key,
+                                                 val,
+                                                 is_ptr,
+                                                 ts,
+                                                 expire_ts,
+                                                 compression_type,
+                                                 large_value);
                 assert(success);
                 page_id = MaxPageId;
             }
@@ -511,6 +522,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         std::string_view base_val = base_page_iter.Value();
         uint64_t base_ts = base_page_iter.Timestamp();
         bool is_overflow_ptr = false;
+        bool is_large_value = false;
 
         change_key = {change_it->key_.data(), change_it->key_.size()};
         std::string_view change_val = {change_it->val_.data(),
@@ -538,6 +550,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             new_val = base_val;
             new_ts = base_ts;
             is_overflow_ptr = base_page_iter.IsOverflow();
+            is_large_value = base_page_iter.IsLargeValue();
             expire_ts = base_page_iter.ExpireTs();
             adv_type = AdvanceType::PageIter;
         }
@@ -550,6 +563,10 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
                 {
                     err = DelOverflowValue(base_val);
                     CHECK_KV_ERR(err);
+                }
+                else if (base_page_iter.IsLargeValue())
+                {
+                    DelLargeValue(base_val);
                 }
                 const uint64_t base_expire = base_page_iter.ExpireTs();
                 expire_ts = change_it->expire_ts_;
@@ -588,6 +605,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
                 new_val = base_val;
                 new_ts = base_ts;
                 is_overflow_ptr = base_page_iter.IsOverflow();
+                is_large_value = base_page_iter.IsLargeValue();
                 expire_ts = base_page_iter.ExpireTs();
             }
         }
@@ -616,7 +634,15 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         {
             if (add_change_key)
             {
-                if (Options()->enable_compression)
+                if (change_it->HasLargeValue())
+                {
+                    err = WriteLargeValue(*change_it);
+                    CHECK_KV_ERR(err);
+                    new_val = large_value_content_;
+                    is_large_value = true;
+                    compression_type = compression::CompressionType::None;
+                }
+                else if (Options()->enable_compression)
                 {
                     compression::PreparedValue prepared = compression::Prepare(
                         new_val, compression, compression_scratch);
@@ -632,8 +658,12 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             {
                 compression_type = base_page_iter.CompressionType();
             }
-            err = add_to_page(
-                new_key, new_val, is_overflow_ptr, new_ts, expire_ts);
+            err = add_to_page(new_key,
+                              new_val,
+                              is_overflow_ptr,
+                              new_ts,
+                              expire_ts,
+                              is_large_value);
             CHECK_KV_ERR(err);
         }
 
@@ -658,10 +688,11 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
         std::string_view key = base_page_iter.Key();
         std::string_view val = base_page_iter.Value();
         bool overflow = base_page_iter.IsOverflow();
+        bool large_val = base_page_iter.IsLargeValue();
         uint64_t ts = base_page_iter.Timestamp();
         uint64_t expire_ts = base_page_iter.ExpireTs();
         compression_type = base_page_iter.CompressionType();
-        err = add_to_page(key, val, overflow, ts, expire_ts);
+        err = add_to_page(key, val, overflow, ts, expire_ts, large_val);
         CHECK_KV_ERR(err);
         AdvanceDataPageIter(base_page_iter, is_base_iter_valid);
     }
@@ -678,9 +709,18 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
                                  change_it->val_.size()};
             uint64_t ts = change_it->timestamp_;
             uint64_t expire_ts = change_it->expire_ts_;
+            bool large_val = false;
             UpdateTTL(expire_ts, key, WriteOp::Upsert);
 
-            if (Options()->enable_compression)
+            if (change_it->HasLargeValue())
+            {
+                err = WriteLargeValue(*change_it);
+                CHECK_KV_ERR(err);
+                val = large_value_content_;
+                large_val = true;
+                compression_type = compression::CompressionType::None;
+            }
+            else if (Options()->enable_compression)
             {
                 compression::PreparedValue prepared =
                     compression::Prepare(val, compression, compression_scratch);
@@ -691,7 +731,7 @@ KvError BatchWriteTask::ApplyOnePage(size_t &cidx, uint64_t now_ms)
             {
                 compression_type = compression::CompressionType::None;
             }
-            err = add_to_page(key, val, false, ts, expire_ts);
+            err = add_to_page(key, val, false, ts, expire_ts, large_val);
             CHECK_KV_ERR(err);
         }
         else
@@ -1286,6 +1326,10 @@ KvError BatchWriteTask::DeleteDataPage(PageId page_id, bool update_prev)
             err = DelOverflowValue(iter.Value());
             CHECK_KV_ERR(err);
         }
+        else if (iter.IsLargeValue())
+        {
+            DelLargeValue(iter.Value());
+        }
         uint64_t expire_ts = iter.ExpireTs();
         UpdateTTL(expire_ts, iter.Key(), WriteOp::Delete);
     }
@@ -1398,6 +1442,92 @@ KvError BatchWriteTask::DelOverflowValue(std::string_view encoded_ptrs)
         FreePage(page_id);
     }
     return KvError::NoError;
+}
+
+void BatchWriteTask::EnsureSegmentMapper()
+{
+    if (cow_meta_.segment_mapper_ != nullptr)
+    {
+        return;
+    }
+    IndexPageManager *idx_mgr = shard->IndexManager();
+    const TableIdent *tbl_id = &cow_meta_.root_handle_.EntryPtr()->tbl_id_;
+    auto mapper = std::make_unique<PageMapper>(idx_mgr, tbl_id);
+    // Replace the default data-file allocator with a segment-file allocator.
+    mapper->file_page_allocator_ = std::make_unique<AppendAllocator>(
+        Options()->segments_per_file_shift, 0, 0, 0);
+    cow_meta_.segment_mapper_ = std::move(mapper);
+    // Register the new mapping snapshot with RootMeta for reference tracking.
+    RootMeta *meta = cow_meta_.root_handle_.Get();
+    meta->segment_mapping_snapshots_.insert(
+        cow_meta_.segment_mapper_->GetMapping());
+}
+
+KvError BatchWriteTask::WriteLargeValue(const WriteDataEntry &entry)
+{
+    EnsureSegmentMapper();
+
+    const uint32_t seg_size = Options()->segment_size;
+    const IoStringBuffer &large_val = entry.large_val_;
+    const auto &fragments = large_val.Fragments();
+    const uint32_t num_segments = fragments.size();
+
+    large_value_content_.clear();
+
+    // Allocate logical segment IDs and physical file segment IDs.
+    std::vector<PageId> logical_ids(num_segments);
+    std::vector<FilePageId> physical_ids(num_segments);
+    for (uint32_t i = 0; i < num_segments; ++i)
+    {
+        auto [logical_id, file_page_id] = AllocateSegment(MaxPageId);
+        logical_ids[i] = logical_id;
+        physical_ids[i] = file_page_id;
+    }
+
+    // Write segments in batches of max_segments_batch.
+    for (uint32_t offset = 0; offset < num_segments;
+         offset += max_segments_batch)
+    {
+        uint32_t batch_size =
+            std::min(uint32_t(max_segments_batch), num_segments - offset);
+        std::array<FilePageId, max_segments_batch> batch_fp_ids;
+        std::array<const char *, max_segments_batch> batch_ptrs;
+        std::array<uint16_t, max_segments_batch> batch_buf_indices;
+        for (uint32_t i = 0; i < batch_size; ++i)
+        {
+            batch_fp_ids[i] = physical_ids[offset + i];
+            batch_ptrs[i] = fragments[offset + i].data_;
+            batch_buf_indices[i] = fragments[offset + i].buf_index_;
+        }
+        KvError err =
+            IoMgr()->WriteSegments(tbl_ident_,
+                                   {batch_fp_ids.data(), batch_size},
+                                   {batch_ptrs.data(), batch_size},
+                                   {batch_buf_indices.data(), batch_size});
+        CHECK_KV_ERR(err);
+    }
+
+    uint32_t actual_length = static_cast<uint32_t>(large_val.Size());
+    EncodeLargeValueContent(actual_length,
+                            {logical_ids.data(), num_segments},
+                            large_value_content_);
+    return KvError::NoError;
+}
+
+void BatchWriteTask::DelLargeValue(std::string_view encoded_content)
+{
+    uint32_t actual_length;
+    uint32_t max_segments =
+        (encoded_content.size() - sizeof(uint32_t)) / sizeof(PageId);
+    std::vector<PageId> segment_ids(max_segments);
+    uint32_t n =
+        DecodeLargeValueContent(encoded_content, actual_length, segment_ids);
+    assert(cow_meta_.segment_mapper_ != nullptr);
+    for (uint32_t i = 0; i < n; ++i)
+    {
+        cow_meta_.segment_mapper_->FreePage(segment_ids[i]);
+        RecordSegmentMappingDelete(segment_ids[i]);
+    }
 }
 
 void BatchWriteTask::AdvanceDataPageIter(DataPageIter &iter, bool &is_valid)
@@ -1636,7 +1766,8 @@ std::pair<bool, KvError> BatchWriteTask::TruncateDataPage(
                                iter.IsOverflow(),
                                iter.Timestamp(),
                                iter.ExpireTs(),
-                               iter.CompressionType());
+                               iter.CompressionType(),
+                               iter.IsLargeValue());
     }
     if (has_trunc_tail)
     {
@@ -1649,6 +1780,10 @@ std::pair<bool, KvError> BatchWriteTask::TruncateDataPage(
                 {
                     return {true, err};
                 }
+            }
+            else if (iter.IsLargeValue())
+            {
+                DelLargeValue(iter.Value());
             }
             uint64_t expire_ts = iter.ExpireTs();
             UpdateTTL(expire_ts, iter.Key(), WriteOp::Delete);

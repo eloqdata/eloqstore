@@ -5,13 +5,11 @@
 #include <sys/types.h>
 
 #include <atomic>
-#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
 #include <memory>
-#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -22,12 +20,12 @@
 #include <variant>
 #include <vector>
 
+#include "absl/container/flat_hash_map.h"
 #include "absl/container/node_hash_set.h"
 
 // https://github.com/cameron314/concurrentqueue/issues/280
 #undef BLOCK_SIZE
 
-#include "common.h"
 #include "concurrentqueue/concurrentqueue.h"
 #include "direct_io_buffer.h"
 #include "error.h"
@@ -42,6 +40,7 @@ namespace eloqstore
 class WriteReq;
 class WriteTask;
 class MemIndexPage;
+class GlobalRegisteredMemory;
 class CloudStorageService;
 class Shard;
 
@@ -68,6 +67,15 @@ enum class VarPageType : uint8_t
 };
 
 class EloqStore;
+
+// Archive floors for both data and segment files. A file whose id is below the
+// corresponding floor is referenced by a retained archive snapshot and must
+// not be garbage-collected.
+struct ArchivedMaxFileIds
+{
+    FileId data_file_id{0};
+    FileId segment_file_id{0};
+};
 
 class AsyncIoManager
 {
@@ -123,6 +131,39 @@ public:
     virtual KvError WritePage(const TableIdent &tbl_id,
                               VarPage page,
                               FilePageId file_page_id) = 0;
+
+    virtual GlobalRegisteredMemory *GetGlobalRegisteredMemory() const
+    {
+        return nullptr;
+    }
+    virtual uint16_t GlobalRegMemIndexBase() const
+    {
+        return 0;
+    }
+
+    virtual KvError ReadSegments(const TableIdent &tbl_id,
+                                 std::span<const FilePageId> segment_ids,
+                                 std::span<char *> dst_ptrs,
+                                 std::span<const uint16_t> buf_indices)
+    {
+        (void) tbl_id;
+        (void) segment_ids;
+        (void) dst_ptrs;
+        (void) buf_indices;
+        return KvError::InvalidArgs;
+    }
+    virtual KvError WriteSegments(const TableIdent &tbl_id,
+                                  std::span<const FilePageId> segment_ids,
+                                  std::span<const char *> src_ptrs,
+                                  std::span<const uint16_t> buf_indices)
+    {
+        (void) tbl_id;
+        (void) segment_ids;
+        (void) src_ptrs;
+        (void) buf_indices;
+        return KvError::InvalidArgs;
+    }
+
     virtual KvError SyncData(const TableIdent &tbl_id) = 0;
     virtual KvError AbortWrite(const TableIdent &tbl_id) = 0;
 
@@ -195,7 +236,7 @@ public:
         return false;
     }
     virtual KvError SubmitMergedWrite(const TableIdent &tbl_id,
-                                      FileId file_id,
+                                      TypedFileId file_id,
                                       uint64_t offset,
                                       char *buf_ptr,
                                       size_t bytes,
@@ -218,28 +259,14 @@ public:
         return KvError::InvalidArgs;
     }
     /**
-     * @brief Hook for cloud mode to capture data ranges before write submit.
+     * @brief Hook for cloud mode to capture file ranges before write submit.
      *
-     * This callback is invoked during write preparation (before write
-     * completion is known), allowing cloud storage implementations to track
-     * ranges in memory for efficient segment-based uploads. The data view
-     * points to the bytes scheduled for this write and remains valid only
-     * during the callback.
-     *
-     * In cloud append mode, this enables uploading file tails without reading
-     * from disk by maintaining in-memory segments of recently prepared writes.
-     *
-     * @param tbl_id Table identifier
-     * @param file_id File identifier (data file or manifest)
-     * @param term File term (for data files) or manifest term
-     * @param offset Byte offset where data will be written
-     * @param data View of the write payload (valid only during callback)
-     *
-     * @note Default implementation is no-op. Override in CloudStoreMgr to
-     *       record segments for later upload.
+     * The TypedFileId tells the implementation whether the range belongs to a
+     * data file, segment file, or manifest, so a single hook can route to the
+     * right per-type upload buffer.
      */
     virtual void OnFileRangeWritePrepared(const TableIdent &tbl_id,
-                                          FileId file_id,
+                                          TypedFileId file_id,
                                           std::string_view branch_name,
                                           uint64_t term,
                                           uint64_t offset,
@@ -253,29 +280,14 @@ public:
         (void) data;
     }
     /**
-     * @brief Hook for cloud append mode: invoked when current data file is
-     * sealed.
+     * @brief Hook for cloud append mode: invoked when the current data or
+     * segment file is sealed (the writer switched away from it).
      *
-     * This callback is triggered synchronously when the write path switches to
-     * a new data file (file_id increments), indicating the previous file is
-     * complete and should be uploaded immediately. This enables immediate
-     * upload of sealed data files in cloud append mode.
-     *
-     * The callback itself runs in the current write task context, but cloud
-     * implementations may submit the sealed-file upload asynchronously and
-     * return before the upload completes. Returning an error still fails the
-     * write request and triggers AbortWrite to clean up any partial state.
-     *
-     * @param tbl_id Table identifier
-     * @param file_id The file_id that was just sealed (before switching to
-     * next)
-     *
-     * @return KvError::NoError on success, error code on failure
-     *
-     * @note Default implementation returns NoError. Override in CloudStoreMgr
-     *       to trigger immediate upload of the sealed file.
+     * The TypedFileId carries the kind (data vs segment) and the on-disk id,
+     * so cloud implementations can pick the right filename for upload.
      */
-    virtual KvError OnDataFileSealed(const TableIdent &tbl_id, FileId file_id)
+    virtual KvError OnDataFileSealed(const TableIdent &tbl_id,
+                                     TypedFileId file_id)
     {
         (void) tbl_id;
         (void) file_id;
@@ -341,10 +353,12 @@ public:
         return false;
     }
 
-    // Get branch_name and term for a specific file_id in a table in one lookup.
+    // Get branch_name and term for a specific TypedFileId in a table in one
+    // lookup. The file_id encodes the kind (data vs segment) so the lookup
+    // dispatches to the right max_*_file_id field.
     // Returns true if found, false otherwise (branch_name and term unchanged).
     virtual bool GetBranchNameAndTerm(const TableIdent &tbl_id,
-                                      FileId file_id,
+                                      TypedFileId file_id,
                                       std::string &branch_name,
                                       uint64_t &term)
     {
@@ -355,10 +369,13 @@ public:
         return false;
     }
 
-    // Update branch and term for a specific file_id in a table (default no-op;
-    // concrete implementations can override for efficient updates).
+    // Update branch and term for a specific TypedFileId in a table.
+    // Updates max_file_id (data) or max_segment_file_id (segment) inside
+    // the BranchFileMapping entry for (branch, term), inheriting the other
+    // field from the previous entry to keep the per-field non-decreasing
+    // invariants.
     virtual void SetBranchFileIdTerm(const TableIdent &tbl_id,
-                                     FileId file_id,
+                                     TypedFileId file_id,
                                      std::string_view branch_name,
                                      uint64_t term)
     {
@@ -405,6 +422,8 @@ public:
     }
 
     const KvOptions *options_;
+    std::unordered_map<TableIdent, ArchivedMaxFileIds>
+        least_not_archived_file_ids_;
 };
 
 KvError ToKvError(int err_no);
@@ -432,7 +451,7 @@ public:
         return write_buf_registered_;
     }
     KvError SubmitMergedWrite(const TableIdent &tbl_id,
-                              FileId file_id,
+                              TypedFileId file_id,
                               uint64_t offset,
                               char *buf_ptr,
                               size_t bytes,
@@ -453,6 +472,16 @@ public:
     KvError WritePage(const TableIdent &tbl_id,
                       VarPage page,
                       FilePageId file_page_id) override;
+
+    KvError ReadSegments(const TableIdent &tbl_id,
+                         std::span<const FilePageId> segment_ids,
+                         std::span<char *> dst_ptrs,
+                         std::span<const uint16_t> buf_indices) override;
+    KvError WriteSegments(const TableIdent &tbl_id,
+                          std::span<const FilePageId> segment_ids,
+                          std::span<const char *> src_ptrs,
+                          std::span<const uint16_t> buf_indices) override;
+
     KvError SyncData(const TableIdent &tbl_id) override;
     KvError AbortWrite(const TableIdent &tbl_id) override;
 
@@ -480,15 +509,16 @@ public:
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
 
-    // Get branch_name and term for a specific file_id in a table in one lookup.
+    // Get branch_name and term for a specific TypedFileId in a table in one
+    // lookup.
     bool GetBranchNameAndTerm(const TableIdent &tbl_id,
-                              FileId file_id,
+                              TypedFileId file_id,
                               std::string &branch_name,
                               uint64_t &term) override;
 
-    // Update branch and term for a specific file_id in a table.
+    // Update branch and term for a specific TypedFileId in a table.
     void SetBranchFileIdTerm(const TableIdent &tbl_id,
-                             FileId file_id,
+                             TypedFileId file_id,
                              std::string_view branch_name,
                              uint64_t term) override;
 
@@ -526,7 +556,7 @@ public:
                      DirectIoBuffer &content) override;
     KvError DeleteFiles(const std::vector<std::string> &file_paths);
     KvError CloseFiles(const TableIdent &tbl_id,
-                       const std::span<FileId> file_ids);
+                       const std::span<TypedFileId> file_ids);
 
     /**
      * @brief Get the number of currently open file descriptors.
@@ -583,14 +613,17 @@ public:
             IouringMgr *io_mgr_ = nullptr;
         };
 
-        LruFD(PartitionFiles *tbl, FileId file_id, uint64_t term = 0);
+        LruFD(PartitionFiles *tbl, TypedFileId file_id, uint64_t term = 0);
         FdIdx FdPair() const;
         void Deque();
         void EnqueNext(LruFD *new_fd);
 
-        static constexpr FileId kDirectory = MaxFileId;
-        static constexpr FileId kManifest = kDirectory - 1;
-        static constexpr FileId kMaxDataFile = kManifest - 1;
+        static constexpr TypedFileId kDirectory{MaxFileId};
+        static constexpr TypedFileId kManifest{MaxFileId - 1};
+        // Largest raw FileId that can encode to a non-sentinel TypedFileId.
+        // DataFileKey/SegmentFileKey shift left by 1, so any FileId
+        // <= kMaxDataFile yields an encoded value < kMaxReserved.
+        static constexpr FileId kMaxDataFile = (MaxFileId - 1) >> 1;
 
         static constexpr int FdEmpty = -1;
 
@@ -603,7 +636,7 @@ public:
         bool dirty_{false};
 
         PartitionFiles *const tbl_;
-        const FileId file_id_;
+        const TypedFileId file_id_;
         uint32_t ref_count_{0};
         LruFD *prev_{nullptr};
         LruFD *next_{nullptr};
@@ -657,7 +690,7 @@ public:
     {
     public:
         const TableIdent *tbl_id_ = nullptr;
-        std::unordered_map<FileId, LruFD> fds_;
+        std::unordered_map<TypedFileId, LruFD> fds_;
     };
 
     class Manifest : public ManifestFile
@@ -688,6 +721,8 @@ public:
      * @brief Convert file page id to <file_id, file_offset>
      */
     std::pair<FileId, uint32_t> ConvFilePageId(FilePageId file_page_id) const;
+    std::pair<FileId, uint32_t> ConvFileSegmentId(
+        FilePageId file_segment_id) const;
 
     uint32_t AllocRegisterIndex();
     void FreeRegisterIndex(uint32_t idx);
@@ -720,31 +755,46 @@ public:
                               std::string_view name,
                               std::string_view content);
     virtual int CreateFile(LruFD::Ref dir_fd,
-                           FileId file_id,
+                           TypedFileId file_id,
                            std::string_view branch_name,
                            uint64_t term);
     virtual int OpenFile(const TableIdent &tbl_id,
-                         FileId file_id,
+                         TypedFileId file_id,
                          uint64_t flags,
                          uint64_t mode,
                          std::string_view branch_name,
                          uint64_t term,
                          bool skip_cloud_lookup = false);
     virtual void WaitForEvictingPath(const TableIdent &tbl_id,
-                                     FileId file_id,
+                                     TypedFileId file_id,
+                                     std::string_view branch_name,
                                      uint64_t term)
     {
+        (void) tbl_id;
+        (void) file_id;
+        (void) branch_name;
+        (void) term;
     }
     virtual bool StartEvictingPath(const TableIdent &tbl_id,
-                                   FileId file_id,
+                                   TypedFileId file_id,
+                                   std::string_view branch_name,
                                    uint64_t term)
     {
+        (void) tbl_id;
+        (void) file_id;
+        (void) branch_name;
+        (void) term;
         return true;
     }
     virtual void FinishEvictingPath(const TableIdent &tbl_id,
-                                    FileId file_id,
+                                    TypedFileId file_id,
+                                    std::string_view branch_name,
                                     uint64_t term)
     {
+        (void) tbl_id;
+        (void) file_id;
+        (void) branch_name;
+        (void) term;
     }
     virtual KvError SyncFile(LruFD::Ref fd);
     virtual KvError SyncFiles(const TableIdent &tbl_id,
@@ -759,13 +809,13 @@ public:
     /**
      * @brief Get file descripter if it is already opened.
      */
-    LruFD::Ref GetOpenedFD(const TableIdent &tbl_id, FileId file_id);
+    LruFD::Ref GetOpenedFD(const TableIdent &tbl_id, TypedFileId file_id);
     /**
      * @brief Open file if already exists. Only data file is opened with
      * O_DIRECT by default. Set `direct` to true to open manifest with O_DIRECT.
      */
     std::pair<LruFD::Ref, KvError> OpenFD(const TableIdent &tbl_id,
-                                          FileId file_id,
+                                          TypedFileId file_id,
                                           bool direct,
                                           std::string_view branch_name,
                                           uint64_t term);
@@ -779,7 +829,7 @@ public:
      */
     std::pair<LruFD::Ref, KvError> OpenOrCreateFD(
         const TableIdent &tbl_id,
-        FileId file_id,
+        TypedFileId file_id,
         bool direct,
         bool create,
         std::string_view branch_name,
@@ -829,8 +879,8 @@ public:
     // Per-table BranchFileMapping storage (branch_name, term, max_file_id
     // ranges).
     absl::flat_hash_map<TableIdent, BranchFileMapping> branch_file_mapping_;
-    LruFD lru_fd_head_{nullptr, MaxFileId};
-    LruFD lru_fd_tail_{nullptr, MaxFileId};
+    LruFD lru_fd_head_{nullptr, TypedFileId{MaxFileId}};
+    LruFD lru_fd_tail_{nullptr, TypedFileId{MaxFileId}};
     uint32_t lru_fd_count_{0};
     const uint32_t fd_limit_;
 
@@ -871,7 +921,21 @@ public:
     // Uses node_hash_set for pointer stability across insertions.
     absl::node_hash_set<std::string> branch_name_pool_;
 
-    KvError BootstrapRing(Shard *shard);
+    KvError BootstrapRing(Shard *shard,
+                          GlobalRegisteredMemory *global_reg_mem = nullptr);
+
+    GlobalRegisteredMemory *global_reg_mem_{nullptr};
+    uint16_t global_reg_mem_index_base_{0};
+
+public:
+    GlobalRegisteredMemory *GetGlobalRegisteredMemory() const override
+    {
+        return global_reg_mem_;
+    }
+    uint16_t GlobalRegMemIndexBase() const override
+    {
+        return global_reg_mem_index_base_;
+    }
 };
 
 class CloudStoreMgr final : public IouringMgr
@@ -881,6 +945,10 @@ public:
                   uint32_t fd_limit,
                   CloudStorageService *service);
     ~CloudStoreMgr() override;
+    static constexpr TypedFileId ManifestFileId()
+    {
+        return LruFD::kManifest;
+    }
     KvError Init(Shard *shard) override;
     KvError RestoreStartupState() override;
     bool IsIdle() override;
@@ -1006,14 +1074,15 @@ public:
         return process_term_;
     }
     void OnFileRangeWritePrepared(const TableIdent &tbl_id,
-                                  FileId file_id,
+                                  TypedFileId file_id,
                                   std::string_view branch_name,
                                   uint64_t term,
                                   uint64_t offset,
                                   std::string_view data) override;
-    // Called when append-mode writing switches away from a data file.
-    // Upload success marks that file clean; failure aborts the write task.
-    KvError OnDataFileSealed(const TableIdent &tbl_id, FileId file_id) override;
+    // Called when append-mode writing switches away from a data or segment
+    // file. Upload success marks that file clean; failure aborts the task.
+    KvError OnDataFileSealed(const TableIdent &tbl_id,
+                             TypedFileId file_id) override;
     KvError AppendManifest(const TableIdent &tbl_id,
                            std::string_view log,
                            uint64_t offset) override;
@@ -1032,7 +1101,7 @@ public:
     bool IsDirEvicting(const TableIdent &tbl_id) const override;
     // Downloads the cloud file and writes it into the local file from offset.
     KvError DownloadFile(const TableIdent &tbl_id,
-                         FileId file_id,
+                         TypedFileId file_id,
                          std::string_view branch_name,
                          uint64_t term,
                          bool download_to_exist = false,
@@ -1050,24 +1119,27 @@ private:
 
 private:
     int CreateFile(LruFD::Ref dir_fd,
-                   FileId file_id,
+                   TypedFileId file_id,
                    std::string_view branch_name,
                    uint64_t term) override;
     int OpenFile(const TableIdent &tbl_id,
-                 FileId file_id,
+                 TypedFileId file_id,
                  uint64_t flags,
                  uint64_t mode,
                  std::string_view branch_name,
                  uint64_t term = 0,
                  bool skip_cloud_lookup = false) override;
     void WaitForEvictingPath(const TableIdent &tbl_id,
-                             FileId file_id,
+                             TypedFileId file_id,
+                             std::string_view branch_name,
                              uint64_t term) override;
     bool StartEvictingPath(const TableIdent &tbl_id,
-                           FileId file_id,
+                           TypedFileId file_id,
+                           std::string_view branch_name,
                            uint64_t term) override;
     void FinishEvictingPath(const TableIdent &tbl_id,
-                            FileId file_id,
+                            TypedFileId file_id,
+                            std::string_view branch_name,
                             uint64_t term) override;
     KvError SyncFile(LruFD::Ref fd) override;
     KvError SyncFiles(const TableIdent &tbl_id,
@@ -1124,17 +1196,40 @@ private:
     void EnqueClosedFile(FileKey key);
     bool HasEvictableFile() const;
     int ReserveCacheSpace(size_t size);
-    size_t EstimateFileSize(FileId file_id) const;
+    static std::string ToFilename(TypedFileId file_id, uint64_t term = 0);
+    size_t EstimateFileSize(TypedFileId file_id) const;
     size_t EstimateFileSize(std::string_view filename) const;
     void InitBackgroundJob() override;
     KvError RestoreLocalCacheState();
+    /**
+     * @brief Register pre-existing cached files for one partition on warm
+     * start.
+     *
+     * Walks a single partition directory and registers every cacheable file
+     * (data, manifest, or segment) with the closed-file LRU so the shard can
+     * serve reads from the local cache instead of re-downloading from the
+     * object store. Removes stray `*.tmp` leftovers, rejects unknown file
+     * types, and bumps the shard's `used_local_space_`. Invoked once per
+     * partition by `RestoreLocalCacheState()` during `Init()` when
+     * `allow_reuse_local_caches` is set.
+     *
+     * @param tbl_id Table identifier for the partition being restored
+     * @param table_path Absolute filesystem path to the partition directory
+     * @param restored_files In/out counter incremented by the number of files
+     * registered
+     * @param restored_bytes In/out counter incremented by the total estimated
+     * bytes of the registered files
+     *
+     * @return KvError::NoError on success, error code on failure
+     */
     KvError RestoreFilesForTable(const TableIdent &tbl_id,
                                  const fs::path &table_path,
                                  size_t &restored_files,
                                  size_t &restored_bytes);
     std::pair<size_t, size_t> TrimRestoredCacheUsage();
     FileKey EvictingPathKey(const TableIdent &tbl_id,
-                            FileId file_id,
+                            TypedFileId file_id,
+                            std::string_view branch_name,
                             uint64_t term) const;
     void WaitForEvictingKey(const FileKey &key);
     bool StartEvictingKey(FileKey key);

@@ -72,6 +72,7 @@ struct PrewarmFile
     std::string branch_name;
     size_t file_size;
     bool is_manifest;
+    bool is_segment{false};
     std::string mod_time;
 };
 

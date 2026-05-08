@@ -30,12 +30,17 @@ namespace eloqstore
 //               BranchFileMapping:
 //                 num_entries(8B) |
 //                 per entry: name_len(4B) | name(bytes) | term(8B) |
-//                 max_file_id(8B) ]
+//                 max_file_id(8B) | max_segment_file_id(8B) |
+//             max_segment_fp_id(varint64) |
+//             segment_mapping_bytes_len(4B) |
+//             segment_mapping_tbl(varint64...) ]
 //
 // For appended Manifest log, the structure is:
 // Header  :  [ Checksum(8B) | Root(4B) | TTL Root(4B) | Payload Len(4B) ]
 // LogBody :  [ mapping_bytes_len(4B) | mapping_bytes(varint64...) |
-//              BranchManifestMetadata (same layout as above) ]
+//              BranchManifestMetadata (same layout as above) |
+//              segment_delta_bytes_len(4B) |
+//              segment_deltas(varint32+varint64 pairs...) ]
 class PageMapper;
 struct MappingSnapshot;
 class IndexPageManager;
@@ -51,12 +56,15 @@ public:
      *        BranchManifestMetadata to buff_.
      */
     void AppendBranchManifestMetadata(std::string_view branch_metadata);
+    void AppendSegmentMapping(std::string_view segment_mapping);
     std::string_view Snapshot(PageId root_id,
                               PageId ttl_root,
                               const MappingSnapshot *mapping,
                               FilePageId max_fp_id,
                               std::string_view dict_bytes,
-                              const BranchManifestMetadata &branch_metadata);
+                              const BranchManifestMetadata &branch_metadata,
+                              const MappingSnapshot *segment_mapping = nullptr,
+                              FilePageId max_segment_fp_id = 0);
 
     std::string_view Finalize(PageId new_root, PageId ttl_root);
     static bool ValidateChecksum(std::string_view record);
@@ -87,7 +95,9 @@ struct RootMeta
     PageId root_id_{MaxPageId};
     PageId ttl_root_id_{MaxPageId};
     std::unique_ptr<PageMapper> mapper_{nullptr};
+    std::unique_ptr<PageMapper> segment_mapper_{nullptr};
     absl::flat_hash_set<MappingSnapshot *> mapping_snapshots_;
+    absl::flat_hash_set<MappingSnapshot *> segment_mapping_snapshots_;
     absl::flat_hash_set<MemIndexPage *> index_pages_;
     uint64_t manifest_size_{0};
     uint64_t next_expire_ts_{0};
@@ -211,8 +221,10 @@ struct CowRootMeta
     PageId root_id_{MaxPageId};
     PageId ttl_root_id_{MaxPageId};
     std::unique_ptr<PageMapper> mapper_{nullptr};
+    std::unique_ptr<PageMapper> segment_mapper_{nullptr};
     uint64_t manifest_size_{};
     MappingSnapshot::Ref old_mapping_{nullptr};
+    MappingSnapshot::Ref old_segment_mapping_{nullptr};
     uint64_t next_expire_ts_{};
     std::shared_ptr<compression::DictCompression> compression_{nullptr};
     RootMetaMgr::Handle root_handle_{};

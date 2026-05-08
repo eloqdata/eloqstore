@@ -263,11 +263,14 @@ std::string_view ScanIterator::Key() const
     return iter_.Key();
 }
 
-std::pair<std::string_view, KvError> ScanIterator::ResolveValue(
-    std::string &storage)
+KvError ScanIterator::ResolveValue(std::string &value)
 {
+    if (iter_.IsLargeValue())
+    {
+        return KvError::LargeValueUnsupported;
+    }
     return eloqstore::ResolveValue(
-        tbl_id_, mapping_.Get(), iter_, storage, compression_);
+        tbl_id_, mapping_.Get(), iter_, value, compression_);
 }
 
 uint64_t ScanIterator::ExpireTs() const
@@ -312,7 +315,6 @@ KvError ScanTask::Scan()
         }
     }
 
-    std::string value_storage;
     while (req->EndKey().empty() ||
            Comp()->Compare(iter.Key(), req->EndKey()) < 0 ||
            (req->end_inclusive_ &&
@@ -325,14 +327,18 @@ KvError ScanTask::Scan()
             break;
         }
 
-        // Fetch value
-        auto [value, fetch_err] = iter.ResolveValue(value_storage);
-        err = fetch_err;
+        // Reuse a pooled slot (extra slots beyond num_entries_ are scratch
+        // space; num_entries_ tracks the valid prefix).
+        KvEntry &entry = req->num_entries_ < req->entries_.size()
+                             ? req->entries_[req->num_entries_]
+                             : req->entries_.emplace_back();
+
+        err = iter.ResolveValue(entry.value_);
         assert(err != KvError::EndOfFile);
         CHECK_KV_ERR(err);
 
         // Check result size limit.
-        const size_t entry_size = iter.Key().size() + value.size() +
+        const size_t entry_size = iter.Key().size() + entry.value_.size() +
                                   sizeof(iter.Timestamp()) +
                                   sizeof(iter.ExpireTs());
         if (result_size > 0 && result_size + entry_size > req->page_size_)
@@ -341,13 +347,8 @@ KvError ScanTask::Scan()
             break;
         }
         result_size += entry_size;
-
-        KvEntry &entry = req->num_entries_ < req->entries_.size()
-                             ? req->entries_[req->num_entries_]
-                             : req->entries_.emplace_back();
         req->num_entries_++;
         entry.key_.assign(iter.Key());
-        entry.value_ = value_storage.empty() ? value : std::move(value_storage);
         entry.timestamp_ = iter.Timestamp();
         entry.expire_ts_ = iter.ExpireTs();
 

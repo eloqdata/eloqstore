@@ -30,6 +30,7 @@
 #include "cloud_storage_service.h"
 #include "common.h"
 #include "file_gc.h"
+#include "global_registered_memory.h"
 #include "standby_service.h"
 #include "storage/shard.h"
 #include "tasks/archive_crond.h"
@@ -342,6 +343,27 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
             << "prewarm_cloud_cache requires cloud_store_path to be set, "
                "disabling prewarm";
         opts.prewarm_cloud_cache = false;
+    }
+
+    if (!opts.global_registered_memories.empty())
+    {
+        if (opts.global_registered_memories.size() != opts.num_threads)
+        {
+            LOG(ERROR) << "global_registered_memories size ("
+                       << opts.global_registered_memories.size()
+                       << ") must equal num_threads (" << opts.num_threads
+                       << ")";
+            return false;
+        }
+        for (GlobalRegisteredMemory *mem : opts.global_registered_memories)
+        {
+            if (mem == nullptr)
+            {
+                LOG(ERROR) << "global_registered_memories contains a null "
+                              "pointer";
+                return false;
+            }
+        }
     }
 
     if (opts.data_append_mode)
@@ -891,9 +913,7 @@ KvError EloqStore::BuildStorePathLut()
             for (size_t i = 0; i < path_count; ++i)
             {
                 const fs::path &path = options_.store_path[i];
-                struct stat stat_buf
-                {
-                };
+                struct stat stat_buf{};
                 if (stat(path.c_str(), &stat_buf) != 0)
                 {
                     int err = errno;
@@ -901,9 +921,7 @@ KvError EloqStore::BuildStorePathLut()
                         << "stat(" << path << ") failed: " << strerror(err);
                     return ToKvError(-err);
                 }
-                struct statvfs vfs_buf
-                {
-                };
+                struct statvfs vfs_buf{};
                 if (statvfs(path.c_str(), &vfs_buf) != 0)
                 {
                     int err = errno;
@@ -2223,6 +2241,16 @@ metrics::Meter *EloqStore::GetMetricsMeter(size_t shard_id) const
 const KvOptions &EloqStore::Options() const
 {
     return options_;
+}
+
+uint16_t EloqStore::GlobalRegMemIndexBase(size_t shard_id) const
+{
+    if (shard_id >= shards_.size() || shards_[shard_id] == nullptr)
+    {
+        return 0;
+    }
+    AsyncIoManager *io_mgr = shards_[shard_id]->IoManager();
+    return io_mgr == nullptr ? 0 : io_mgr->GlobalRegMemIndexBase();
 }
 
 bool EloqStore::IsStopped() const

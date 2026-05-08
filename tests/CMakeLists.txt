@@ -3,9 +3,21 @@ project(CatchUnitTests)
 find_package(Catch2 REQUIRED)
 
 set(UTEST_DIR ${CMAKE_SOURCE_DIR}/tests)
-set(UTEST_INCLUDE 
+set(UTEST_INCLUDE
     ${CMAKE_SOURCE_DIR}/include
     ${CMAKE_SOURCE_DIR})
+
+# Tests that use GlobalRegisteredMemory with io_uring fixed-buffer registration
+# need RLIMIT_MEMLOCK bumped to 2GB at process start.  They are built with
+# large_value_main.cpp (Catch2::Catch2, no bundled main) instead of
+# Catch2::Catch2WithMain.
+set(LARGE_VALUE_SOURCES
+    large_value_e2e.cpp
+    segment_compact.cpp
+    large_value_concurrency.cpp
+    large_value_fault_injection.cpp
+    large_value_benchmark.cpp
+)
 
 set(UTEST_SOURCES
     scan.cpp
@@ -27,28 +39,36 @@ set(UTEST_SOURCES
     branch_operations.cpp
     branch_gc.cpp
     manifest_payload.cpp
+    global_registered_memory.cpp
+    io_string_buffer.cpp
+    data_page_large_value.cpp
+    segment_allocator.cpp
 )
 
 string( REPLACE ".cpp" "" BASENAMES_UTEST "${UTEST_SOURCES}" )
-set( ALL_TARGETS ${BASENAMES_UTEST} )
+set( STANDARD_TARGETS ${BASENAMES_UTEST} )
 
+string( REPLACE ".cpp" "" BASENAMES_LARGE_VALUE "${LARGE_VALUE_SOURCES}" )
+set( LARGE_VALUE_TARGETS ${BASENAMES_LARGE_VALUE} )
 
-#add_executable(insert insert_test.cpp)
-#target_link_libraries( insert PRIVATE Catch2WithMain)
+set( ALL_TARGETS ${STANDARD_TARGETS} ${LARGE_VALUE_TARGETS} )
 
 enable_testing()
 include(CTest)
 include(Catch)
 
-foreach( name ${ALL_TARGETS} )
+foreach( name ${STANDARD_TARGETS} )
    add_executable( ${name} ${UTEST_DIR}/${name}.cpp common.cpp)
+   target_include_directories(${name} PUBLIC ${UTEST_INCLUDE} ${INCLUDE_DIR})
+   target_link_libraries( ${name} PRIVATE Catch2::Catch2WithMain test_util)
    catch_discover_tests(${name})
 endforeach()
 
-foreach( name ${ALL_TARGETS} )
-    target_include_directories(${name} PUBLIC ${UTEST_INCLUDE} ${INCLUDE_DIR})
-endforeach()
-
-foreach( name ${ALL_TARGETS} )
-    target_link_libraries( ${name} PRIVATE Catch2::Catch2WithMain test_util)
+foreach( name ${LARGE_VALUE_TARGETS} )
+   add_executable( ${name} ${UTEST_DIR}/${name}.cpp
+                            ${UTEST_DIR}/large_value_main.cpp
+                            common.cpp)
+   target_include_directories(${name} PUBLIC ${UTEST_INCLUDE} ${INCLUDE_DIR})
+   target_link_libraries( ${name} PRIVATE Catch2::Catch2 test_util)
+   catch_discover_tests(${name})
 endforeach()

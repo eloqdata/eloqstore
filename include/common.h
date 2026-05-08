@@ -13,8 +13,6 @@
 #include <utility>
 #include <vector>
 
-#include "absl/container/flat_hash_map.h"
-#include "coding.h"
 #include "manifest_buffer.h"
 #include "types.h"
 
@@ -309,6 +307,79 @@ inline uint64_t ManifestTermFromFilename(std::string_view filename)
     return term;
 }
 
+// Term-aware DataFileName
+inline std::string DataFileName(FileId file_id, uint64_t term)
+{
+    // Always use term-aware format: data_<id>_<term> (including term=0).
+    std::string name;
+    name.reserve(std::size(FileNameData) + 22);
+    name.append(FileNameData);
+    name.push_back(FileNameSeparator);
+    name.append(std::to_string(file_id));
+    name.push_back(FileNameSeparator);
+    name.append(std::to_string(term));
+    return name;
+}
+
+// Branch-aware SegmentFileName: segment_<id>_<branch>_<term>
+inline std::string SegmentFileName(FileId file_id,
+                                   std::string_view branch_name,
+                                   uint64_t term)
+{
+    std::string normalized_branch = NormalizeBranchName(branch_name);
+    if (normalized_branch.empty())
+    {
+        return "";
+    }
+    std::string name;
+    name.reserve(std::size(FileNameSegment) + normalized_branch.size() + 32);
+    name.append(FileNameSegment);
+    name.push_back(FileNameSeparator);
+    name.append(std::to_string(file_id));
+    name.push_back(FileNameSeparator);
+    name.append(normalized_branch);
+    name.push_back(FileNameSeparator);
+    name.append(std::to_string(term));
+    return name;
+}
+
+// ParseSegmentFileSuffix: parses suffix from segment file name
+// Same format as data file suffix: "<file_id>_<branch_name>_<term>"
+inline bool ParseSegmentFileSuffix(std::string_view suffix,
+                                   FileId &file_id,
+                                   std::string_view &branch_name,
+                                   uint64_t &term)
+{
+    return ParseDataFileSuffix(suffix, file_id, branch_name, term);
+}
+
+// ManifestFileName - generates manifest filename with term suffix
+inline std::string ManifestFileName(uint64_t term)
+{
+    // Always use term-aware format: manifest_<term> (including term=0).
+    std::string name;
+    name.reserve(std::size(FileNameManifest) + 11);
+    name.append(FileNameManifest);
+    name.push_back(FileNameSeparator);
+    name.append(std::to_string(term));
+    return name;
+}
+
+// ArchiveName: generates term-aware archive filename
+// Format: manifest_<term>_<ts>
+// Note: term must be provided (use 0 for legacy compatibility if needed)
+inline std::string ArchiveName(uint64_t term, uint64_t ts)
+{
+    std::string name;
+    name.reserve(std::size(FileNameManifest) + 31);
+    name.append(FileNameManifest);
+    name.push_back(FileNameSeparator);
+    name.append(std::to_string(term));
+    name.push_back(FileNameSeparator);
+    name.append(std::to_string(ts));
+    return name;
+}
+
 inline bool IsArchiveFile(std::string_view filename)
 {
     auto [type, suffix] = ParseFileName(filename);
@@ -578,21 +649,19 @@ inline bool IsBranchDataFile(std::string_view filename)
     return ParseDataFileSuffix(suffix, file_id, branch_name, term);
 }
 
-// Find branch range for a given file_id using binary search
-// Returns iterator to the branch range, or end() if not found
-// Uses std::lower_bound to find first range where max_file_id >= file_id
+// Find branch range for a TypedFileId using binary search. Dispatches by
+// file class via BranchFileRange::operator<(TypedFileId): data files compare
+// against max_file_id, segment files against max_segment_file_id. Both fields
+// are non-decreasing across entries, so std::lower_bound is valid for either.
 inline BranchFileMapping::const_iterator FindBranchRange(
-    const BranchFileMapping &mapping, FileId file_id)
+    const BranchFileMapping &mapping, TypedFileId file_id)
 {
-    BranchFileRange target;
-    target.max_file_id = file_id;
-    return std::lower_bound(mapping.begin(), mapping.end(), target);
+    return std::lower_bound(mapping.begin(), mapping.end(), file_id);
 }
 
-// Check if file_id belongs to a specific branch
-// Returns true if file_id is within the branch's range
+// Check if file_id belongs to a specific branch.
 inline bool FileIdInBranch(const BranchFileMapping &mapping,
-                           FileId file_id,
+                           TypedFileId file_id,
                            std::string_view branch_name)
 {
     auto it = FindBranchRange(mapping, file_id);
@@ -600,14 +669,12 @@ inline bool FileIdInBranch(const BranchFileMapping &mapping,
     {
         return false;
     }
-    return it->branch_name == branch_name;
+    return it->branch_name_ == branch_name;
 }
 
-// Get branch_name and term for a given file_id in one lookup
-// Returns true if file_id found in any branch range
-// Uses single binary search for efficiency
+// Get branch_name and term for a TypedFileId in one lookup.
 inline bool GetBranchNameAndTerm(const BranchFileMapping &mapping,
-                                 FileId file_id,
+                                 TypedFileId file_id,
                                  std::string &branch_name,
                                  uint64_t &term)
 {
@@ -616,48 +683,46 @@ inline bool GetBranchNameAndTerm(const BranchFileMapping &mapping,
     {
         return false;
     }
-    branch_name = it->branch_name;
-    term = it->term;
+    branch_name = it->branch_name_;
+    term = it->term_;
     return true;
 }
 
 // Serialize BranchFileMapping to string
 // Format:
-// [num_entries][branch_name_len][branch_name][term(8B)][max_file_id(8B)]...
+// [num_entries(8B)][per entry: name_len(4B) | name | term(8B) |
+//  max_file_id(8B) | max_segment_file_id(8B)]
 inline std::string SerializeBranchFileMapping(const BranchFileMapping &mapping)
 {
     std::string result;
 
-    // Number of entries (fixed 8 bytes)
     uint64_t num_entries = static_cast<uint64_t>(mapping.size());
     result.append(reinterpret_cast<const char *>(&num_entries),
                   sizeof(uint64_t));
 
     for (const auto &range : mapping)
     {
-        // Branch name length (4 bytes)
-        uint32_t name_len = static_cast<uint32_t>(range.branch_name.size());
+        uint32_t name_len = static_cast<uint32_t>(range.branch_name_.size());
         result.append(reinterpret_cast<const char *>(&name_len),
                       sizeof(uint32_t));
+        result.append(range.branch_name_);
 
-        // Branch name
-        result.append(range.branch_name);
-
-        // Term (8 bytes)
-        uint64_t term = range.term;
+        uint64_t term = range.term_;
         result.append(reinterpret_cast<const char *>(&term), sizeof(uint64_t));
 
-        // Max file_id (8 bytes)
-        uint64_t max_file_id = range.max_file_id;
+        uint64_t max_file_id = range.max_file_id_;
         result.append(reinterpret_cast<const char *>(&max_file_id),
+                      sizeof(uint64_t));
+
+        uint64_t max_segment_file_id = range.max_segment_file_id_;
+        result.append(reinterpret_cast<const char *>(&max_segment_file_id),
                       sizeof(uint64_t));
     }
 
     return result;
 }
 
-// Deserialize BranchFileMapping from string_view
-// Returns empty mapping on error
+// Deserialize BranchFileMapping from string_view; returns empty on error.
 inline BranchFileMapping DeserializeBranchFileMapping(std::string_view data)
 {
     BranchFileMapping mapping;
@@ -675,26 +740,30 @@ inline BranchFileMapping DeserializeBranchFileMapping(std::string_view data)
     {
         if (data.size() < sizeof(uint32_t))
         {
-            return BranchFileMapping{};  // Error: invalid data
+            return BranchFileMapping{};
         }
 
         uint32_t name_len = 0;
         std::memcpy(&name_len, data.data(), sizeof(uint32_t));
         data = data.substr(sizeof(uint32_t));
 
-        if (data.size() < name_len + sizeof(uint64_t) * 2)
+        // term + max_file_id + max_segment_file_id = 3 * uint64_t
+        if (data.size() < name_len + sizeof(uint64_t) * 3)
         {
-            return BranchFileMapping{};  // Error: invalid data
+            return BranchFileMapping{};
         }
 
         BranchFileRange range;
-        range.branch_name = std::string(data.substr(0, name_len));
+        range.branch_name_ = std::string(data.substr(0, name_len));
         data = data.substr(name_len);
 
-        std::memcpy(&range.term, data.data(), sizeof(uint64_t));
+        std::memcpy(&range.term_, data.data(), sizeof(uint64_t));
         data = data.substr(sizeof(uint64_t));
 
-        std::memcpy(&range.max_file_id, data.data(), sizeof(uint64_t));
+        std::memcpy(&range.max_file_id_, data.data(), sizeof(uint64_t));
+        data = data.substr(sizeof(uint64_t));
+
+        std::memcpy(&range.max_segment_file_id_, data.data(), sizeof(uint64_t));
         data = data.substr(sizeof(uint64_t));
 
         mapping.push_back(std::move(range));

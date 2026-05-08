@@ -13,6 +13,8 @@
 #include "utils.h"
 namespace eloqstore
 {
+class GlobalRegisteredMemory;
+
 constexpr int KB = 1 << 10;
 constexpr int MB = 1 << 20;
 constexpr int GB = 1 << 30;
@@ -20,6 +22,8 @@ constexpr int64_t TB = 1LL << 40;
 
 constexpr uint8_t max_overflow_pointers = 128;
 constexpr uint16_t max_read_pages_batch = max_overflow_pointers;
+constexpr uint16_t max_segments_batch = 8;
+
 struct KvOptions
 {
     int LoadFromIni(const char *path);
@@ -103,6 +107,25 @@ struct KvOptions
      */
     uint8_t file_amplify_factor = 2;
     /**
+     * @brief Move segments in a segment file when its space amplification
+     * factor exceeds this value. A value of 0 disables segment file
+     * compaction independently of data file compaction. Defaults to
+     * file_amplify_factor; segment rewrites are ~two orders of magnitude
+     * more expensive per unit than page rewrites, so this knob can be
+     * raised to prefer space over churn.
+     * Only takes effect when data_append_mode is enabled.
+     */
+    uint8_t segment_file_amplify_factor = 2;
+    /**
+     * @brief Yield to low-priority queue after processing this many
+     * segments during background segment compaction. Each segment is
+     * 128KB-512KB, so the page-compaction yield cadence would hold the
+     * coroutine far longer between yields; a smaller value protects
+     * foreground read/write tail latency. Set to 0 to disable intra-file
+     * yielding (outer loops still yield between files).
+     */
+    uint32_t segment_compact_yield_every = max_segments_batch;
+    /**
      * @brief Limit total size of local files.
      * Only take effect when cloud store is enabled.
      */
@@ -157,6 +180,35 @@ struct KvOptions
      * store starts.
      */
     bool allow_reuse_local_caches = false;
+    /**
+     * @brief The chunk size of a big string in local storage.
+     */
+    uint32_t chunk_size = 256;
+    /**
+     * @brief The segment size in GlobalRegisteredMemory for storing very large
+     * strings. Configurable from 128KB to 512KB. Must be 4KB aligned.
+     */
+    uint32_t segment_size = 256 * KB;
+    /**
+     * @brief The size of each memory chunk in GlobalRegisteredMemory.
+     * Must be a multiple of segment_size and 4KB aligned.
+     */
+    size_t registered_memory_chunk_size = 1ULL * GB;
+    /**
+     * @brief Per-shard pointers to GlobalRegisteredMemory instances owned
+     * externally (by the surrounding system that also hosts the networking
+     * module and in-memory cache). When non-empty, must have exactly
+     * num_threads entries; each instance is registered with that shard's
+     * io_uring and used for zero-copy very-large-value I/O. Leave empty to
+     * disable the feature on this EloqStore instance.
+     */
+    std::vector<GlobalRegisteredMemory *> global_registered_memories;
+    /**
+     * @brief Number of segments per segment file (1 <<
+     * segments_per_file_shift). Default 7 means 128 segments per file (32MB
+     * file at 256KB segment).
+     */
+    uint8_t segments_per_file_shift = 7;
 
     /* NOTE:
      * The following options will be persisted in storage, so after the first
@@ -264,6 +316,11 @@ struct KvOptions
     size_t DataFileSize() const
     {
         return static_cast<size_t>(data_page_size) << pages_per_file_shift;
+    }
+
+    size_t SegmentFileSize() const
+    {
+        return static_cast<size_t>(segment_size) << segments_per_file_shift;
     }
 
     /**

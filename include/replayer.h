@@ -20,16 +20,21 @@ public:
     std::unique_ptr<PageMapper> GetMapper(IndexPageManager *idx_mgr,
                                           const TableIdent *tbl_ident,
                                           uint64_t expect_term = 0);
+    std::unique_ptr<PageMapper> GetSegmentMapper(IndexPageManager *idx_mgr,
+                                                 const TableIdent *tbl_ident,
+                                                 uint64_t expect_term = 0);
 
     bool corrupted_log_found_{false};
     PageId root_;
     PageId ttl_root_;
     MappingSnapshot::MappingTbl mapping_tbl_;
     FilePageId max_fp_id_;
+    MappingSnapshot::MappingTbl segment_mapping_tbl_;
+    FilePageId max_segment_fp_id_{0};
     uint64_t file_size_before_corrupted_log_;
     uint64_t file_size_;
     std::string dict_bytes_;
-    BranchManifestMetadata branch_metadata_;  // branch-specific metadata
+    BranchManifestMetadata branch_metadata_;
 
 private:
     KvError ParseNextRecord(ManifestFile *file);

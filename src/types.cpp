@@ -76,6 +76,19 @@ WriteDataEntry::WriteDataEntry(std::string key,
 {
 }
 
+WriteDataEntry::WriteDataEntry(std::string key,
+                               IoStringBuffer large_val,
+                               uint64_t ts,
+                               WriteOp op,
+                               uint64_t expire_ts)
+    : key_(std::move(key)),
+      large_val_(std::move(large_val)),
+      timestamp_(ts),
+      op_(op),
+      expire_ts_(expire_ts)
+{
+}
+
 bool WriteDataEntry::operator<(const WriteDataEntry &other) const
 {
     // TODO: use comparator defined in KvOptions ?

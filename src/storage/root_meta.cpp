@@ -68,8 +68,17 @@ void ManifestBuilder::AppendBranchManifestMetadata(
     uint32_t mapping_len =
         static_cast<uint32_t>(buff_.size() - header_bytes - 4);
     EncodeFixed32(buff_.data() + header_bytes, mapping_len);
-    // append the serialized branch_metadata
+    // append branch_metadata with Fixed32 length prefix so replayer can skip it
+    uint32_t branch_meta_len = static_cast<uint32_t>(branch_metadata.size());
+    size_t branch_len_offset = buff_.size();
+    buff_.resize(buff_.size() + 4);
     buff_.append(branch_metadata);
+    EncodeFixed32(buff_.data() + branch_len_offset, branch_meta_len);
+}
+
+void ManifestBuilder::AppendSegmentMapping(std::string_view segment_mapping)
+{
+    buff_.append(segment_mapping);
 }
 
 std::string_view ManifestBuilder::Snapshot(
@@ -78,15 +87,10 @@ std::string_view ManifestBuilder::Snapshot(
     const MappingSnapshot *mapping,
     FilePageId max_fp_id,
     std::string_view dict_bytes,
-    const BranchManifestMetadata &branch_metadata)
+    const BranchManifestMetadata &branch_metadata,
+    const MappingSnapshot *segment_mapping,
+    FilePageId max_segment_fp_id)
 {
-    // For snapshot, the structure is:
-    // Checksum(8B) | Root(4B) | TTL Root(4B) | Payload Len(4B) |
-    // MaxFpId(8B) | DictLen(4B) | dict_bytes(bytes) | mapping_len(4B) |
-    // mapping_tbl(varint64...) | branch_metadata
-    //
-    // branch_metadata = branch_name_len(4B) + branch_name + term(8B) +
-    // BranchFileMapping
     std::string branch_metadata_str =
         SerializeBranchManifestMetadata(branch_metadata);
 
@@ -105,8 +109,25 @@ std::string_view ManifestBuilder::Snapshot(
     uint32_t mapping_bytes_len =
         static_cast<uint32_t>(buff_.size() - mapping_bytes_len_offset - 4);
     EncodeFixed32(buff_.data() + mapping_bytes_len_offset, mapping_bytes_len);
-    // branch_metadata
+    // branch_metadata: Fixed32 length prefix so the replayer can skip it
+    uint32_t branch_meta_len =
+        static_cast<uint32_t>(branch_metadata_str.size());
+    size_t branch_len_offset = buff_.size();
+    buff_.resize(buff_.size() + 4);
     buff_.append(branch_metadata_str);
+    EncodeFixed32(buff_.data() + branch_len_offset, branch_meta_len);
+    // segment mapping section (omitted entirely when no segment mapping exists)
+    if (segment_mapping != nullptr)
+    {
+        buff_.AppendVarint64(max_segment_fp_id);
+        size_t seg_mapping_bytes_len_offset = buff_.size();
+        buff_.resize(buff_.size() + 4);
+        segment_mapping->Serialize(buff_);
+        uint32_t seg_mapping_bytes_len = static_cast<uint32_t>(
+            buff_.size() - seg_mapping_bytes_len_offset - 4);
+        EncodeFixed32(buff_.data() + seg_mapping_bytes_len_offset,
+                      seg_mapping_bytes_len);
+    }
     return Finalize(root_id, ttl_root);
 }
 
@@ -323,8 +344,14 @@ void RootMetaMgr::ReleaseMappers()
             snapshot->idx_mgr_ = nullptr;
         }
         meta.mapping_snapshots_.clear();
+        for (MappingSnapshot *snapshot : meta.segment_mapping_snapshots_)
+        {
+            snapshot->idx_mgr_ = nullptr;
+        }
+        meta.segment_mapping_snapshots_.clear();
         meta.index_pages_.clear();
         meta.mapper_ = nullptr;
+        meta.segment_mapper_ = nullptr;
     }
 }
 

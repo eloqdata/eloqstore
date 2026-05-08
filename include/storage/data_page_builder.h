@@ -28,7 +28,8 @@ public:
              bool overflow,
              uint64_t ts,
              uint64_t expire_ts,
-             compression::CompressionType compression_kind);
+             compression::CompressionType compression_kind,
+             bool large_value = false);
 
     // Finish building the block and return a view that refers to the page
     // contents. The returned view will remain valid for the lifetime of this
