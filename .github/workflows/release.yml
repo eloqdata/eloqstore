@@ -1,0 +1,157 @@
+name: Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "VERSION"
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.read_version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version
+        id: read_version
+        run: |
+          VER=$(cat VERSION | tr -d '[:space:]')
+          if ! echo "$VER" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "VERSION file must contain a valid semver (e.g. 1.0.0), got: $VER" >&2
+            exit 1
+          fi
+          TAG="v${VER}"
+          if git rev-parse "${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists" >&2
+            exit 1
+          fi
+          echo "version=${VER}" >> "$GITHUB_OUTPUT"
+          echo "Version: ${VER}" >> "$GITHUB_STEP_SUMMARY"
+
+  python-release:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    container:
+      image: eloqdata/eloq-dev-ci-ubuntu2404:latest
+      options: --user root --security-opt seccomp=unconfined
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Fix permissions
+        run: chmod -R a+rwx "$GITHUB_WORKSPACE" || true
+
+      - name: Configure Git safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set Python SDK version
+        run: |
+          VER='${{ needs.validate.outputs.version }}'
+          sed -i "s/^version = \"[^\"]*\"/version = \"${VER}\"/" python/pyproject.toml
+
+      - name: Build Python wheel
+        run: |
+          python3 -m pip install build
+          python3 -m build --wheel
+        working-directory: ${{ github.workspace }}/python
+
+      - name: Publish Python package
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python/dist/
+
+  rust-release:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    container:
+      image: eloqdata/eloq-dev-ci-ubuntu2404:latest
+      options: --user root --security-opt seccomp=unconfined
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Fix permissions
+        run: chmod -R a+rwx "$GITHUB_WORKSPACE" || true
+
+      - name: Configure Git safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Set Rust crate versions
+        run: |
+          VER='${{ needs.validate.outputs.version }}'
+          sed -i "s/^version = \"[^\"]*\"/version = \"${VER}\"/" rust/eloqstore-sys/Cargo.toml
+          sed -i "s/^version = \"[^\"]*\"/version = \"${VER}\"/" rust/eloqstore/Cargo.toml
+        working-directory: ${{ github.workspace }}
+
+      - name: Verify eloqstore-sys publish tarball
+        run: cargo publish -p eloqstore-sys --dry-run --allow-dirty --token "${CRATES_IO_TOKEN}"
+        working-directory: ${{ github.workspace }}/rust
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+      - name: Publish eloqstore-sys
+        run: cargo publish -p eloqstore-sys --token "${CRATES_IO_TOKEN}"
+        working-directory: ${{ github.workspace }}/rust
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+      - name: Wait for eloqstore-sys in crates.io index
+        run: |
+          VER='${{ needs.validate.outputs.version }}'
+          for i in $(seq 1 60); do
+            if cargo info eloqstore-sys | grep -Fq "version: ${VER}"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "eloqstore-sys ${VER} did not appear in crates.io index in time" >&2
+          exit 1
+        working-directory: ${{ github.workspace }}/rust
+
+      - name: Publish eloqstore
+        run: cargo publish -p eloqstore --token "${CRATES_IO_TOKEN}"
+        working-directory: ${{ github.workspace }}/rust
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+  tag:
+    needs: [validate, python-release, rust-release]
+    if: success()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create and push tag
+        run: |
+          VER='${{ needs.validate.outputs.version }}'
+          TAG="v${VER}"
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin "${TAG}"
