@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      id-token: write
     env:
       CCACHE_DIR: /github/home/.cache/ccache
       CCACHE_MAXSIZE: 1G
@@ -152,10 +153,13 @@ jobs:
 
       - name: Publish Python to PyPI
         if: steps.detect.outputs.is_release == 'true'
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
-        run: python3 -m twine upload --verbose python/dist/*.whl
+        run: |
+          OIDC_TOKEN=$(curl -sSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=pypi" | jq -r '.value')
+          python3 -m twine upload --verbose \
+            --username __token__ \
+            --password "${OIDC_TOKEN}" \
+            python/dist/*.whl
 
       - name: Publish eloqstore-sys to crates.io
         if: steps.detect.outputs.is_release == 'true'
