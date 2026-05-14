@@ -93,9 +93,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /github/home/.cache/pip
-          key: ${{ runner.os }}-sdk-pip-v1-${{ hashFiles('python/pyproject.toml', '.github/workflows/release.yml') }}
+          key: ${{ runner.os }}-sdk-pip-v2-${{ hashFiles('python/pyproject.toml') }}
           restore-keys: |
-            ${{ runner.os }}-sdk-pip-v1-
+            ${{ runner.os }}-sdk-pip-v2-
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -110,7 +110,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /github/home/.cache/ccache
-          key: ${{ runner.os }}-sdk-ccache-v1-${{ hashFiles('CMakeLists.txt', 'ffi/**', 'include/**', 'src/**', 'rust/eloqstore-sys/**', 'python/build_hooks.py', '.github/workflows/release.yml') }}
+          key: ${{ runner.os }}-sdk-ccache-v2-${{ hashFiles('CMakeLists.txt', 'ffi/**', 'include/**', 'src/**', 'rust/eloqstore-sys/**', 'python/build_hooks.py') }}
           restore-keys: |
             ${{ runner.os }}-sdk-ccache-v1-
 
