@@ -27,7 +27,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     env:
       CCACHE_DIR: /github/home/.cache/ccache
       CCACHE_MAXSIZE: 1G
@@ -151,15 +150,12 @@ jobs:
         run: cargo package -p eloqstore-sys --allow-dirty --no-verify
         working-directory: ${{ github.workspace }}/rust
 
-      - name: Publish Python to PyPI
+      - name: Upload wheel artifact
         if: steps.detect.outputs.is_release == 'true'
-        run: |
-          OIDC_TOKEN=$(curl -sSL -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=pypi" | jq -r '.value')
-          python3 -m twine upload --verbose \
-            --username __token__ \
-            --password "${OIDC_TOKEN}" \
-            python/dist/*.whl
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-wheel
+          path: python/dist/*.whl
 
       - name: Publish eloqstore-sys to crates.io
         if: steps.detect.outputs.is_release == 'true'
@@ -192,9 +188,27 @@ jobs:
         if: always()
         run: ccache --show-stats || true
 
+  # ── PyPI publish (release only, bare metal for OIDC) ────────────
+  python-publish:
+    needs: build-and-test
+    if: needs.build-and-test.outputs.is_release == 'true' && success()
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: python-wheel
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+
   # ── tag + GitHub Release (release only) ────────────────────────
   tag-and-release:
-    needs: build-and-test
+    needs: [build-and-test, python-publish]
     if: needs.build-and-test.outputs.is_release == 'true' && success()
     runs-on: ubuntu-latest
     permissions:
