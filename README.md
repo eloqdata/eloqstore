@@ -121,6 +121,51 @@ cmake --build . -j8
 cd ..
 ```
 
+## 📦 SDKs
+
+### Python SDK
+
+```bash
+pip install eloqstore
+```
+
+```python
+from eloqstore import Client, Options
+
+client = Client(Options(table_name="demo", partition_id=0, num_threads=1))
+client.put("hello", b"world")
+assert client.get("hello") == b"world"
+client.close()
+```
+
+See [python/examples/](python/examples/) for more usage examples.
+
+### Rust SDK
+
+Add to your `Cargo.toml`:
+
+```toml
+[dependencies]
+eloqstore = "1"
+```
+
+```rust
+use eloqstore::{EloqStore, Options, TableIdentifier};
+
+let mut opts = Options::new().unwrap();
+opts.set_num_threads(1).unwrap();
+let mut store = EloqStore::new(&opts).unwrap();
+store.start().unwrap();
+
+let table = TableIdentifier::new("demo", 0).unwrap();
+let ts = 0;
+store.put(&table, b"hello", b"world", ts).unwrap();
+assert_eq!(store.get(&table, b"hello").unwrap(), Some(b"world".to_vec()));
+store.stop();
+```
+
+See [rust/eloqstore/examples/](rust/eloqstore/examples/) for more usage examples.
+
 ## 🧪 Testing
 
 ### Run Unit Tests

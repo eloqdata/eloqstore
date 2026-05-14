@@ -147,7 +147,22 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate changelog
+        run: |
+          VER='${{ needs.validate.outputs.version }}'
+          TAG="v${VER}"
+          PREV_TAG=$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null || echo "")
+          if [ -n "$PREV_TAG" ]; then
+            echo "Changes since ${PREV_TAG}:" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            git log --oneline --no-merges "${PREV_TAG}..HEAD" >> CHANGELOG.md
+          else
+            echo "Initial release ${TAG}" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            git log --oneline --no-merges HEAD >> CHANGELOG.md
+          fi
+          cat CHANGELOG.md
 
       - name: Create and push tag
         run: |
@@ -155,3 +170,29 @@ jobs:
           TAG="v${VER}"
           git tag -a "${TAG}" -m "Release ${TAG}"
           git push origin "${TAG}"
+
+      - name: Create GitHub Release
+        run: |
+          VER='${{ needs.validate.outputs.version }}'
+          TAG="v${VER}"
+          RELEASE_NOTES="## eloqstore v${VER}
+
+          ### Install
+          \`\`\`bash
+          # Python SDK
+          pip install eloqstore
+          \`\`\`
+          \`\`\`toml
+          # Rust SDK (add to Cargo.toml)
+          eloqstore = \"${VER}\"
+          \`\`\`
+
+          ### Changelog
+          $(cat CHANGELOG.md)"
+
+          gh release create "${TAG}" \
+            --title "v${VER}" \
+            --notes "${RELEASE_NOTES}" \
+            --repo '${{ github.repository }}'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

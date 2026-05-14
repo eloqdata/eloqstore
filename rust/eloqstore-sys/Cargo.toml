@@ -1,6 +1,6 @@
 [package]
 name = "eloqstore-sys"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 build = "build.rs"
 description = "Low-level Rust FFI bindings for EloqStore"
