@@ -119,7 +119,7 @@ jobs:
 
       - name: Build Python wheel
         run: |
-          python3 -m pip install build pytest twine
+          python3 -m pip install build pytest
           python3 -m build --wheel
         working-directory: ${{ github.workspace }}/python
 
@@ -157,33 +157,6 @@ jobs:
           name: python-wheel
           path: python/dist/*.whl
 
-      - name: Publish eloqstore-sys to crates.io
-        if: steps.detect.outputs.is_release == 'true'
-        run: cargo publish -p eloqstore-sys --allow-dirty --token "${CRATES_IO_TOKEN}"
-        working-directory: ${{ github.workspace }}/rust
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-
-      - name: Wait for eloqstore-sys index
-        if: steps.detect.outputs.is_release == 'true'
-        run: |
-          for i in $(seq 1 60); do
-            if cargo info eloqstore-sys | grep -Fq "version: ${VERSION}"; then
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "eloqstore-sys ${VERSION} not in crates.io index" >&2
-          exit 1
-        working-directory: ${{ github.workspace }}/rust
-
-      - name: Publish eloqstore to crates.io
-        if: steps.detect.outputs.is_release == 'true'
-        run: cargo publish -p eloqstore --allow-dirty --token "${CRATES_IO_TOKEN}"
-        working-directory: ${{ github.workspace }}/rust
-        env:
-          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-
       - name: Show ccache stats
         if: always()
         run: ccache --show-stats || true
@@ -201,14 +174,80 @@ jobs:
           name: python-wheel
           path: dist/
 
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
 
+  # ── Rust publish (release only) ─────────────────────────────────
+  rust-publish:
+    needs: build-and-test
+    if: needs.build-and-test.outputs.is_release == 'true' && success()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CCACHE_DIR: /github/home/.cache/ccache
+      CCACHE_MAXSIZE: 1G
+    container:
+      image: eloqdata/eloq-dev-ci-ubuntu2404:latest
+      options: --user root --security-opt seccomp=unconfined
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Fix permissions
+        run: chmod -R a+rwx "$GITHUB_WORKSPACE" || true
+
+      - name: Configure Git safe directory
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rust -> target
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: /github/home/.cache/ccache
+          key: ${{ runner.os }}-sdk-ccache-v2-${{ hashFiles('CMakeLists.txt', 'ffi/**', 'include/**', 'src/**', 'rust/eloqstore-sys/**', 'python/build_hooks.py') }}
+          restore-keys: |
+            ${{ runner.os }}-sdk-ccache-v1-
+
+      - name: Publish eloqstore-sys to crates.io
+        run: cargo publish -p eloqstore-sys --allow-dirty --token "${CRATES_IO_TOKEN}"
+        working-directory: ${{ github.workspace }}/rust
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+      - name: Wait for eloqstore-sys index
+        run: |
+          VER='${{ needs.build-and-test.outputs.version }}'
+          for i in $(seq 1 60); do
+            if cargo info eloqstore-sys | grep -Fq "version: ${VER}"; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "eloqstore-sys ${VER} not in crates.io index" >&2
+          exit 1
+        working-directory: ${{ github.workspace }}/rust
+
+      - name: Publish eloqstore to crates.io
+        run: cargo publish -p eloqstore --allow-dirty --token "${CRATES_IO_TOKEN}"
+        working-directory: ${{ github.workspace }}/rust
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
   # ── tag + GitHub Release (release only) ────────────────────────
   tag-and-release:
-    needs: [build-and-test, python-publish]
+    needs: [build-and-test, python-publish, rust-publish]
     if: needs.build-and-test.outputs.is_release == 'true' && success()
     runs-on: ubuntu-latest
     permissions:
