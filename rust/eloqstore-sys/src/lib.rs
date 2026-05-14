@@ -93,6 +93,7 @@ pub struct CGetResult {
     pub timestamp: u64,
     pub expire_ts: u64,
     pub found: bool,
+    pub owns_value: bool,
 }
 
 #[repr(C)]
@@ -260,7 +261,8 @@ mod ffi {
             table: CTableIdentHandle,
             key: *const c_uchar,
             key_len: usize,
-        ) -> bool;
+            out_exists: *mut bool,
+        ) -> CEloqStoreStatus;
 
         pub fn CEloqStore_Floor(
             store: CEloqStoreHandle,

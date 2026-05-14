@@ -40,7 +40,7 @@ fn test_all_apis() {
     store.put(&table, key, value, ts).expect("PUT");
     println!("✓ put(key={:?}, value={:?})", key, value);
 
-    assert!(store.exists(&table, key));
+    assert!(store.exists(&table, key).expect("exists"));
     println!("✓ exists(key={:?}) -> true", key);
 
     let v = store.get(&table, key).expect("GET").expect("not found");
@@ -48,7 +48,7 @@ fn test_all_apis() {
     println!("✓ get(key={:?}) -> {:?}", key, String::from_utf8_lossy(&v));
 
     store.delete(&table, key, ts + 1).expect("DELETE");
-    assert!(!store.exists(&table, key));
+    assert!(!store.exists(&table, key).expect("exists"));
     assert!(store.get(&table, key).expect("GET after DELETE").is_none());
     println!("✓ delete(key={:?})", key);
 
@@ -228,7 +228,7 @@ fn test_load_from_ini_and_disk_persistence() {
 
     let mut reopened = EloqStore::new(&reopened_opts).expect("Failed to create reopened store");
     reopened.start().expect("Failed to restart store");
-    assert!(reopened.exists(&table, b"persist"));
+    assert!(reopened.exists(&table, b"persist").expect("exists"));
     assert_eq!(
         reopened.get(&table, b"persist").expect("GET"),
         Some(b"value".to_vec())
@@ -294,6 +294,7 @@ fn test_c_scan_range_honors_end_inclusive() {
             eloqstore_sys::CEloqStoreStatus::Ok
         );
         assert_eq!(scan_result.num_entries, 1);
+        assert!(!scan_result.entries.is_null());
         let first = *scan_result.entries;
         assert_eq!(
             std::slice::from_raw_parts(first.key, first.key_len),
@@ -320,6 +321,7 @@ fn test_c_scan_range_honors_end_inclusive() {
             eloqstore_sys::CEloqStoreStatus::Ok
         );
         assert_eq!(inclusive_result.num_entries, 2);
+        assert!(!inclusive_result.entries.is_null());
         let keys: Vec<Vec<u8>> = (0..inclusive_result.num_entries)
             .map(|i| {
                 let entry = *inclusive_result.entries.add(i);

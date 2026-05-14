@@ -27,6 +27,7 @@ class CGetResult(Structure):
         ("timestamp", c_uint64),
         ("expire_ts", c_uint64),
         ("found", c_bool),
+        ("owns_value", c_bool),
     ]
 
 
@@ -135,8 +136,8 @@ def _configure_library(lib) -> None:
     ]
     lib.CEloqStore_GetInto.restype = c_uint32
 
-    lib.CEloqStore_Exists.argtypes = [c_void_p, c_void_p, POINTER(c_uint8), c_size_t]
-    lib.CEloqStore_Exists.restype = c_bool
+    lib.CEloqStore_Exists.argtypes = [c_void_p, c_void_p, POINTER(c_uint8), c_size_t, POINTER(c_bool)]
+    lib.CEloqStore_Exists.restype = c_uint32
 
     lib.CEloqStore_Delete.argtypes = [
         c_void_p,

@@ -87,6 +87,7 @@ extern "C"
         uint64_t timestamp;
         uint64_t expire_ts;
         bool found;
+        bool owns_value;
     } CGetResult;
 
     // Floor operation result
@@ -265,10 +266,11 @@ extern "C"
                                         uint8_t *out_value,
                                         size_t out_capacity,
                                         CGetResult *out_result);
-    bool CEloqStore_Exists(CEloqStoreHandle store,
-                           CTableIdentHandle table,
-                           const uint8_t *key,
-                           size_t key_len);
+    CEloqStoreStatus CEloqStore_Exists(CEloqStoreHandle store,
+                                       CTableIdentHandle table,
+                                       const uint8_t *key,
+                                       size_t key_len,
+                                       bool *out_exists);
 
     CEloqStoreStatus CEloqStore_Floor(CEloqStoreHandle store,
                                       CTableIdentHandle table,

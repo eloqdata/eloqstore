@@ -721,6 +721,7 @@ extern "C"
                 out_result->timestamp = req.ts_;
                 out_result->expire_ts = req.expire_ts_;
                 out_result->found = true;
+                out_result->owns_value = true;
             }
             else if (err == KvError::NotFound)
             {
@@ -729,6 +730,7 @@ extern "C"
                 out_result->timestamp = 0;
                 out_result->expire_ts = 0;
                 out_result->found = false;
+                out_result->owns_value = false;
             }
             else
             {
@@ -796,6 +798,7 @@ extern "C"
                         out_value, req.value_.data(), req.value_.size());
                 }
                 out_result->value = out_value;
+                out_result->owns_value = false;
             }
             else if (err == KvError::NotFound)
             {
@@ -804,6 +807,7 @@ extern "C"
                 out_result->timestamp = 0;
                 out_result->expire_ts = 0;
                 out_result->found = false;
+                out_result->owns_value = false;
             }
             else
             {
@@ -818,15 +822,16 @@ extern "C"
         }
     }
 
-    bool CEloqStore_Exists(CEloqStoreHandle store,
-                           CTableIdentHandle table,
-                           const uint8_t *key,
-                           size_t key_len)
+    CEloqStoreStatus CEloqStore_Exists(CEloqStoreHandle store,
+                                       CTableIdentHandle table,
+                                       const uint8_t *key,
+                                       size_t key_len,
+                                       bool *out_exists)
     {
         clear_last_error();
-        if (!store || !table || !key || key_len == 0)
+        if (!store || !table || !key || key_len == 0 || !out_exists)
         {
-            return false;
+            return CEloqStoreStatus_InvalidArgs;
         }
 
         auto *cpp_store = reinterpret_cast<EloqStore *>(store);
@@ -839,12 +844,23 @@ extern "C"
                 *cpp_table,
                 std::string(reinterpret_cast<const char *>(key), key_len));
             cpp_store->ExecSync(&req);
-            return req.Error() == KvError::NoError;
+            if (req.Error() == KvError::NoError)
+            {
+                *out_exists = true;
+                return CEloqStoreStatus_Ok;
+            }
+            if (req.Error() == KvError::NotFound)
+            {
+                *out_exists = false;
+                return CEloqStoreStatus_Ok;
+            }
+            set_last_error("Exists query failed");
+            return kv_error_to_c(req.Error());
         }
         catch (const std::exception &e)
         {
             set_last_error(e.what());
-            return false;
+            return CEloqStoreStatus_InvalidArgs;
         }
     }
 
@@ -1203,12 +1219,13 @@ extern "C"
     {
         if (result)
         {
-            if (result->value)
+            if (result->value && result->owns_value)
             {
                 delete[] result->value;
                 result->value = nullptr;
             }
             result->value_len = 0;
+            result->owns_value = false;
             result->found = false;
         }
     }

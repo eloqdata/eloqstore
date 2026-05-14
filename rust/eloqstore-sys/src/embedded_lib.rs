@@ -119,9 +119,7 @@ fn extract_embedded_library() -> Result<Option<PathBuf>, Box<dyn std::error::Err
             .map_err(|e| format!("Invalid library path: {}", e))?;
 
         unsafe {
-            const RTLD_LAZY: c_int = 1;
-            const RTLD_GLOBAL: c_int = 0x00100; // Expose symbols to later-loaded libraries
-            let handle = dlopen(lib_path_cstr.as_ptr(), RTLD_LAZY | RTLD_GLOBAL);
+            let handle = dlopen(lib_path_cstr.as_ptr(), libc::RTLD_LAZY | libc::RTLD_GLOBAL);
             if handle.is_null() {
                 let err = dlerror();
                 let error_msg = if err.is_null() {

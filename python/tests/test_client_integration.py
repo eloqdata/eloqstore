@@ -120,11 +120,12 @@ def test_options_path_and_branch_start():
         client.close()
 
 
-def test_bad_ini_path_raises():
+def test_bad_ini_path_raises(tmp_path):
+    bad_ini = tmp_path / "does-not-exist-eloqstore.ini"
     with pytest.raises(EloqStoreError):
         Client(
             Options(
-                options_path="/tmp/does-not-exist-eloqstore.ini",
+                options_path=str(bad_ini),
                 table_name="demo",
                 partition_id=0,
             )

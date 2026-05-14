@@ -285,8 +285,21 @@ impl EloqStore {
         }
     }
 
-    pub fn exists(&self, tbl: &TableIdentifier, key: &[u8]) -> bool {
-        unsafe { eloqstore_sys::CEloqStore_Exists(self.ptr, tbl.ptr, key.as_ptr(), key.len()) }
+    pub fn exists(&self, tbl: &TableIdentifier, key: &[u8]) -> Result<bool, KvError> {
+        unsafe {
+            let mut out_exists: bool = false;
+            let status = eloqstore_sys::CEloqStore_Exists(
+                self.ptr,
+                tbl.ptr,
+                key.as_ptr(),
+                key.len(),
+                &mut out_exists,
+            );
+            match status {
+                eloqstore_sys::CEloqStoreStatus::Ok => Ok(out_exists),
+                _ => Err(status.into()),
+            }
+        }
     }
 
     pub fn put(

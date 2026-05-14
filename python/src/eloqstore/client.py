@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ctypes import POINTER, c_size_t, c_uint8, c_uint64
+from ctypes import POINTER, c_size_t, c_uint8, c_uint64, c_bool, byref
 from dataclasses import dataclass, field
 from time import time_ns
 from typing import Any, Iterable, Mapping, Sequence
@@ -194,6 +194,10 @@ class Client:
         *,
         timestamp: int | None = None,
     ) -> None:
+        if self._closed:
+            raise RuntimeError("store is closed")
+        ts = timestamp if timestamp is not None else time_ns()
+        _validate_uint("timestamp", ts, 2**64 - 1)
         key_arr, key_ptr, key_len = alloc_bytes(_to_bytes(key))
         value_arr, value_ptr, value_len = as_input_buffer(value)
         _ok(
@@ -204,11 +208,13 @@ class Client:
                 key_len,
                 value_ptr,
                 value_len,
-                timestamp if timestamp is not None else time_ns(),
+                ts,
             )
         )
 
     def get(self, key: str | bytes) -> bytes | None:
+        if self._closed:
+            raise RuntimeError("store is closed")
         key_arr, key_ptr, key_len = alloc_bytes(_to_bytes(key))
         result = CGetResult()
         status = self._lib.CEloqStore_Get(
@@ -223,6 +229,8 @@ class Client:
             self._lib.CEloqStore_FreeGetResult(result)
 
     def get_into(self, key: str | bytes, out_buffer: Any) -> int | None:
+        if self._closed:
+            raise RuntimeError("store is closed")
         key_arr, key_ptr, key_len = alloc_bytes(_to_bytes(key))
         out_arr, out_ptr, out_len = as_output_buffer(out_buffer)
         result = CGetResult()
@@ -241,15 +249,23 @@ class Client:
         return int(result.value_len)
 
     def exists(self, key: str | bytes) -> bool:
+        if self._closed:
+            raise RuntimeError("store is closed")
         key_b = _to_bytes(key)
         key_arr, key_ptr, key_len = alloc_bytes(key_b)
-        return bool(
+        out = c_bool(False)
+        _ok(
             self._lib.CEloqStore_Exists(
-                self._store_handle, self._table_handle, key_ptr, key_len
+                self._store_handle, self._table_handle, key_ptr, key_len, byref(out)
             )
         )
+        return bool(out)
 
     def delete(self, key: str | bytes, *, timestamp: int | None = None) -> None:
+        if self._closed:
+            raise RuntimeError("store is closed")
+        ts = timestamp if timestamp is not None else time_ns()
+        _validate_uint("timestamp", ts, 2**64 - 1)
         key_b = _to_bytes(key)
         key_arr, key_ptr, key_len = alloc_bytes(key_b)
         _ok(
@@ -258,7 +274,7 @@ class Client:
                 self._table_handle,
                 key_ptr,
                 key_len,
-                timestamp if timestamp is not None else time_ns(),
+                ts,
             )
         )
 
@@ -268,9 +284,14 @@ class Client:
         *,
         timestamp: int | None = None,
     ) -> None:
+        if self._closed:
+            raise RuntimeError("store is closed")
         pairs = list(items.items()) if isinstance(items, Mapping) else list(items)
         if not pairs:
             return
+
+        ts = timestamp if timestamp is not None else time_ns()
+        _validate_uint("timestamp", ts, 2**64 - 1)
 
         key_ptrs = []
         key_lens = []
@@ -302,18 +323,25 @@ class Client:
                 ValuePtrArray(*value_ptrs),
                 LenArray(*value_lens),
                 len(pairs),
-                timestamp if timestamp is not None else time_ns(),
+                ts,
             )
         )
 
     def batch_get(self, keys: Sequence[str | bytes]) -> list[bytes | None]:
+        if self._closed:
+            raise RuntimeError("store is closed")
         return [self.get(key) for key in keys]
 
     def batch_delete(
         self, keys: Sequence[str | bytes], *, timestamp: int | None = None
     ) -> None:
+        if self._closed:
+            raise RuntimeError("store is closed")
         if not keys:
             return
+
+        ts = timestamp if timestamp is not None else time_ns()
+        _validate_uint("timestamp", ts, 2**64 - 1)
 
         key_ptrs = []
         key_lens = []
@@ -334,6 +362,6 @@ class Client:
                 KeyPtrArray(*key_ptrs),
                 LenArray(*key_lens),
                 len(keys),
-                timestamp if timestamp is not None else time_ns(),
+                ts,
             )
         )

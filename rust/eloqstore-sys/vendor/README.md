@@ -28,7 +28,7 @@ Modify directly in **repository root**, no need to sync to vendor:
 - Modify `/external/*` → vendor automatically (soft link)
 
 ### Modify FFI-Specific Code
-Keep these two locations in sync:
+Keep these four locations in sync:
 - `ffi/src/eloqstore_capi.cpp`
 - `ffi/include/eloqstore_capi.h`
 - `rust/eloqstore-sys/ffi/src/eloqstore_capi.cpp`
