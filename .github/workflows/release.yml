@@ -27,7 +27,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write
     env:
       CCACHE_DIR: /github/home/.cache/ccache
       CCACHE_MAXSIZE: 1G
@@ -151,21 +150,11 @@ jobs:
         run: cargo package -p eloqstore-sys --allow-dirty --no-verify
         working-directory: ${{ github.workspace }}/rust
 
-      - name: Mint PyPI OIDC token
-        if: steps.detect.outputs.is_release == 'true'
-        id: pypi-token
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const token = await core.getIDToken('pypi');
-            core.setSecret(token);
-            core.setOutput('token', token);
-
       - name: Publish Python to PyPI
         if: steps.detect.outputs.is_release == 'true'
         env:
           TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ steps.pypi-token.outputs.token }}
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
         run: python3 -m twine upload --verbose python/dist/*.whl
 
       - name: Publish eloqstore-sys to crates.io
