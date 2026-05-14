@@ -1,6 +1,6 @@
 [package]
 name = "eloqstore"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 description = "High-level Rust SDK for EloqStore"
 readme = "README.md"
@@ -18,4 +18,4 @@ include = [
 ]
 
 [dependencies]
-eloqstore-sys = { version = "0.1.0", path = "../eloqstore-sys" }
+eloqstore-sys = { version = "1.0.0", path = "../eloqstore-sys" }

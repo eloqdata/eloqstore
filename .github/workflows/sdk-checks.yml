@@ -7,6 +7,7 @@ on:
       - "rust/**"
       - "ffi/**"
       - "CMakeLists.txt"
+      - "VERSION"
       - ".github/workflows/sdk-checks.yml"
   push:
     branches:
@@ -16,6 +17,7 @@ on:
       - "rust/**"
       - "ffi/**"
       - "CMakeLists.txt"
+      - "VERSION"
       - ".github/workflows/sdk-checks.yml"
   workflow_dispatch:
 
@@ -42,6 +44,34 @@ jobs:
 
       - name: Configure Git safe directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      - name: Check version consistency
+        run: |
+          VER=$(cat VERSION | tr -d '[:space:]')
+          echo "VERSION = $VER"
+
+          PY_VER=$(sed -n 's/^version = "\(.*\)"/\1/p' python/pyproject.toml | head -n1)
+          echo "pyproject.toml version = $PY_VER"
+          if [ "$VER" != "$PY_VER" ]; then
+            echo "ERROR: VERSION ($VER) != pyproject.toml ($PY_VER)" >&2
+            exit 1
+          fi
+
+          SYS_VER=$(sed -n 's/^version = "\(.*\)"/\1/p' rust/eloqstore-sys/Cargo.toml | head -n1)
+          echo "eloqstore-sys/Cargo.toml version = $SYS_VER"
+          if [ "$VER" != "$SYS_VER" ]; then
+            echo "ERROR: VERSION ($VER) != eloqstore-sys/Cargo.toml ($SYS_VER)" >&2
+            exit 1
+          fi
+
+          SDK_VER=$(sed -n 's/^version = "\(.*\)"/\1/p' rust/eloqstore/Cargo.toml | head -n1)
+          echo "eloqstore/Cargo.toml version = $SDK_VER"
+          if [ "$VER" != "$SDK_VER" ]; then
+            echo "ERROR: VERSION ($VER) != eloqstore/Cargo.toml ($SDK_VER)" >&2
+            exit 1
+          fi
+
+          echo "All version files consistent: $VER"
 
       - name: Set up Python
         uses: actions/setup-python@v5
