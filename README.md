@@ -7,6 +7,8 @@
 
 [![License: BSL 2.0](https://img.shields.io/badge/License-BSL_2.0-blue.svg)](https://github.com/eloqdata/eloqstore/blob/main/LICENSE.md) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-green.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Language](https://img.shields.io/badge/language-C++-orange)](https://isocpp.org/)
+[![PyPI](https://img.shields.io/pypi/v/eloqstore)](https://pypi.org/project/eloqstore/)
+[![Crates.io](https://img.shields.io/crates/v/eloqstore)](https://crates.io/crates/eloqstore)
 [![GitHub issues](https://img.shields.io/github/issues/eloqdata/eloqstore)](https://github.com/eloqdata/eloqstore/issues)
 [![Release](https://img.shields.io/badge/release-latest-blue)](https://www.eloqdata.com/download)
 <a href="https://discord.com/invite/nmYjBkfak6">
