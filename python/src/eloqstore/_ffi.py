@@ -13,6 +13,7 @@ from ctypes import (
     c_uint64,
     c_uint8,
     c_void_p,
+    cast,
     cdll,
 )
 from pathlib import Path
@@ -28,6 +29,27 @@ class CGetResult(Structure):
         ("expire_ts", c_uint64),
         ("found", c_bool),
         ("owns_value", c_bool),
+    ]
+
+
+class CLargeValueResult(Structure):
+    _fields_ = [
+        ("value", c_void_p),
+        ("value_len", c_size_t),
+        ("timestamp", c_uint64),
+        ("expire_ts", c_uint64),
+        ("found", c_bool),
+        ("kind", c_uint32),
+    ]
+
+
+class CIoStringFragment(Structure):
+    _fields_ = [
+        ("data", POINTER(c_uint8)),
+        ("len", c_size_t),
+        ("buf_index", c_uint16),
+        ("chunk_index", c_uint32),
+        ("offset", c_size_t),
     ]
 
 
@@ -75,6 +97,17 @@ def _configure_library(lib) -> None:
     lib.CEloqStore_Options_SetOverflowPointers.argtypes = [c_void_p, c_uint8]
     lib.CEloqStore_Options_SetDataAppendMode.argtypes = [c_void_p, c_bool]
     lib.CEloqStore_Options_SetEnableCompression.argtypes = [c_void_p, c_bool]
+    lib.CEloqStore_Options_SetSegmentSize.argtypes = [c_void_p, c_uint32]
+    lib.CEloqStore_Options_SetRegisteredMemoryChunkSize.argtypes = [
+        c_void_p,
+        c_uint64,
+    ]
+    lib.CEloqStore_Options_SetSegmentsPerFileShift.argtypes = [c_void_p, c_uint8]
+    lib.CEloqStore_Options_SetGlobalRegisteredMemory.argtypes = [
+        c_void_p,
+        c_uint32,
+        c_void_p,
+    ]
     lib.CEloqStore_Options_AddStorePath.argtypes = [c_void_p, c_char_p]
     lib.CEloqStore_Options_LoadFromIni.argtypes = [c_void_p, c_char_p]
     lib.CEloqStore_Options_LoadFromIni.restype = c_bool
@@ -89,6 +122,8 @@ def _configure_library(lib) -> None:
     lib.CEloqStore_Stop.argtypes = [c_void_p]
     lib.CEloqStore_IsStopped.argtypes = [c_void_p]
     lib.CEloqStore_IsStopped.restype = c_bool
+    lib.CEloqStore_GlobalRegMemIndexBase.argtypes = [c_void_p, c_size_t]
+    lib.CEloqStore_GlobalRegMemIndexBase.restype = c_uint16
 
     lib.CEloqStore_TableIdent_Create.argtypes = [c_char_p, c_uint32]
     lib.CEloqStore_TableIdent_Create.restype = c_void_p
@@ -136,6 +171,40 @@ def _configure_library(lib) -> None:
     ]
     lib.CEloqStore_GetInto.restype = c_uint32
 
+    lib.CEloqStore_GetLarge.argtypes = [
+        c_void_p,
+        c_void_p,
+        POINTER(c_uint8),
+        c_size_t,
+        POINTER(CLargeValueResult),
+    ]
+    lib.CEloqStore_GetLarge.restype = c_uint32
+    lib.CEloqStore_GetLargeAsync.argtypes = [
+        c_void_p,
+        c_void_p,
+        POINTER(c_uint8),
+        c_size_t,
+        c_void_p,
+        c_uint16,
+    ]
+    lib.CEloqStore_GetLargeAsync.restype = c_void_p
+    lib.CEloqStore_AsyncGetLargeResult.argtypes = [
+        c_void_p,
+        POINTER(CLargeValueResult),
+    ]
+    lib.CEloqStore_AsyncGetLargeResult.restype = c_uint32
+    lib.CEloqStore_PutLarge.argtypes = [
+        c_void_p,
+        c_void_p,
+        POINTER(c_uint8),
+        c_size_t,
+        c_void_p,
+        c_void_p,
+        c_uint16,
+        c_uint64,
+    ]
+    lib.CEloqStore_PutLarge.restype = c_uint32
+
     lib.CEloqStore_Exists.argtypes = [c_void_p, c_void_p, POINTER(c_uint8), c_size_t, POINTER(c_bool)]
     lib.CEloqStore_Exists.restype = c_uint32
 
@@ -158,9 +227,67 @@ def _configure_library(lib) -> None:
     ]
     lib.CEloqStore_DeleteBatch.restype = c_uint32
 
+    lib.CEloqStore_BatchWrite_Create.restype = c_void_p
+    lib.CEloqStore_BatchWrite_Destroy.argtypes = [c_void_p]
+    lib.CEloqStore_BatchWrite_SetTable.argtypes = [c_void_p, c_void_p]
+    lib.CEloqStore_BatchWrite_AddLargeEntry.argtypes = [
+        c_void_p,
+        POINTER(c_uint8),
+        c_size_t,
+        c_void_p,
+        c_uint64,
+        c_uint32,
+        c_uint64,
+    ]
+    lib.CEloqStore_BatchWrite_Clear.argtypes = [c_void_p]
+    lib.CEloqStore_BatchWrite_RecycleLargeEntries.argtypes = [
+        c_void_p,
+        c_void_p,
+        c_uint16,
+    ]
+    lib.CEloqStore_ExecBatchWrite.argtypes = [c_void_p, c_void_p]
+    lib.CEloqStore_ExecBatchWrite.restype = c_uint32
+    lib.CEloqStore_ExecBatchWriteAsync.argtypes = [c_void_p, c_void_p, c_void_p, c_uint16]
+    lib.CEloqStore_ExecBatchWriteAsync.restype = c_void_p
+    lib.CEloqStore_AsyncIsDone.argtypes = [c_void_p]
+    lib.CEloqStore_AsyncIsDone.restype = c_bool
+    lib.CEloqStore_AsyncWait.argtypes = [c_void_p]
+    lib.CEloqStore_AsyncWait.restype = c_uint32
+    lib.CEloqStore_AsyncStatus.argtypes = [c_void_p]
+    lib.CEloqStore_AsyncStatus.restype = c_uint32
+    lib.CEloqStore_AsyncDestroy.argtypes = [c_void_p]
+
     lib.CEloqStore_FreeGetResult.argtypes = [POINTER(CGetResult)]
     lib.CEloqStore_GetLastError.argtypes = [c_void_p]
     lib.CEloqStore_GetLastError.restype = c_char_p
+
+    lib.CEloqStore_GlobalMemory_Create.argtypes = [c_uint32, c_uint64, c_uint64]
+    lib.CEloqStore_GlobalMemory_Create.restype = c_void_p
+    lib.CEloqStore_GlobalMemory_Destroy.argtypes = [c_void_p]
+    lib.CEloqStore_GlobalMemory_SegmentSize.argtypes = [c_void_p]
+    lib.CEloqStore_GlobalMemory_SegmentSize.restype = c_uint32
+    lib.CEloqStore_GlobalMemory_TotalSegments.argtypes = [c_void_p]
+    lib.CEloqStore_GlobalMemory_TotalSegments.restype = c_size_t
+    lib.CEloqStore_GlobalMemory_FreeSegments.argtypes = [c_void_p]
+    lib.CEloqStore_GlobalMemory_FreeSegments.restype = c_size_t
+    lib.CEloqStore_GlobalMemory_AllocateIoString.argtypes = [
+        c_void_p,
+        c_size_t,
+        c_uint16,
+    ]
+    lib.CEloqStore_GlobalMemory_AllocateIoString.restype = c_void_p
+    lib.CEloqStore_IoStringBuffer_Destroy.argtypes = [c_void_p]
+    lib.CEloqStore_IoStringBuffer_Recycle.argtypes = [c_void_p, c_void_p, c_uint16]
+    lib.CEloqStore_IoStringBuffer_Size.argtypes = [c_void_p]
+    lib.CEloqStore_IoStringBuffer_Size.restype = c_size_t
+    lib.CEloqStore_IoStringBuffer_FragmentCount.argtypes = [c_void_p]
+    lib.CEloqStore_IoStringBuffer_FragmentCount.restype = c_size_t
+    lib.CEloqStore_IoStringBuffer_FragmentAt.argtypes = [
+        c_void_p,
+        c_size_t,
+        POINTER(CIoStringFragment),
+    ]
+    lib.CEloqStore_IoStringBuffer_FragmentAt.restype = c_bool
 
 
 _LIB = None

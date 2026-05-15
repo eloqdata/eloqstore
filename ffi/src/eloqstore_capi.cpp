@@ -1,5 +1,7 @@
 #include "eloqstore_capi.h"
 
+#include <algorithm>
+#include <condition_variable>
 #include <cstring>
 #include <memory>
 #include <mutex>
@@ -9,12 +11,16 @@
 #include <vector>
 
 #include "eloq_store.h"
+#include "global_registered_memory.h"
+#include "io_string_buffer.h"
 #include "kv_options.h"
 #include "types.h"
 
 using eloqstore::BatchWriteRequest;
 using eloqstore::EloqStore;
 using eloqstore::FloorRequest;
+using eloqstore::GlobalRegisteredMemory;
+using eloqstore::IoStringBuffer;
 using eloqstore::KvError;
 using eloqstore::KvOptions;
 using eloqstore::ReadRequest;
@@ -50,6 +56,44 @@ struct OwnedScanResult
 static std::mutex g_scan_result_mutex;
 static std::unordered_map<CScanResult *, std::unique_ptr<OwnedScanResult>>
     g_owned_scan_results;
+
+enum class AsyncHandleKind
+{
+    BatchWrite,
+    LargeRead,
+};
+
+struct AsyncHandleData
+{
+    AsyncHandleKind kind{AsyncHandleKind::BatchWrite};
+    std::unique_ptr<BatchWriteRequest> req;
+    std::unique_ptr<ReadRequest> read_req;
+    std::unique_ptr<IoStringBuffer> large_value;
+    GlobalRegisteredMemory *mem{nullptr};
+    uint16_t reg_mem_index_base{0};
+    std::mutex mutex;
+    std::condition_variable cv;
+    bool done{false};
+    bool result_claimed{false};
+    CEloqStoreStatus status{CEloqStoreStatus_Ok};
+    CLargeValueResult result{nullptr, 0, 0, 0, false, CValueKind_NotFound};
+    std::string error_message;
+};
+
+static void recycle_large_entries(BatchWriteRequest *req,
+                                  GlobalRegisteredMemory *mem,
+                                  uint16_t reg_mem_index_base)
+{
+    if (!req || !mem)
+        return;
+    for (auto &entry : req->batch_)
+    {
+        if (!entry.large_val_.Fragments().empty())
+        {
+            entry.large_val_.Recycle(mem, reg_mem_index_base);
+        }
+    }
+}
 
 // ============================================================
 // Error code conversion
@@ -187,14 +231,52 @@ extern "C"
     }
 
     void CEloqStore_Options_SetEnableCompression(CEloqStoreHandle opts,
-                                                 bool enable)
+                                                  bool enable)
     {
         if (opts)
             reinterpret_cast<KvOptions *>(opts)->enable_compression = enable;
     }
 
+    void CEloqStore_Options_SetSegmentSize(CEloqStoreHandle opts,
+                                           uint32_t size)
+    {
+        if (opts)
+            reinterpret_cast<KvOptions *>(opts)->segment_size = size;
+    }
+
+    void CEloqStore_Options_SetRegisteredMemoryChunkSize(CEloqStoreHandle opts,
+                                                         uint64_t size)
+    {
+        if (opts)
+            reinterpret_cast<KvOptions *>(opts)->registered_memory_chunk_size =
+                static_cast<size_t>(size);
+    }
+
+    void CEloqStore_Options_SetSegmentsPerFileShift(CEloqStoreHandle opts,
+                                                    uint8_t shift)
+    {
+        if (opts)
+            reinterpret_cast<KvOptions *>(opts)->segments_per_file_shift = shift;
+    }
+
+    void CEloqStore_Options_SetGlobalRegisteredMemory(
+        CEloqStoreHandle opts,
+        uint32_t shard_id,
+        CGlobalRegisteredMemoryHandle mem)
+    {
+        if (!opts || !mem)
+            return;
+        auto *cpp_opts = reinterpret_cast<KvOptions *>(opts);
+        if (cpp_opts->global_registered_memories.size() <= shard_id)
+        {
+            cpp_opts->global_registered_memories.resize(shard_id + 1, nullptr);
+        }
+        cpp_opts->global_registered_memories[shard_id] =
+            reinterpret_cast<GlobalRegisteredMemory *>(mem);
+    }
+
     void CEloqStore_Options_AddStorePath(CEloqStoreHandle opts,
-                                         const char *path)
+                                          const char *path)
     {
         if (opts && path)
             reinterpret_cast<KvOptions *>(opts)->store_path.push_back(path);
@@ -375,6 +457,14 @@ extern "C"
     bool CEloqStore_IsStopped(CEloqStoreHandle store)
     {
         return store ? reinterpret_cast<EloqStore *>(store)->IsStopped() : true;
+    }
+
+    uint16_t CEloqStore_GlobalRegMemIndexBase(CEloqStoreHandle store,
+                                              size_t shard_id)
+    {
+        return store ? reinterpret_cast<EloqStore *>(store)->GlobalRegMemIndexBase(
+                           shard_id)
+                     : 0;
     }
 
     // ============================================================
@@ -822,6 +912,255 @@ extern "C"
         }
     }
 
+    CEloqStoreStatus CEloqStore_GetLarge(CEloqStoreHandle store,
+                                         CTableIdentHandle table,
+                                         const uint8_t *key,
+                                         size_t key_len,
+                                         CLargeValueResult *out_result)
+    {
+        clear_last_error();
+        if (!store || !table || !key || key_len == 0 || !out_result)
+        {
+            return CEloqStoreStatus_InvalidArgs;
+        }
+
+        auto *cpp_store = reinterpret_cast<EloqStore *>(store);
+        auto *cpp_table = reinterpret_cast<TableIdent *>(table);
+
+        try
+        {
+            ReadRequest req;
+            req.SetArgs(
+                *cpp_table,
+                std::string(reinterpret_cast<const char *>(key), key_len));
+
+            cpp_store->ExecSync(&req);
+            auto err = req.Error();
+
+            if (err == KvError::NoError)
+            {
+                out_result->timestamp = req.ts_;
+                out_result->expire_ts = req.expire_ts_;
+                out_result->found = true;
+
+                if (!req.large_value_.Fragments().empty())
+                {
+                    auto *large = new IoStringBuffer(std::move(req.large_value_));
+                    out_result->value = reinterpret_cast<CIoStringBufferHandle>(large);
+                    out_result->value_len = large->Size();
+                    out_result->kind = CValueKind_Large;
+                }
+                else
+                {
+                    out_result->value = nullptr;
+                    out_result->value_len = req.value_.size();
+                    out_result->kind = CValueKind_Small;
+                    set_last_error(
+                        "value is not stored as a zero-copy large value");
+                    return CEloqStoreStatus_InvalidArgs;
+                }
+            }
+            else if (err == KvError::NotFound)
+            {
+                out_result->value = nullptr;
+                out_result->value_len = 0;
+                out_result->timestamp = 0;
+                out_result->expire_ts = 0;
+                out_result->found = false;
+                out_result->kind = CValueKind_NotFound;
+            }
+            else
+            {
+                return kv_error_to_c(err);
+            }
+            return CEloqStoreStatus_Ok;
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return CEloqStoreStatus_InvalidArgs;
+        }
+    }
+
+    CAsyncHandle CEloqStore_GetLargeAsync(CEloqStoreHandle store,
+                                          CTableIdentHandle table,
+                                          const uint8_t *key,
+                                          size_t key_len,
+                                          CGlobalRegisteredMemoryHandle mem,
+                                          uint16_t reg_mem_index_base)
+    {
+        clear_last_error();
+        if (!store || !table || !key || key_len == 0 || !mem)
+        {
+            return nullptr;
+        }
+
+        auto *cpp_store = reinterpret_cast<EloqStore *>(store);
+        auto *cpp_table = reinterpret_cast<TableIdent *>(table);
+
+        try
+        {
+            auto *handle = new AsyncHandleData();
+            handle->kind = AsyncHandleKind::LargeRead;
+            handle->mem = reinterpret_cast<GlobalRegisteredMemory *>(mem);
+            handle->reg_mem_index_base = reg_mem_index_base;
+            handle->read_req = std::make_unique<ReadRequest>();
+            handle->read_req->SetArgs(
+                *cpp_table,
+                std::string(reinterpret_cast<const char *>(key), key_len));
+
+            bool submitted = cpp_store->ExecAsyn(
+                handle->read_req.get(),
+                0,
+                [handle](eloqstore::KvRequest *done_req)
+                {
+                    auto *read = static_cast<ReadRequest *>(done_req);
+                    std::lock_guard<std::mutex> lock(handle->mutex);
+                    auto err = read->Error();
+                    if (err == KvError::NoError)
+                    {
+                        if (!read->large_value_.Fragments().empty())
+                        {
+                            handle->large_value = std::make_unique<IoStringBuffer>(
+                                std::move(read->large_value_));
+                            handle->result.value = reinterpret_cast<CIoStringBufferHandle>(
+                                handle->large_value.get());
+                            handle->result.value_len = handle->large_value->Size();
+                            handle->result.timestamp = read->ts_;
+                            handle->result.expire_ts = read->expire_ts_;
+                            handle->result.found = true;
+                            handle->result.kind = CValueKind_Large;
+                            handle->status = CEloqStoreStatus_Ok;
+                        }
+                        else
+                        {
+                            handle->result.value = nullptr;
+                            handle->result.value_len = read->value_.size();
+                            handle->result.timestamp = read->ts_;
+                            handle->result.expire_ts = read->expire_ts_;
+                            handle->result.found = true;
+                            handle->result.kind = CValueKind_Small;
+                            handle->status = CEloqStoreStatus_InvalidArgs;
+                            handle->error_message =
+                                "value is not stored as a zero-copy large value";
+                        }
+                    }
+                    else if (err == KvError::NotFound)
+                    {
+                        handle->result =
+                            CLargeValueResult{nullptr,
+                                              0,
+                                              0,
+                                              0,
+                                              false,
+                                              CValueKind_NotFound};
+                        handle->status = CEloqStoreStatus_Ok;
+                    }
+                    else
+                    {
+                        handle->status = kv_error_to_c(err);
+                    }
+                    handle->done = true;
+                    handle->cv.notify_all();
+                });
+            if (!submitted)
+            {
+                std::lock_guard<std::mutex> lock(handle->mutex);
+                handle->status = CEloqStoreStatus_NotRunning;
+                handle->done = true;
+                handle->cv.notify_all();
+            }
+            return reinterpret_cast<CAsyncHandle>(handle);
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return nullptr;
+        }
+    }
+
+    CEloqStoreStatus CEloqStore_AsyncGetLargeResult(
+        CAsyncHandle handle,
+        CLargeValueResult *out_result)
+    {
+        clear_last_error();
+        if (!handle || !out_result)
+        {
+            return CEloqStoreStatus_InvalidArgs;
+        }
+        auto *async = reinterpret_cast<AsyncHandleData *>(handle);
+        CEloqStoreStatus status = CEloqStore_AsyncWait(handle);
+        if (status != CEloqStoreStatus_Ok)
+        {
+            return status;
+        }
+
+        std::lock_guard<std::mutex> lock(async->mutex);
+        if (async->kind != AsyncHandleKind::LargeRead || async->result_claimed)
+        {
+            return CEloqStoreStatus_InvalidArgs;
+        }
+        *out_result = async->result;
+        if (async->large_value)
+        {
+            out_result->value = reinterpret_cast<CIoStringBufferHandle>(
+                async->large_value.release());
+            async->result.value = nullptr;
+        }
+        async->result_claimed = true;
+        return CEloqStoreStatus_Ok;
+    }
+
+    CEloqStoreStatus CEloqStore_PutLarge(CEloqStoreHandle store,
+                                         CTableIdentHandle table,
+                                         const uint8_t *key,
+                                         size_t key_len,
+                                         CIoStringBufferHandle value,
+                                         CGlobalRegisteredMemoryHandle mem,
+                                         uint16_t reg_mem_index_base,
+                                         uint64_t timestamp)
+    {
+        clear_last_error();
+        if (!store || !table || !key || key_len == 0 || !value || !mem)
+        {
+            return CEloqStoreStatus_InvalidArgs;
+        }
+
+        auto *cpp_store = reinterpret_cast<EloqStore *>(store);
+        auto *cpp_table = reinterpret_cast<TableIdent *>(table);
+        auto *large_value = reinterpret_cast<IoStringBuffer *>(value);
+        auto *global_mem = reinterpret_cast<GlobalRegisteredMemory *>(mem);
+
+        try
+        {
+            WriteDataEntry entry;
+            entry.key_ =
+                std::string(reinterpret_cast<const char *>(key), key_len);
+            entry.large_val_ = std::move(*large_value);
+            entry.timestamp_ = timestamp;
+            entry.expire_ts_ = 0;
+            entry.op_ = WriteOp::Upsert;
+
+            BatchWriteRequest req;
+            std::vector<WriteDataEntry> batch;
+            batch.push_back(std::move(entry));
+            req.SetArgs(*cpp_table, std::move(batch));
+
+            cpp_store->ExecSync(&req);
+            auto err = req.Error();
+            if (!req.batch_.empty() && !req.batch_[0].large_val_.Fragments().empty())
+            {
+                req.batch_[0].large_val_.Recycle(global_mem, reg_mem_index_base);
+            }
+            return kv_error_to_c(err);
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return CEloqStoreStatus_InvalidArgs;
+        }
+    }
+
     CEloqStoreStatus CEloqStore_Exists(CEloqStoreHandle store,
                                        CTableIdentHandle table,
                                        const uint8_t *key,
@@ -1171,10 +1510,45 @@ extern "C"
         }
     }
 
+    void CEloqStore_BatchWrite_AddLargeEntry(CBatchWriteHandle req,
+                                             const uint8_t *key,
+                                             size_t key_len,
+                                             CIoStringBufferHandle value,
+                                             uint64_t timestamp,
+                                             CWriteOp op,
+                                             uint64_t expire_ts)
+    {
+        if (req && key && key_len > 0 && value)
+        {
+            auto *cpp_req = reinterpret_cast<BatchWriteRequest *>(req);
+            auto *large_value = reinterpret_cast<IoStringBuffer *>(value);
+            WriteDataEntry entry;
+            entry.key_ =
+                std::string(reinterpret_cast<const char *>(key), key_len);
+            entry.large_val_ = std::move(*large_value);
+            entry.timestamp_ = timestamp;
+            entry.op_ = static_cast<WriteOp>(op);
+            entry.expire_ts_ = expire_ts;
+            cpp_req->batch_.push_back(std::move(entry));
+        }
+    }
+
     void CEloqStore_BatchWrite_Clear(CBatchWriteHandle req)
     {
         if (req)
             reinterpret_cast<BatchWriteRequest *>(req)->Clear();
+    }
+
+    void CEloqStore_BatchWrite_RecycleLargeEntries(
+        CBatchWriteHandle req,
+        CGlobalRegisteredMemoryHandle mem,
+        uint16_t reg_mem_index_base)
+    {
+        if (!req || !mem)
+            return;
+        auto *cpp_req = reinterpret_cast<BatchWriteRequest *>(req);
+        auto *global_mem = reinterpret_cast<GlobalRegisteredMemory *>(mem);
+        recycle_large_entries(cpp_req, global_mem, reg_mem_index_base);
     }
 
     CEloqStoreStatus CEloqStore_ExecBatchWrite(CEloqStoreHandle store,
@@ -1199,6 +1573,255 @@ extern "C"
             set_last_error(e.what());
             return CEloqStoreStatus_InvalidArgs;
         }
+    }
+
+    CAsyncHandle CEloqStore_ExecBatchWriteAsync(
+        CEloqStoreHandle store,
+        CBatchWriteHandle req,
+        CGlobalRegisteredMemoryHandle mem,
+        uint16_t reg_mem_index_base)
+    {
+        clear_last_error();
+        if (!store || !req)
+        {
+            return nullptr;
+        }
+        auto *cpp_store = reinterpret_cast<EloqStore *>(store);
+        auto *cpp_req = reinterpret_cast<BatchWriteRequest *>(req);
+        auto *handle = new AsyncHandleData();
+        handle->kind = AsyncHandleKind::BatchWrite;
+        handle->req.reset(cpp_req);
+        handle->mem = reinterpret_cast<GlobalRegisteredMemory *>(mem);
+        handle->reg_mem_index_base = reg_mem_index_base;
+        bool submitted = cpp_store->ExecAsyn(
+            handle->req.get(),
+            0,
+            [handle](eloqstore::KvRequest *done_req)
+            {
+                auto *batch = static_cast<BatchWriteRequest *>(done_req);
+                recycle_large_entries(
+                    batch, handle->mem, handle->reg_mem_index_base);
+                {
+                    std::lock_guard<std::mutex> lock(handle->mutex);
+                    handle->status = kv_error_to_c(done_req->Error());
+                    handle->done = true;
+                }
+                handle->cv.notify_all();
+            });
+        if (!submitted)
+        {
+            recycle_large_entries(
+                handle->req.get(), handle->mem, handle->reg_mem_index_base);
+            {
+                std::lock_guard<std::mutex> lock(handle->mutex);
+                handle->status = CEloqStoreStatus_NotRunning;
+                handle->done = true;
+            }
+            handle->cv.notify_all();
+        }
+        return reinterpret_cast<CAsyncHandle>(handle);
+    }
+
+    bool CEloqStore_AsyncIsDone(CAsyncHandle handle)
+    {
+        if (!handle)
+            return true;
+        auto *async = reinterpret_cast<AsyncHandleData *>(handle);
+        std::lock_guard<std::mutex> lock(async->mutex);
+        return async->done;
+    }
+
+    CEloqStoreStatus CEloqStore_AsyncWait(CAsyncHandle handle)
+    {
+        if (!handle)
+            return CEloqStoreStatus_InvalidArgs;
+        auto *async = reinterpret_cast<AsyncHandleData *>(handle);
+        std::unique_lock<std::mutex> lock(async->mutex);
+        async->cv.wait(lock, [async]() { return async->done; });
+        if (!async->error_message.empty())
+        {
+            set_last_error(async->error_message);
+        }
+        return async->status;
+    }
+
+    CEloqStoreStatus CEloqStore_AsyncStatus(CAsyncHandle handle)
+    {
+        if (!handle)
+            return CEloqStoreStatus_InvalidArgs;
+        auto *async = reinterpret_cast<AsyncHandleData *>(handle);
+        std::lock_guard<std::mutex> lock(async->mutex);
+        if (!async->error_message.empty())
+        {
+            set_last_error(async->error_message);
+        }
+        return async->status;
+    }
+
+    void CEloqStore_AsyncDestroy(CAsyncHandle handle)
+    {
+        if (!handle)
+            return;
+        auto *async = reinterpret_cast<AsyncHandleData *>(handle);
+        CEloqStore_AsyncWait(handle);
+        if (async->kind == AsyncHandleKind::LargeRead && async->large_value &&
+            async->mem)
+        {
+            async->large_value->Recycle(async->mem, async->reg_mem_index_base);
+        }
+        delete async;
+    }
+
+    // ============================================================
+    // Zero-copy registered memory and large-value buffers
+    // ============================================================
+
+    CGlobalRegisteredMemoryHandle CEloqStore_GlobalMemory_Create(
+        uint32_t segment_size,
+        uint64_t chunk_size,
+        uint64_t total_size)
+    {
+        clear_last_error();
+        try
+        {
+            auto *mem = new GlobalRegisteredMemory(segment_size,
+                                                   static_cast<size_t>(chunk_size),
+                                                   static_cast<size_t>(total_size));
+            return reinterpret_cast<CGlobalRegisteredMemoryHandle>(mem);
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return nullptr;
+        }
+    }
+
+    void CEloqStore_GlobalMemory_Destroy(CGlobalRegisteredMemoryHandle mem)
+    {
+        delete reinterpret_cast<GlobalRegisteredMemory *>(mem);
+    }
+
+    uint32_t CEloqStore_GlobalMemory_SegmentSize(
+        CGlobalRegisteredMemoryHandle mem)
+    {
+        return mem ? reinterpret_cast<GlobalRegisteredMemory *>(mem)->SegmentSize()
+                   : 0;
+    }
+
+    size_t CEloqStore_GlobalMemory_TotalSegments(
+        CGlobalRegisteredMemoryHandle mem)
+    {
+        return mem ? reinterpret_cast<GlobalRegisteredMemory *>(mem)->TotalSegments()
+                   : 0;
+    }
+
+    size_t CEloqStore_GlobalMemory_FreeSegments(
+        CGlobalRegisteredMemoryHandle mem)
+    {
+        return mem ? reinterpret_cast<GlobalRegisteredMemory *>(mem)->FreeSegments()
+                   : 0;
+    }
+
+    CIoStringBufferHandle CEloqStore_GlobalMemory_AllocateIoString(
+        CGlobalRegisteredMemoryHandle mem,
+        size_t size,
+        uint16_t reg_mem_index_base)
+    {
+        clear_last_error();
+        if (!mem)
+        {
+            set_last_error("registered memory is null");
+            return nullptr;
+        }
+        try
+        {
+            auto *global_mem = reinterpret_cast<GlobalRegisteredMemory *>(mem);
+            auto *buf = new IoStringBuffer();
+            const size_t segment_size = global_mem->SegmentSize();
+            const size_t segments =
+                size == 0 ? 0 : (size + segment_size - 1) / segment_size;
+            for (size_t i = 0; i < segments; ++i)
+            {
+                auto [ptr, chunk_index] = global_mem->GetSegment([]() {});
+                buf->Append({ptr,
+                             static_cast<uint16_t>(reg_mem_index_base +
+                                                   chunk_index)});
+            }
+            buf->SetSize(size);
+            return reinterpret_cast<CIoStringBufferHandle>(buf);
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return nullptr;
+        }
+    }
+
+    void CEloqStore_IoStringBuffer_Destroy(CIoStringBufferHandle buf)
+    {
+        delete reinterpret_cast<IoStringBuffer *>(buf);
+    }
+
+    void CEloqStore_IoStringBuffer_Recycle(CIoStringBufferHandle buf,
+                                           CGlobalRegisteredMemoryHandle mem,
+                                           uint16_t reg_mem_index_base)
+    {
+        if (!buf || !mem)
+            return;
+        reinterpret_cast<IoStringBuffer *>(buf)->Recycle(
+            reinterpret_cast<GlobalRegisteredMemory *>(mem), reg_mem_index_base);
+    }
+
+    size_t CEloqStore_IoStringBuffer_Size(CIoStringBufferHandle buf)
+    {
+        return buf ? reinterpret_cast<IoStringBuffer *>(buf)->Size() : 0;
+    }
+
+    size_t CEloqStore_IoStringBuffer_FragmentCount(CIoStringBufferHandle buf)
+    {
+        return buf ? reinterpret_cast<IoStringBuffer *>(buf)->Fragments().size() : 0;
+    }
+
+    bool CEloqStore_IoStringBuffer_FragmentAt(CIoStringBufferHandle buf,
+                                              size_t index,
+                                              CIoStringFragment *out_fragment)
+    {
+        if (!buf || !out_fragment)
+            return false;
+        auto *cpp_buf = reinterpret_cast<IoStringBuffer *>(buf);
+        const auto &fragments = cpp_buf->Fragments();
+        if (index >= fragments.size())
+            return false;
+        const auto &frag = fragments[index];
+        const size_t segment_size =
+            cpp_buf->Size() == 0 ? 0 : cpp_buf->Size();
+        size_t remaining = 0;
+        if (cpp_buf->Size() > 0)
+        {
+            // Fragment payload length is the full segment except for the last
+            // fragment. The exact segment size is not stored in IoStringBuffer,
+            // so infer it from the distance to the next fragment when possible.
+            if (index + 1 < fragments.size())
+            {
+                remaining = static_cast<size_t>(fragments[index + 1].data_ -
+                                                frag.data_);
+            }
+            if (remaining == 0 || remaining > cpp_buf->Size())
+            {
+                remaining = (cpp_buf->Size() + fragments.size() - 1) /
+                            fragments.size();
+            }
+            const size_t used_before = index * remaining;
+            remaining = used_before >= cpp_buf->Size()
+                            ? 0
+                            : std::min(remaining, cpp_buf->Size() - used_before);
+        }
+        out_fragment->data = reinterpret_cast<uint8_t *>(frag.data_);
+        out_fragment->len = remaining == 0 ? segment_size : remaining;
+        out_fragment->buf_index = frag.buf_index_;
+        out_fragment->chunk_index = frag.buf_index_;
+        out_fragment->offset = 0;
+        return true;
     }
 
     // ============================================================

@@ -41,6 +41,16 @@ extern "C"
     typedef void *CTableIdentHandle;
     typedef void *CScanRequestHandle;
     typedef void *CBatchWriteHandle;
+    typedef void *CGlobalRegisteredMemoryHandle;
+    typedef void *CIoStringBufferHandle;
+    typedef void *CAsyncHandle;
+
+    typedef enum CValueKind
+    {
+        CValueKind_NotFound = 0,
+        CValueKind_Small = 1,
+        CValueKind_Large = 2,
+    } CValueKind;
 
     // ============================================================
     // Write operation enum
@@ -89,6 +99,25 @@ extern "C"
         bool found;
         bool owns_value;
     } CGetResult;
+
+    typedef struct CLargeValueResult
+    {
+        CIoStringBufferHandle value;
+        size_t value_len;
+        uint64_t timestamp;
+        uint64_t expire_ts;
+        bool found;
+        CValueKind kind;
+    } CLargeValueResult;
+
+    typedef struct CIoStringFragment
+    {
+        uint8_t *data;
+        size_t len;
+        uint16_t buf_index;
+        uint32_t chunk_index;
+        size_t offset;
+    } CIoStringFragment;
 
     // Floor operation result
     typedef struct CFloorResult
@@ -144,7 +173,17 @@ extern "C"
     void CEloqStore_Options_SetDataAppendMode(CEloqStoreHandle opts,
                                               bool enable);
     void CEloqStore_Options_SetEnableCompression(CEloqStoreHandle opts,
-                                                 bool enable);
+                                                  bool enable);
+    void CEloqStore_Options_SetSegmentSize(CEloqStoreHandle opts,
+                                           uint32_t size);
+    void CEloqStore_Options_SetRegisteredMemoryChunkSize(CEloqStoreHandle opts,
+                                                         uint64_t size);
+    void CEloqStore_Options_SetSegmentsPerFileShift(CEloqStoreHandle opts,
+                                                    uint8_t shift);
+    void CEloqStore_Options_SetGlobalRegisteredMemory(
+        CEloqStoreHandle opts,
+        uint32_t shard_id,
+        CGlobalRegisteredMemoryHandle mem);
 
     void CEloqStore_Options_AddStorePath(CEloqStoreHandle opts,
                                          const char *path);
@@ -180,6 +219,8 @@ extern "C"
                                                 uint32_t partition_group_id);
     void CEloqStore_Stop(CEloqStoreHandle store);
     bool CEloqStore_IsStopped(CEloqStoreHandle store);
+    uint16_t CEloqStore_GlobalRegMemIndexBase(CEloqStoreHandle store,
+                                              size_t shard_id);
 
     // ============================================================
     // Table identifier
@@ -266,6 +307,28 @@ extern "C"
                                         uint8_t *out_value,
                                         size_t out_capacity,
                                         CGetResult *out_result);
+    CEloqStoreStatus CEloqStore_GetLarge(CEloqStoreHandle store,
+                                         CTableIdentHandle table,
+                                         const uint8_t *key,
+                                         size_t key_len,
+                                         CLargeValueResult *out_result);
+    CAsyncHandle CEloqStore_GetLargeAsync(CEloqStoreHandle store,
+                                          CTableIdentHandle table,
+                                          const uint8_t *key,
+                                          size_t key_len,
+                                          CGlobalRegisteredMemoryHandle mem,
+                                          uint16_t reg_mem_index_base);
+    CEloqStoreStatus CEloqStore_AsyncGetLargeResult(
+        CAsyncHandle handle,
+        CLargeValueResult *out_result);
+    CEloqStoreStatus CEloqStore_PutLarge(CEloqStoreHandle store,
+                                         CTableIdentHandle table,
+                                         const uint8_t *key,
+                                         size_t key_len,
+                                         CIoStringBufferHandle value,
+                                         CGlobalRegisteredMemoryHandle mem,
+                                         uint16_t reg_mem_index_base,
+                                         uint64_t timestamp);
     CEloqStoreStatus CEloqStore_Exists(CEloqStoreHandle store,
                                        CTableIdentHandle table,
                                        const uint8_t *key,
@@ -330,10 +393,60 @@ extern "C"
                                         uint64_t timestamp,
                                         CWriteOp op,
                                         uint64_t expire_ts);
+    void CEloqStore_BatchWrite_AddLargeEntry(CBatchWriteHandle req,
+                                             const uint8_t *key,
+                                             size_t key_len,
+                                             CIoStringBufferHandle value,
+                                             uint64_t timestamp,
+                                             CWriteOp op,
+                                             uint64_t expire_ts);
     void CEloqStore_BatchWrite_Clear(CBatchWriteHandle req);
+    void CEloqStore_BatchWrite_RecycleLargeEntries(
+        CBatchWriteHandle req,
+        CGlobalRegisteredMemoryHandle mem,
+        uint16_t reg_mem_index_base);
 
     CEloqStoreStatus CEloqStore_ExecBatchWrite(CEloqStoreHandle store,
                                                CBatchWriteHandle req);
+    CAsyncHandle CEloqStore_ExecBatchWriteAsync(
+        CEloqStoreHandle store,
+        CBatchWriteHandle req,
+        CGlobalRegisteredMemoryHandle mem,
+        uint16_t reg_mem_index_base);
+    bool CEloqStore_AsyncIsDone(CAsyncHandle handle);
+    CEloqStoreStatus CEloqStore_AsyncWait(CAsyncHandle handle);
+    CEloqStoreStatus CEloqStore_AsyncStatus(CAsyncHandle handle);
+    void CEloqStore_AsyncDestroy(CAsyncHandle handle);
+
+    // ============================================================
+    // Zero-copy registered memory and large-value buffers
+    // ============================================================
+
+    CGlobalRegisteredMemoryHandle CEloqStore_GlobalMemory_Create(
+        uint32_t segment_size,
+        uint64_t chunk_size,
+        uint64_t total_size);
+    void CEloqStore_GlobalMemory_Destroy(CGlobalRegisteredMemoryHandle mem);
+    uint32_t CEloqStore_GlobalMemory_SegmentSize(
+        CGlobalRegisteredMemoryHandle mem);
+    size_t CEloqStore_GlobalMemory_TotalSegments(
+        CGlobalRegisteredMemoryHandle mem);
+    size_t CEloqStore_GlobalMemory_FreeSegments(
+        CGlobalRegisteredMemoryHandle mem);
+    CIoStringBufferHandle CEloqStore_GlobalMemory_AllocateIoString(
+        CGlobalRegisteredMemoryHandle mem,
+        size_t size,
+        uint16_t reg_mem_index_base);
+
+    void CEloqStore_IoStringBuffer_Destroy(CIoStringBufferHandle buf);
+    void CEloqStore_IoStringBuffer_Recycle(CIoStringBufferHandle buf,
+                                           CGlobalRegisteredMemoryHandle mem,
+                                           uint16_t reg_mem_index_base);
+    size_t CEloqStore_IoStringBuffer_Size(CIoStringBufferHandle buf);
+    size_t CEloqStore_IoStringBuffer_FragmentCount(CIoStringBufferHandle buf);
+    bool CEloqStore_IoStringBuffer_FragmentAt(CIoStringBufferHandle buf,
+                                              size_t index,
+                                              CIoStringFragment *out_fragment);
 
     // ============================================================
     // Error message query
