@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Pre-commit: auto-sync version files and apply formatting.
+set -euo pipefail
+
+ROOT="$(git rev-parse --show-toplevel)"
+SCRIPTS="${ROOT}/scripts"
+
+"${SCRIPTS}/sync-version.sh"
