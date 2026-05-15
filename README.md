@@ -204,14 +204,11 @@ ctest --test-dir build/tests/
 ### Install git hooks
 
 ```shell
-bash scripts/setup-hooks.sh
+git config core.hooksPath .githooks
 ```
 
-This installs a pre-commit hook that:
-- Auto-syncs `pyproject.toml` / `Cargo.toml` from `VERSION`, so SDK packages always match the repo version.
-- (Future: auto-format C++ code.)
-
-Run once after cloning. To bypass the hook temporarily: `git commit --no-verify`.
+The pre-commit hook auto-syncs `pyproject.toml` / `Cargo.toml` versions from `VERSION`.
+Run once after cloning. Bypass with `git commit --no-verify`.
 
 ### Install Format Tool
 
