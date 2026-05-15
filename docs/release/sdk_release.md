@@ -1,6 +1,6 @@
 # SDK Release Guide
 
-The release workflow is `.github/workflows/release.yml` (named "SDK").
+The release workflow is `.github/workflows/sdk-release.yml` (named "SDK Release").
 
 ## How it works
 
