@@ -119,8 +119,9 @@ jobs:
 
       - name: Build Python wheel
         run: |
-          python3 -m pip install build pytest
+          python3 -m pip install build pytest wheel
           python3 -m build --wheel
+          python3 -m wheel tags --platform-tag manylinux_2_31_x86_64 python/dist/eloqstore-*-linux_x86_64.whl
         working-directory: ${{ github.workspace }}/python
 
       - name: Run Python tests
