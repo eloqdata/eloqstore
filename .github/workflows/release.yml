@@ -204,23 +204,16 @@ jobs:
         working-directory: ${{ github.workspace }}
 
       - name: Publish eloqstore-sys to crates.io
-        run: cargo publish -p eloqstore-sys --no-verify --allow-dirty --token "${CRATES_IO_TOKEN}"
+        run: |
+          cargo publish -p eloqstore-sys --no-verify --allow-dirty --token "${CRATES_IO_TOKEN}" 2>&1 | tee /tmp/cargo-pub.log
+          rc=${PIPESTATUS[0]}
+          if [ $rc -ne 0 ]; then
+            grep -q "already exists" /tmp/cargo-pub.log && exit 0
+            exit $rc
+          fi
         working-directory: ${{ github.workspace }}/rust
         env:
           CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-
-      - name: Wait for eloqstore-sys index
-        run: |
-          VER='${{ needs.build-and-test.outputs.version }}'
-          for i in $(seq 1 60); do
-            if cargo info eloqstore-sys | grep -Fq "version: ${VER}"; then
-              exit 0
-            fi
-            sleep 10
-          done
-          echo "eloqstore-sys ${VER} not in crates.io index" >&2
-          exit 1
-        working-directory: ${{ github.workspace }}/rust
 
       - name: Publish eloqstore to crates.io
         run: cargo publish -p eloqstore --no-verify --allow-dirty --token "${CRATES_IO_TOKEN}"
