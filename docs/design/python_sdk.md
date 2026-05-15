@@ -57,10 +57,19 @@ configuration path:
 - `branch`
 - `term`
 - `partition_group_id`
+- `validate`
 - `num_threads`
+- `data_page_size`
+- `pages_per_file_shift`
+- `data_append_mode`
+- `overflow_pointers`
+- `enable_compression`
+- `buffer_pool_size`
+- `manifest_limit`
+- `fd_limit`
 
 The dataclass is not a full mirror of `KvOptions`. It is intentionally
-small and focused on the common embedded-store case.
+focused on the common embedded-store case with validated FFI inputs.
 
 ### `Client`
 
@@ -75,6 +84,7 @@ The first release exposes:
 
 - `put`
 - `get`
+- `get_into`
 - `exists`
 - `delete`
 - `batch_put`
@@ -140,27 +150,24 @@ handling to callers.
 
 ## Build and Packaging Model
 
-The repository now builds a shared library target:
+The repository builds a shared library `eloqstore_capi`. The Python wheel bundles
+`libeloqstore_capi.so` under `eloqstore/.libs/`, so no manual `ELOQSTORE_PY_LIB`
+override is required when installing from PyPI.
 
-- `eloqstore_capi`
+For local development, the library is discovered via:
 
-The Python package itself is currently pure-Python and expects the
-shared library to be discoverable via:
+1. wheel-bundled path (`eloqstore/.libs/`)
+2. `ELOQSTORE_PY_LIB` environment variable
+3. nearby repository build directory
 
-1. `ELOQSTORE_PY_LIB`
-2. a package-local bundled library path
-3. a nearby repository build directory
-
-This is sufficient for local development and SDK iteration.
-
-A later packaging phase can bundle the shared library directly into the
-wheel once the ABI and build story are stable.
+The Python package is published to PyPI as `eloqstore` with a `manylinux_2_31_x86_64`
+platform tag.
 
 ## Future Work
 
-- bundle `eloqstore_capi` into platform wheels
 - expand `Options` coverage for more `KvOptions` fields
 - add scan and iterator APIs
 - add bulk read helpers at the C API level
 - evaluate a pybind11 or cffi backend behind the same Python API
+- cross-platform wheel builds
 
