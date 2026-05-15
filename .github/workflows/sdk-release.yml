@@ -134,23 +134,11 @@ jobs:
         run: cargo test -p eloqstore --test integration_test -- --nocapture --test-threads=1
         working-directory: ${{ github.workspace }}/rust
 
-      - name: Package Rust crates
-        run: |
-          cargo package -p eloqstore-sys --allow-dirty --no-verify
-          cargo package -p eloqstore --allow-dirty --no-verify
-        working-directory: ${{ github.workspace }}/rust
-
       - name: Upload Python wheel artifact
         uses: actions/upload-artifact@v4
         with:
           name: python-wheel
           path: python/dist/*.whl
-
-      - name: Upload Rust crates artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: rust-crates
-          path: rust/target/package/*.crate
 
       - name: Show ccache stats
         if: always()

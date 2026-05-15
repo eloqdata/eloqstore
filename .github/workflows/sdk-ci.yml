@@ -35,13 +35,6 @@ jobs:
       - name: Configure Git safe directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Read version
-        id: read_version
-        run: |
-          VER=$(cat VERSION | tr -d '[:space:]')
-          echo "version=${VER}" >> "$GITHUB_OUTPUT"
-          echo "Version: $VER"
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -103,28 +96,6 @@ jobs:
       - name: Run Rust integration tests
         run: cargo test -p eloqstore --test integration_test -- --nocapture --test-threads=1
         working-directory: ${{ github.workspace }}/rust
-
-      - name: Package Rust crates
-        run: |
-          cargo package -p eloqstore-sys --allow-dirty --no-verify
-          cargo package -p eloqstore --allow-dirty --no-verify
-        working-directory: ${{ github.workspace }}/rust
-
-      - name: Upload Python wheel artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: python-wheel
-          path: python/dist/*.whl
-          if-no-files-found: warn
-
-      - name: Upload Rust crates artifact
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: rust-crates
-          path: rust/target/package/*.crate
-          if-no-files-found: warn
 
       - name: Show ccache stats
         if: always()
