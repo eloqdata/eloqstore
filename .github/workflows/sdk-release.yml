@@ -1,14 +1,6 @@
-name: SDK
+name: SDK Release
 
 on:
-  pull_request:
-    paths:
-      - "python/**"
-      - "rust/**"
-      - "ffi/**"
-      - "CMakeLists.txt"
-      - "VERSION"
-      - ".github/workflows/release.yml"
   push:
     branches:
       - main
@@ -17,7 +9,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ── build + test (always) ──────────────────────────────────────
+  # ── build + test ─────────────────────────────────────────────────
   build-and-test:
     runs-on: ubuntu-latest
     permissions:
@@ -31,7 +23,6 @@ jobs:
 
     outputs:
       version: ${{ steps.read_version.outputs.version }}
-      is_release: ${{ steps.detect.outputs.is_release }}
 
     steps:
       - uses: actions/checkout@v4
@@ -45,15 +36,6 @@ jobs:
       - name: Configure Git safe directory
         run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - name: Detect if release
-        id: detect
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "is_release=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_release=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Read version
         id: read_version
         run: |
@@ -63,7 +45,7 @@ jobs:
           echo "Version: $VER"
 
       - name: Sync version files and push
-        if: steps.detect.outputs.is_release == 'true' && github.event_name == 'push'
+        if: github.event_name == 'push'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -75,14 +57,13 @@ jobs:
           git push origin HEAD:main
 
       - name: Sync version (manual, no push)
-        if: steps.detect.outputs.is_release == 'true' && github.event_name != 'push'
+        if: github.event_name == 'workflow_dispatch'
         run: |
           sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" python/pyproject.toml
           sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" rust/eloqstore-sys/Cargo.toml
           sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" rust/eloqstore/Cargo.toml
 
       - name: Validate release tag
-        if: steps.detect.outputs.is_release == 'true'
         run: |
           TAG="v${VERSION}"
           if git rev-parse "${TAG}" >/dev/null 2>&1; then
@@ -117,9 +98,9 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /github/home/.cache/ccache
-          key: ${{ runner.os }}-sdk-ccache-v2-${{ hashFiles('CMakeLists.txt', 'ffi/**', 'include/**', 'src/**', 'rust/eloqstore-sys/**', 'python/build_hooks.py') }}
+          key: ${{ runner.os }}-sdk-ccache-v3-${{ hashFiles('CMakeLists.txt', 'ffi/**', 'include/**', 'src/**', 'rust/eloqstore-sys/**', 'python/build_hooks.py') }}
           restore-keys: |
-            ${{ runner.os }}-sdk-ccache-v1-
+            ${{ runner.os }}-sdk-ccache-v3-
 
       - name: Reset ccache stats
         run: ccache --zero-stats || true
@@ -128,10 +109,6 @@ jobs:
         run: |
           python3 -m pip install build pytest wheel
           python3 -m build --wheel
-          for whl in dist/eloqstore-*-linux_x86_64.whl; do
-            python3 -m wheel tags --platform-tag manylinux_2_31_x86_64 "$whl"
-            rm "$whl"
-          done
         working-directory: ${{ github.workspace }}/python
 
       - name: Run Python tests
@@ -157,25 +134,32 @@ jobs:
         run: cargo test -p eloqstore --test integration_test -- --nocapture --test-threads=1
         working-directory: ${{ github.workspace }}/rust
 
-      - name: Check Rust FFI package
-        run: cargo package -p eloqstore-sys --allow-dirty --no-verify
+      - name: Package Rust crates
+        run: |
+          cargo package -p eloqstore-sys --allow-dirty --no-verify
+          cargo package -p eloqstore --allow-dirty --no-verify
         working-directory: ${{ github.workspace }}/rust
 
-      - name: Upload wheel artifact
-        if: steps.detect.outputs.is_release == 'true'
+      - name: Upload Python wheel artifact
         uses: actions/upload-artifact@v4
         with:
           name: python-wheel
           path: python/dist/*.whl
 
+      - name: Upload Rust crates artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-crates
+          path: rust/target/package/*.crate
+
       - name: Show ccache stats
         if: always()
         run: ccache --show-stats || true
 
-  # ── PyPI publish (release only, bare metal for OIDC) ────────────
+  # ── PyPI publish (bare metal for OIDC) ──────────────────────────
   python-publish:
     needs: build-and-test
-    if: needs.build-and-test.outputs.is_release == 'true' && success()
+    if: success()
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -190,10 +174,10 @@ jobs:
           packages-dir: dist/
           skip-existing: true
 
-  # ── Rust publish (release only, bare metal) ─────────────────────
+  # ── Rust publish (bare metal) ───────────────────────────────────
   rust-publish:
     needs: build-and-test
-    if: needs.build-and-test.outputs.is_release == 'true' && success()
+    if: success()
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -228,10 +212,10 @@ jobs:
         env:
           CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
 
-  # ── tag + GitHub Release (release only) ────────────────────────
+  # ── tag + GitHub Release ────────────────────────────────────────
   tag-and-release:
     needs: [build-and-test, python-publish, rust-publish]
-    if: needs.build-and-test.outputs.is_release == 'true' && success()
+    if: success()
     runs-on: ubuntu-latest
     permissions:
       contents: write
