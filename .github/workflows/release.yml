@@ -21,7 +21,7 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
     env:
       CCACHE_DIR: /github/home/.cache/ccache
       CCACHE_MAXSIZE: 1G
@@ -61,6 +61,25 @@ jobs:
           echo "version=${VER}" >> "$GITHUB_OUTPUT"
           echo "VERSION=${VER}" >> "$GITHUB_ENV"
           echo "Version: $VER"
+
+      - name: Sync version files and push
+        if: steps.detect.outputs.is_release == 'true' && github.event_name == 'push'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" python/pyproject.toml
+          sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" rust/eloqstore-sys/Cargo.toml
+          sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" rust/eloqstore/Cargo.toml
+          git add python/pyproject.toml rust/eloqstore-sys/Cargo.toml rust/eloqstore/Cargo.toml
+          git commit -m "Sync version to ${VERSION} [skip ci]" || true
+          git push origin HEAD:main
+
+      - name: Sync version (manual, no push)
+        if: steps.detect.outputs.is_release == 'true' && github.event_name != 'push'
+        run: |
+          sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" python/pyproject.toml
+          sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" rust/eloqstore-sys/Cargo.toml
+          sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" rust/eloqstore/Cargo.toml
 
       - name: Validate release tag
         if: steps.detect.outputs.is_release == 'true'
@@ -104,9 +123,6 @@ jobs:
 
       - name: Reset ccache stats
         run: ccache --zero-stats || true
-
-      - name: Set Python SDK version
-        run: sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" python/pyproject.toml
 
       - name: Build Python wheel
         run: |
@@ -188,13 +204,6 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Set Rust crate versions
-        run: |
-          VER='${{ needs.build-and-test.outputs.version }}'
-          sed -i "s/^version = \"[^\"]*\"/version = \"${VER}\"/" rust/eloqstore-sys/Cargo.toml
-          sed -i "s/^version = \"[^\"]*\"/version = \"${VER}\"/" rust/eloqstore/Cargo.toml
-        working-directory: ${{ github.workspace }}
-
       - name: Publish eloqstore-sys to crates.io
         run: |
           cargo publish -p eloqstore-sys --no-verify --allow-dirty --token "${CRATES_IO_TOKEN}" 2>&1 | tee /tmp/cargo-pub.log
@@ -249,6 +258,8 @@ jobs:
 
       - name: Create and push tag
         run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
           TAG="v${{ needs.build-and-test.outputs.version }}"
           git tag -a "${TAG}" -m "Release ${TAG}"
           git push origin "${TAG}"
