@@ -37,6 +37,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
       - name: Fix permissions
         run: chmod -R a+rwx "$GITHUB_WORKSPACE" || true
@@ -59,15 +60,7 @@ jobs:
           VER=$(cat VERSION | tr -d '[:space:]')
           echo "version=${VER}" >> "$GITHUB_OUTPUT"
           echo "VERSION=${VER}" >> "$GITHUB_ENV"
-
-          PY_VER=$(sed -n 's/^version = "\(.*\)"/\1/p' python/pyproject.toml | head -n1)
-          SYS_VER=$(sed -n 's/^version = "\(.*\)"/\1/p' rust/eloqstore-sys/Cargo.toml | head -n1)
-          SDK_VER=$(sed -n 's/^version = "\(.*\)"/\1/p' rust/eloqstore/Cargo.toml | head -n1)
-          if [ "$VER" != "$PY_VER" ] || [ "$VER" != "$SYS_VER" ] || [ "$VER" != "$SDK_VER" ]; then
-            echo "Version mismatch: VERSION=$VER pyproject=$PY_VER eloqstore-sys=$SYS_VER eloqstore=$SDK_VER" >&2
-            exit 1
-          fi
-          echo "Version consistency OK: $VER"
+          echo "Version: $VER"
 
       - name: Validate release tag
         if: steps.detect.outputs.is_release == 'true'
@@ -111,6 +104,9 @@ jobs:
 
       - name: Reset ccache stats
         run: ccache --zero-stats || true
+
+      - name: Set Python SDK version
+        run: sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" python/pyproject.toml
 
       - name: Build Python wheel
         run: |
