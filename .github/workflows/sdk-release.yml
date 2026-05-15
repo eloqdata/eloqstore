@@ -40,6 +40,10 @@ jobs:
         id: read_version
         run: |
           VER=$(cat VERSION | tr -d '[:space:]')
+          if ! echo "${VER}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?(\+[a-zA-Z0-9.]+)?$'; then
+            echo "VERSION '${VER}' is not valid semver (X.Y.Z format required)" >&2
+            exit 1
+          fi
           echo "version=${VER}" >> "$GITHUB_OUTPUT"
           echo "VERSION=${VER}" >> "$GITHUB_ENV"
           echo "Version: $VER"
@@ -59,6 +63,10 @@ jobs:
       - name: Sync version (manual, no push)
         if: github.event_name == 'workflow_dispatch'
         run: |
+          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+            echo "workflow_dispatch is only allowed from the main branch (current: ${GITHUB_REF})" >&2
+            exit 1
+          fi
           sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" python/pyproject.toml
           sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" rust/eloqstore-sys/Cargo.toml
           sed -i "s/^version = \"[^\"]*\"/version = \"${VERSION}\"/" rust/eloqstore/Cargo.toml
@@ -66,8 +74,8 @@ jobs:
       - name: Validate release tag
         run: |
           TAG="v${VERSION}"
-          if git rev-parse "${TAG}" >/dev/null 2>&1; then
-            echo "Tag ${TAG} already exists" >&2
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists on remote" >&2
             exit 1
           fi
           echo "Tag ${TAG} available"
@@ -172,6 +180,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -187,6 +197,20 @@ jobs:
         working-directory: ${{ github.workspace }}/rust
         env:
           CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+
+      - name: Wait for eloqstore-sys to be indexed
+        run: |
+          VER='${{ needs.build-and-test.outputs.version }}'
+          for i in $(seq 1 30); do
+            if curl -fsSL "https://crates.io/api/v1/crates/eloqstore-sys/${VER}" >/dev/null 2>&1; then
+              echo "eloqstore-sys ${VER} is indexed"
+              exit 0
+            fi
+            echo "Waiting for eloqstore-sys ${VER} (attempt $i/30)..."
+            sleep 10
+          done
+          echo "Timed out waiting for eloqstore-sys ${VER}" >&2
+          exit 1
 
       - name: Publish eloqstore to crates.io
         run: |
@@ -262,4 +286,4 @@ jobs:
             --notes-file release_notes.md \
             --repo '${{ github.repository }}'
         env:
-          GH_TOKEN: ${{ github.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
