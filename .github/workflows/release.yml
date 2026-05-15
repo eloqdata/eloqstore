@@ -13,12 +13,7 @@ on:
     branches:
       - main
     paths:
-      - "python/**"
-      - "rust/**"
-      - "ffi/**"
-      - "CMakeLists.txt"
       - "VERSION"
-      - ".github/workflows/release.yml"
   workflow_dispatch:
 
 jobs:
@@ -181,6 +176,7 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+          skip-existing: true
 
   # ── Rust publish (release only, bare metal) ─────────────────────
   rust-publish:
@@ -216,7 +212,13 @@ jobs:
           CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
 
       - name: Publish eloqstore to crates.io
-        run: cargo publish -p eloqstore --no-verify --allow-dirty --token "${CRATES_IO_TOKEN}"
+        run: |
+          cargo publish -p eloqstore --no-verify --allow-dirty --token "${CRATES_IO_TOKEN}" 2>&1 | tee /tmp/cargo-pub2.log
+          rc=${PIPESTATUS[0]}
+          if [ $rc -ne 0 ]; then
+            grep -q "already exists" /tmp/cargo-pub2.log && exit 0
+            exit $rc
+          fi
         working-directory: ${{ github.workspace }}/rust
         env:
           CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
