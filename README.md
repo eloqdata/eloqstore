@@ -201,6 +201,18 @@ ctest --test-dir build/tests/
 ./build/benchmark/simple_bench --kvoptions=./benchmark/opts_append.ini --workload=write-read --kv_size=1024 --batch_size=20000 --max_key=10000000 --read_per_part=4 --partitions=1
 ```
 
+### Install git hooks
+
+```shell
+bash scripts/setup-hooks.sh
+```
+
+This installs a pre-commit hook that:
+- Auto-syncs `pyproject.toml` / `Cargo.toml` from `VERSION`, so SDK packages always match the repo version.
+- (Future: auto-format C++ code.)
+
+Run once after cloning. To bypass the hook temporarily: `git commit --no-verify`.
+
 ### Install Format Tool
 
 ```shell 
