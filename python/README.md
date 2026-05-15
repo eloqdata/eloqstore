@@ -1,64 +1,24 @@
-# EloqStore Python SDK
+# eloqstore — Python SDK
 
-This directory contains the first Python SDK for EloqStore.
+[![PyPI](https://img.shields.io/pypi/v/eloqstore)](https://pypi.org/project/eloqstore/)
+[![Python](https://img.shields.io/pypi/pyversions/eloqstore)](https://pypi.org/project/eloqstore/)
 
-## Status
+Python SDK for [EloqStore](https://github.com/eloqdata/eloqstore), a high-performance hybrid-tier key-value storage engine. Combines object storage (S3) with local NVMe SSDs for exceptional write throughput and sub-millisecond read latency.
 
-The SDK is currently intended for local development and embedded usage.
-It wraps the repository's C API shared library, `eloqstore_capi`.
-
-## Build the shared library
-
-From the repository root:
+## Installation
 
 ```bash
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build --target eloqstore_capi -j8
+pip install eloqstore
 ```
 
-The resulting library is typically:
+Requires Linux kernel 6.8+ (uses `io_uring`).
 
-- `build/libeloqstore_capi.so`
-
-## Install the Python package
-
-From the `python/` directory:
-
-```bash
-pip install -e .
-```
-
-To build a distributable wheel that bundles `libeloqstore_capi.so`:
-
-```bash
-python -m pip install build
-python -m build --wheel
-```
-
-The wheel build runs CMake against the repository root and embeds the
-resulting shared library under `eloqstore/.libs/`.
-
-If the shared library is not in a default search location, point the SDK
-at it explicitly:
-
-```bash
-export ELOQSTORE_PY_LIB=/abs/path/to/libeloqstore_capi.so
-```
-
-## Example
+## Quick Start
 
 ```python
 from eloqstore import Client, Options
 
-client = Client(
-    Options(
-        store_paths=["/tmp/eloqstore"],
-        table_name="example",
-        partition_id=0,
-        num_threads=1,
-    )
-)
-
+client = Client(Options(table_name="demo", partition_id=0, num_threads=1))
 client.put("hello", b"world")
 assert client.get("hello") == b"world"
 assert client.exists("hello")
@@ -66,10 +26,71 @@ client.delete("hello")
 client.close()
 ```
 
-## Example scripts
+## Disk Persistence
 
-Under `python/examples/`:
+```python
+from eloqstore import Client, Options
 
-- `basic_usage.py`: in-memory embedded usage
-- `disk_persistence.py`: local disk mode with reopen/persistence
-- `ini_branch_usage.py`: loading options from ini and starting a named branch
+client = Client(
+    Options(
+        store_paths=["/data/eloqstore"],
+        table_name="mydb",
+        partition_id=0,
+        num_threads=4,
+    )
+)
+client.put("key", b"value")
+client.close()
+# Data persists — reopen later with the same store_paths
+```
+
+## INI Configuration
+
+```python
+from eloqstore import Client, Options
+
+client = Client(
+    Options(
+        store_paths=["/data/eloqstore"],
+        options_path="/etc/eloqstore.ini",
+        table_name="mydb",
+        partition_id=0,
+        branch="feature-x",
+        term=7,
+    )
+)
+```
+
+## API
+
+| Method | Description |
+|---|---|
+| `Client(options)` | Create a client with `Options` |
+| `put(key, value, *, timestamp)` | Upsert a key-value pair |
+| `get(key)` | Get value by key, returns `None` if missing |
+| `get_into(key, out_buffer)` | Read value into a pre-allocated buffer |
+| `exists(key)` | Check if key exists |
+| `delete(key, *, timestamp)` | Delete a key |
+| `batch_put(items, *, timestamp)` | Batch upsert multiple key-value pairs |
+| `batch_get(keys)` | Batch get multiple values |
+| `batch_delete(keys, *, timestamp)` | Batch delete multiple keys |
+| `close()` | Close the store, release resources |
+
+## Building from Source
+
+```bash
+cd python
+python -m pip install build
+python -m build --wheel
+pip install dist/*.whl
+```
+
+If the shared library is not auto-discovered, set:
+
+```bash
+export ELOQSTORE_PY_LIB=/path/to/libeloqstore_capi.so
+```
+
+## License
+
+BSL 2.0 or AGPL 3.0 (dual-licensed). See [LICENSE.md](https://github.com/eloqdata/eloqstore/blob/main/LICENSE.md).
