@@ -121,8 +121,9 @@ jobs:
         run: |
           python3 -m pip install build pytest wheel
           python3 -m build --wheel
-          for whl in dist/eloqstore-*.whl; do
+          for whl in dist/eloqstore-*-linux_x86_64.whl; do
             python3 -m wheel tags --platform-tag manylinux_2_31_x86_64 "$whl"
+            rm "$whl"
           done
         working-directory: ${{ github.workspace }}/python
 
