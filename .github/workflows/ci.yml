@@ -10,72 +10,140 @@ on:
       - ready_for_review
     branches:
       - main
+  workflow_dispatch:
 
 jobs:
   test:
-    if: ${{ github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'ci-approved') }}
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'ci-approved')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
+    env:
+      CCACHE_DIR: /github/home/.cache/ccache
+      CCACHE_MAXSIZE: 1G
     container:
       image: eloqdata/eloq-dev-ci-ubuntu2404:latest
       options: --user root --security-opt seccomp=unconfined
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
       - name: Fix permissions
-        run: |
-          chmod -R a+rwx $GITHUB_WORKSPACE || true
+        run: chmod -R a+rwx "$GITHUB_WORKSPACE" || true
 
       - name: Configure Git safe directory
-        run: |
-          git config --global --add safe.directory $GITHUB_WORKSPACE
+        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+
+      # ── C++ core engine ──────────────────────────────────────────
 
       - name: Configure CMake
         run: |
-          mkdir -p build
           cmake -B build -S . \
             -DCMAKE_BUILD_TYPE=Debug \
             -DSKIP_CREATE_BUCKET=ON
 
-      - name: Build
-        run: |
-          cmake --build build -j$(nproc)
+      - name: Build C++ engine
+        run: cmake --build build -j$(nproc)
 
       - name: Install and start MinIO
         run: |
-          # Download MinIO server
           wget -q https://dl.min.io/server/minio/release/linux-amd64/minio
           chmod +x minio
-          # Start MinIO server in background
           mkdir -p /tmp/minio-data
-          ./minio server /tmp/minio-data --address :9900  --console-address ":9001" &
+          ./minio server /tmp/minio-data --address :9900 --console-address ":9001" &
           MINIO_PID=$!
-          # Wait for MinIO to be ready
           for i in {1..30}; do
             if curl -fsS http://127.0.0.1:9900/minio/health/ready >/dev/null; then
               break
             fi
             sleep 1
           done
-          echo "MINIO_PID=$MINIO_PID" >> $GITHUB_ENV
+          echo "MINIO_PID=$MINIO_PID" >> "$GITHUB_ENV"
 
-      - name: Run unit tests
+      - name: Run C++ unit tests
+        run: ctest --test-dir build/tests/ --output-on-failure -V
+
+      # ── Python SDK ────────────────────────────────────────────────
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache pip downloads
+        uses: actions/cache@v4
+        with:
+          path: /github/home/.cache/pip
+          key: ${{ runner.os }}-ci-pip-${{ hashFiles('python/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-ci-pip-
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: /github/home/.cache/ccache
+          key: ${{ runner.os }}-ci-ccache-${{ hashFiles('CMakeLists.txt', 'ffi/**', 'include/**', 'src/**', 'rust/eloqstore-sys/**', 'python/build_hooks.py') }}
+          restore-keys: |
+            ${{ runner.os }}-ci-ccache-
+
+      - name: Reset ccache stats
+        run: ccache --zero-stats || true
+
+      - name: Build Python wheel
         run: |
-          ctest --test-dir build/tests/ --output-on-failure -V
+          python3 -m pip install build pytest wheel
+          python3 -m build --wheel
+        working-directory: ${{ github.workspace }}/python
 
+      - name: Run Python tests
+        run: |
+          ELOQSTORE_PY_LIB="$GITHUB_WORKSPACE/python/build/native/libeloqstore_capi.so" \
+          PYTHONPATH="$GITHUB_WORKSPACE/python/src" \
+          python3 -m pytest \
+            "$GITHUB_WORKSPACE/python/tests/test_import.py" \
+            "$GITHUB_WORKSPACE/python/tests/test_client_integration.py"
 
-      - name: Build Rust SDK with static linking
+      - name: Verify Python wheel install
+        run: |
+          python3 -m pip install --no-deps --target /tmp/eloqstore-wheel-test python/dist/*.whl
+          PYTHONPATH=/tmp/eloqstore-wheel-test python3 - <<'PY'
+          from eloqstore import Client, Options
+          client = Client(Options(table_name="demo", partition_id=0, num_threads=1))
+          client.put("k", b"v")
+          assert client.get("k") == b"v"
+          client.close()
+          PY
+
+      # ── Rust SDK ──────────────────────────────────────────────────
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            rust -> target
+
+      - name: Build Rust SDK static example
         run: |
           cd rust
-          rustup default stable
           ELOQSTORE_STATIC_EXE=1 cargo build --release --example basic_usage
           ./target/release/examples/basic_usage
+
+      - name: Run Rust integration tests
+        run: cargo test -p eloqstore --test integration_test -- --nocapture --test-threads=1
+        working-directory: ${{ github.workspace }}/rust
+
+      # ── cleanup ───────────────────────────────────────────────────
+
+      - name: Show ccache stats
+        if: always()
+        run: ccache --show-stats || true
 
       - name: Remove ci-approved label after run
         if: ${{ always() }}
