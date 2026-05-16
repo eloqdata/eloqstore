@@ -45,10 +45,26 @@ struct MemChunk
  *     the new top, before that Push's release-CAS on `head_`; reads are
  *     performed by the Pop (TryGetSegment) that observes i as the top.
  *
- * Storing successors in a separate array (rather than in the segment's own
- * memory) is still important: the caller may write arbitrary data into a
- * segment it owns, and that data must never be reinterpreted as free-list
- * metadata.
+ * Why successors_ is a separate array (not the first 4 bytes of each
+ * segment):
+ *
+ *   - C++ data race. There is a window between a popper's acquire-load
+ *     of head_ and its CAS where another thread can pop the same
+ *     segment and hand it to a caller that immediately starts writing
+ *     I/O bytes into it (or queues a kernel io_uring fixed write). With
+ *     inline metadata the popper's relaxed-load of the segment's first
+ *     4 bytes would race with those non-atomic writes -- a data race in
+ *     the C++ memory model, hence UB, even though the failed CAS would
+ *     recover correctness in practice. A separate array keeps the next-
+ *     pointer slot in memory that only Push/Pop ever touch atomically.
+ *
+ *   - Cache locality under io_uring DMA. When the caller's intent is
+ *     io_uring_prep_*_fixed I/O (the common case here), the kernel
+ *     writes segment bytes via DMA and the CPU never pulls those cache
+ *     lines into L1. Inline metadata would force every Pop to fetch the
+ *     first cache line of the segment just to read the next index. The
+ *     separate array (4 bytes * total_segments_, dense and small) keeps
+ *     segment cache lines cold for the DMA path.
  *
  * Memory ordering: Recycle stores successors_[i] then release-CASes head_;
  * TryGetSegment acquire-loads head_ and then loads successors_[top] under
