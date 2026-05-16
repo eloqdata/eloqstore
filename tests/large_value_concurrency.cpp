@@ -178,20 +178,18 @@ public:
     {
         for (auto &entry : req.batch_)
         {
-            if (entry.HasLargeValue())
-            {
-                entry.large_val_.Recycle(memories_[shard_id].get(),
-                                         bases_[shard_id]);
-            }
+            entry.RecycleLargeValue(memories_[shard_id].get(),
+                                    bases_[shard_id]);
         }
     }
 
     void RecycleRead(eloqstore::ReadRequest &req, size_t shard_id)
     {
-        if (!req.large_value_.Fragments().empty())
+        if (auto *iosb =
+                std::get_if<eloqstore::IoStringBuffer>(&req.large_value_dest_);
+            iosb != nullptr && !iosb->Fragments().empty())
         {
-            req.large_value_.Recycle(memories_[shard_id].get(),
-                                     bases_[shard_id]);
+            iosb->Recycle(memories_[shard_id].get(), bases_[shard_id]);
         }
     }
 
@@ -370,6 +368,9 @@ TEST_CASE("multi-shard interleaved large-value workload",
                 // Read. Validate against the last-write expected entry.
                 eloqstore::ReadRequest r;
                 r.SetArgs(tbl, key);
+                r.large_value_dest_.emplace<eloqstore::IoStringBuffer>();
+                auto &iosb =
+                    std::get<eloqstore::IoStringBuffer>(r.large_value_dest_);
                 store->ExecSync(&r);
                 total_reads.fetch_add(1, std::memory_order_relaxed);
 
@@ -384,8 +385,7 @@ TEST_CASE("multi-shard interleaved large-value workload",
                     continue;
                 }
                 if (r.Error() != eloqstore::KvError::NoError ||
-                    !h.VerifyLargeValue(
-                        r.large_value_, it->second.size, it->second.seed))
+                    !h.VerifyLargeValue(iosb, it->second.size, it->second.seed))
                 {
                     read_failures.fetch_add(1, std::memory_order_relaxed);
                 }
@@ -462,10 +462,12 @@ TEST_CASE("reader snapshot survives overwrite of same key",
     // Read the first version and HOLD the IoStringBuffer.
     eloqstore::ReadRequest r1;
     r1.SetArgs(tbl, "k");
+    r1.large_value_dest_.emplace<eloqstore::IoStringBuffer>();
+    auto &iosb1 = std::get<eloqstore::IoStringBuffer>(r1.large_value_dest_);
     store->ExecSync(&r1);
     REQUIRE(r1.Error() == eloqstore::KvError::NoError);
-    REQUIRE(r1.large_value_.Size() == size);
-    REQUIRE(h.VerifyLargeValue(r1.large_value_, size, seed_a));
+    REQUIRE(iosb1.Size() == size);
+    REQUIRE(h.VerifyLargeValue(iosb1, size, seed_a));
 
     // Overwrite the same key with different bytes WHILE r1 still owns its
     // segments. This exercises the snapshot-per-task guarantee — the in-flight
@@ -473,16 +475,18 @@ TEST_CASE("reader snapshot survives overwrite of same key",
     WriteLargeSync(store, h, 0, tbl, "k", size, seed_b, /*ts=*/2);
 
     // r1's bytes must still match seed_a (the snapshot we read earlier).
-    REQUIRE(h.VerifyLargeValue(r1.large_value_, size, seed_a));
+    REQUIRE(h.VerifyLargeValue(iosb1, size, seed_a));
     h.RecycleRead(r1, 0);
 
     // A fresh read must observe the new bytes (seed_b).
     eloqstore::ReadRequest r2;
     r2.SetArgs(tbl, "k");
+    r2.large_value_dest_.emplace<eloqstore::IoStringBuffer>();
+    auto &iosb2 = std::get<eloqstore::IoStringBuffer>(r2.large_value_dest_);
     store->ExecSync(&r2);
     REQUIRE(r2.Error() == eloqstore::KvError::NoError);
-    REQUIRE(r2.large_value_.Size() == size);
-    REQUIRE(h.VerifyLargeValue(r2.large_value_, size, seed_b));
+    REQUIRE(iosb2.Size() == size);
+    REQUIRE(h.VerifyLargeValue(iosb2, size, seed_b));
     h.RecycleRead(r2, 0);
 
     store->Stop();
@@ -500,19 +504,31 @@ TEST_CASE("reader snapshot survives overwrite of same key",
 // the worker's last-write expectation (i.e. no reader saw a segment whose
 // backing file had been GC'd or compacted out from under it).
 //
-// Known flake (~4% at the 256MB/shard pool): latent EloqStore bug in the
-// concurrent Compact() path. Reproducer: two shards each run Compact()
-// simultaneously while workers push new writes; the crash is a SIGSEGV
-// inside EloqStore, not in the test. The failure logs always end with
-// back-to-back "begin compaction on lvc_gc.X" lines on different shards
-// just before the signal. Catch2 attributes the signal to whichever
-// REQUIRE was last on the coroutine's stack (typically the test-helper
-// REQUIRE in WriteLargeSync/DeleteSync after ExecSync returned), but the
-// actual crash site is in BackgroundWrite::Compact / DoCompactSegmentFile.
-// The crash rate was much higher (~13%) at the very tight write/read loop
-// and is held down (not eliminated) by the 200us kOpPause below; eviction
-// throttling at smaller pool sizes masked the bug entirely. Reducing the
-// pool size is the knob to hide it again; fixing it belongs in EloqStore.
+// Was a flaky test (~40-60% fail rate at 256MB/shard pool) until two
+// related empty-wipe bugs were fixed: (a) AppendAllocator::UpdateStat
+// now snaps max_fp_id up so SpaceSize() == 0 after the empty-mapping
+// branch of DoCompact{Data,Segment}File, preventing the futile
+// CompactIfNeeded re-trigger loop on a rmdir'd partition; (b)
+// BackgroundWrite::Compact() short-circuits when both mappings are
+// empty and both allocators report SpaceSize==0, preventing a stale
+// CompactRequest (queued legitimately by a writer's CompactIfNeeded
+// before another path -- typically an ArchiveRequest's inline
+// CreateArchive::needs_compact -- already wiped the partition) from
+// running TriggerFileGC -> ListLocalFiles on the rmdir'd directory and
+// SIGABRTing from std::filesystem::filesystem_error.
+//
+// Residual: a separate ~1% hang remains that is NOT the empty-wipe
+// class. Captured signature (multiple samples): one shard has inflight
+// >=1 io_uring SQEs (READ_FIXED, WRITE_FIXED, READ, or WRITE) with
+// IORING_SQ_TASKRUN asserted, while io_uring_enter(GETEVENTS) is called
+// thousands of times per second to no effect. A task spins in
+// GlobalRegisteredMemory::GetSegment waiting on segments held by parked
+// tasks whose CQEs never arrive. Reproduces across DEFER_TASKRUN on/off,
+// liburing 2.11 vs 2.15, fixed vs non-fixed I/O, and shard counts 1
+// and 2. Affects both 4 KiB page I/O and 256 KiB segment I/O.
+// Diagnosed as a kernel-side io_uring CQE-delivery issue on
+// 6.6.87.2-microsoft-standard-WSL2. Out of scope for the empty-wipe
+// fix; tracked separately in the project memory note.
 // ---------------------------------------------------------------------------
 TEST_CASE("large-value workload survives concurrent compaction and archives",
           "[large-value][concurrency][gc]")
@@ -606,6 +622,9 @@ TEST_CASE("large-value workload survives concurrent compaction and archives",
             {
                 eloqstore::ReadRequest r;
                 r.SetArgs(tbl, key);
+                r.large_value_dest_.emplace<eloqstore::IoStringBuffer>();
+                auto &iosb =
+                    std::get<eloqstore::IoStringBuffer>(r.large_value_dest_);
                 store->ExecSync(&r);
 
                 auto it = live_map.find(key);
@@ -619,8 +638,7 @@ TEST_CASE("large-value workload survives concurrent compaction and archives",
                     continue;
                 }
                 if (r.Error() != eloqstore::KvError::NoError ||
-                    !h.VerifyLargeValue(
-                        r.large_value_, it->second.size, it->second.seed))
+                    !h.VerifyLargeValue(iosb, it->second.size, it->second.seed))
                 {
                     read_failures.fetch_add(1, std::memory_order_relaxed);
                 }
@@ -732,5 +750,225 @@ TEST_CASE("large-value workload survives concurrent compaction and archives",
     REQUIRE(total_archives.load() > 0);
     store->Stop();
     h.AssertPoolRestored();
+    CleanupStore(opts);
+}
+
+// ===========================================================================
+// Pinned-mode multi-shard tail-scratch isolation (Phase 7)
+// ===========================================================================
+namespace
+{
+// Owns one 4 KiB-aligned chunk per shard. Each chunk's end serves as the
+// cross-boundary source for that shard's worker, so the rounded-up tail
+// of a mid-segment value sits past the chunk and forces scratch fallback.
+class PinnedMultiShardHarness
+{
+public:
+    static constexpr size_t kChunkSize = 16ULL * 1024 * 1024;
+
+    PinnedMultiShardHarness(uint32_t seg_size, uint16_t num_shards)
+        : seg_size_(seg_size), num_shards_(num_shards)
+    {
+        bases_.resize(num_shards_, nullptr);
+        for (uint16_t i = 0; i < num_shards_; ++i)
+        {
+            void *raw = nullptr;
+            REQUIRE(posix_memalign(&raw, 4096, kChunkSize) == 0);
+            REQUIRE(raw != nullptr);
+            std::memset(raw, 0, kChunkSize);
+            bases_[i] = static_cast<char *>(raw);
+        }
+    }
+
+    ~PinnedMultiShardHarness()
+    {
+        for (auto *b : bases_)
+        {
+            std::free(b);
+        }
+    }
+
+    uint32_t SegmentSize() const
+    {
+        return seg_size_;
+    }
+    uint16_t NumShards() const
+    {
+        return num_shards_;
+    }
+    char *Base(size_t i) const
+    {
+        return bases_[i];
+    }
+
+    std::vector<std::pair<char *, size_t>> Chunks() const
+    {
+        std::vector<std::pair<char *, size_t>> out;
+        out.reserve(bases_.size());
+        for (auto *b : bases_)
+            out.emplace_back(b, kChunkSize);
+        return out;
+    }
+
+    // Cross-boundary sub-range at the end of `shard_id`'s chunk. The
+    // rounded-up [ptr, ptr + ceil(size/seg)*seg) extends past the chunk so
+    // the pinned write hits the scratch fallback path.
+    std::pair<char *, size_t> CrossBoundaryAtChunkEnd(size_t shard_id,
+                                                      size_t size) const
+    {
+        REQUIRE(size > 0);
+        REQUIRE(size <= kChunkSize);
+        const size_t k = (size + seg_size_ - 1) / seg_size_;
+        REQUIRE(k * seg_size_ > size);
+        char *p = bases_[shard_id] + (kChunkSize - size);
+        return {p, size};
+    }
+
+private:
+    uint32_t seg_size_;
+    uint16_t num_shards_;
+    std::vector<char *> bases_;
+};
+
+eloqstore::KvOptions MakePinnedOpts(PinnedMultiShardHarness &h,
+                                    uint16_t pinned_tail_scratch_slots)
+{
+    eloqstore::KvOptions opts = append_opts;
+    opts.num_threads = h.NumShards();
+    opts.segment_size = h.SegmentSize();
+    opts.segments_per_file_shift = 3;
+    opts.buffer_pool_size = 16 * eloqstore::MB;
+    opts.write_buffer_size = 0;
+    opts.write_buffer_ratio = 0.0;
+    opts.pinned_memory_chunks = h.Chunks();
+    opts.gc_global_mem_size_per_shard = 32ULL * eloqstore::MB;
+    opts.pinned_tail_scratch_slots = pinned_tail_scratch_slots;
+    return opts;
+}
+
+void AsyncPinnedWrite(eloqstore::EloqStore *store,
+                      eloqstore::BatchWriteRequest &req,
+                      const eloqstore::TableIdent &tbl,
+                      const std::string &key,
+                      std::pair<char *, size_t> dst,
+                      std::string metadata,
+                      uint64_t ts)
+{
+    std::vector<eloqstore::WriteDataEntry> entries;
+    entries.emplace_back(
+        key,
+        std::move(metadata),
+        std::make_pair(static_cast<const char *>(dst.first), dst.second),
+        ts,
+        eloqstore::WriteOp::Upsert);
+    req.SetArgs(tbl, std::move(entries));
+    REQUIRE(store->ExecAsyn(&req));
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// Per-shard pool isolation: each shard's tail-scratch pool is independent.
+// The setup uses a small pool (`pinned_tail_scratch_slots = 2`) and submits
+// many more concurrent cross-boundary writes per shard than the pool can
+// hold simultaneously, on multiple shards in parallel. The architectural
+// invariant we exercise is that one shard's pool exhaustion (writes
+// waiting on `tail_scratch_waiting_`) does NOT block another shard's
+// writes: each shard owns its own pool.
+//
+// Assertions:
+//   - Every cross-boundary write succeeds on both shards (no deadlock,
+//     no spurious InvalidArgs).
+//   - Per-shard `TailScratchAcquireCount` equals exactly the number of
+//     cross-boundary writes routed to that shard -- proves the counter is
+//     per-shard, not aggregated, and that the pool drained correctly
+//     (each acquire was paired with a release).
+//   - A final cross-boundary write on each shard after quiescence succeeds
+//     and bumps that shard's counter by 1 -- proves the pool returned to a
+//     functional state (no slots permanently leaked).
+// ---------------------------------------------------------------------------
+TEST_CASE(
+    "multi-shard pinned writes use per-shard tail-scratch pools "
+    "independently",
+    "[large-value-concurrency][pinned][tail-scratch]")
+{
+    constexpr uint16_t kNumShards = 2;
+    constexpr uint16_t kSlotsPerShard = 2;  // small: easy to saturate
+    constexpr int kWritesPerShard = 16;     // >> slot count
+
+    PinnedMultiShardHarness h(kSegmentSize, kNumShards);
+    eloqstore::KvOptions opts = MakePinnedOpts(h, kSlotsPerShard);
+    eloqstore::EloqStore *store = InitStore(opts);
+
+    const size_t seg = h.SegmentSize();
+    const size_t vsz = seg + 4096;  // K=2, mid-segment, 4 KiB aligned
+    const std::string meta = "ms-pinned";
+
+    // Each worker:
+    //   - Picks a partition that hashes to its shard (partition_id %
+    //     num_shards == shard_id).
+    //   - Pre-fills its own chunk's end region once (no other thread
+    //     touches that buffer; safe to source many writes from it).
+    //   - Submits `kWritesPerShard` cross-boundary writes via ExecAsyn so
+    //     the shard's coroutine scheduler can run several in parallel;
+    //     more than `kSlotsPerShard` will end up waiting on
+    //     `tail_scratch_waiting_`. If the pools were shared across shards,
+    //     each shard's outstanding queue would block the other's progress
+    //     in lockstep.
+    //   - Waits on every request and checks the error code.
+    auto worker = [&](size_t shard_id)
+    {
+        eloqstore::TableIdent tbl{"msp", static_cast<uint32_t>(shard_id)};
+        auto dst = h.CrossBoundaryAtChunkEnd(shard_id, vsz);
+        // Pre-fill is local to this worker's chunk; no race with the other
+        // worker (it writes from a different chunk).
+        std::memset(dst.first, static_cast<int>('A' + shard_id), dst.second);
+
+        std::vector<eloqstore::BatchWriteRequest> reqs(kWritesPerShard);
+        for (int i = 0; i < kWritesPerShard; ++i)
+        {
+            std::string key =
+                "k_s" + std::to_string(shard_id) + "_" + std::to_string(i);
+            AsyncPinnedWrite(store, reqs[i], tbl, key, dst, meta, /*ts=*/1 + i);
+        }
+        for (int i = 0; i < kWritesPerShard; ++i)
+        {
+            reqs[i].Wait();
+            REQUIRE(reqs[i].Error() == eloqstore::KvError::NoError);
+        }
+    };
+
+    std::vector<std::thread> threads;
+    threads.reserve(kNumShards);
+    for (uint16_t s = 0; s < kNumShards; ++s)
+        threads.emplace_back(worker, s);
+    for (auto &t : threads)
+        t.join();
+
+    // Each shard's scratch counter equals exactly its workload, proving:
+    //   - Per-shard counters (no cross-shard aggregation).
+    //   - Every acquire was matched by a release (no slot leak).
+    for (uint16_t s = 0; s < kNumShards; ++s)
+    {
+        INFO("shard " << s);
+        REQUIRE(store->TailScratchAcquireCount(s) ==
+                static_cast<size_t>(kWritesPerShard));
+    }
+
+    // Post-quiescence write per shard: pool is functional, the new acquire
+    // bumps the counter by exactly 1 on that shard alone.
+    for (uint16_t s = 0; s < kNumShards; ++s)
+    {
+        const size_t pre = store->TailScratchAcquireCount(s);
+        eloqstore::TableIdent tbl{"msp", static_cast<uint32_t>(s)};
+        auto dst = h.CrossBoundaryAtChunkEnd(s, vsz);
+        eloqstore::BatchWriteRequest req;
+        AsyncPinnedWrite(store, req, tbl, "final", dst, meta, /*ts=*/1000);
+        req.Wait();
+        REQUIRE(req.Error() == eloqstore::KvError::NoError);
+        REQUIRE(store->TailScratchAcquireCount(s) == pre + 1);
+    }
+
+    store->Stop();
     CleanupStore(opts);
 }

@@ -2,8 +2,11 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstring>
 #include <limits>
 #include <memory>
+#include <span>
+#include <variant>
 
 #include "coding.h"
 #include "compression.h"
@@ -1465,13 +1468,137 @@ void BatchWriteTask::EnsureSegmentMapper()
 
 KvError BatchWriteTask::WriteLargeValue(const WriteDataEntry &entry)
 {
+    // Metadata travels in `val_` when the entry also carries a large value.
+    std::string_view metadata{entry.val_};
+
+    if (const IoStringBuffer *iosb =
+            std::get_if<IoStringBuffer>(&entry.large_val_);
+        iosb != nullptr)
+    {
+        const auto &fragments = iosb->Fragments();
+        const uint32_t num_segments = fragments.size();
+        std::vector<const char *> ptrs(num_segments);
+        std::vector<uint16_t> buf_indices(num_segments);
+        for (uint32_t i = 0; i < num_segments; ++i)
+        {
+            ptrs[i] = fragments[i].data_;
+            buf_indices[i] = fragments[i].buf_index_;
+        }
+        return WriteLargeValueSegments(
+            static_cast<uint32_t>(iosb->Size()), ptrs, buf_indices, metadata);
+    }
+
+    if (const auto *pinned =
+            std::get_if<std::pair<const char *, size_t>>(&entry.large_val_);
+        pinned != nullptr)
+    {
+        const uint32_t seg_size = Options()->segment_size;
+        const char *base = pinned->first;
+        const size_t size = pinned->second;
+        assert(base != nullptr);
+        assert(size > 0);
+        const uint32_t num_segments =
+            static_cast<uint32_t>((size + seg_size - 1) / seg_size);
+
+        // Writes always flush K = ceil(size / seg_size) full segments to
+        // disk -- segment files are allocated at seg_size granularity, and
+        // io_uring_prep_write_fixed in WriteSegments reads exactly seg_size
+        // bytes per request. The garbage past `size` that ends up on disk is
+        // skipped on read via the header's `actual_length` (small payloads)
+        // or Phase 6's `tail_size` (contiguous-pinned reads), so it is
+        // never surfaced to consumers.
+        //
+        // The caller's contract is "[base, base + size) is within one
+        // registered pinned chunk". When `size` doesn't divide seg_size, the
+        // final segment's read range extends to base + K*seg_size, which may
+        // fall outside the registered chunk. Two paths:
+        //   - Fast path (the common case): if the chunk has slack and
+        //     [base, base + K*seg_size) is fully inside it, write all K
+        //     segments directly from the caller's pinned memory.
+        //   - Fallback: the trailing region crosses the chunk boundary.
+        //     Acquire one segment-sized scratch slot from the tail-scratch
+        //     pool, copy the meaningful tail into it, zero-pad, and write
+        //     the final segment from the scratch slot instead. The first
+        //     K-1 segments still write from the caller's memory because
+        //     `(K-1) * seg_size < size` by the definition of K.
+        // Locate the registered pinned chunk that contains `base`. One
+        // linear scan yields the chunk's bounds and its buf_index; the
+        // contract checks below are then plain pointer arithmetic.
+        AsyncIoManager *io_mgr = IoMgr();
+        auto chunk = io_mgr->PinnedChunkFor(base);
+        if (!chunk)
+        {
+            return KvError::InvalidArgs;
+        }
+        const uint16_t base_buf_index = chunk->buf_index;
+        const char *chunk_end = chunk->base + chunk->size;
+        // The meaningful range must fit in one chunk.
+        if (base + size > chunk_end)
+        {
+            return KvError::InvalidArgs;
+        }
+        // Fast path when the rounded-up K * seg_size range also fits in the
+        // chunk; otherwise the final segment crosses the chunk boundary and
+        // we need a scratch slot.
+        const bool needs_scratch =
+            (base + static_cast<size_t>(num_segments) * seg_size > chunk_end);
+
+        std::vector<const char *> ptrs(num_segments);
+        std::vector<uint16_t> buf_indices(num_segments, base_buf_index);
+        for (uint32_t i = 0; i < num_segments; ++i)
+        {
+            ptrs[i] = base + static_cast<size_t>(i) * seg_size;
+        }
+
+        char *scratch_ptr = nullptr;
+        uint16_t scratch_buf_index = 0;
+        if (needs_scratch)
+        {
+            scratch_ptr = io_mgr->AcquireTailScratch(scratch_buf_index);
+            if (scratch_ptr == nullptr)
+            {
+                // Pool not allocated (pinned_tail_scratch_slots == 0); the
+                // caller's pinned range doesn't extend to K*seg_size, so we
+                // can't safely issue the last fixed write.
+                return KvError::InvalidArgs;
+            }
+            const size_t tail_meaningful =
+                size - static_cast<size_t>(num_segments - 1) * seg_size;
+            assert(tail_meaningful > 0 && tail_meaningful <= seg_size);
+            std::memcpy(scratch_ptr,
+                        base + static_cast<size_t>(num_segments - 1) * seg_size,
+                        tail_meaningful);
+            std::memset(
+                scratch_ptr + tail_meaningful, 0, seg_size - tail_meaningful);
+            ptrs[num_segments - 1] = scratch_ptr;
+            buf_indices[num_segments - 1] = scratch_buf_index;
+        }
+
+        KvError result = WriteLargeValueSegments(
+            static_cast<uint32_t>(size), ptrs, buf_indices, metadata);
+
+        if (needs_scratch)
+        {
+            io_mgr->ReleaseTailScratch(scratch_ptr);
+        }
+        return result;
+    }
+
+    // HasLargeValue() should gate calls; monostate here is a caller bug.
+    assert(false && "WriteLargeValue called on entry without a large value");
+    return KvError::InvalidArgs;
+}
+
+KvError BatchWriteTask::WriteLargeValueSegments(
+    uint32_t actual_length,
+    std::span<const char *> ptrs,
+    std::span<const uint16_t> buf_indices,
+    std::string_view metadata)
+{
+    assert(ptrs.size() == buf_indices.size());
     EnsureSegmentMapper();
 
-    const uint32_t seg_size = Options()->segment_size;
-    const IoStringBuffer &large_val = entry.large_val_;
-    const auto &fragments = large_val.Fragments();
-    const uint32_t num_segments = fragments.size();
-
+    const uint32_t num_segments = static_cast<uint32_t>(ptrs.size());
     large_value_content_.clear();
 
     // Allocate logical segment IDs and physical file segment IDs.
@@ -1496,8 +1623,8 @@ KvError BatchWriteTask::WriteLargeValue(const WriteDataEntry &entry)
         for (uint32_t i = 0; i < batch_size; ++i)
         {
             batch_fp_ids[i] = physical_ids[offset + i];
-            batch_ptrs[i] = fragments[offset + i].data_;
-            batch_buf_indices[i] = fragments[offset + i].buf_index_;
+            batch_ptrs[i] = ptrs[offset + i];
+            batch_buf_indices[i] = buf_indices[offset + i];
         }
         KvError err =
             IoMgr()->WriteSegments(tbl_ident_,
@@ -1507,23 +1634,24 @@ KvError BatchWriteTask::WriteLargeValue(const WriteDataEntry &entry)
         CHECK_KV_ERR(err);
     }
 
-    uint32_t actual_length = static_cast<uint32_t>(large_val.Size());
     EncodeLargeValueContent(actual_length,
                             {logical_ids.data(), num_segments},
-                            large_value_content_);
+                            large_value_content_,
+                            metadata);
     return KvError::NoError;
 }
 
 void BatchWriteTask::DelLargeValue(std::string_view encoded_content)
 {
-    uint32_t actual_length;
-    uint32_t max_segments =
-        (encoded_content.size() - sizeof(uint32_t)) / sizeof(PageId);
-    std::vector<PageId> segment_ids(max_segments);
-    uint32_t n =
-        DecodeLargeValueContent(encoded_content, actual_length, segment_ids);
+    auto header =
+        DecodeLargeValueHeader(encoded_content, Options()->segment_size);
+    assert(header.has_value());
+    std::vector<PageId> segment_ids(header->num_segments);
+    bool ok = DecodeLargeValueContent(encoded_content, *header, segment_ids);
+    assert(ok);
+    (void) ok;
     assert(cow_meta_.segment_mapper_ != nullptr);
-    for (uint32_t i = 0; i < n; ++i)
+    for (uint32_t i = 0; i < header->num_segments; ++i)
     {
         cow_meta_.segment_mapper_->FreePage(segment_ids[i]);
         RecordSegmentMappingDelete(segment_ids[i]);

@@ -169,13 +169,16 @@ KvError GetLargeValue(const TableIdent &tbl_id,
     assert(seg_mapping != nullptr);
     assert(global_mem != nullptr);
 
-    uint32_t actual_length;
-    uint32_t max_segments =
-        (encoded_content.size() - sizeof(uint32_t)) / sizeof(PageId);
-    std::vector<PageId> segment_ids(max_segments);
-    uint32_t num_segments =
-        DecodeLargeValueContent(encoded_content, actual_length, segment_ids);
-    if (num_segments == 0)
+    auto header =
+        DecodeLargeValueHeader(encoded_content, Options()->segment_size);
+    if (!header || header->num_segments == 0)
+    {
+        return KvError::Corrupted;
+    }
+    const uint32_t actual_length = header->actual_length;
+    const uint32_t num_segments = header->num_segments;
+    std::vector<PageId> segment_ids(num_segments);
+    if (!DecodeLargeValueContent(encoded_content, *header, segment_ids))
     {
         return KvError::Corrupted;
     }
@@ -227,30 +230,129 @@ KvError GetLargeValue(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError ResolveValue(const TableIdent &tbl_id,
-                     MappingSnapshot *mapping,
-                     DataPageIter &iter,
-                     std::string &value,
-                     const compression::DictCompression *compression,
-                     MappingSnapshot *seg_mapping,
-                     IoStringBuffer *large_value,
-                     GlobalRegisteredMemory *global_mem,
-                     uint16_t reg_mem_index_base,
-                     std::function<void()> yield)
+KvError GetLargeValueContiguous(const TableIdent &tbl_id,
+                                const MappingSnapshot *seg_mapping,
+                                std::string_view encoded_content,
+                                char *dst,
+                                size_t dst_size,
+                                AsyncIoManager *io_mgr)
+{
+    assert(seg_mapping != nullptr);
+    assert(io_mgr != nullptr);
+    assert(dst != nullptr);
+
+    const uint32_t segment_size = Options()->segment_size;
+    auto header = DecodeLargeValueHeader(encoded_content, segment_size);
+    if (!header || header->num_segments == 0)
+    {
+        return KvError::Corrupted;
+    }
+    const uint32_t num_segments = header->num_segments;
+    std::vector<PageId> segment_ids(num_segments);
+    if (!DecodeLargeValueContent(encoded_content, *header, segment_ids))
+    {
+        return KvError::Corrupted;
+    }
+
+    // dst_size must hold all-but-last segments fully and a 4 KiB-aligned
+    // tail. The tail size can be smaller than segment_size: the final
+    // ReadSegments request is issued with that smaller size, so the bytes
+    // past dst_size are never touched.
+    const size_t prefix_bytes =
+        static_cast<size_t>(num_segments - 1) * segment_size;
+    if (dst_size <= prefix_bytes ||
+        dst_size > static_cast<size_t>(num_segments) * segment_size)
+    {
+        return KvError::InvalidArgs;
+    }
+    const uint32_t tail_bytes = static_cast<uint32_t>(dst_size - prefix_bytes);
+    if ((tail_bytes & (4096u - 1u)) != 0)
+    {
+        return KvError::InvalidArgs;
+    }
+
+    // Single chunk per read is guaranteed by the caller: one
+    // BufIndexForAddress lookup at the base, reused for every segment.
+    const uint16_t buf_index = io_mgr->BufIndexForAddress(dst);
+    if (buf_index == std::numeric_limits<uint16_t>::max())
+    {
+        return KvError::InvalidArgs;
+    }
+    assert(io_mgr->BufIndexForAddress(dst + dst_size - 1) == buf_index);
+
+    std::vector<FilePageId> physical_ids(num_segments);
+    for (uint32_t i = 0; i < num_segments; ++i)
+    {
+        physical_ids[i] = seg_mapping->ToFilePage(segment_ids[i]);
+    }
+
+    for (uint32_t offset = 0; offset < num_segments;
+         offset += max_segments_batch)
+    {
+        const uint32_t batch_size = std::min(
+            static_cast<uint32_t>(max_segments_batch), num_segments - offset);
+        std::array<FilePageId, max_segments_batch> batch_fp_ids;
+        std::array<char *, max_segments_batch> batch_ptrs;
+        std::array<uint16_t, max_segments_batch> batch_buf_indices;
+        for (uint32_t i = 0; i < batch_size; ++i)
+        {
+            batch_fp_ids[i] = physical_ids[offset + i];
+            batch_ptrs[i] = dst + (offset + i) * segment_size;
+            batch_buf_indices[i] = buf_index;
+        }
+        // Only the batch that contains the final segment can ride a partial
+        // tail; pass tail_size = 0 (full reads) on every other batch.
+        const bool is_last_batch = (offset + batch_size == num_segments);
+        const uint32_t tail_size_arg =
+            (is_last_batch && tail_bytes != segment_size) ? tail_bytes : 0;
+        KvError err =
+            io_mgr->ReadSegments(tbl_id,
+                                 {batch_fp_ids.data(), batch_size},
+                                 {batch_ptrs.data(), batch_size},
+                                 {batch_buf_indices.data(), batch_size},
+                                 tail_size_arg);
+        if (err != KvError::NoError)
+        {
+            return err;
+        }
+    }
+    return KvError::NoError;
+}
+
+KvError ResolveValueOrMetadata(const TableIdent &tbl_id,
+                               MappingSnapshot *mapping,
+                               DataPageIter &iter,
+                               std::string &value,
+                               const compression::DictCompression *compression,
+                               bool extract_metadata)
 {
     if (iter.IsLargeValue())
     {
-        if (large_value == nullptr || global_mem == nullptr)
+        // Large entry: write the metadata trailer (or clear when absent).
+        // The K segment IDs are parsed but discarded -- the caller fetches
+        // the value bytes via GetLargeValue / GetLargeValueContiguous.
+        if (!extract_metadata)
         {
-            return KvError::InvalidArgs;
+            value.clear();
+            return KvError::NoError;
         }
-        return GetLargeValue(tbl_id,
-                             seg_mapping,
-                             iter.Value(),
-                             *large_value,
-                             global_mem,
-                             reg_mem_index_base,
-                             std::move(yield));
+        auto header =
+            DecodeLargeValueHeader(iter.Value(), Options()->segment_size);
+        if (!header || header->num_segments == 0)
+        {
+            return KvError::Corrupted;
+        }
+        if (header->metadata_length == 0)
+        {
+            value.clear();
+            return KvError::NoError;
+        }
+        if (!DecodeLargeValueContent(
+                iter.Value(), *header, /*segment_ids=*/{}, &value))
+        {
+            return KvError::Corrupted;
+        }
+        return KvError::NoError;
     }
 
     compression::CompressionType comp_type = iter.CompressionType();

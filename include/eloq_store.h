@@ -182,9 +182,32 @@ public:
 
     // output
     std::string value_;
-    IoStringBuffer large_value_;
     uint64_t ts_;
     uint64_t expire_ts_;
+
+    // Destination for the very-large-value bytes. The active alternative
+    // picks the read mode and the single container the value lands in:
+    //   std::monostate (default): metadata-only -- no segment reads. For
+    //     a non-large entry, `value_` receives the inline bytes; for a
+    //     large entry, `value_` receives the metadata blob (empty when
+    //     there is no metadata trailer).
+    //   IoStringBuffer: legacy zero-copy path. Dispatch allocates fragments
+    //     from the IoMgr's GlobalRegisteredMemory and appends them to this
+    //     buffer; the caller reads them back out of the variant after the
+    //     request completes.
+    //   std::pair<char *, size_t>: KV Cache pinned-memory path. The
+    //     contiguous range [ptr, ptr + size) is the destination.
+    // A value is loaded into at most one container per request -- the
+    // variant captures that constraint at the type level.
+    std::variant<std::monostate, IoStringBuffer, std::pair<char *, size_t>>
+        large_value_dest_;
+
+    // When true and the resolved entry is a large value, skip metadata
+    // extraction -- `value_` is left empty even when the entry carries a
+    // metadata trailer. Useful for the "I already retrieved the metadata,
+    // just give me the value bytes" pattern. Ignored when the destination
+    // is `std::monostate`.
+    bool large_value_only_{false};
 
 private:
     // input
@@ -885,6 +908,13 @@ public:
      * @return 0 if the shard does not own a GlobalRegisteredMemory.
      */
     uint16_t GlobalRegMemIndexBase(size_t shard_id) const;
+
+    /**
+     * @brief Test-only: number of times the shard's tail-scratch pool has
+     * been acquired since startup. Returns 0 for non-pinned-mode managers
+     * or invalid shard IDs. See `IouringMgr::AcquireTailScratch`.
+     */
+    size_t TailScratchAcquireCount(size_t shard_id) const;
 
     bool ExecAsyn(KvRequest *req);
     void ExecSync(KvRequest *req);

@@ -149,6 +149,96 @@ TEST_CASE("EloqStore ValidateOptions validates all parameters", "[eloq_store]")
     CleanupTestDir(test_dir);
 }
 
+TEST_CASE(
+    "EloqStore ValidateOptions rejects bad pinned-memory / GC-pool configs",
+    "[eloq_store]")
+{
+    auto test_dir = CreateTestDir("_validate_pinned");
+
+    // Build a base set of options with pinned mode active and a single
+    // 4 KiB-aligned chunk. posix_memalign-style 4 KiB alignment is required
+    // by Phase 2 validation.
+    constexpr size_t kPinnedSize = 1ULL << 20;  // 1 MiB
+    void *raw_ptr = nullptr;
+    REQUIRE(posix_memalign(&raw_ptr, 4096, kPinnedSize) == 0);
+    REQUIRE(raw_ptr != nullptr);
+    char *pinned_base = static_cast<char *>(raw_ptr);
+
+    auto make_pinned_opts = [&]
+    {
+        auto opts = CreateValidOptions(test_dir);
+        opts.pinned_memory_chunks = {{pinned_base, kPinnedSize}};
+        opts.segment_size = 256 * 1024;
+        // Default gc pool is 32 MiB, which already satisfies the floor
+        // (max_segments_batch * segment_size = 8 * 256 KiB = 2 MiB).
+        return opts;
+    };
+
+    // Baseline: the pinned-mode config validates cleanly.
+    {
+        auto opts = make_pinned_opts();
+        REQUIRE(eloqstore::EloqStore::ValidateOptions(opts) == true);
+    }
+
+    // pinned_memory_chunks and global_registered_memories are mutually
+    // exclusive.
+    {
+        auto opts = make_pinned_opts();
+        // Use the existing num_threads (2) as the size of the external
+        // pointers array. The validation runs the size check first, so
+        // we don't need actual GlobalRegisteredMemory instances -- just
+        // non-null sentinels are required by the no-null-pointer check
+        // that runs before mutual-exclusion. Reuse the same dummy pointer.
+        eloqstore::GlobalRegisteredMemory *fake =
+            reinterpret_cast<eloqstore::GlobalRegisteredMemory *>(0x1);
+        opts.global_registered_memories = {fake, fake};
+        REQUIRE(eloqstore::EloqStore::ValidateOptions(opts) == false);
+    }
+
+    // Non-4-KiB-aligned pinned chunk base.
+    {
+        auto opts = make_pinned_opts();
+        opts.pinned_memory_chunks = {{pinned_base + 1, kPinnedSize - 4096}};
+        REQUIRE(eloqstore::EloqStore::ValidateOptions(opts) == false);
+    }
+
+    // Non-4-KiB-aligned pinned chunk size.
+    {
+        auto opts = make_pinned_opts();
+        opts.pinned_memory_chunks = {{pinned_base, kPinnedSize - 1}};
+        REQUIRE(eloqstore::EloqStore::ValidateOptions(opts) == false);
+    }
+
+    // gc_global_mem_size_per_shard below max_segments_batch * segment_size.
+    {
+        auto opts = make_pinned_opts();
+        opts.gc_global_mem_size_per_shard = opts.segment_size;  // < 8 * seg
+        REQUIRE(eloqstore::EloqStore::ValidateOptions(opts) == false);
+    }
+
+    // gc_global_mem_size_per_shard not a multiple of segment_size.
+    {
+        auto opts = make_pinned_opts();
+        opts.gc_global_mem_size_per_shard =
+            static_cast<size_t>(eloqstore::max_segments_batch) *
+                opts.segment_size +
+            4096;  // not divisible
+        REQUIRE(eloqstore::EloqStore::ValidateOptions(opts) == false);
+    }
+
+    // pinned_tail_scratch_slots == 0: validation accepts with a warning.
+    // The strict Phase 4 contract still applies at runtime; ValidateOptions
+    // returns true.
+    {
+        auto opts = make_pinned_opts();
+        opts.pinned_tail_scratch_slots = 0;
+        REQUIRE(eloqstore::EloqStore::ValidateOptions(opts) == true);
+    }
+
+    std::free(raw_ptr);
+    CleanupTestDir(test_dir);
+}
+
 TEST_CASE("EloqStore Start validates local store paths", "[eloq_store]")
 {
     auto test_dir = CreateTestDir("_start_store_space");

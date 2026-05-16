@@ -647,7 +647,17 @@ std::unique_ptr<FilePageAllocator> AppendAllocator::Clone()
 void AppendAllocator::UpdateStat(FileId min_file_id, uint32_t hole_cnt)
 {
     assert(min_file_id >= min_file_id_);
-    assert((min_file_id << pages_per_file_shift_) <= max_fp_id_);
+    const FilePageId new_min_fp_id = static_cast<FilePageId>(min_file_id)
+                                     << pages_per_file_shift_;
+    if (new_min_fp_id > max_fp_id_)
+    {
+        // Empty-wipe path: caller is signaling the tail file is also gone
+        // (DoCompact{Data,Segment}File's empty branch — the upcoming GC pass
+        // will delete the tail). Snap max_fp_id_ up to the boundary so
+        // SpaceSize() == 0 and the next Allocate() opens a fresh file rather
+        // than leaving stale tail accounting that re-triggers compaction.
+        max_fp_id_ = new_min_fp_id;
+    }
     min_file_id_ = min_file_id;
     empty_file_cnt_ = hole_cnt;
 }

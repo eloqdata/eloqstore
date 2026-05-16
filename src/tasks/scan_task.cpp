@@ -269,7 +269,7 @@ KvError ScanIterator::ResolveValue(std::string &value)
     {
         return KvError::LargeValueUnsupported;
     }
-    return eloqstore::ResolveValue(
+    return eloqstore::ResolveValueOrMetadata(
         tbl_id_, mapping_.Get(), iter_, value, compression_);
 }
 

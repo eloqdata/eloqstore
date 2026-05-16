@@ -183,20 +183,18 @@ public:
     {
         for (auto &entry : req.batch_)
         {
-            if (entry.HasLargeValue())
-            {
-                entry.large_val_.Recycle(memories_[shard_id].get(),
-                                         bases_[shard_id]);
-            }
+            entry.RecycleLargeValue(memories_[shard_id].get(),
+                                    bases_[shard_id]);
         }
     }
 
     void RecycleReadValue(eloqstore::ReadRequest &req, size_t shard_id = 0)
     {
-        if (!req.large_value_.Fragments().empty())
+        if (auto *iosb =
+                std::get_if<eloqstore::IoStringBuffer>(&req.large_value_dest_);
+            iosb != nullptr && !iosb->Fragments().empty())
         {
-            req.large_value_.Recycle(memories_[shard_id].get(),
-                                     bases_[shard_id]);
+            iosb->Recycle(memories_[shard_id].get(), bases_[shard_id]);
         }
     }
 
@@ -325,14 +323,17 @@ TEST_CASE("EloqStore round-trips large values across canonical sizes",
     {
         eloqstore::ReadRequest req;
         req.SetArgs(tbl, c.key);
+        req.large_value_dest_.emplace<eloqstore::IoStringBuffer>();
+        auto &iosb = std::get<eloqstore::IoStringBuffer>(req.large_value_dest_);
         store->ExecSync(&req);
         REQUIRE(req.Error() == eloqstore::KvError::NoError);
-        // Large-value path must not populate the small-value output field.
+        // Large-value path does not populate the small-value output field
+        // beyond the metadata trailer (empty for these no-metadata writes).
         REQUIRE(req.value_.empty());
-        REQUIRE(req.large_value_.Size() == c.size);
+        REQUIRE(iosb.Size() == c.size);
         const size_t expected_frags = (c.size + seg - 1) / seg;
-        REQUIRE(req.large_value_.Fragments().size() == expected_frags);
-        for (const auto &frag : req.large_value_.Fragments())
+        REQUIRE(iosb.Fragments().size() == expected_frags);
+        for (const auto &frag : iosb.Fragments())
         {
             // buf_index_ must lie inside the registered range owned by the
             // harness (base + [0, num_chunks)).
@@ -341,7 +342,7 @@ TEST_CASE("EloqStore round-trips large values across canonical sizes",
             REQUIRE(frag.buf_index_ >= base);
             REQUIRE(frag.buf_index_ < base + num_chunks);
         }
-        REQUIRE(harness.VerifyLargeValue(req.large_value_, c.size, c.seed));
+        REQUIRE(harness.VerifyLargeValue(iosb, c.size, c.seed));
         harness.RecycleReadValue(req);
     }
 
@@ -386,7 +387,6 @@ TEST_CASE("EloqStore routes short, overflow, and large values in one batch",
         store->ExecSync(&r);
         REQUIRE(r.Error() == eloqstore::KvError::NoError);
         REQUIRE(r.value_ == "hello");
-        REQUIRE(r.large_value_.Fragments().empty());
     }
     {
         eloqstore::ReadRequest r;
@@ -394,16 +394,17 @@ TEST_CASE("EloqStore routes short, overflow, and large values in one batch",
         store->ExecSync(&r);
         REQUIRE(r.Error() == eloqstore::KvError::NoError);
         REQUIRE(r.value_ == std::string(8 * 1024, 'o'));
-        REQUIRE(r.large_value_.Fragments().empty());
     }
     {
         eloqstore::ReadRequest r;
         r.SetArgs(tbl, "k_large");
+        r.large_value_dest_.emplace<eloqstore::IoStringBuffer>();
+        auto &iosb = std::get<eloqstore::IoStringBuffer>(r.large_value_dest_);
         store->ExecSync(&r);
         REQUIRE(r.Error() == eloqstore::KvError::NoError);
         REQUIRE(r.value_.empty());
-        REQUIRE(r.large_value_.Size() == seg * 3 + 17);
-        REQUIRE(harness.VerifyLargeValue(r.large_value_, seg * 3 + 17, 0x7a));
+        REQUIRE(iosb.Size() == seg * 3 + 17);
+        REQUIRE(harness.VerifyLargeValue(iosb, seg * 3 + 17, 0x7a));
         harness.RecycleReadValue(r);
     }
 
@@ -432,7 +433,6 @@ TEST_CASE("EloqStore overwrite semantics across large/small transitions",
         store->ExecSync(&r);
         REQUIRE(r.Error() == eloqstore::KvError::NoError);
         REQUIRE(r.value_ == "tiny");
-        REQUIRE(r.large_value_.Fragments().empty());
     }
 
     // (b) short -> large
@@ -441,11 +441,13 @@ TEST_CASE("EloqStore overwrite semantics across large/small transitions",
     {
         eloqstore::ReadRequest r;
         r.SetArgs(tbl, "k2");
+        r.large_value_dest_.emplace<eloqstore::IoStringBuffer>();
+        auto &iosb = std::get<eloqstore::IoStringBuffer>(r.large_value_dest_);
         store->ExecSync(&r);
         REQUIRE(r.Error() == eloqstore::KvError::NoError);
         REQUIRE(r.value_.empty());
-        REQUIRE(r.large_value_.Size() == seg * 3);
-        REQUIRE(harness.VerifyLargeValue(r.large_value_, seg * 3, 0xa2));
+        REQUIRE(iosb.Size() == seg * 3);
+        REQUIRE(harness.VerifyLargeValue(iosb, seg * 3, 0xa2));
         harness.RecycleReadValue(r);
     }
 
@@ -455,11 +457,13 @@ TEST_CASE("EloqStore overwrite semantics across large/small transitions",
     {
         eloqstore::ReadRequest r;
         r.SetArgs(tbl, "k3");
+        r.large_value_dest_.emplace<eloqstore::IoStringBuffer>();
+        auto &iosb = std::get<eloqstore::IoStringBuffer>(r.large_value_dest_);
         store->ExecSync(&r);
         REQUIRE(r.Error() == eloqstore::KvError::NoError);
-        REQUIRE(r.large_value_.Size() == seg * 5);
-        REQUIRE(r.large_value_.Fragments().size() == 5);
-        REQUIRE(harness.VerifyLargeValue(r.large_value_, seg * 5, 0xa4));
+        REQUIRE(iosb.Size() == seg * 5);
+        REQUIRE(iosb.Fragments().size() == 5);
+        REQUIRE(harness.VerifyLargeValue(iosb, seg * 5, 0xa4));
         harness.RecycleReadValue(r);
     }
 
@@ -492,7 +496,6 @@ TEST_CASE(
     store->ExecSync(&r);
     REQUIRE(r.Error() == eloqstore::KvError::NotFound);
     REQUIRE(r.value_.empty());
-    REQUIRE(r.large_value_.Fragments().empty());
 
     store->Stop();
     harness.AssertFreePoolRestored();
@@ -525,7 +528,6 @@ TEST_CASE(
         store->ExecSync(&r);
         REQUIRE(r.Error() == eloqstore::KvError::NoError);
         REQUIRE(r.value_ == "v" + std::to_string(i));
-        REQUIRE(r.large_value_.Fragments().empty());
     }
     // Full pool = no segment was ever fetched for this partition.
     REQUIRE(harness.Memory(0)->FreeSegments() ==
@@ -533,6 +535,513 @@ TEST_CASE(
 
     store->Stop();
     harness.AssertFreePoolRestored();
+    CleanupStore(opts);
+}
+
+namespace
+{
+// Harness for KV Cache pinned-memory mode. Owns one large 4 KiB-aligned
+// backing buffer and hands out segment-aligned sub-ranges per key. The
+// buffer is registered with EloqStore via KvOptions::pinned_memory_chunks
+// (one chunk per shard's ring).
+class PinnedHarness
+{
+public:
+    static constexpr size_t kPinnedSize = 32ULL * 1024 * 1024;  // 32 MiB
+
+    PinnedHarness(uint32_t segment_size = kDefaultSegmentSize)
+        : segment_size_(segment_size)
+    {
+        void *raw = nullptr;
+        REQUIRE(posix_memalign(&raw, 4096, kPinnedSize) == 0);
+        REQUIRE(raw != nullptr);
+        std::memset(raw, 0, kPinnedSize);
+        base_ = static_cast<char *>(raw);
+    }
+
+    ~PinnedHarness()
+    {
+        std::free(base_);
+    }
+
+    char *Base() const
+    {
+        return base_;
+    }
+    size_t Size() const
+    {
+        return kPinnedSize;
+    }
+    uint32_t SegmentSize() const
+    {
+        return segment_size_;
+    }
+
+    // Allocate `size` bytes from the head of the pinned buffer. Sub-ranges
+    // are not segment-aligned by themselves; the caller picks `size` to
+    // match the test's segment count. Cursor advances by ceil(size/seg) *
+    // seg bytes so back-to-back allocations stay segment-aligned (so a
+    // mid-segment `size` leaves the rest of the segment slack inside the
+    // chunk -- the fast path).
+    std::pair<char *, size_t> AllocateSegmentAligned(size_t size)
+    {
+        const size_t k = (size + segment_size_ - 1) / segment_size_;
+        const size_t aligned = k * segment_size_;
+        REQUIRE(cursor_ + aligned <= kPinnedSize);
+        char *p = base_ + cursor_;
+        cursor_ += aligned;
+        return {p, size};
+    }
+
+    // Allocate `size` bytes flush against the end of the chunk: the
+    // resulting [ptr, ptr + ceil(size/seg)*seg) extends past the chunk
+    // and forces Phase 7's scratch fallback. Cursor is *not* advanced
+    // (this is a terminal allocation).
+    std::pair<char *, size_t> AllocateChunkEnd(size_t size)
+    {
+        // Place the sub-range at chunk_end - size, so the *meaningful*
+        // bytes end exactly at chunk_end but the rounded-up K*seg range
+        // extends past it.
+        REQUIRE(size <= kPinnedSize);
+        REQUIRE(size > 0);
+        const size_t k = (size + segment_size_ - 1) / segment_size_;
+        REQUIRE(k * segment_size_ > size);  // must round up to trigger fallback
+        char *p = base_ + (kPinnedSize - size);
+        return {p, size};
+    }
+
+    void ResetCursor()
+    {
+        cursor_ = 0;
+    }
+
+    std::vector<std::pair<char *, size_t>> Chunks() const
+    {
+        return {{base_, kPinnedSize}};
+    }
+
+private:
+    uint32_t segment_size_;
+    char *base_{nullptr};
+    size_t cursor_{0};
+};
+
+// Build KvOptions wired for pinned mode.
+eloqstore::KvOptions MakePinnedOpts(PinnedHarness &harness,
+                                    uint16_t num_threads = 1)
+{
+    eloqstore::KvOptions opts = append_opts;
+    opts.num_threads = num_threads;
+    opts.segment_size = harness.SegmentSize();
+    opts.segments_per_file_shift = 3;
+    opts.buffer_pool_size = 16 * eloqstore::MB;
+    opts.write_buffer_size = 0;
+    opts.write_buffer_ratio = 0.0;
+    opts.pinned_memory_chunks = harness.Chunks();
+    opts.gc_global_mem_size_per_shard = 32ULL * eloqstore::MB;
+    opts.pinned_tail_scratch_slots = eloqstore::max_segments_batch;
+    return opts;
+}
+
+// One-shot pinned write of a single (key, value) pair with optional
+// metadata. Fills `[ptr, ptr+size)` with deterministic bytes and submits
+// a BatchWriteRequest.
+void WritePinned(eloqstore::EloqStore *store,
+                 PinnedHarness &harness,
+                 const eloqstore::TableIdent &tbl,
+                 std::string key,
+                 std::pair<char *, size_t> dst,
+                 uint64_t seed,
+                 std::string metadata = {},
+                 uint64_t ts = 1)
+{
+    FillDeterministic(dst.first, dst.second, seed);
+    eloqstore::BatchWriteRequest req;
+    std::vector<eloqstore::WriteDataEntry> entries;
+    entries.emplace_back(
+        std::move(key),
+        std::move(metadata),
+        std::make_pair(static_cast<const char *>(dst.first), dst.second),
+        ts,
+        eloqstore::WriteOp::Upsert);
+    req.SetArgs(tbl, std::move(entries));
+    store->ExecSync(&req);
+    (void) harness;
+    REQUIRE(req.Error() == eloqstore::KvError::NoError);
+}
+}  // namespace
+
+TEST_CASE("EloqStore pinned write + read round-trips with metadata",
+          "[large-value-e2e][pinned]")
+{
+    PinnedHarness harness;
+    auto opts = MakePinnedOpts(harness);
+    auto *store = InitStore(opts);
+
+    eloqstore::TableIdent tbl{"pinned", 0};
+    const size_t seg = harness.SegmentSize();
+    const size_t value_size = seg * 3;  // exactly 3 segments
+    const uint64_t seed = 0xb1u;
+    const std::string metadata = "tensor[3*seg,bf16,key=pinned]";
+
+    auto write_buf = harness.AllocateSegmentAligned(value_size);
+    WritePinned(store, harness, tbl, "k", write_buf, seed, metadata);
+
+    // Overload A metadata-only: leave `large_value_` null so the dispatch
+    // skips the segment fetch. `value_` receives the metadata blob.
+    {
+        eloqstore::ReadRequest r;
+        r.SetArgs(tbl, "k");
+        store->ExecSync(&r);
+        REQUIRE(r.Error() == eloqstore::KvError::NoError);
+        REQUIRE(r.value_ == metadata);
+    }
+
+    // Overload B: value_ <- metadata, segments <- pinned buffer.
+    auto read_buf = harness.AllocateSegmentAligned(value_size);
+    std::memset(read_buf.first, 0, value_size);
+    {
+        eloqstore::ReadRequest r;
+        r.SetArgs(tbl, "k");
+        r.large_value_dest_ = std::make_pair(read_buf.first, read_buf.second);
+        store->ExecSync(&r);
+        REQUIRE(r.Error() == eloqstore::KvError::NoError);
+        REQUIRE(r.value_ == metadata);
+        REQUIRE(VerifyDeterministic(read_buf.first, value_size, seed));
+    }
+
+    store->Stop();
+    CleanupStore(opts);
+}
+
+TEST_CASE("EloqStore mixed metadata / no-metadata large values via overload A",
+          "[large-value-e2e][pinned]")
+{
+    PinnedHarness harness;
+    auto opts = MakePinnedOpts(harness);
+    auto *store = InitStore(opts);
+
+    eloqstore::TableIdent tbl{"mixed_meta", 0};
+    const size_t seg = harness.SegmentSize();
+
+    struct Case
+    {
+        std::string key;
+        size_t size;
+        uint64_t seed;
+        std::string metadata;
+    };
+    std::vector<Case> cases = {
+        {"with_meta", seg * 2, 0xc1, "meta-A"},
+        {"no_meta", seg * 2, 0xc2, ""},
+        {"with_meta_3seg", seg * 3, 0xc3, "meta-C-longer"},
+        {"no_meta_3seg", seg * 3, 0xc4, ""},
+    };
+
+    for (const auto &c : cases)
+    {
+        auto buf = harness.AllocateSegmentAligned(c.size);
+        WritePinned(store, harness, tbl, c.key, buf, c.seed, c.metadata);
+    }
+
+    // Read back via overload A (metadata-only).
+    for (const auto &c : cases)
+    {
+        eloqstore::ReadRequest r;
+        r.SetArgs(tbl, c.key);
+        store->ExecSync(&r);
+        REQUIRE(r.Error() == eloqstore::KvError::NoError);
+        REQUIRE(r.value_ == c.metadata);
+    }
+
+    // Read back via overload B (metadata + pinned).
+    for (const auto &c : cases)
+    {
+        auto read_buf = harness.AllocateSegmentAligned(c.size);
+        std::memset(read_buf.first, 0, c.size);
+        eloqstore::ReadRequest r;
+        r.SetArgs(tbl, c.key);
+        r.large_value_dest_ = std::make_pair(read_buf.first, read_buf.second);
+        store->ExecSync(&r);
+        REQUIRE(r.Error() == eloqstore::KvError::NoError);
+        REQUIRE(r.value_ == c.metadata);
+        REQUIRE(VerifyDeterministic(read_buf.first, c.size, c.seed));
+    }
+
+    store->Stop();
+    CleanupStore(opts);
+}
+
+TEST_CASE("EloqStore overload C (pinned-only) reads",
+          "[large-value-e2e][pinned]")
+{
+    PinnedHarness harness;
+    auto opts = MakePinnedOpts(harness);
+    auto *store = InitStore(opts);
+
+    eloqstore::TableIdent tbl{"overload_c", 0};
+    const size_t seg = harness.SegmentSize();
+
+    // Set up: write a large value with metadata.
+    const size_t value_size = seg * 4;
+    const uint64_t seed = 0xc5u;
+    const std::string metadata = "C-only-test";
+    auto write_buf = harness.AllocateSegmentAligned(value_size);
+    WritePinned(store, harness, tbl, "k_large", write_buf, seed, metadata);
+
+    // A short value to exercise the "not a large value" error path.
+    WriteSmall(store, tbl, "k_short", "tiny");
+
+    // Overload C on the large value: fresh pinned buffer, value-only.
+    auto read_buf = harness.AllocateSegmentAligned(value_size);
+    std::memset(read_buf.first, 0, value_size);
+    {
+        eloqstore::ReadRequest r;
+        r.SetArgs(tbl, "k_large");
+        r.large_value_dest_ = std::make_pair(read_buf.first, read_buf.second);
+        r.large_value_only_ = true;
+        store->ExecSync(&r);
+        REQUIRE(r.Error() == eloqstore::KvError::NoError);
+        // value-only mode does NOT touch value_; it remains empty.
+        REQUIRE(r.value_.empty());
+        REQUIRE(VerifyDeterministic(read_buf.first, value_size, seed));
+    }
+
+    // Value-only read on a non-large entry -> InvalidArgs.
+    {
+        eloqstore::ReadRequest r;
+        r.SetArgs(tbl, "k_short");
+        r.large_value_dest_ = std::make_pair(read_buf.first, read_buf.second);
+        r.large_value_only_ = true;
+        store->ExecSync(&r);
+        REQUIRE(r.Error() == eloqstore::KvError::InvalidArgs);
+    }
+
+    store->Stop();
+    CleanupStore(opts);
+}
+
+TEST_CASE("EloqStore pinned-write tail scratch fast path and fallback",
+          "[large-value-e2e][pinned][tail-scratch]")
+{
+    PinnedHarness harness;
+    auto opts = MakePinnedOpts(harness);
+    auto *store = InitStore(opts);
+
+    eloqstore::TableIdent tbl{"tail_scratch", 0};
+    const size_t seg = harness.SegmentSize();
+
+    // Fast path 1: segment-aligned size, sub-range inside the chunk.
+    const uint64_t seed_a = 0xaa;
+    auto buf_a = harness.AllocateSegmentAligned(seg * 2);
+    WritePinned(store, harness, tbl, "aligned", buf_a, seed_a);
+
+    // Fast path 2: mid-segment size, but the sub-range has slack to the
+    // chunk end (chunk size is much larger than allocations so far).
+    const uint64_t seed_b = 0xbb;
+    auto buf_b = harness.AllocateSegmentAligned(seg * 2 + 4096);
+    WritePinned(store, harness, tbl, "slack", buf_b, seed_b);
+
+    // At this point, both writes took the fast path; the scratch pool
+    // should not have been acquired yet.
+    REQUIRE(store->TailScratchAcquireCount(/*shard_id=*/0) == 0);
+
+    // Fallback: mid-segment size flush against the chunk end. The
+    // rounded-up tail extends past the chunk -- scratch is acquired. Size
+    // is 4 KiB-aligned so the reverse-read via overload C can use the
+    // same buffer size (`GetLargeValueContiguous` requires 4 KiB-aligned
+    // dst_size).
+    const uint64_t seed_c = 0xcc;
+    auto buf_c = harness.AllocateChunkEnd(seg * 2 + 4096);
+    WritePinned(store, harness, tbl, "tail_fallback", buf_c, seed_c);
+    REQUIRE(store->TailScratchAcquireCount(/*shard_id=*/0) == 1);
+
+    // Read back: all three should round-trip cleanly.
+    auto verify =
+        [&](const char *key, std::pair<char *, size_t> orig, uint64_t seed)
+    {
+        INFO("verify key=" << key << " size=" << orig.second);
+        auto read_buf = harness.AllocateSegmentAligned(orig.second);
+        std::memset(read_buf.first, 0, orig.second);
+        eloqstore::ReadRequest r;
+        r.SetArgs(tbl, key);
+        r.large_value_dest_ = std::make_pair(read_buf.first, read_buf.second);
+        r.large_value_only_ = true;
+        store->ExecSync(&r);
+        REQUIRE(r.Error() == eloqstore::KvError::NoError);
+        REQUIRE(VerifyDeterministic(read_buf.first, orig.second, seed));
+    };
+    verify("aligned", buf_a, seed_a);
+    verify("slack", buf_b, seed_b);
+    verify("tail_fallback", buf_c, seed_c);
+
+    store->Stop();
+    CleanupStore(opts);
+}
+
+TEST_CASE("EloqStore pinned-write zero-slot scratch rejects cross-boundary",
+          "[large-value-e2e][pinned][tail-scratch]")
+{
+    PinnedHarness harness;
+    auto opts = MakePinnedOpts(harness);
+    opts.pinned_tail_scratch_slots = 0;  // disable fallback
+    auto *store = InitStore(opts);
+
+    eloqstore::TableIdent tbl{"zero_slot", 0};
+    const size_t seg = harness.SegmentSize();
+
+    // Segment-aligned write succeeds without scratch.
+    auto aligned_buf = harness.AllocateSegmentAligned(seg * 2);
+    WritePinned(store, harness, tbl, "ok", aligned_buf, 0xab);
+
+    // Cross-boundary write must fail with InvalidArgs.
+    {
+        auto bad_buf = harness.AllocateChunkEnd(seg + 4096);
+        FillDeterministic(bad_buf.first, bad_buf.second, 0xff);
+        eloqstore::BatchWriteRequest req;
+        std::vector<eloqstore::WriteDataEntry> entries;
+        entries.emplace_back(
+            "fail",
+            std::string{},
+            std::make_pair(static_cast<const char *>(bad_buf.first),
+                           bad_buf.second),
+            /*ts=*/1,
+            eloqstore::WriteOp::Upsert);
+        req.SetArgs(tbl, std::move(entries));
+        store->ExecSync(&req);
+        REQUIRE(req.Error() == eloqstore::KvError::InvalidArgs);
+    }
+
+    store->Stop();
+    CleanupStore(opts);
+}
+
+// In KV Cache pinned mode the internal GlobalRegisteredMemory is reserved
+// for GC / compaction. Reads must use a caller-owned destination
+// (overload B or C); reads with `large_value_dest_ = IoStringBuffer{}`
+// would force fragments out of the internal pool with no way for the
+// caller to recycle them. The dispatch in src/storage/shard.cpp rejects
+// this combination at request-execute time with KvError::InvalidArgs.
+TEST_CASE("EloqStore pinned mode rejects IoStringBuffer read destination",
+          "[large-value-e2e][pinned]")
+{
+    PinnedHarness harness;
+    auto opts = MakePinnedOpts(harness);
+    auto *store = InitStore(opts);
+
+    eloqstore::TableIdent tbl{"pinned_reject_iosb", 0};
+    const size_t seg = harness.SegmentSize();
+    const size_t value_size = seg * 2;
+    auto write_buf = harness.AllocateSegmentAligned(value_size);
+    WritePinned(store,
+                harness,
+                tbl,
+                "k",
+                write_buf,
+                /*seed=*/0xe5,
+                /*metadata=*/{});
+
+    // Wrong arm: IoStringBuffer destination on a pinned-mode store.
+    {
+        eloqstore::ReadRequest r;
+        r.SetArgs(tbl, "k");
+        r.large_value_dest_.emplace<eloqstore::IoStringBuffer>();
+        store->ExecSync(&r);
+        REQUIRE(r.Error() == eloqstore::KvError::InvalidArgs);
+        // The dispatch refused before reaching GetLargeValue, so the
+        // IoStringBuffer inside the variant stays empty (no segments
+        // allocated from the internal pool).
+        auto &iosb = std::get<eloqstore::IoStringBuffer>(r.large_value_dest_);
+        REQUIRE(iosb.Fragments().empty());
+    }
+
+    // Sanity: the correct pinned arm still works on the same key.
+    auto read_buf = harness.AllocateSegmentAligned(value_size);
+    std::memset(read_buf.first, 0, value_size);
+    {
+        eloqstore::ReadRequest r;
+        r.SetArgs(tbl, "k");
+        r.large_value_dest_ = std::make_pair(read_buf.first, read_buf.second);
+        store->ExecSync(&r);
+        REQUIRE(r.Error() == eloqstore::KvError::NoError);
+        REQUIRE(VerifyDeterministic(read_buf.first, value_size, 0xe5));
+    }
+
+    store->Stop();
+    CleanupStore(opts);
+}
+
+TEST_CASE("EloqStore persists metadata-bearing pinned writes across restart",
+          "[large-value-e2e][pinned][restart]")
+{
+    PinnedHarness harness;
+    auto opts = MakePinnedOpts(harness);
+    CleanupStore(opts);
+
+    eloqstore::TableIdent tbl{"pinned_restart", 0};
+    const size_t seg = harness.SegmentSize();
+
+    struct Case
+    {
+        std::string key;
+        size_t size;
+        uint64_t seed;
+        std::string metadata;
+    };
+    std::vector<Case> cases = {
+        {"r1", seg * 2, 0xd1, "meta-r1"},
+        {"r2", seg * 3, 0xd2, ""},
+        {"r3", seg * 4, 0xd3, "meta-r3-bigger-blob"},
+    };
+
+    {
+        auto store = std::make_unique<eloqstore::EloqStore>(opts);
+        REQUIRE(store->Start() == eloqstore::KvError::NoError);
+        for (const auto &c : cases)
+        {
+            auto buf = harness.AllocateSegmentAligned(c.size);
+            WritePinned(
+                store.get(), harness, tbl, c.key, buf, c.seed, c.metadata);
+        }
+        // Archive flushes the segment mapping into the manifest.
+        eloqstore::ArchiveRequest ar;
+        ar.SetTableId(tbl);
+        store->ExecAsyn(&ar);
+        ar.Wait();
+        REQUIRE(ar.Error() == eloqstore::KvError::NoError);
+        store->Stop();
+    }
+
+    // Restart and read everything back.
+    harness.ResetCursor();
+    {
+        auto store = std::make_unique<eloqstore::EloqStore>(opts);
+        REQUIRE(store->Start() == eloqstore::KvError::NoError);
+
+        for (const auto &c : cases)
+        {
+            // Metadata-only read (leave large_value_ null).
+            eloqstore::ReadRequest r1;
+            r1.SetArgs(tbl, c.key);
+            store->ExecSync(&r1);
+            REQUIRE(r1.Error() == eloqstore::KvError::NoError);
+            REQUIRE(r1.value_ == c.metadata);
+
+            // Full-value read via overload B.
+            auto read_buf = harness.AllocateSegmentAligned(c.size);
+            std::memset(read_buf.first, 0, c.size);
+            eloqstore::ReadRequest r2;
+            r2.SetArgs(tbl, c.key);
+            r2.large_value_dest_ =
+                std::make_pair(read_buf.first, read_buf.second);
+            store->ExecSync(&r2);
+            REQUIRE(r2.Error() == eloqstore::KvError::NoError);
+            REQUIRE(r2.value_ == c.metadata);
+            REQUIRE(VerifyDeterministic(read_buf.first, c.size, c.seed));
+        }
+        store->Stop();
+    }
+
     CleanupStore(opts);
 }
 
@@ -587,11 +1096,14 @@ TEST_CASE("EloqStore persists large values across restart",
         {
             eloqstore::ReadRequest r;
             r.SetArgs(tbl, c.key);
+            r.large_value_dest_.emplace<eloqstore::IoStringBuffer>();
+            auto &iosb =
+                std::get<eloqstore::IoStringBuffer>(r.large_value_dest_);
             store->ExecSync(&r);
             REQUIRE(r.Error() == eloqstore::KvError::NoError);
             REQUIRE(r.value_.empty());
-            REQUIRE(r.large_value_.Size() == c.size);
-            REQUIRE(harness.VerifyLargeValue(r.large_value_, c.size, c.seed));
+            REQUIRE(iosb.Size() == c.size);
+            REQUIRE(harness.VerifyLargeValue(iosb, c.size, c.seed));
             harness.RecycleReadValue(r);
         }
 
@@ -601,9 +1113,11 @@ TEST_CASE("EloqStore persists large values across restart",
             store.get(), harness, tbl, "r_post_restart", seg * 2 + 9, 0xf0);
         eloqstore::ReadRequest r;
         r.SetArgs(tbl, "r_post_restart");
+        r.large_value_dest_.emplace<eloqstore::IoStringBuffer>();
+        auto &iosb = std::get<eloqstore::IoStringBuffer>(r.large_value_dest_);
         store->ExecSync(&r);
         REQUIRE(r.Error() == eloqstore::KvError::NoError);
-        REQUIRE(harness.VerifyLargeValue(r.large_value_, seg * 2 + 9, 0xf0));
+        REQUIRE(harness.VerifyLargeValue(iosb, seg * 2 + 9, 0xf0));
         harness.RecycleReadValue(r);
 
         store->Stop();

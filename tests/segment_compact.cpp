@@ -143,18 +143,17 @@ public:
     {
         for (auto &entry : req.batch_)
         {
-            if (entry.HasLargeValue())
-            {
-                entry.large_val_.Recycle(mem_.get(), base_);
-            }
+            entry.RecycleLargeValue(mem_.get(), base_);
         }
     }
 
     void RecycleRead(eloqstore::ReadRequest &req)
     {
-        if (!req.large_value_.Fragments().empty())
+        if (auto *iosb =
+                std::get_if<eloqstore::IoStringBuffer>(&req.large_value_dest_);
+            iosb != nullptr && !iosb->Fragments().empty())
         {
-            req.large_value_.Recycle(mem_.get(), base_);
+            iosb->Recycle(mem_.get(), base_);
         }
     }
 
@@ -309,9 +308,21 @@ SegmentFileInfo InspectSegmentFiles(const eloqstore::KvOptions &opts,
     return info;
 }
 
-void WaitForCompact(int ms = 500)
+template <typename Pred>
+bool WaitForCondition(chrono::milliseconds timeout,
+                      chrono::milliseconds step,
+                      Pred &&pred)
 {
-    std::this_thread::sleep_for(chrono::milliseconds(ms));
+    auto deadline = chrono::steady_clock::now() + timeout;
+    while (chrono::steady_clock::now() < deadline)
+    {
+        if (pred())
+        {
+            return true;
+        }
+        std::this_thread::sleep_for(step);
+    }
+    return pred();
 }
 
 void ReadAndVerify(eloqstore::EloqStore *store,
@@ -323,11 +334,13 @@ void ReadAndVerify(eloqstore::EloqStore *store,
 {
     eloqstore::ReadRequest r;
     r.SetArgs(tbl, key);
+    r.large_value_dest_.emplace<eloqstore::IoStringBuffer>();
+    auto &iosb = std::get<eloqstore::IoStringBuffer>(r.large_value_dest_);
     store->ExecSync(&r);
     REQUIRE(r.Error() == eloqstore::KvError::NoError);
     REQUIRE(r.value_.empty());
-    REQUIRE(r.large_value_.Size() == size);
-    REQUIRE(h.VerifyLargeValue(r.large_value_, size, seed));
+    REQUIRE(iosb.Size() == size);
+    REQUIRE(h.VerifyLargeValue(iosb, size, seed));
     h.RecycleRead(r);
 }
 
@@ -378,7 +391,9 @@ TEST_CASE("segment compaction is disabled when seg amplify factor is zero",
                     {{"k5", seg}},
                     /*seed_base=*/0x3000,
                     /*ts=*/100);
-    WaitForCompact();
+    // No wait: seg_amp=0 makes MapperExceedsAmplification short-circuit,
+    // so CompactIfNeeded never schedules a CompactRequest. ExecSync has
+    // already committed every write; on-disk segment file state is stable.
 
     // Every live value still reads back correctly.
     ReadAndVerify(store, h, tbl, "k1", seg, 0x2000 + 5 * 10);  // last overwrite
@@ -438,7 +453,10 @@ TEST_CASE("compact is safe on small-only partitions with no segment mapper",
                        /*ts=*/2 + round);
         }
     }
-    WaitForCompact();
+    // No wait: the partition has no segment mapper, so segment compaction
+    // can never run. Data-side compaction may run as a side effect of the
+    // amplification check, but it does not affect the segment file
+    // assertion below.
 
     // Reads must still succeed — segment path is never touched because the
     // segment mapper was never created.
@@ -449,7 +467,6 @@ TEST_CASE("compact is safe on small-only partitions with no segment mapper",
         store->ExecSync(&r);
         REQUIRE(r.Error() == eloqstore::KvError::NoError);
         REQUIRE(r.value_ == value);
-        REQUIRE(r.large_value_.Fragments().empty());
     }
     // No segment files should exist on disk for a small-only partition.
     SegmentFileInfo info = InspectSegmentFiles(opts, tbl);
@@ -508,7 +525,10 @@ TEST_CASE("segment compaction reclaims space and preserves bytes",
                     {{"k5", seg}},
                     /*seed_base=*/0x6000,
                     /*ts=*/200);
-    WaitForCompact();
+    REQUIRE(WaitForCondition(
+        chrono::seconds(3),
+        chrono::milliseconds(20),
+        [&]() { return InspectSegmentFiles(opts, tbl).count <= 2; }));
 
     // Every live value still reads back correctly.
     ReadAndVerify(store, h, tbl, "k1", seg, last_overwrite_seed + 0);
@@ -568,7 +588,10 @@ TEST_CASE("empty segment mapping retires all segment files",
     }
     // Nudge a fresh BatchWrite through UpdateMeta to trigger CompactIfNeeded.
     WriteSmall(store, tbl, "nudge", "n", /*ts=*/20);
-    WaitForCompact();
+    REQUIRE(WaitForCondition(chrono::seconds(3),
+                             chrono::milliseconds(20),
+                             [&]()
+                             { return !InspectSegmentFiles(opts, tbl).any; }));
 
     SegmentFileInfo after = InspectSegmentFiles(opts, tbl);
     REQUIRE_FALSE(after.any);
@@ -617,7 +640,9 @@ TEST_CASE("create archive does not compact below threshold",
     REQUIRE(store->ExecAsyn(&ar));
     ar.Wait();
     REQUIRE(ar.Error() == eloqstore::KvError::NoError);
-    WaitForCompact();
+    // No wait: ar.Wait() returned, so CreateArchive is fully committed.
+    // factor=1 < threshold=2 means CreateArchive's needs_compact check is
+    // false and no inline Compact ran. Nothing else should change.
 
     SegmentFileInfo after = InspectSegmentFiles(opts, tbl);
     // Archive must not tail-rewrite the one live segment file. Max segment
@@ -634,5 +659,387 @@ TEST_CASE("create archive does not compact below threshold",
 
     store->Stop();
     h.AssertPoolRestored();
+    CleanupStore(opts);
+}
+
+// ===========================================================================
+// Pinned-mode compaction tests
+// ===========================================================================
+namespace
+{
+// Harness for KV Cache pinned-memory mode. One 4 KiB-aligned backing buffer
+// is registered with EloqStore via KvOptions::pinned_memory_chunks. Writes
+// allocate sub-ranges by advancing a cursor.
+class PinnedHarness
+{
+public:
+    // 64 MiB gives the test room for several seeds + 10+ overwrite rounds
+    // (each at seg*2) plus per-key read buffers, with headroom for a
+    // sentinel region in the back half.
+    static constexpr size_t kPinnedSize = 64ULL * 1024 * 1024;
+
+    PinnedHarness()
+    {
+        void *raw = nullptr;
+        REQUIRE(posix_memalign(&raw, 4096, kPinnedSize) == 0);
+        REQUIRE(raw != nullptr);
+        std::memset(raw, 0, kPinnedSize);
+        base_ = static_cast<char *>(raw);
+    }
+
+    ~PinnedHarness()
+    {
+        std::free(base_);
+    }
+
+    char *Base() const
+    {
+        return base_;
+    }
+    size_t Size() const
+    {
+        return kPinnedSize;
+    }
+    uint32_t SegmentSize() const
+    {
+        return kSegmentSize;
+    }
+
+    // Allocate `size` bytes at the current cursor; cursor advances by
+    // ceil(size/seg)*seg so back-to-back allocations stay segment-aligned.
+    std::pair<char *, size_t> AllocateSegmentAligned(size_t size)
+    {
+        const size_t k = (size + kSegmentSize - 1) / kSegmentSize;
+        const size_t aligned = k * kSegmentSize;
+        REQUIRE(cursor_ + aligned <= cursor_limit_);
+        char *p = base_ + cursor_;
+        cursor_ += aligned;
+        return {p, size};
+    }
+
+    // Cap allocations to the front [0, limit). Used by the sentinel test
+    // to keep writes from straying into the protected back region.
+    void SetCursorLimit(size_t limit)
+    {
+        REQUIRE(limit <= kPinnedSize);
+        cursor_limit_ = limit;
+    }
+
+    std::vector<std::pair<char *, size_t>> Chunks() const
+    {
+        return {{base_, kPinnedSize}};
+    }
+
+private:
+    char *base_{nullptr};
+    size_t cursor_{0};
+    size_t cursor_limit_{kPinnedSize};
+};
+
+eloqstore::KvOptions MakePinnedOpts(PinnedHarness &h,
+                                    uint8_t file_amp = 2,
+                                    uint8_t seg_amp = 2,
+                                    uint32_t num_archives = 0)
+{
+    eloqstore::KvOptions opts;
+    opts.num_threads = 1;
+    opts.num_retained_archives = num_archives;
+    opts.archive_interval_secs = 0;
+    opts.file_amplify_factor = file_amp;
+    opts.segment_file_amplify_factor = seg_amp;
+    opts.segment_compact_yield_every = 8;
+    opts.store_path = {test_path};
+    opts.pages_per_file_shift = 8;
+    opts.segment_size = h.SegmentSize();
+    opts.segments_per_file_shift = 3;
+    opts.data_append_mode = true;
+    opts.buffer_pool_size = 16 * eloqstore::MB;
+    opts.write_buffer_size = 0;
+    opts.write_buffer_ratio = 0.0;
+    opts.pinned_memory_chunks = h.Chunks();
+    opts.gc_global_mem_size_per_shard = 32ULL * eloqstore::MB;
+    opts.pinned_tail_scratch_slots = eloqstore::max_segments_batch;
+    return opts;
+}
+
+// One-shot pinned write of a single key. Fills the destination with
+// deterministic bytes seeded by `seed` and submits a BatchWriteRequest.
+void WritePinned(eloqstore::EloqStore *store,
+                 const eloqstore::TableIdent &tbl,
+                 const std::string &key,
+                 std::pair<char *, size_t> dst,
+                 uint64_t seed,
+                 std::string metadata = {},
+                 uint64_t ts = 1)
+{
+    FillDeterministic(dst.first, dst.second, seed);
+    eloqstore::BatchWriteRequest req;
+    std::vector<eloqstore::WriteDataEntry> entries;
+    entries.emplace_back(
+        key,
+        std::move(metadata),
+        std::make_pair(static_cast<const char *>(dst.first), dst.second),
+        ts,
+        eloqstore::WriteOp::Upsert);
+    req.SetArgs(tbl, std::move(entries));
+    store->ExecSync(&req);
+    REQUIRE(req.Error() == eloqstore::KvError::NoError);
+}
+
+struct PinnedBatchEntry
+{
+    std::string key;
+    std::pair<char *, size_t> dst;
+    uint64_t seed;
+    std::string metadata;
+};
+
+// Multi-entry pinned write: groups several keys into a single
+// BatchWriteRequest so that UpdateMeta (and any subsequent
+// CompactIfNeeded) fires once for the whole group. Matches the access
+// pattern of the GlobalRegisteredMemory-mode tests' WriteLargeBatch and
+// avoids fragmenting tail rewrites across many small batches.
+void WritePinnedBatch(eloqstore::EloqStore *store,
+                      const eloqstore::TableIdent &tbl,
+                      std::vector<PinnedBatchEntry> entries_in,
+                      uint64_t ts)
+{
+    eloqstore::BatchWriteRequest req;
+    std::vector<eloqstore::WriteDataEntry> entries;
+    entries.reserve(entries_in.size());
+    for (auto &e : entries_in)
+    {
+        FillDeterministic(e.dst.first, e.dst.second, e.seed);
+        entries.emplace_back(
+            e.key,
+            std::move(e.metadata),
+            std::make_pair(static_cast<const char *>(e.dst.first),
+                           e.dst.second),
+            ts,
+            eloqstore::WriteOp::Upsert);
+    }
+    std::sort(entries.begin(), entries.end());
+    req.SetArgs(tbl, std::move(entries));
+    store->ExecSync(&req);
+    REQUIRE(req.Error() == eloqstore::KvError::NoError);
+}
+
+// Read via overload B (metadata + pinned bytes) and check both halves.
+void ReadAndVerifyPinned(eloqstore::EloqStore *store,
+                         PinnedHarness &h,
+                         const eloqstore::TableIdent &tbl,
+                         const std::string &key,
+                         size_t size,
+                         uint64_t expected_seed,
+                         const std::string &expected_metadata)
+{
+    auto rb = h.AllocateSegmentAligned(size);
+    std::memset(rb.first, 0, rb.second);
+    eloqstore::ReadRequest r;
+    r.SetArgs(tbl, key);
+    r.large_value_dest_ = std::make_pair(rb.first, rb.second);
+    store->ExecSync(&r);
+    REQUIRE(r.Error() == eloqstore::KvError::NoError);
+    REQUIRE(r.value_ == expected_metadata);
+    REQUIRE(VerifyDeterministic(rb.first, size, expected_seed));
+}
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// Sentinel test: compaction in pinned mode must route reads/writes through
+// the private gc GlobalRegisteredMemory pool, not the caller's pinned
+// chunks. We fill the back half of the pinned chunk with a recognizable
+// pattern that no write touches; if compaction issues fixed I/O into the
+// pinned chunks by mistake, the kernel's write_fixed will scribble somewhere
+// in that range and the sentinel bytes will change.
+// ---------------------------------------------------------------------------
+TEST_CASE("segment compaction in pinned mode leaves caller's chunk untouched",
+          "[segment-compact][pinned]")
+{
+    PinnedHarness h;
+    eloqstore::KvOptions opts =
+        MakePinnedOpts(h, /*file_amp=*/2, /*seg_amp=*/2);
+    eloqstore::EloqStore *store = InitStore(opts);
+
+    eloqstore::TableIdent tbl{"sc_pinned_sentinel", 0};
+    const size_t seg = h.SegmentSize();
+
+    // Back half is sentinel; front half holds all write/read allocations.
+    constexpr size_t kHalf = PinnedHarness::kPinnedSize / 2;
+    char *sentinel_base = h.Base() + kHalf;
+    constexpr unsigned char kSentinel = 0xCA;
+    std::memset(sentinel_base, kSentinel, kHalf);
+    h.SetCursorLimit(kHalf);
+
+    // 4 seed keys + 10 rounds of overwrites on k1+k2. Each value spans 2
+    // segments. The seed and per-round overwrites are issued as single
+    // batches so UpdateMeta (and CompactIfNeeded) fires once per round --
+    // matches the access pattern of the GlobalRegisteredMemory-mode reclaim
+    // test and lets compaction collapse the tail into 1-2 files.
+    const size_t value_segs = 2;
+    const size_t value_size = seg * value_segs;
+    {
+        std::vector<PinnedBatchEntry> seed_entries;
+        for (size_t i = 0; i < 4; ++i)
+        {
+            seed_entries.push_back({"k" + std::to_string(i + 1),
+                                    h.AllocateSegmentAligned(value_size),
+                                    0xA000 + i,
+                                    {}});
+        }
+        WritePinnedBatch(store, tbl, std::move(seed_entries), /*ts=*/1);
+    }
+
+    uint64_t last_k1 = 0;
+    uint64_t last_k2 = 0;
+    for (int round = 0; round < 10; ++round)
+    {
+        last_k1 = 0xB000 + static_cast<uint64_t>(round) * 100;
+        last_k2 = 0xB000 + static_cast<uint64_t>(round) * 100 + 1;
+        std::vector<PinnedBatchEntry> round_entries = {
+            {"k1", h.AllocateSegmentAligned(value_size), last_k1, {}},
+            {"k2", h.AllocateSegmentAligned(value_size), last_k2, {}}};
+        WritePinnedBatch(
+            store, tbl, std::move(round_entries), /*ts=*/2 + round);
+    }
+    REQUIRE(WaitForCondition(
+        chrono::seconds(3),
+        chrono::milliseconds(20),
+        [&]() { return InspectSegmentFiles(opts, tbl).count <= 2; }));
+
+    // Sentinel region is byte-for-byte intact.
+    for (size_t i = 0; i < kHalf; ++i)
+    {
+        if (static_cast<unsigned char>(sentinel_base[i]) != kSentinel)
+        {
+            INFO("sentinel byte at offset " << i << " changed");
+            REQUIRE(false);
+        }
+    }
+
+    // And every live value reads back correctly via overload B.
+    ReadAndVerifyPinned(store,
+                        h,
+                        tbl,
+                        "k1",
+                        value_size,
+                        last_k1,
+                        /*metadata=*/{});
+    ReadAndVerifyPinned(store,
+                        h,
+                        tbl,
+                        "k2",
+                        value_size,
+                        last_k2,
+                        /*metadata=*/{});
+    ReadAndVerifyPinned(store,
+                        h,
+                        tbl,
+                        "k3",
+                        value_size,
+                        0xA000 + 2,
+                        /*metadata=*/{});
+    ReadAndVerifyPinned(store,
+                        h,
+                        tbl,
+                        "k4",
+                        value_size,
+                        0xA000 + 3,
+                        /*metadata=*/{});
+
+    // Compaction actually ran: the live mapping has only 4 keys * 2 = 8
+    // segments, so the collapsed on-disk file count must be small.
+    SegmentFileInfo info = InspectSegmentFiles(opts, tbl);
+    REQUIRE(info.any);
+    REQUIRE(info.count <= 2);
+
+    store->Stop();
+    CleanupStore(opts);
+}
+
+// ---------------------------------------------------------------------------
+// Bound check: KV Cache mode requires `max_segments_batch * segment_size <=
+// gc_global_mem_size_per_shard` so compaction's worst-case batch always fits
+// in the private pool. Validate the boundary value is accepted; the
+// less-than-boundary case is rejected by ValidateOptions and reaches the
+// caller as a LOG(FATAL) from the EloqStore constructor, which cannot be
+// exercised from inside a single Catch2 process (no fork-based death tests
+// here).
+// ---------------------------------------------------------------------------
+TEST_CASE(
+    "pinned-mode boundary gc_global_mem_size_per_shard is accepted by Start",
+    "[segment-compact][pinned]")
+{
+    PinnedHarness h;
+    eloqstore::KvOptions opts = MakePinnedOpts(h);
+    // Exactly max_segments_batch * segment_size: the minimum the bound check
+    // allows. Anything smaller would trip the FATAL.
+    opts.gc_global_mem_size_per_shard =
+        static_cast<size_t>(eloqstore::max_segments_batch) * opts.segment_size;
+    CleanupStore(opts);
+
+    auto store = std::make_unique<eloqstore::EloqStore>(opts);
+    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    store->Stop();
+    CleanupStore(opts);
+}
+
+// ---------------------------------------------------------------------------
+// Compaction in pinned mode must preserve the metadata trailer stored in the
+// data page. Write metadata-bearing large values, overwrite them past the
+// segment-amplification threshold, wait for compaction, then verify each key
+// reads back with both the latest bytes AND the original metadata blob.
+// ---------------------------------------------------------------------------
+TEST_CASE("segment compaction in pinned mode preserves metadata trailer",
+          "[segment-compact][pinned]")
+{
+    PinnedHarness h;
+    eloqstore::KvOptions opts =
+        MakePinnedOpts(h, /*file_amp=*/2, /*seg_amp=*/2);
+    eloqstore::EloqStore *store = InitStore(opts);
+
+    eloqstore::TableIdent tbl{"sc_pinned_meta", 0};
+    const size_t seg = h.SegmentSize();
+    const std::string meta_k1 = "tensor[seg*2,bf16,key=k1]";
+    const std::string meta_k2 = "tensor[seg*2,fp32,key=k2,longer-blob]";
+
+    // Seed: 2 metadata-bearing values, 2 segments each.
+    {
+        auto b1 = h.AllocateSegmentAligned(seg * 2);
+        WritePinned(store, tbl, "k1", b1, 0xC100, meta_k1, /*ts=*/1);
+        auto b2 = h.AllocateSegmentAligned(seg * 2);
+        WritePinned(store, tbl, "k2", b2, 0xC200, meta_k2, /*ts=*/1);
+    }
+
+    // Overwrite both keys (same metadata) until segment amplification
+    // exceeds the factor=2 threshold and compaction rewrites the tail.
+    uint64_t last_k1 = 0;
+    uint64_t last_k2 = 0;
+    for (int round = 0; round < 10; ++round)
+    {
+        auto bk1 = h.AllocateSegmentAligned(seg * 2);
+        last_k1 = 0xD000 + static_cast<uint64_t>(round) * 100;
+        WritePinned(store, tbl, "k1", bk1, last_k1, meta_k1, /*ts=*/2 + round);
+
+        auto bk2 = h.AllocateSegmentAligned(seg * 2);
+        last_k2 = 0xD000 + static_cast<uint64_t>(round) * 100 + 1;
+        WritePinned(store, tbl, "k2", bk2, last_k2, meta_k2, /*ts=*/2 + round);
+    }
+    REQUIRE(WaitForCondition(
+        chrono::seconds(3),
+        chrono::milliseconds(20),
+        [&]() { return InspectSegmentFiles(opts, tbl).count <= 2; }));
+
+    // Both metadata and bytes round-trip through compaction.
+    ReadAndVerifyPinned(store, h, tbl, "k1", seg * 2, last_k1, meta_k1);
+    ReadAndVerifyPinned(store, h, tbl, "k2", seg * 2, last_k2, meta_k2);
+
+    // And compaction did run (live mapping = 4 segments collapse to ~1 file).
+    SegmentFileInfo info = InspectSegmentFiles(opts, tbl);
+    REQUIRE(info.any);
+    REQUIRE(info.count <= 2);
+
+    store->Stop();
     CleanupStore(opts);
 }

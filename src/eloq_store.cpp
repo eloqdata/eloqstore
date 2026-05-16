@@ -364,6 +364,61 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
                 return false;
             }
         }
+        if (!opts.pinned_memory_chunks.empty())
+        {
+            LOG(ERROR) << "global_registered_memories and pinned_memory_chunks "
+                          "are mutually exclusive; only one mode may be set";
+            return false;
+        }
+    }
+
+    if (!opts.pinned_memory_chunks.empty())
+    {
+        constexpr size_t kPinnedAlign = 4096;
+        for (const auto &chunk : opts.pinned_memory_chunks)
+        {
+            if (chunk.first == nullptr || chunk.second == 0)
+            {
+                LOG(ERROR) << "pinned_memory_chunks contains a null/zero-size "
+                              "chunk";
+                return false;
+            }
+            if (reinterpret_cast<uintptr_t>(chunk.first) % kPinnedAlign != 0 ||
+                chunk.second % kPinnedAlign != 0)
+            {
+                LOG(ERROR)
+                    << "pinned_memory_chunks must be 4 KiB aligned (base "
+                       "and size)";
+                return false;
+            }
+        }
+        const size_t min_gc_pool =
+            static_cast<size_t>(max_segments_batch) * opts.segment_size;
+        if (opts.gc_global_mem_size_per_shard < min_gc_pool)
+        {
+            LOG(ERROR) << "gc_global_mem_size_per_shard ("
+                       << opts.gc_global_mem_size_per_shard
+                       << ") must be at least max_segments_batch * "
+                          "segment_size ("
+                       << min_gc_pool << ")";
+            return false;
+        }
+        if (opts.gc_global_mem_size_per_shard % opts.segment_size != 0)
+        {
+            LOG(ERROR) << "gc_global_mem_size_per_shard ("
+                       << opts.gc_global_mem_size_per_shard
+                       << ") must be a multiple of segment_size ("
+                       << opts.segment_size << ")";
+            return false;
+        }
+        // tail-scratch knob is unbounded above; only sanity-check that a
+        // 0-slot pool is the caller's explicit "fail if cross-chunk" choice.
+        if (opts.pinned_tail_scratch_slots == 0)
+        {
+            LOG(WARNING) << "pinned_tail_scratch_slots is 0; pinned writes "
+                            "with non-segment-aligned size that end at a "
+                            "chunk boundary will fail with InvalidArgs";
+        }
     }
 
     if (opts.data_append_mode)
@@ -2251,6 +2306,16 @@ uint16_t EloqStore::GlobalRegMemIndexBase(size_t shard_id) const
     }
     AsyncIoManager *io_mgr = shards_[shard_id]->IoManager();
     return io_mgr == nullptr ? 0 : io_mgr->GlobalRegMemIndexBase();
+}
+
+size_t EloqStore::TailScratchAcquireCount(size_t shard_id) const
+{
+    if (shard_id >= shards_.size() || shards_[shard_id] == nullptr)
+    {
+        return 0;
+    }
+    AsyncIoManager *io_mgr = shards_[shard_id]->IoManager();
+    return io_mgr == nullptr ? 0 : io_mgr->TailScratchAcquireCount();
 }
 
 bool EloqStore::IsStopped() const

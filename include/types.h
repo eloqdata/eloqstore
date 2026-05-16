@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <utility>  // NOLINT(build/include_order)
+#include <variant>
 #include <vector>
 
 #include "external/span.hpp"
@@ -164,16 +165,41 @@ enum class WriteOp : uint8_t
     Delete
 };
 
+class GlobalRegisteredMemory;
+
 struct WriteDataEntry
 {
+    /**
+     * @brief Variant type backing the very-large-value sink:
+     *  - `std::monostate`: no large value (inline value in `val_` only).
+     *  - `IoStringBuffer`: zero-copy fragments owned by
+     * `GlobalRegisteredMemory` (legacy path).
+     *  - `std::pair<const char *, size_t>`: contiguous pinned memory owned by
+     *    the caller (KV Cache mode). When this arm is active, `val_` may
+     *    additionally carry the metadata blob.
+     */
+    using LargeValueVariant = std::variant<std::monostate,
+                                           IoStringBuffer,
+                                           std::pair<const char *, size_t>>;
+
     WriteDataEntry() = default;
+    /// Inline value (no large value).
     WriteDataEntry(std::string key,
                    std::string val,
                    uint64_t ts,
                    WriteOp op,
                    uint64_t expire_ts = 0);
+    /// Large value via the zero-copy IoStringBuffer path.
     WriteDataEntry(std::string key,
                    IoStringBuffer large_val,
+                   uint64_t ts,
+                   WriteOp op,
+                   uint64_t expire_ts = 0);
+    /// Large value via the KV Cache pinned-memory path. @p val is the metadata
+    /// blob (may be empty); @p large is `(pinned_ptr, size_bytes)`.
+    WriteDataEntry(std::string key,
+                   std::string val,
+                   std::pair<const char *, size_t> large,
                    uint64_t ts,
                    WriteOp op,
                    uint64_t expire_ts = 0);
@@ -181,12 +207,19 @@ struct WriteDataEntry
 
     bool HasLargeValue() const
     {
-        return !large_val_.Fragments().empty();
+        return !std::holds_alternative<std::monostate>(large_val_);
     }
+
+    /// If this entry's large value is an IoStringBuffer, recycle its fragments
+    /// back to @p mem; otherwise no-op (monostate / caller-owned pinned).
+    /// Used by tests and any caller that takes ownership of an
+    /// IoStringBuffer-backed entry.
+    void RecycleLargeValue(GlobalRegisteredMemory *mem,
+                           uint16_t reg_mem_index_base);
 
     std::string key_;
     std::string val_;
-    IoStringBuffer large_val_;
+    LargeValueVariant large_val_;
     uint64_t timestamp_;
     WriteOp op_;
     uint64_t expire_ts_{0};  // 0 means never expire.

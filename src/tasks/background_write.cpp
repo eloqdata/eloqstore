@@ -105,6 +105,33 @@ KvError BackgroundWrite::Compact()
     KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
     CHECK_KV_ERR(err);
 
+    // Short-circuit when there is nothing to compact and nothing to GC:
+    // both mappings empty AND both allocators report zero space. This
+    // happens when a stale CompactRequest (queued legitimately by a
+    // writer's CompactIfNeeded while the partition still had work) gets
+    // dispatched *after* something else already wiped the partition --
+    // typically an ArchiveRequest whose CreateArchive->needs_compact ran
+    // an inline Compact and TriggerFileGC, including rmdir'ing the
+    // partition directory. Without this guard the stale CompactRequest
+    // would call TriggerFileGC -> ExecuteLocalGC -> ListLocalFiles on
+    // the rmdir'd directory and SIGABRT from a filesystem_error.
+    const bool data_clean =
+        !opts->data_append_mode ||
+        (cow_meta_.mapper_->MappingCount() == 0 &&
+         static_cast<AppendAllocator *>(cow_meta_.mapper_->FilePgAllocator())
+                 ->SpaceSize() == 0);
+    const bool seg_clean = cow_meta_.segment_mapper_ == nullptr ||
+                           (cow_meta_.segment_mapper_->MappingCount() == 0 &&
+                            static_cast<AppendAllocator *>(
+                                cow_meta_.segment_mapper_->FilePgAllocator())
+                                    ->SpaceSize() == 0);
+    if (data_clean && seg_clean)
+    {
+        LOG(INFO) << "skip compaction on " << tbl_ident_
+                  << " (no work; stale CompactRequest after prior wipe)";
+        return KvError::NoError;
+    }
+
     // Data pages only participate when the partition is in data-append mode;
     // otherwise the data allocator is not an AppendAllocator and this
     // compaction model (min_file_id / empty_file_cnt statistics, tail rewrite)
@@ -163,16 +190,22 @@ KvError BackgroundWrite::DoCompactDataFile(MovingCachedPages &moving_cached)
     YieldToLowPQ();
     assert(fp_ids.size() == mapping_cnt);
 
-    // Empty mapping: if the allocator still has non-empty space, drop the
-    // empty files via a stat update and return. No rewrite pass is needed, and
-    // the unconditional UpdateMeta in Compact() will flush the current
-    // mapping.
+    // Empty mapping: forfeit the tail file too. The upcoming TriggerFileGC
+    // will delete every data file on disk (retained_files is empty), so
+    // advance min_file_id past the tail and let UpdateStat snap max_fp_id_
+    // up to that boundary. Without this, SpaceSize stays at the partial
+    // tail (max_fp_id mod pages_per_file), MapperExceedsAmplification keeps
+    // firing on mapping_cnt==0 && space_size>0, and the next archive tick
+    // would re-enter Compact -> TriggerFileGC on a rmdir'd partition.
     if (fp_ids.empty())
     {
         if (allocator->SpaceSize() > 0)
         {
-            FilePageId max_fp_id = allocator->MaxFilePageId();
-            allocator->UpdateStat(max_fp_id >> opts->pages_per_file_shift, 0);
+            const uint32_t mask = (1u << opts->pages_per_file_shift) - 1;
+            const FileId next_file =
+                static_cast<FileId>((allocator->MaxFilePageId() + mask) >>
+                                    opts->pages_per_file_shift);
+            allocator->UpdateStat(next_file, 0);
         }
         return KvError::NoError;
     }
@@ -342,14 +375,19 @@ KvError BackgroundWrite::DoCompactSegmentFile()
     YieldToLowPQ();
     assert(fp_ids.size() == mapping_cnt);
 
-    // Empty segment mapping: drop empty files via a stat update and return.
+    // Empty segment mapping: forfeit the tail segment file too. See the
+    // matching note in DoCompactDataFile — without rounding up, SpaceSize
+    // stays at the partial tail and the empty-wipe partition keeps
+    // re-entering Compact -> TriggerFileGC on every archive tick.
     if (fp_ids.empty())
     {
         if (seg_allocator->SpaceSize() > 0)
         {
-            FilePageId max_fp_id = seg_allocator->MaxFilePageId();
-            seg_allocator->UpdateStat(
-                max_fp_id >> opts->segments_per_file_shift, 0);
+            const uint32_t mask = (1u << opts->segments_per_file_shift) - 1;
+            const FileId next_file =
+                static_cast<FileId>((seg_allocator->MaxFilePageId() + mask) >>
+                                    opts->segments_per_file_shift);
+            seg_allocator->UpdateStat(next_file, 0);
         }
         return KvError::NoError;
     }

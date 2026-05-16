@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <deque>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -140,16 +141,94 @@ public:
     {
         return 0;
     }
+    /**
+     * @brief Resolve a pinned-memory address to its io_uring fixed-buffer
+     * index. Returns UINT16_MAX when @p ptr is not within any registered
+     * pinned chunk (the default for managers that do not support KV Cache
+     * pinned mode).
+     */
+    virtual uint16_t BufIndexForAddress(const char *ptr) const
+    {
+        (void) ptr;
+        return std::numeric_limits<uint16_t>::max();
+    }
 
+    /**
+     * @brief Pinned chunk metadata: the chunk's [base, base+size) range and
+     * its io_uring fixed-buffer index. Returned by PinnedChunkFor so the
+     * caller can both index a fixed write and bounds-check additional
+     * sub-ranges (e.g. the rounded-up K*segment_size tail) without a second
+     * linear scan.
+     */
+    struct PinnedChunkInfo
+    {
+        const char *base;
+        size_t size;
+        uint16_t buf_index;
+    };
+
+    /**
+     * @brief Locate the registered pinned chunk containing @p ptr and return
+     * its full bounds + buf_index. Returns nullopt when @p ptr is not in any
+     * registered chunk.
+     */
+    virtual std::optional<PinnedChunkInfo> PinnedChunkFor(
+        const char *ptr) const
+    {
+        (void) ptr;
+        return std::nullopt;
+    }
+
+    /**
+     * @brief Acquire a `segment_size`-sized registered scratch slot, used
+     * for the pinned-write tail fallback when the caller's pinned sub-range
+     * doesn't extend to K*segment_size. Blocks (yields the coroutine) until
+     * a slot is free. Returns nullptr when the pool isn't allocated (non-
+     * pinned mode or `pinned_tail_scratch_slots == 0`).
+     */
+    virtual char *AcquireTailScratch(uint16_t &buf_index)
+    {
+        (void) buf_index;
+        return nullptr;
+    }
+    virtual void ReleaseTailScratch(char *ptr)
+    {
+        (void) ptr;
+    }
+    /**
+     * @brief Number of times `AcquireTailScratch` has been called since
+     * BootstrapRing. Test-only observability for the pinned-write fast-vs-
+     * fallback path; default zero for non-pinned-mode managers.
+     */
+    virtual size_t TailScratchAcquireCount() const
+    {
+        return 0;
+    }
+
+    /**
+     * @brief Read K segments into pre-registered buffers.
+     *
+     * Every segment except possibly the last reads `segment_size` bytes.
+     * The last segment (`segment_ids.back()`) reads `tail_size` bytes when
+     * @p tail_size is non-zero; otherwise it also reads `segment_size`.
+     * Only the tail may be partial -- the design contract guarantees that
+     * non-tail segments in a value are always full.
+     *
+     * @param tail_size 0 (default) means "all segments read segment_size"
+     *   -- preserves existing behavior for callers that don't need partial
+     *   reads. When non-zero, must be 4 KiB aligned and `<= segment_size`.
+     */
     virtual KvError ReadSegments(const TableIdent &tbl_id,
                                  std::span<const FilePageId> segment_ids,
                                  std::span<char *> dst_ptrs,
-                                 std::span<const uint16_t> buf_indices)
+                                 std::span<const uint16_t> buf_indices,
+                                 uint32_t tail_size = 0)
     {
         (void) tbl_id;
         (void) segment_ids;
         (void) dst_ptrs;
         (void) buf_indices;
+        (void) tail_size;
         return KvError::InvalidArgs;
     }
     virtual KvError WriteSegments(const TableIdent &tbl_id,
@@ -476,7 +555,8 @@ public:
     KvError ReadSegments(const TableIdent &tbl_id,
                          std::span<const FilePageId> segment_ids,
                          std::span<char *> dst_ptrs,
-                         std::span<const uint16_t> buf_indices) override;
+                         std::span<const uint16_t> buf_indices,
+                         uint32_t tail_size = 0) override;
     KvError WriteSegments(const TableIdent &tbl_id,
                           std::span<const FilePageId> segment_ids,
                           std::span<const char *> src_ptrs,
@@ -913,6 +993,21 @@ public:
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};
 
+    // Counter for consecutive Submit() calls that skipped the kernel
+    // entry (no prepared SQEs and IORING_SQ_TASKRUN not set). When the
+    // ring is configured with IORING_SETUP_DEFER_TASKRUN, the kernel
+    // never delivers CQEs autonomously -- the user thread must enter
+    // via io_uring_enter(GETEVENTS) to drive deferred taskrun. There is
+    // a brief window after I/O completion before the kernel sets
+    // IORING_SQ_TASKRUN; if the shard polls the flag during that window
+    // and there are no SQEs to submit, it would otherwise spin in user
+    // mode forever (observed deadlock at high read concurrency). To
+    // bound that window, we force an io_uring_enter(GETEVENTS) every
+    // kForceSubmitEveryNoOps iterations even when the flag says
+    // there's nothing to do.
+    static constexpr uint32_t kForceSubmitEveryNoOps = 10;
+    uint32_t consecutive_skipped_submits_{0};
+
     // Active branch for this shard.
     std::string active_branch_{MainBranchName};
 
@@ -921,11 +1016,62 @@ public:
     // Uses node_hash_set for pointer stability across insertions.
     absl::node_hash_set<std::string> branch_name_pool_;
 
-    KvError BootstrapRing(Shard *shard,
-                          GlobalRegisteredMemory *global_reg_mem = nullptr);
+    /**
+     * Bootstrap inputs for the very-large-value zero-copy memory.
+     *  - `GlobalRegisteredMemory *`: external instance owned by the caller
+     *    (legacy zero-copy mode). nullptr disables zero-copy entirely.
+     *  - `std::span<const std::pair<char*, size_t>>`: KV Cache pinned memory
+     *    chunks (shared across shards). EloqStore additionally constructs a
+     *    private GlobalRegisteredMemory per shard to back background tasks
+     *    that cannot use the pinned chunks.
+     */
+    using GlobalMemoryConfig =
+        std::variant<GlobalRegisteredMemory *,
+                     std::span<const std::pair<char *, size_t>>>;
 
+    KvError BootstrapRing(Shard *shard, GlobalMemoryConfig config = {});
+
+    // Set when the GlobalRegisteredMemory pointed to by global_reg_mem_ is
+    // owned by this IouringMgr (KV Cache pinned-mode private GC pool).
+    std::unique_ptr<GlobalRegisteredMemory> private_gc_mem_;
     GlobalRegisteredMemory *global_reg_mem_{nullptr};
     uint16_t global_reg_mem_index_base_{0};
+
+    // KV Cache pinned-mode metadata. Empty when not in pinned mode.
+    std::vector<std::pair<char *, size_t>> pinned_chunks_;
+    uint16_t pinned_index_base_{0};
+
+    // Tail-scratch pool: a contiguous registered buffer of
+    // `pinned_tail_scratch_slots * segment_size` bytes used by the pinned-
+    // write tail fallback. Allocated only when the KV Cache pinned mode is
+    // active and `pinned_tail_scratch_slots > 0`. The slot size is
+    // `options_->segment_size` and the slot count is
+    // `options_->pinned_tail_scratch_slots`; both are read directly from
+    // KvOptions rather than mirrored as members.
+    //
+    // Registered as a *single* iovec covering the whole buffer: the kernel
+    // only requires that `[slot_ptr, slot_ptr + segment_size)` lies within
+    // the iovec at `tail_scratch_buf_idx_`, which is trivially true for any
+    // slot in the contiguous buffer. All slots share the same buf_index.
+    //
+    // The free list is intrusive: when a slot is free, its first 8 bytes
+    // hold a `char *` to the next free slot (or nullptr at the tail). The
+    // free-state and in-use-state never overlap in time -- once a slot is
+    // acquired, the caller overwrites it with I/O data; once released, we
+    // immediately re-stamp the first 8 bytes with the next-free pointer. The
+    // pool is per-shard and single-threaded (only the shard's coroutine
+    // touches it), so the concurrency hazards that forced
+    // `GlobalRegisteredMemory` to use a separate `successors_` table do not
+    // apply here. The pointer is read/written via `std::memcpy` to sidestep
+    // strict-aliasing concerns.
+    std::unique_ptr<char, decltype(&std::free)> tail_scratch_buf_{nullptr,
+                                                                  &std::free};
+    uint16_t tail_scratch_buf_idx_{0};  // iovec index of the pool
+    char *tail_scratch_free_{nullptr};  // intrusive free-list head
+    WaitingZone tail_scratch_waiting_;
+    // Increment-on-acquire counter, exposed for tests that want to assert
+    // the fast-path (no-scratch) frequency. Not used by production code.
+    size_t tail_scratch_acquire_count_{0};
 
 public:
     GlobalRegisteredMemory *GetGlobalRegisteredMemory() const override
@@ -936,6 +1082,47 @@ public:
     {
         return global_reg_mem_index_base_;
     }
+    /**
+     * @brief Resolve a pinned-memory address to its io_uring fixed-buffer
+     * index. Linear-searches the registered pinned chunks; the address must
+     * fall within exactly one chunk. Returns UINT16_MAX if not found.
+     */
+    uint16_t BufIndexForAddress(const char *ptr) const override;
+
+    char *AcquireTailScratch(uint16_t &buf_index) override;
+    void ReleaseTailScratch(char *ptr) override;
+    size_t TailScratchAcquireCount() const override
+    {
+        return tail_scratch_acquire_count_;
+    }
+
+    /**
+     * @brief Pure-function form of BufIndexForAddress: searches @p chunks for
+     * the one containing @p ptr and returns base_index + chunk_index, or
+     * UINT16_MAX if not found. Exposed statically so the lookup can be unit-
+     * tested without standing up a full IouringMgr.
+     */
+    static uint16_t LookupBufIndex(
+        std::span<const std::pair<char *, size_t>> chunks,
+        uint16_t base_index,
+        const char *ptr);
+
+    /**
+     * @brief Locate the pinned chunk containing @p ptr and return its
+     * bounds + buf_index. See AsyncIoManager::PinnedChunkFor.
+     */
+    std::optional<PinnedChunkInfo> PinnedChunkFor(
+        const char *ptr) const override;
+
+    /**
+     * @brief Pure-function form of PinnedChunkFor: counterpart to
+     * LookupBufIndex that returns the full chunk record instead of just
+     * its buf_index.
+     */
+    static std::optional<PinnedChunkInfo> LookupPinnedChunk(
+        std::span<const std::pair<char *, size_t>> chunks,
+        uint16_t base_index,
+        const char *ptr);
 };
 
 class CloudStoreMgr final : public IouringMgr

@@ -1,5 +1,7 @@
 #pragma once
 
+#include <span>
+#include <string_view>
 #include <utility>
 
 #include "storage/data_page_builder.h"
@@ -156,12 +158,35 @@ private:
 
     /**
      * @brief Write a very large value to segment files.
-     * Allocates logical segment IDs, writes segments via WriteSegments,
-     * and encodes the value content as segment ID pointers into
-     * large_value_content_.
-     * @param entry The write data entry containing the large value.
+     *
+     * Dispatches on `entry.large_val_`'s active variant:
+     *  - `IoStringBuffer`: derives per-segment ptrs / buf_indices from the
+     *    fragments and forwards to WriteLargeValueSegments.
+     *  - `std::pair<const char *, size_t>` (pinned): splits the contiguous
+     *    range into K = ceil(size / segment_size) segment-sized chunks,
+     *    looks up the shared buf_index once via AsyncIoManager::
+     *    BufIndexForAddress, and forwards.
+     *
+     * On both arms, `entry.val_` is passed as the metadata blob -- empty
+     * for legacy IoStringBuffer writes (the metadata trailer is omitted),
+     * non-empty for KV Cache pinned writes that carry metadata.
      */
     KvError WriteLargeValue(const WriteDataEntry &entry);
+
+    /**
+     * @brief Shared core of WriteLargeValue: allocates K logical/physical
+     * segment IDs, issues batched WriteSegments, and encodes the resulting
+     * value content (including @p metadata) into `large_value_content_`.
+     *
+     * @param actual_length True byte length of the very large value.
+     * @param ptrs Source pointers for each segment (size = K).
+     * @param buf_indices io_uring buffer index per segment (size = K).
+     * @param metadata Optional metadata blob to append in the encoded trailer.
+     */
+    KvError WriteLargeValueSegments(uint32_t actual_length,
+                                    std::span<const char *> ptrs,
+                                    std::span<const uint16_t> buf_indices,
+                                    std::string_view metadata);
     /**
      * @brief Free logical segments for a deleted/overwritten large value.
      * @param encoded_content The encoded large value content from the data

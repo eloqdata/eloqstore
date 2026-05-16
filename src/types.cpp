@@ -1,5 +1,7 @@
 #include "types.h"
 
+#include "global_registered_memory.h"
+
 namespace eloqstore
 {
 std::ostream &operator<<(std::ostream &out, const TableIdent &tid)
@@ -89,9 +91,33 @@ WriteDataEntry::WriteDataEntry(std::string key,
 {
 }
 
+WriteDataEntry::WriteDataEntry(std::string key,
+                               std::string val,
+                               std::pair<const char *, size_t> large,
+                               uint64_t ts,
+                               WriteOp op,
+                               uint64_t expire_ts)
+    : key_(std::move(key)),
+      val_(std::move(val)),
+      large_val_(large),
+      timestamp_(ts),
+      op_(op),
+      expire_ts_(expire_ts)
+{
+}
+
 bool WriteDataEntry::operator<(const WriteDataEntry &other) const
 {
     // TODO: use comparator defined in KvOptions ?
     return key_ < other.key_;
+}
+
+void WriteDataEntry::RecycleLargeValue(GlobalRegisteredMemory *mem,
+                                       uint16_t reg_mem_index_base)
+{
+    if (auto *iosb = std::get_if<IoStringBuffer>(&large_val_); iosb != nullptr)
+    {
+        iosb->Recycle(mem, reg_mem_index_base);
+    }
 }
 }  // namespace eloqstore

@@ -201,8 +201,55 @@ struct KvOptions
      * num_threads entries; each instance is registered with that shard's
      * io_uring and used for zero-copy very-large-value I/O. Leave empty to
      * disable the feature on this EloqStore instance.
+     *
+     * Mutually exclusive with `pinned_memory_chunks` (KV Cache mode).
      */
     std::vector<GlobalRegisteredMemory *> global_registered_memories;
+    /**
+     * @brief Raw pinned memory chunks owned by KV Cache (PyTorch-registered).
+     * When non-empty, EloqStore registers these chunks in every shard's
+     * io_uring as fixed buffers for zero-copy reads/writes of very large
+     * values. Unlike `global_registered_memories`, the chunks are shared
+     * across all shards (KV Cache manages them centrally) and each shard's
+     * ring registers them independently. Each chunk's base address and size
+     * must be 4 KiB aligned. Leave empty to disable KV Cache mode.
+     *
+     * Mutually exclusive with `global_registered_memories`.
+     */
+    std::vector<std::pair<char *, size_t>> pinned_memory_chunks;
+    /**
+     * @brief Per-shard capacity for the internal GlobalRegisteredMemory
+     * EloqStore allocates in KV Cache mode (pinned_memory_chunks non-empty)
+     * to back GC and compaction reads/writes. Online reads/writes use the
+     * caller's pinned chunks; background tasks (GC, compaction) cannot,
+     * because EloqStore does not manage their lifetime, so an internal pool
+     * is required. Default 32 MiB; must satisfy
+     * `max_segments_batch * segment_size <= gc_global_mem_size_per_shard`.
+     */
+    size_t gc_global_mem_size_per_shard = 32ULL * MB;
+    /**
+     * @brief Number of segment-sized scratch slots EloqStore allocates per
+     * shard to back the pinned-write tail fallback. Only meaningful when
+     * `pinned_memory_chunks` is non-empty.
+     *
+     * Background: a pinned write of `size` bytes flushes K = ceil(size /
+     * segment_size) full segments to disk. When `size` does not divide
+     * `segment_size`, the kernel's fixed write of the final segment reads
+     * `K*segment_size - size` bytes past the caller's logical value end.
+     * If those trailing bytes still lie inside the caller's registered
+     * chunk (the common case), no scratch is needed and the write is
+     * zero-copy. If they fall outside the registered chunk (the caller's
+     * pinned sub-range ends at a chunk boundary or has no slack), EloqStore
+     * acquires one of these scratch slots, copies the meaningful tail into
+     * it, zero-pads the rest, and writes from there instead.
+     *
+     * Each slot is `segment_size` bytes. Defaults to `max_segments_batch`
+     * (sized to bound concurrent tail-fallback writes per shard). Set to 0
+     * to disable the fallback -- the caller must then guarantee that
+     * `[ptr, ptr + K*segment_size)` is fully inside one registered chunk
+     * for every pinned write.
+     */
+    uint16_t pinned_tail_scratch_slots = max_segments_batch;
     /**
      * @brief Number of segments per segment file (1 <<
      * segments_per_file_shift). Default 7 means 128 segments per file (32MB

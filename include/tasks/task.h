@@ -79,7 +79,13 @@ KvError GetOverflowValue(const TableIdent &tbl_id,
 class GlobalRegisteredMemory;
 
 /**
- * @brief Read a large value stored in segment files.
+ * @brief Read a large value stored in segment files into an IoStringBuffer.
+ *
+ * Segments are allocated from @p global_mem and appended to @p large_value
+ * one per K. The metadata trailer (if any) is parsed but not surfaced here -
+ * the caller should call DecodeLargeValueHeader / DecodeLargeValueContent
+ * separately if metadata is needed.
+ *
  * @param tbl_id The table partition identifier.
  * @param seg_mapping The segment mapping snapshot.
  * @param encoded_content The encoded large value content from the data page.
@@ -97,22 +103,49 @@ KvError GetLargeValue(const TableIdent &tbl_id,
                       std::function<void()> yield);
 
 /**
- * @brief Resolve the value at the iterator's current position.
+ * @brief Read a large value stored in segment files into contiguous pinned
+ * memory (KV Cache mode).
  *
- * Writes the decoded value bytes directly into @p value. If the entry is a
- * large value, @p large_value is populated instead and @p value is left
- * unchanged.
+ * @param tbl_id The table partition identifier.
+ * @param seg_mapping The segment mapping snapshot.
+ * @param encoded_content The encoded large value content from the data page.
+ * @param dst Pinned memory base where the value is written. Must lie within
+ *   a single chunk registered with this shard's io_uring; resolved to a
+ *   buffer index via IouringMgr::BufIndexForAddress once and reused for all
+ *   segments.
+ * @param dst_size Capacity at @p dst. Must satisfy
+ *   `(K - 1) * segment_size + 4096 <= dst_size <= K * segment_size`. The final
+ *   segment is read with `dst_size - (K - 1) * segment_size` bytes.
+ * @param io_mgr The IO manager that owns the io_uring and the buf-index
+ *   resolution for the pinned chunks.
  */
-KvError ResolveValue(const TableIdent &tbl_id,
-                     MappingSnapshot *mapping,
-                     DataPageIter &iter,
-                     std::string &value,
-                     const compression::DictCompression *compression,
-                     MappingSnapshot *seg_mapping = nullptr,
-                     IoStringBuffer *large_value = nullptr,
-                     GlobalRegisteredMemory *global_mem = nullptr,
-                     uint16_t reg_mem_index_base = 0,
-                     std::function<void()> yield = nullptr);
+KvError GetLargeValueContiguous(const TableIdent &tbl_id,
+                                const MappingSnapshot *seg_mapping,
+                                std::string_view encoded_content,
+                                char *dst,
+                                size_t dst_size,
+                                AsyncIoManager *io_mgr);
+
+/**
+ * @brief Resolve the iterator's entry into @p value as either an inline value
+ * or the metadata trailer.
+ *
+ * - Non-large entry: writes the decoded inline / overflow / compressed bytes.
+ * - Large entry: writes the metadata blob (empty if the entry carries no
+ *   metadata trailer). The segment bytes are not touched -- the caller invokes
+ *   GetLargeValue or GetLargeValueContiguous separately when they need the
+ *   value's payload.
+ *
+ * Asserting `mapping` and `compression` are used directly here (for overflow
+ * resolution and compression respectively); no other plumbing is hidden in
+ * delegation.
+ */
+KvError ResolveValueOrMetadata(const TableIdent &tbl_id,
+                               MappingSnapshot *mapping,
+                               DataPageIter &iter,
+                               std::string &value,
+                               const compression::DictCompression *compression,
+                               bool extract_metadata = true);
 /**
  * @brief Decode overflow pointers.
  * @param encoded The encoded overflow pointers.

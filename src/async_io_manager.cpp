@@ -209,8 +209,7 @@ KvError IouringMgr::Init(Shard *shard)
     return KvError::NoError;
 }
 
-KvError IouringMgr::BootstrapRing(Shard *shard,
-                                  GlobalRegisteredMemory *global_reg_mem)
+KvError IouringMgr::BootstrapRing(Shard *shard, GlobalMemoryConfig config)
 {
     if (ring_inited_)
     {
@@ -370,14 +369,108 @@ KvError IouringMgr::BootstrapRing(Shard *shard,
         }
     }
 
-    global_reg_mem_ = global_reg_mem;
+    pinned_chunks_.clear();
+    pinned_index_base_ = 0;
+    private_gc_mem_.reset();
+    global_reg_mem_ = nullptr;
     global_reg_mem_index_base_ = 0;
-    if (global_reg_mem != nullptr)
+    tail_scratch_buf_.reset();
+    tail_scratch_free_ = nullptr;
+    tail_scratch_buf_idx_ = 0;
+
+    if (std::holds_alternative<std::span<const std::pair<char *, size_t>>>(
+            config))
     {
-        global_reg_mem_index_base_ = static_cast<uint16_t>(iovecs.size());
-        for (const auto &chunk : global_reg_mem->MemChunks())
+        // KV Cache pinned-memory mode: register the caller's pinned chunks,
+        // then allocate a private GlobalRegisteredMemory for background tasks
+        // (GC / compaction) that cannot use the caller-managed memory.
+        auto pinned_span =
+            std::get<std::span<const std::pair<char *, size_t>>>(config);
+        if (!pinned_span.empty())
         {
-            iovecs.emplace_back(chunk.base_, chunk.size_);
+            pinned_index_base_ = static_cast<uint16_t>(iovecs.size());
+            pinned_chunks_.reserve(pinned_span.size());
+            for (const auto &chunk : pinned_span)
+            {
+                pinned_chunks_.emplace_back(chunk.first, chunk.second);
+                iovecs.emplace_back(chunk.first, chunk.second);
+            }
+        }
+
+        const size_t gc_pool_bytes = options_->gc_global_mem_size_per_shard;
+        if (gc_pool_bytes > 0)
+        {
+            // Single chunk for the private pool keeps iovec count low; chunk
+            // size == total size satisfies the
+            // total_size-multiple-of-chunk_size constraint.
+            private_gc_mem_ = std::make_unique<GlobalRegisteredMemory>(
+                options_->segment_size, gc_pool_bytes, gc_pool_bytes);
+            global_reg_mem_ = private_gc_mem_.get();
+            global_reg_mem_index_base_ = static_cast<uint16_t>(iovecs.size());
+            for (const auto &chunk : private_gc_mem_->MemChunks())
+            {
+                iovecs.emplace_back(chunk.base_, chunk.size_);
+            }
+        }
+
+        // Tail-scratch pool: a small registered pool of segment-sized slots
+        // used when the caller's pinned sub-range ends before
+        // K * segment_size. Each slot is iovec-registered so io_uring fixed
+        // writes from it succeed.
+        if (options_->pinned_tail_scratch_slots > 0)
+        {
+            const size_t slot_size = options_->segment_size;
+            const size_t pool_bytes =
+                static_cast<size_t>(options_->pinned_tail_scratch_slots) *
+                slot_size;
+            void *raw_ptr = nullptr;
+            int aligned = posix_memalign(&raw_ptr, page_align, pool_bytes);
+            if (aligned == 0 && raw_ptr != nullptr)
+            {
+                tail_scratch_buf_.reset(static_cast<char *>(raw_ptr));
+                tail_scratch_buf_idx_ = static_cast<uint16_t>(iovecs.size());
+                // Register the whole pool as a single iovec; all slots share
+                // this buf_index.
+                iovecs.push_back(iovec{
+                    .iov_base = tail_scratch_buf_.get(),
+                    .iov_len = pool_bytes,
+                });
+                // Build the intrusive free list. Each slot's first 8 bytes
+                // store the address of the next free slot; nullptr at the
+                // tail. We chain in forward order so the list head ends up
+                // at slot N-1.
+                const uint16_t slot_count = options_->pinned_tail_scratch_slots;
+                tail_scratch_free_ = nullptr;
+                for (uint16_t i = 0; i < slot_count; ++i)
+                {
+                    char *slot = tail_scratch_buf_.get() +
+                                 static_cast<size_t>(i) * slot_size;
+                    std::memcpy(slot, &tail_scratch_free_, sizeof(char *));
+                    tail_scratch_free_ = slot;
+                }
+            }
+            else
+            {
+                LOG(WARNING)
+                    << "posix_memalign failed for tail scratch pool, error: "
+                    << aligned;
+            }
+        }
+    }
+    else
+    {
+        // Legacy mode: an externally-owned GlobalRegisteredMemory pointer (may
+        // be nullptr to disable zero-copy entirely).
+        GlobalRegisteredMemory *ext =
+            std::get<GlobalRegisteredMemory *>(config);
+        global_reg_mem_ = ext;
+        if (ext != nullptr)
+        {
+            global_reg_mem_index_base_ = static_cast<uint16_t>(iovecs.size());
+            for (const auto &chunk : ext->MemChunks())
+            {
+                iovecs.emplace_back(chunk.base_, chunk.size_);
+            }
         }
     }
 
@@ -486,12 +579,111 @@ void IouringMgr::InitBackgroundJob()
     Shard *target_shard = shard;
     CHECK(target_shard != nullptr)
         << "Shard must be set before initializing io_uring";
-    KvError err = BootstrapRing(target_shard, target_shard->GlobalRegMem());
+    GlobalMemoryConfig config;
+    if (!options_->pinned_memory_chunks.empty())
+    {
+        config = std::span<const std::pair<char *, size_t>>(
+            options_->pinned_memory_chunks.data(),
+            options_->pinned_memory_chunks.size());
+    }
+    else
+    {
+        config = target_shard->GlobalRegMem();
+    }
+    KvError err = BootstrapRing(target_shard, config);
     if (err != KvError::NoError)
     {
         LOG(FATAL) << "failed to initialize io queue in background thread: "
                    << ErrorString(err);
     }
+}
+
+uint16_t IouringMgr::BufIndexForAddress(const char *ptr) const
+{
+    return LookupBufIndex(pinned_chunks_, pinned_index_base_, ptr);
+}
+
+char *IouringMgr::AcquireTailScratch(uint16_t &buf_index)
+{
+    if (tail_scratch_buf_ == nullptr)
+    {
+        buf_index = std::numeric_limits<uint16_t>::max();
+        return nullptr;
+    }
+    ++tail_scratch_acquire_count_;
+    while (tail_scratch_free_ == nullptr)
+    {
+        tail_scratch_waiting_.Wait(ThdTask());
+    }
+    char *slot = tail_scratch_free_;
+    // Pop the head: load `next` from the slot's first 8 bytes via memcpy
+    // (well-defined, sidesteps strict-aliasing concerns).
+    std::memcpy(&tail_scratch_free_, slot, sizeof(char *));
+    // The pool is one registered iovec; every slot shares its buf_index.
+    buf_index = tail_scratch_buf_idx_;
+    return slot;
+}
+
+void IouringMgr::ReleaseTailScratch(char *ptr)
+{
+    if (tail_scratch_buf_ == nullptr)
+    {
+        return;
+    }
+    assert(ptr >= tail_scratch_buf_.get());
+    assert(static_cast<size_t>(ptr - tail_scratch_buf_.get()) <
+           static_cast<size_t>(options_->pinned_tail_scratch_slots) *
+               options_->segment_size);
+    assert(static_cast<size_t>(ptr - tail_scratch_buf_.get()) %
+               options_->segment_size ==
+           0);
+    // Push back onto the head: stamp the slot's first 8 bytes with the
+    // current free pointer, then advance the head.
+    std::memcpy(ptr, &tail_scratch_free_, sizeof(char *));
+    tail_scratch_free_ = ptr;
+    tail_scratch_waiting_.WakeOne();
+}
+
+uint16_t IouringMgr::LookupBufIndex(
+    std::span<const std::pair<char *, size_t>> chunks,
+    uint16_t base_index,
+    const char *ptr)
+{
+    for (size_t i = 0; i < chunks.size(); ++i)
+    {
+        const auto &chunk = chunks[i];
+        if (ptr >= chunk.first && ptr < chunk.first + chunk.second)
+        {
+            return static_cast<uint16_t>(base_index + i);
+        }
+    }
+    return std::numeric_limits<uint16_t>::max();
+}
+
+std::optional<AsyncIoManager::PinnedChunkInfo> IouringMgr::PinnedChunkFor(
+    const char *ptr) const
+{
+    return LookupPinnedChunk(pinned_chunks_, pinned_index_base_, ptr);
+}
+
+std::optional<AsyncIoManager::PinnedChunkInfo> IouringMgr::LookupPinnedChunk(
+    std::span<const std::pair<char *, size_t>> chunks,
+    uint16_t base_index,
+    const char *ptr)
+{
+    for (size_t i = 0; i < chunks.size(); ++i)
+    {
+        const auto &chunk = chunks[i];
+        if (ptr >= chunk.first && ptr < chunk.first + chunk.second)
+        {
+            return PinnedChunkInfo{
+                .base = chunk.first,
+                .size = chunk.second,
+                .buf_index = static_cast<uint16_t>(base_index + i),
+            };
+        }
+    }
+    return std::nullopt;
 }
 
 std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
@@ -793,11 +985,22 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
 KvError IouringMgr::ReadSegments(const TableIdent &tbl_id,
                                  std::span<const FilePageId> segment_ids,
                                  std::span<char *> dst_ptrs,
-                                 std::span<const uint16_t> buf_indices)
+                                 std::span<const uint16_t> buf_indices,
+                                 uint32_t tail_size)
 {
     assert(segment_ids.size() <= max_segments_batch);
     assert(segment_ids.size() == dst_ptrs.size());
     assert(segment_ids.size() == buf_indices.size());
+
+    const uint32_t seg_size = options_->segment_size;
+    // Validate tail_size: must be 4 KiB aligned and <= segment_size when set.
+    if (tail_size != 0 &&
+        (tail_size > seg_size || (tail_size & (4096u - 1u)) != 0))
+    {
+        return KvError::InvalidArgs;
+    }
+    // The tail-size override applies to the last entry of the batch.
+    const size_t tail_idx = segment_ids.empty() ? 0 : segment_ids.size() - 1;
 
     struct SegReadReq : BaseReq
     {
@@ -850,9 +1053,12 @@ KvError IouringMgr::ReadSegments(const TableIdent &tbl_id,
             ThdTask(), std::move(fd_ref), offset, dst_ptrs[i], buf_indices[i]);
     }
 
-    const uint32_t seg_size = options_->segment_size;
+    // Read length per request: every entry uses `seg_size` except the tail
+    // when `tail_size != 0`.
+    auto read_size_for = [seg_size, tail_size, tail_idx](size_t i) -> uint32_t
+    { return (tail_size != 0 && i == tail_idx) ? tail_size : seg_size; };
 
-    auto send_req = [this, seg_size](SegReadReq *req)
+    auto send_req = [this](SegReadReq *req, uint32_t read_size)
     {
         auto [fd, registered] = req->fd_ref_.FdPair();
         io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, req);
@@ -861,26 +1067,28 @@ KvError IouringMgr::ReadSegments(const TableIdent &tbl_id,
             sqe->flags |= IOSQE_FIXED_FILE;
         }
         io_uring_prep_read_fixed(
-            sqe, fd, req->dst_, seg_size, req->offset_, req->buf_index_);
+            sqe, fd, req->dst_, read_size, req->offset_, req->buf_index_);
     };
 
     // Send and retry loop.
     while (true)
     {
         bool all_finished = true;
-        for (SegReadReq &req : reqs)
+        for (size_t i = 0; i < reqs.size(); ++i)
         {
+            SegReadReq &req = reqs[i];
             if (req.done_)
             {
                 continue;
             }
 
+            const uint32_t expected = read_size_for(i);
             int res = req.res_;
             KvError err = ToKvError(res);
-            if ((res >= 0 && static_cast<uint32_t>(res) < seg_size) ||
+            if ((res >= 0 && static_cast<uint32_t>(res) < expected) ||
                 err == KvError::TryAgain)
             {
-                send_req(&req);
+                send_req(&req, expected);
                 all_finished = false;
             }
             else if (err != KvError::NoError)
@@ -890,7 +1098,7 @@ KvError IouringMgr::ReadSegments(const TableIdent &tbl_id,
             }
             else
             {
-                assert(static_cast<uint32_t>(res) == seg_size);
+                assert(static_cast<uint32_t>(res) == expected);
                 req.done_ = true;
             }
         }
@@ -1745,8 +1953,35 @@ void IouringMgr::Submit()
 
     if (prepared_before == 0 && !need_taskrun)
     {
+        // The common no-op path. With IORING_SETUP_DEFER_TASKRUN there is
+        // a race window after I/O completion where the kernel has work
+        // queued but has not yet set IORING_SQ_TASKRUN. If we never
+        // re-enter the kernel, those CQEs never get delivered and any
+        // tasks waiting on them stall indefinitely (the shard thread
+        // pegs a core in user mode and client `Wait()`s never return).
+        //
+        // Bound the worst-case stall by forcing an
+        // io_uring_enter(GETEVENTS) every kForceSubmitEveryNoOps
+        // iterations even when the flag claims there is nothing to do.
+        // The extra syscall amortizes to 1 / N iterations, so the
+        // overhead is small while the recovery window is bounded.
+        if (++consecutive_skipped_submits_ < kForceSubmitEveryNoOps)
+        {
+            return;
+        }
+        consecutive_skipped_submits_ = 0;
+        int forced_ret = io_uring_enter(
+            ring_.ring_fd, 0, 0, IORING_ENTER_GETEVENTS, nullptr);
+        if (__builtin_expect(forced_ret < 0, 0))
+        {
+            LOG(ERROR) << "io_uring_enter(GETEVENTS) [forced] failed "
+                       << forced_ret;
+        }
         return;
     }
+
+    // Any path that actually enters the kernel resets the skip counter.
+    consecutive_skipped_submits_ = 0;
 
     int ret = 0;
     if (prepared_before == 0)

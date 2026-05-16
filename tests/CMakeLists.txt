@@ -17,6 +17,7 @@ set(LARGE_VALUE_SOURCES
     large_value_concurrency.cpp
     large_value_fault_injection.cpp
     large_value_benchmark.cpp
+    large_value_gc.cpp
 )
 
 set(UTEST_SOURCES
@@ -42,6 +43,8 @@ set(UTEST_SOURCES
     global_registered_memory.cpp
     io_string_buffer.cpp
     data_page_large_value.cpp
+    iouring_pinned_lookup.cpp
+    iouring_tail_scratch.cpp
     segment_allocator.cpp
 )
 

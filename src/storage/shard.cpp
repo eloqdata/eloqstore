@@ -502,13 +502,81 @@ bool Shard::ProcessReq(KvRequest *req)
         auto lbd = [task, req]() -> KvError
         {
             auto read_req = static_cast<ReadRequest *>(req);
-            KvError err = task->Read(req->TableId(),
-                                     read_req->Key(),
-                                     read_req->value_,
-                                     read_req->ts_,
-                                     read_req->expire_ts_,
-                                     &read_req->large_value_);
-            return err;
+            // The variant alternative selects the destination; the type
+            // system enforces "at most one container" so no runtime check
+            // is needed.
+            return std::visit(
+                [&](auto &&dest) -> KvError
+                {
+                    using T = std::decay_t<decltype(dest)>;
+                    if constexpr (std::is_same_v<T, std::monostate>)
+                    {
+                        // No destination -- metadata-only mode. No segment
+                        // reads; `value_` receives inline value or
+                        // metadata. `large_value_only_` is meaningless
+                        // here (there is no value bytes destination).
+                        return task->Read(req->TableId(),
+                                          read_req->Key(),
+                                          read_req->value_,
+                                          read_req->ts_,
+                                          read_req->expire_ts_,
+                                          /*iosb=*/nullptr,
+                                          /*extract_metadata=*/true);
+                    }
+                    else if constexpr (std::is_same_v<T, IoStringBuffer>)
+                    {
+                        // Legacy zero-copy: dispatch fills the
+                        // IoStringBuffer that lives inside the variant. The
+                        // caller reads fragments back out via
+                        // std::get<IoStringBuffer>(...) after the request
+                        // completes. `large_value_only_` skips the metadata
+                        // trailer extraction.
+                        //
+                        // Reject this arm in KV Cache pinned mode: the
+                        // fragments would be allocated from EloqStore's
+                        // internal GC pool, which is reserved for GC /
+                        // compaction. No public API exposes that pool, so
+                        // the caller cannot Recycle the fragments and the
+                        // pool would leak. Pinned-mode callers must use
+                        // overload B (metadata + pinned dst) or overload C
+                        // (pinned-only) where the destination is caller-
+                        // owned.
+                        if (!shard->store_->Options()
+                                 .pinned_memory_chunks.empty())
+                        {
+                            return KvError::InvalidArgs;
+                        }
+                        return task->Read(req->TableId(),
+                                          read_req->Key(),
+                                          read_req->value_,
+                                          read_req->ts_,
+                                          read_req->expire_ts_,
+                                          &dest,
+                                          !read_req->large_value_only_);
+                    }
+                    else
+                    {
+                        // KV Cache pinned destination. Overload C skips
+                        // metadata extraction; overload B includes it.
+                        if (read_req->large_value_only_)
+                        {
+                            return task->Read(req->TableId(),
+                                              read_req->Key(),
+                                              read_req->ts_,
+                                              read_req->expire_ts_,
+                                              dest.first,
+                                              dest.second);
+                        }
+                        return task->Read(req->TableId(),
+                                          read_req->Key(),
+                                          read_req->value_,
+                                          read_req->ts_,
+                                          read_req->expire_ts_,
+                                          dest.first,
+                                          dest.second);
+                    }
+                },
+                read_req->large_value_dest_);
         };
         StartTask(task, req, lbd);
         return true;
