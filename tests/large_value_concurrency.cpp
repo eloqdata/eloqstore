@@ -504,31 +504,37 @@ TEST_CASE("reader snapshot survives overwrite of same key",
 // the worker's last-write expectation (i.e. no reader saw a segment whose
 // backing file had been GC'd or compacted out from under it).
 //
-// Was a flaky test (~40-60% fail rate at 256MB/shard pool) until two
-// related empty-wipe bugs were fixed: (a) AppendAllocator::UpdateStat
-// now snaps max_fp_id up so SpaceSize() == 0 after the empty-mapping
-// branch of DoCompact{Data,Segment}File, preventing the futile
-// CompactIfNeeded re-trigger loop on a rmdir'd partition; (b)
-// BackgroundWrite::Compact() short-circuits when both mappings are
-// empty and both allocators report SpaceSize==0, preventing a stale
-// CompactRequest (queued legitimately by a writer's CompactIfNeeded
-// before another path -- typically an ArchiveRequest's inline
-// CreateArchive::needs_compact -- already wiped the partition) from
-// running TriggerFileGC -> ListLocalFiles on the rmdir'd directory and
-// SIGABRTing from std::filesystem::filesystem_error.
+// Was a flaky test (~40-60% fail rate at 256MB/shard pool) until three
+// independent bugs were fixed:
 //
-// Residual: a separate ~1% hang remains that is NOT the empty-wipe
-// class. Captured signature (multiple samples): one shard has inflight
-// >=1 io_uring SQEs (READ_FIXED, WRITE_FIXED, READ, or WRITE) with
-// IORING_SQ_TASKRUN asserted, while io_uring_enter(GETEVENTS) is called
-// thousands of times per second to no effect. A task spins in
-// GlobalRegisteredMemory::GetSegment waiting on segments held by parked
-// tasks whose CQEs never arrive. Reproduces across DEFER_TASKRUN on/off,
-// liburing 2.11 vs 2.15, fixed vs non-fixed I/O, and shard counts 1
-// and 2. Affects both 4 KiB page I/O and 256 KiB segment I/O.
-// Diagnosed as a kernel-side io_uring CQE-delivery issue on
-// 6.6.87.2-microsoft-standard-WSL2. Out of scope for the empty-wipe
-// fix; tracked separately in the project memory note.
+// 1) GlobalRegisteredMemory free-list ABA. The lock-free segment pool
+//    used Harris-style mark-CAS on a per-segment successor slot, but
+//    the slot was reused by Recycle without any reclamation barrier.
+//    Under contention, a stale marked successor could be overwritten
+//    by a fresh Recycle, leaving the free list cyclic / inconsistent.
+//    The free list is now an ABA-tagged Treiber stack: head_ is
+//    (version, seg_idx), every push/pop bumps the version, so a CAS
+//    against a stale head_ always fails. See
+//    include/global_registered_memory.h.
+//
+// 2) AppendAllocator empty-wipe stat lie. UpdateStat now snaps
+//    max_fp_id_ up so SpaceSize() == 0 after the empty-mapping branch
+//    of DoCompact{Data,Segment}File, preventing a futile
+//    CompactIfNeeded re-trigger loop on a rmdir'd partition.
+//
+// 3) Stale CompactRequest after a wipe. BackgroundWrite::Compact()
+//    short-circuits when both mappings are clean, so a CompactRequest
+//    queued legitimately by a writer's CompactIfNeeded that was then
+//    overtaken by an ArchiveRequest's inline Compact (which wiped the
+//    partition first) no longer runs TriggerFileGC -> ListLocalFiles
+//    on a rmdir'd directory and SIGABRTs.
+//
+// With all three fixed, 500/500 stress iterations pass on the local
+// WSL2 setup (kForceSubmitEveryNoOps in IouringMgr::Submit -- pre-
+// existing fix for a different earlier bench hang -- remains in
+// place). The previously suspected "WSL2 kernel io_uring CQE delivery
+// bug" was a misdiagnosis: the captured "inflight > 0" hangs were
+// symptoms of (1), not a kernel issue.
 // ---------------------------------------------------------------------------
 TEST_CASE("large-value workload survives concurrent compaction and archives",
           "[large-value][concurrency][gc]")

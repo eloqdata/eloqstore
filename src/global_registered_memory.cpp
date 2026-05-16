@@ -16,25 +16,28 @@ GlobalRegisteredMemory::GlobalRegisteredMemory(uint32_t segment_size,
       segments_per_chunk_(chunk_size / segment_size),
       total_segments_(total_size / segment_size),
       free_count_(0),
-      head_(0)
+      head_(EncodeHead(0, kInvalidIdx))
 {
     assert(segment_size >= kPageAlign);
     assert(segment_size % kPageAlign == 0);
     assert(chunk_size % segment_size == 0);
     assert(total_size % chunk_size == 0);
     assert(total_segments_ > 0);
+    // The 32-bit seg-index field in head_ must cover every segment plus the
+    // kInvalidIdx sentinel.
+    assert(total_segments_ < static_cast<size_t>(kInvalidIdx));
 
     const size_t num_chunks = total_size / chunk_size;
     chunks_.reserve(num_chunks);
 
-    // Allocate the separate successor-pointer array. Storing successors here
-    // (rather than in the first 8 bytes of each segment) prevents caller I/O
-    // writes from corrupting free-list metadata and causing ABA.
-    successors_ = std::make_unique<std::atomic<uintptr_t>[]>(total_segments_);
+    // One next-pointer slot per segment. successors_[i] is the next free-list
+    // index when segment i is on the free list. Stored separately from
+    // segment data so caller-owned I/O writes can't corrupt the metadata.
+    successors_ = std::make_unique<std::atomic<uint32_t>[]>(total_segments_);
 
-    // Build the free list. successors_[i] stores the encoded successor for
-    // segment i (Encode(next_ptr, next_chunk_idx, /*mark=*/false)).
-    uintptr_t current_head = 0;  // encoded nullptr
+    // Build the free list. Push every segment; order doesn't affect
+    // correctness (stack semantics).
+    uint32_t current_head_idx = kInvalidIdx;
     for (size_t c = 0; c < num_chunks; ++c)
     {
         char *base =
@@ -42,17 +45,20 @@ GlobalRegisteredMemory::GlobalRegisteredMemory(uint32_t segment_size,
         assert(base != nullptr);
         chunks_.emplace_back(base, chunk_size);
 
-        uint32_t chunk_idx = static_cast<uint32_t>(c);
-        size_t meta_base = c * segments_per_chunk_;
+        const uint32_t chunk_idx = static_cast<uint32_t>(c);
+        const uint32_t base_idx =
+            chunk_idx * static_cast<uint32_t>(segments_per_chunk_);
         for (size_t i = 0; i < segments_per_chunk_; ++i)
         {
-            char *segment = base + i * segment_size;
-            successors_[meta_base + i].store(current_head,
-                                             std::memory_order_relaxed);
-            current_head = Encode(segment, chunk_idx, false);
+            const uint32_t seg_idx = base_idx + static_cast<uint32_t>(i);
+            successors_[seg_idx].store(current_head_idx,
+                                       std::memory_order_relaxed);
+            current_head_idx = seg_idx;
         }
     }
-    head_.store(current_head, std::memory_order_relaxed);
+    // Initial version 0; any starting value is fine -- the version only has
+    // to be monotonically incremented from here.
+    head_.store(EncodeHead(0, current_head_idx), std::memory_order_relaxed);
     free_count_.store(total_segments_, std::memory_order_relaxed);
 }
 
@@ -71,88 +77,61 @@ std::span<const MemChunk> GlobalRegisteredMemory::MemChunks() const
 
 std::pair<char *, uint32_t> GlobalRegisteredMemory::TryGetSegment()
 {
-    uintptr_t enc = head_.load(std::memory_order_acquire);
-
+    // ABA-tagged Treiber pop. The version field in head_ ensures that a CAS
+    // observing a stale (top, ver) tuple always fails, even if `top` has
+    // been popped and pushed back in the interim.
+    uint64_t cur = head_.load(std::memory_order_acquire);
     while (true)
     {
-        char *seg = DecodePtr(enc);
-        if (seg == nullptr)
+        const uint32_t cur_idx = DecodeIdx(cur);
+        if (cur_idx == kInvalidIdx)
         {
             return {nullptr, 0};
         }
-        const uint32_t seg_chunk_idx = DecodeIdx(enc);
-
-        // Read seg's successor from the metadata array, never from the segment
-        // data itself (which may be overwritten by caller I/O).
-        std::atomic<uintptr_t> &next_ref =
-            successors_[SegmentIndex(seg, seg_chunk_idx)];
-        uintptr_t next_enc = next_ref.load(std::memory_order_acquire);
-
-        if (DecodeMark(next_enc))
+        // The acquire-load on head_ synchronizes with the release-CAS in the
+        // Recycle that put cur_idx at the top, so the successors_[cur_idx]
+        // store from that Recycle is visible here under relaxed.
+        const uint32_t next_idx =
+            successors_[cur_idx].load(std::memory_order_relaxed);
+        const uint64_t new_head = EncodeHead(DecodeVer(cur) + 1, next_idx);
+        if (head_.compare_exchange_weak(cur,
+                                        new_head,
+                                        std::memory_order_acq_rel,
+                                        std::memory_order_acquire))
         {
-            // seg is already claimed by another thread. Help swing head to
-            // seg's successor, then retry.
-            const uintptr_t clean_next = next_enc & ~uintptr_t{1};
-            if (head_.compare_exchange_weak(enc,
-                                            clean_next,
-                                            std::memory_order_release,
-                                            std::memory_order_acquire))
-            {
-                enc = clean_next;
-            }
-            // On CAS failure enc is updated to the current head; retry either
-            // way.
-            continue;
+            free_count_.fetch_sub(1, std::memory_order_relaxed);
+            return {SegmentPtr(cur_idx), ChunkIdxOf(cur_idx)};
         }
-
-        // Try to mark seg's successor pointer to claim exclusive ownership of
-        // seg.
-        if (!next_ref.compare_exchange_weak(next_enc,
-                                            next_enc | uintptr_t{1},
-                                            std::memory_order_acq_rel,
-                                            std::memory_order_acquire))
-        {
-            // Another thread modified seg's successor. Reload head and retry.
-            enc = head_.load(std::memory_order_acquire);
-            continue;
-        }
-
-        // We own seg. Attempt to swing head to seg's successor. Even if a
-        // helper thread beats us, ownership belongs to whoever won the mark
-        // CAS.
-        head_.compare_exchange_weak(enc,
-                                    next_enc & ~uintptr_t{1},
-                                    std::memory_order_release,
-                                    std::memory_order_acquire);
-
-        free_count_.fetch_sub(1, std::memory_order_relaxed);
-        return {seg, seg_chunk_idx};
+        // CAS failed; `cur` now holds the current head. Loop with the new
+        // value -- the failure path's acquire keeps the next iteration's
+        // successors_ load consistent.
     }
 }
 
 void GlobalRegisteredMemory::Recycle(char *segment, uint32_t chunk_index)
 {
     assert(segment != nullptr);
-    const uintptr_t seg_enc = Encode(segment, chunk_index, false);
+    const uint32_t seg_idx = SegmentIndex(segment, chunk_index);
 
-    uintptr_t old_head = head_.load(std::memory_order_relaxed);
-    std::atomic<uintptr_t> &meta =
-        successors_[SegmentIndex(segment, chunk_index)];
+    uint64_t cur = head_.load(std::memory_order_relaxed);
     while (true)
     {
-        // Publish old_head as segment's successor before swinging head.
-        meta.store(old_head, std::memory_order_release);
-
-        if (head_.compare_exchange_weak(old_head,
-                                        seg_enc,
+        // Publish the new next-pointer for seg_idx before swinging head_.
+        // The release on head_'s CAS below orders this store; any later
+        // acquire-load of head_ that observes the new (ver+1, seg_idx)
+        // value also sees this successors_ store.
+        successors_[seg_idx].store(DecodeIdx(cur), std::memory_order_relaxed);
+        const uint64_t new_head = EncodeHead(DecodeVer(cur) + 1, seg_idx);
+        if (head_.compare_exchange_weak(cur,
+                                        new_head,
                                         std::memory_order_release,
                                         std::memory_order_relaxed))
         {
-            break;
+            free_count_.fetch_add(1, std::memory_order_relaxed);
+            return;
         }
-        // old_head is updated by the CAS to the current head; retry.
+        // `cur` updated by CAS to the current head; retry.
     }
-    free_count_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void GlobalRegisteredMemory::SetEvictFunc(std::function<void()> func)

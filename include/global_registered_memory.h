@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <span>
 #include <utility>
@@ -22,31 +23,37 @@ struct MemChunk
  * @brief A global registered memory area shared across networking, in-memory
  * cache and the storage engine.
  *
- * This class represents a per-core memory area registered in io urings of both
- * the networking layer and EloqStore. It stores segments for very large string
- * values, enabling zero-copy I/O across modules.
+ * This class represents a per-core memory area registered in io urings of
+ * both the networking layer and EloqStore. It stores segments for very
+ * large string values, enabling zero-copy I/O across modules.
  *
- * GetSegment() and Recycle() are thread-safe and lock-free. The free list is
- * a singly-linked stack using a Harris-style mark-then-CAS algorithm.
+ * GetSegment() and Recycle() are thread-safe and lock-free. The free list
+ * is an ABA-tagged Treiber stack:
  *
- * Successor pointers are stored in a separate successors_ array (one
- * std::atomic<uintptr_t> per segment), NOT in the segment's own memory.
- * This is essential: once a segment is returned to a caller, the caller may
- * write arbitrary data into it (e.g. I/O buffers). If the successor were
- * embedded in the first 8 bytes of the segment, a stale thread could read
- * that corrupted data as a successor, pass the Harris mark-CAS on a lucky
- * coincidence, and write garbage into head_, crashing the next pop. The
- * separate successors_ array is only ever written by TryGetSegment and Recycle,
- * so it always contains a valid encoded value.
+ *   - Every segment has a stable global index in [0, total_segments_).
+ *     The index encodes both chunk_idx and offset-within-chunk and is
+ *     fully recoverable to a (char*, chunk_idx) pair via SegmentPtr() /
+ *     ChunkIdxOf().
+ *   - `head_` is a 64-bit atomic carrying `(version : 32, seg_idx : 32)`.
+ *     `seg_idx == kInvalidIdx` (== UINT32_MAX) means the stack is empty.
+ *     Every successful push/pop bumps the version, so any CAS that loaded
+ *     a stale `head_` will fail. This eliminates the classic ABA hazard
+ *     where a segment is popped, handed to a caller, and recycled before
+ *     a concurrent popper finishes its CAS.
+ *   - `successors_[i]` holds the next free-list seg_idx when i is on the
+ *     free list. It is mutated only by the Push (Recycle) that makes i
+ *     the new top, before that Push's release-CAS on `head_`; reads are
+ *     performed by the Pop (TryGetSegment) that observes i as the top.
  *
- * Each entry in successors_ (and head_) is encoded as:
+ * Storing successors in a separate array (rather than in the segment's own
+ * memory) is still important: the caller may write arbitrary data into a
+ * segment it owns, and that data must never be reinterpreted as free-list
+ * metadata.
  *
- *   bits 63..16  — successor pointer shifted left 16 (x86-64 user-space
- *                  addresses fit in 48 bits, so the upper 16 bits are free)
- *   bits 15..1   — chunk_idx of the successor segment
- *   bit  0       — Harris mark bit (1 = this node is being popped)
- *
- * head_ uses the same layout with the mark bit always 0.
+ * Memory ordering: Recycle stores successors_[i] then release-CASes head_;
+ * TryGetSegment acquire-loads head_ and then loads successors_[top] under
+ * the established release-acquire synchronization. The CAS pair on head_
+ * is the only barrier the readers need.
  */
 class GlobalRegisteredMemory
 {
@@ -159,45 +166,60 @@ private:
      */
     std::pair<char *, uint32_t> TryGetSegment();
 
-    // Returns the flat index into successors_ for a given segment.
-    size_t SegmentIndex(char *seg, uint32_t chunk_idx) const
+    // Sentinel "no successor" / "empty stack" value. uint32_t indices range
+    // [0, total_segments_); the max value is reserved as the sentinel.
+    static constexpr uint32_t kInvalidIdx =
+        std::numeric_limits<uint32_t>::max();
+
+    // (version, seg_idx) packing for head_.
+    static uint64_t EncodeHead(uint32_t ver, uint32_t idx)
     {
-        return static_cast<size_t>(chunk_idx) * segments_per_chunk_ +
-               static_cast<size_t>(seg - chunks_[chunk_idx].base_) /
-                   segment_size_;
+        return (static_cast<uint64_t>(ver) << 32) | static_cast<uint64_t>(idx);
+    }
+    static uint32_t DecodeVer(uint64_t enc)
+    {
+        return static_cast<uint32_t>(enc >> 32);
+    }
+    static uint32_t DecodeIdx(uint64_t enc)
+    {
+        return static_cast<uint32_t>(enc & 0xFFFFFFFFu);
     }
 
-    // Encode a free-list node: pointer in bits 63..16, chunk_idx in bits
-    // 15..1, Harris mark bit in bit 0.
-    static uintptr_t Encode(char *ptr, uint32_t chunk_idx, bool mark)
+    // (char*, chunk_idx) -> stable global segment index.
+    uint32_t SegmentIndex(char *seg, uint32_t chunk_idx) const
     {
-        return (reinterpret_cast<uintptr_t>(ptr) << 16) |
-               (static_cast<uintptr_t>(chunk_idx) << 1) |
-               static_cast<uintptr_t>(mark ? 1 : 0);
+        return chunk_idx * static_cast<uint32_t>(segments_per_chunk_) +
+               static_cast<uint32_t>((seg - chunks_[chunk_idx].base_) /
+                                     segment_size_);
     }
-    static char *DecodePtr(uintptr_t v)
+    // Inverse of SegmentIndex.
+    char *SegmentPtr(uint32_t idx) const
     {
-        return reinterpret_cast<char *>(v >> 16);
+        const uint32_t chunk_idx =
+            idx / static_cast<uint32_t>(segments_per_chunk_);
+        const uint32_t in_chunk =
+            idx % static_cast<uint32_t>(segments_per_chunk_);
+        return chunks_[chunk_idx].base_ +
+               static_cast<size_t>(in_chunk) * segment_size_;
     }
-    static uint32_t DecodeIdx(uintptr_t v)
+    uint32_t ChunkIdxOf(uint32_t idx) const
     {
-        return static_cast<uint32_t>((v >> 1) & 0x7FFFu);
-    }
-    static bool DecodeMark(uintptr_t v)
-    {
-        return v & 1u;
+        return idx / static_cast<uint32_t>(segments_per_chunk_);
     }
 
     uint32_t segment_size_;
     size_t segments_per_chunk_;
     size_t total_segments_;
     std::atomic<size_t> free_count_;
-    // Free-list head. 0 means the list is empty.
-    std::atomic<uintptr_t> head_;
-    // Per-segment successor pointers, stored separately from segment data.
-    // successors_[SegmentIndex(seg, chunk_idx)] holds the encoded successor of
-    // seg.
-    std::unique_ptr<std::atomic<uintptr_t>[]> successors_;
+    // Free-list head: high 32 bits = version, low 32 bits = top seg index
+    // (kInvalidIdx when empty). Every push/pop bumps the version, so a
+    // stale-head CAS always fails.
+    std::atomic<uint64_t> head_;
+    // Per-segment next-pointer. successors_[i] is the seg index that
+    // follows i on the free list. Written by Push only (Recycle) before
+    // its release-CAS on head_; read by Pop (TryGetSegment) when i is
+    // observed as the top under acquire on head_.
+    std::unique_ptr<std::atomic<uint32_t>[]> successors_;
     std::function<void()> evict_func_;
     std::vector<MemChunk> chunks_;
 };
