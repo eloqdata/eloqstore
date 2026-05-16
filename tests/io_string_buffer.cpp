@@ -1,3 +1,5 @@
+#include "../include/io_string_buffer.h"
+
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 #include <type_traits>
@@ -6,7 +8,6 @@
 
 #include "../include/global_registered_memory.h"
 #include "../include/io_buffer_ref.h"
-#include "../include/io_string_buffer.h"
 
 namespace
 {
@@ -17,8 +18,8 @@ eloqstore::GlobalRegisteredMemory MakeMem(size_t num_chunks = 2,
                                           size_t segments_per_chunk = 4)
 {
     const size_t chunk_size = kSegment256K * segments_per_chunk;
-    return eloqstore::GlobalRegisteredMemory(kSegment256K, chunk_size,
-                                             chunk_size * num_chunks);
+    return eloqstore::GlobalRegisteredMemory(
+        kSegment256K, chunk_size, chunk_size * num_chunks);
 }
 }  // namespace
 
@@ -136,9 +137,8 @@ TEST_CASE("IoStringBuffer Recycle on empty buffer is a no-op",
     REQUIRE(buf.Fragments().empty());
 }
 
-TEST_CASE(
-    "IoStringBuffer Recycle recovers chunk index across multiple chunks",
-    "[io-string-buffer]")
+TEST_CASE("IoStringBuffer Recycle recovers chunk index across multiple chunks",
+          "[io-string-buffer]")
 {
     eloqstore::GlobalRegisteredMemory mem = MakeMem(/*num_chunks=*/3,
                                                     /*segments_per_chunk=*/2);

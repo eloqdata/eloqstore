@@ -6421,7 +6421,9 @@ KvError IouringMgr::ReadFile(const TableIdent &tbl_id,
     }
     if (!is_data_file && !is_segment_file)
     {
-        struct statx stx{};
+        struct statx stx
+        {
+        };
         FdIdx stat_fd{fd, false};
         int stat_res = Statx(stat_fd, "", &stx);
         if (stat_res < 0)

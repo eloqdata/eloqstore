@@ -968,7 +968,9 @@ KvError EloqStore::BuildStorePathLut()
             for (size_t i = 0; i < path_count; ++i)
             {
                 const fs::path &path = options_.store_path[i];
-                struct stat stat_buf{};
+                struct stat stat_buf
+                {
+                };
                 if (stat(path.c_str(), &stat_buf) != 0)
                 {
                     int err = errno;
@@ -976,7 +978,9 @@ KvError EloqStore::BuildStorePathLut()
                         << "stat(" << path << ") failed: " << strerror(err);
                     return ToKvError(-err);
                 }
-                struct statvfs vfs_buf{};
+                struct statvfs vfs_buf
+                {
+                };
                 if (statvfs(path.c_str(), &vfs_buf) != 0)
                 {
                     int err = errno;

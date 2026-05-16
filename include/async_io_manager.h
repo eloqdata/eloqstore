@@ -172,8 +172,7 @@ public:
      * its full bounds + buf_index. Returns nullopt when @p ptr is not in any
      * registered chunk.
      */
-    virtual std::optional<PinnedChunkInfo> PinnedChunkFor(
-        const char *ptr) const
+    virtual std::optional<PinnedChunkInfo> PinnedChunkFor(const char *ptr) const
     {
         (void) ptr;
         return std::nullopt;
