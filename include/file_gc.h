@@ -35,6 +35,20 @@ void GetRetainedFiles(absl::flat_hash_set<RetainedFileKey> &file_keys,
 
 namespace FileGarbageCollector
 {
+// In-flight write guard state per branch. At most one writer instance may
+// operate on a branch, and only on that branch's newest term. The guard
+// records, per branch, that newest term plus the highest committed data /
+// segment file ids. A file at (branch, newest_term_) with id beyond max is
+// an in-flight write and must be preserved; files at any other term for
+// the same branch are by definition already complete.
+struct BranchGuard
+{
+    uint64_t newest_term_{0};
+    FileId max_data_file_id_{0};
+    FileId max_segment_file_id_{0};
+};
+using BranchGuardMap = absl::flat_hash_map<std::string, BranchGuard>;
+
 // Local mode method (direct execution)
 KvError ExecuteLocalGC(const TableIdent &tbl_id,
                        RetainedFiles &retained_files,
@@ -52,31 +66,33 @@ KvError ListLocalFiles(const TableIdent &tbl_id,
                        std::vector<std::string> &local_files,
                        IouringMgr *io_mgr);
 
+// In-flight write guard: for each on-disk file, look up its branch in
+// `branch_guards`. If the branch is present and the file's term is >= the
+// branch's newest_term_, any file_id beyond max_data_file_id_ is preserved
+// as an in-flight write. The `>=` comparison (not `==`) is required because
+// our manifest snapshot may lag a concurrent primary that has bumped its
+// term but not yet flushed a manifest at the new term. Files for branches
+// absent from the map, or at terms strictly below the branch's newest, are
+// not protected.
 KvError DeleteUnreferencedLocalFiles(
     const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
     const absl::flat_hash_set<RetainedFileKey> &retained_files,
-    const absl::flat_hash_map<std::string, FileId> &max_file_id_per_branch_term,
+    const BranchGuardMap &branch_guards,
     IouringMgr *io_mgr);
 
 // Delete unreferenced segment files on local disk. A segment file is eligible
-// for deletion only when its file_id >= least_not_archived_segment_file_id and
-// it is not referenced by the current mapping (retained_segment_files). The
-// archive floor protects segments referenced by archive snapshots from being
-// collected before the archive itself is deleted.
+// for deletion only when it is not referenced by `retained_segment_files` and
+// it is not protected by the in-flight write guard. Callers must populate
+// `retained_segment_files` from both regular and archive manifests (see
+// AugmentRetainedFilesFromBranchManifests) so archive-referenced segments
+// are protected by inclusion in the retained set. The in-flight guard
+// mirrors DeleteUnreferencedLocalFiles, using max_segment_file_id_.
 KvError DeleteUnreferencedLocalSegmentFiles(
     const TableIdent &tbl_id,
     const std::vector<std::string> &segment_files,
     const RetainedFiles &retained_segment_files,
-    FileId least_not_archived_segment_file_id,
-    IouringMgr *io_mgr);
-
-KvError GetOrUpdateArchivedMaxFileId(
-    const TableIdent &tbl_id,
-    const std::vector<std::string> &archive_files,
-    const std::vector<uint64_t> &archive_timestamps,
-    FileId &least_not_archived_file_id,
-    FileId &least_not_archived_segment_file_id,
+    const BranchGuardMap &branch_guards,
     IouringMgr *io_mgr);
 
 // Cloud mode implementation
@@ -104,15 +120,15 @@ KvError DownloadArchiveFile(const TableIdent &tbl_id,
                             CloudStoreMgr *cloud_mgr,
                             const KvOptions *options);
 
-ArchivedMaxFileIds ParseArchiveForMaxFileId(std::string_view archive_content);
-
+// In-flight write guard rules match DeleteUnreferencedLocalFiles.
 KvError DeleteUnreferencedCloudFiles(
     const TableIdent &tbl_id,
     const std::vector<std::string> &data_files,
     const std::vector<uint64_t> &manifest_terms,
     const std::vector<std::string> &manifest_branch_names,
     const absl::flat_hash_set<RetainedFileKey> &retained_files,
-    const absl::flat_hash_map<std::string, FileId> &max_file_id_per_branch_term,
+    const BranchGuardMap &branch_guards,
+    std::vector<std::string> &deleted_filenames,
     CloudStoreMgr *cloud_mgr);
 
 KvError DeleteOldArchives(const TableIdent &tbl_id,
@@ -123,12 +139,12 @@ KvError DeleteOldArchives(const TableIdent &tbl_id,
                           IouringMgr *io_mgr);
 
 // Augment retained_files by reading every on-disk manifest (both regular and
-// archive) and collecting all file IDs they reference.  Also builds
-// max_file_id_per_branch_term: for each (branch, term) key derived from the
-// BranchManifestMetadata.file_ranges stored in each manifest, records the
-// highest known allocated file ID.  This is used by GC rule 2: any data file
-// whose file_id exceeds the max for its (branch, term) is in-flight and must
-// not be deleted.
+// archive) and collecting all file IDs they reference. Also folds every
+// BranchFileRange seen into `branch_guards` using the rule "for each branch,
+// keep the newest term and the highest file ids observed at that term".
+// Callers must pre-seed `branch_guards` with an entry for their own
+// (active_branch, process_term) so in-flight files protected even before
+// the first manifest at this term is flushed.
 KvError AugmentRetainedFilesFromBranchManifests(
     const TableIdent &tbl_id,
     const std::vector<std::string> &manifest_branch_names,
@@ -137,20 +153,21 @@ KvError AugmentRetainedFilesFromBranchManifests(
     const std::vector<std::string> &archive_branch_names,
     absl::flat_hash_set<RetainedFileKey> &retained_files,
     absl::flat_hash_set<RetainedFileKey> &retained_segment_files,
-    absl::flat_hash_map<std::string, FileId> &max_file_id_per_branch_term,
+    BranchGuardMap &branch_guards,
     uint8_t pages_per_file_shift,
     uint8_t segments_per_file_shift,
     IouringMgr *io_mgr);
 
-// Delete unreferenced segment files in the cloud. A segment file is eligible
-// for deletion only when its file_id >= least_not_archived_segment_file_id and
-// it is not referenced by the current mapping (retained_segment_files). The
-// per-file term check also guards against deleting files from a newer term.
+// Delete unreferenced segment files in the cloud. Same eligibility rule as
+// DeleteUnreferencedLocalSegmentFiles: not in `retained_segment_files` and
+// not protected by the in-flight write guard (see that function for
+// guard semantics). The per-file term check also guards against deleting
+// files from a newer term.
 KvError DeleteUnreferencedCloudSegmentFiles(
     const TableIdent &tbl_id,
     const std::vector<std::string> &segment_files,
     const RetainedFiles &retained_segment_files,
-    FileId least_not_archived_segment_file_id,
+    const BranchGuardMap &branch_guards,
     CloudStoreMgr *cloud_mgr);
 }  // namespace FileGarbageCollector
 

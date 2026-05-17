@@ -167,6 +167,12 @@ protected:
     void RecordSegmentMappingDelete(PageId page_id);
 
     std::optional<FileId> last_append_file_id_;
+    // Mirror of last_append_file_id_ for the segment side: caches the
+    // most-recently-stamped segment file id so AllocateSegment can skip
+    // the branch/term GetBranchNameAndTerm lookup when consecutive
+    // segments land in the same file (the common case in batched writes
+    // and compaction rewrites).
+    std::optional<FileId> last_seen_segment_file_id_;
     WriteBufferAggregator append_aggregator_{0};
     UploadState upload_state_;
     uint32_t inflight_upload_tasks_{0};

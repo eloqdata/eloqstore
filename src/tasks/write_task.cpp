@@ -174,6 +174,7 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     wal_builder_.Reset();
     seg_mapping_deltas_.clear();
     last_append_file_id_.reset();
+    last_seen_segment_file_id_.reset();
     cow_meta_ = CowRootMeta();
     size_t buf_size = Options()->write_buffer_size;
     if (buf_size == 0)
@@ -207,6 +208,7 @@ void WriteTask::Abort()
     }
     cow_meta_ = CowRootMeta();
     last_append_file_id_.reset();
+    last_seen_segment_file_id_.reset();
     pending_upload_tasks_.clear();
     ResetUploadState();
     ReleaseDirBusy();
@@ -523,17 +525,25 @@ std::pair<PageId, FilePageId> WriteTask::AllocateSegment(PageId page_id)
     // After a restart with a new term, the allocator is bumped to a new file
     // whose (branch, term) hasn't been recorded yet. Stamp it on first
     // allocation so the BranchFileMapping carries segment-file ranges.
-    std::string unused_branch;
-    uint64_t unused_term;
-    if (!IoMgr()->GetBranchNameAndTerm(tbl_ident_,
-                                       SegmentFileKey(file_id_before),
-                                       unused_branch,
-                                       unused_term))
+    // Cache the last file id we verified/stamped so consecutive same-file
+    // allocations skip the hash-map lookup -- mirrors last_append_file_id_
+    // for the data-file path in WritePage.
+    if (!last_seen_segment_file_id_.has_value() ||
+        *last_seen_segment_file_id_ != file_id_before)
     {
-        IoMgr()->SetBranchFileIdTerm(tbl_ident_,
-                                     SegmentFileKey(file_id_before),
-                                     IoMgr()->GetActiveBranch(),
-                                     IoMgr()->ProcessTerm());
+        std::string unused_branch;
+        uint64_t unused_term;
+        if (!IoMgr()->GetBranchNameAndTerm(tbl_ident_,
+                                           SegmentFileKey(file_id_before),
+                                           unused_branch,
+                                           unused_term))
+        {
+            IoMgr()->SetBranchFileIdTerm(tbl_ident_,
+                                         SegmentFileKey(file_id_before),
+                                         IoMgr()->GetActiveBranch(),
+                                         IoMgr()->ProcessTerm());
+        }
+        last_seen_segment_file_id_ = file_id_before;
     }
     if (file_id_before != file_id_after)
     {
@@ -541,6 +551,7 @@ std::pair<PageId, FilePageId> WriteTask::AllocateSegment(PageId page_id)
                                      SegmentFileKey(file_id_after),
                                      IoMgr()->GetActiveBranch(),
                                      IoMgr()->ProcessTerm());
+        last_seen_segment_file_id_ = file_id_after;
     }
 
     seg_mapper->UpdateMapping(page_id, file_page_id);

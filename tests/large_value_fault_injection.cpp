@@ -8,7 +8,7 @@
 // Four scenarios from the implementation plan:
 //   1. Crash after WriteSegments but before manifest flush.
 //   2. Crash before compaction's UpdateMeta (single-manifest guarantee).
-//   3. Crash during the archive flush that publishes ArchivedMaxFileIds.
+//   3. Crash during the archive flush that publishes the archive snapshot.
 //   4. Term mismatch on a segment file (simulated by renaming the file).
 
 #include <algorithm>

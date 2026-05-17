@@ -537,6 +537,27 @@ KvError IouringMgr::BootstrapRing(Shard *shard, GlobalMemoryConfig config)
         shard->PagePool()->Init();
     }
 
+    // ReadPage/WritePage fall back to unregistered io_uring_prep_read/write
+    // when buffers_registered_ is false, but ReadSegments / WriteSegments
+    // unconditionally use io_uring_prep_*_fixed and would silently fail
+    // with -ENOBUFS at runtime. If the caller provided memory that
+    // *requires* registered buffers (an external GlobalRegisteredMemory,
+    // pinned-memory chunks for KV Cache mode, or our own private GC pool
+    // for pinned mode), surface the failure at startup instead.
+    const bool needs_registered_buffers =
+        global_reg_mem_ != nullptr || !pinned_chunks_.empty();
+    if (needs_registered_buffers && !buffers_registered_)
+    {
+        LOG(FATAL) << "io_uring buffer registration failed while "
+                      "GlobalRegisteredMemory or pinned_memory_chunks "
+                      "was provided. Segment I/O requires registered "
+                      "buffers. Common cause: RLIMIT_MEMLOCK is too low "
+                      "to lock the requested total memory size. "
+                      "(global_reg_mem="
+                   << (global_reg_mem_ != nullptr)
+                   << ", pinned_chunks=" << pinned_chunks_.size() << ")";
+    }
+
     return KvError::NoError;
 }
 

@@ -69,15 +69,6 @@ enum class VarPageType : uint8_t
 
 class EloqStore;
 
-// Archive floors for both data and segment files. A file whose id is below the
-// corresponding floor is referenced by a retained archive snapshot and must
-// not be garbage-collected.
-struct ArchivedMaxFileIds
-{
-    FileId data_file_id{0};
-    FileId segment_file_id{0};
-};
-
 class AsyncIoManager
 {
 public:
@@ -500,8 +491,6 @@ public:
     }
 
     const KvOptions *options_;
-    std::unordered_map<TableIdent, ArchivedMaxFileIds>
-        least_not_archived_file_ids_;
 };
 
 KvError ToKvError(int err_no);

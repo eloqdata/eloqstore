@@ -147,6 +147,16 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
         LOG(ERROR) << "Option data_page_size is not page aligned";
         return false;
     }
+    // segment_size: must be page-aligned. Enforced here so release builds
+    // fail loud at startup instead of relying on the debug-only assertion
+    // in the GlobalRegisteredMemory constructor.
+    if (opts.segment_size == 0 || (opts.segment_size & (page_align - 1)) != 0)
+    {
+        LOG(ERROR) << "Option segment_size (" << opts.segment_size
+                   << ") must be non-zero and " << page_align
+                   << "-byte aligned";
+        return false;
+    }
     if ((opts.coroutine_stack_size & (page_align - 1)) != 0)
     {
         LOG(ERROR) << "Option coroutine_stack_size is not page aligned";

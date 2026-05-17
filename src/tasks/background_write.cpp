@@ -611,20 +611,8 @@ KvError BackgroundWrite::CreateArchive(std::string_view tag)
     DLOG(INFO) << "CreateArchive done, table=" << tbl_ident_
                << ", term=" << IoMgr()->ProcessTerm() << ", tag=" << tag;
 
-    // Update the cached max file ids for data and segment files. Archive
-    // snapshots capture both mappings, so GC must not collect files referenced
-    // by the archive; these floors are the smallest file ids safe to delete.
-    FileId max_file_id =
-        static_cast<FileId>(max_fp_id >> Options()->pages_per_file_shift);
-    FileId max_segment_file_id = static_cast<FileId>(
-        max_seg_fp_id >> Options()->segments_per_file_shift);
-    IoMgr()->least_not_archived_file_ids_.insert_or_assign(
-        tbl_ident_,
-        ArchivedMaxFileIds{max_file_id + 1, max_segment_file_id + 1});
-
     LOG(INFO) << "created archive for partition " << tbl_ident_ << " with tag "
-              << tag << ", least_not_archived data=" << max_file_id + 1
-              << " segment=" << max_segment_file_id + 1;
+              << tag;
 
     return KvError::NoError;
 }

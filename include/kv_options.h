@@ -186,14 +186,9 @@ struct KvOptions
     uint32_t chunk_size = 256;
     /**
      * @brief The segment size in GlobalRegisteredMemory for storing very large
-     * strings. Configurable from 128KB to 512KB. Must be 4KB aligned.
+     * strings. Default 256 KB. Must be 4 KB aligned.
      */
     uint32_t segment_size = 256 * KB;
-    /**
-     * @brief The size of each memory chunk in GlobalRegisteredMemory.
-     * Must be a multiple of segment_size and 4KB aligned.
-     */
-    size_t registered_memory_chunk_size = 1ULL * GB;
     /**
      * @brief Per-shard pointers to GlobalRegisteredMemory instances owned
      * externally (by the surrounding system that also hosts the networking

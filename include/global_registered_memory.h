@@ -76,10 +76,9 @@ class GlobalRegisteredMemory
 public:
     /**
      * @brief Constructs the global registered memory.
-     * @param segment_size Size of each segment in bytes (128KB-512KB). Must be
-     *        4KB aligned.
+     * @param segment_size Size of each segment in bytes. Must be 4 KB aligned.
      * @param chunk_size Size of each memory chunk in bytes. Must be a multiple
-     *        of segment_size and 4KB aligned.
+     *        of segment_size and 4 KB aligned.
      * @param total_size Total memory to allocate in bytes. Must be a multiple
      *        of chunk_size.
      */
