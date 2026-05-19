@@ -489,6 +489,12 @@ FilePageId MappingSnapshot::ToFilePage(uint64_t val) const
     {
         return DecodeId(val);
     }
+    case ValType::DataSwizzlingPointer:
+    {
+        MemDataPage *dp =
+            reinterpret_cast<MemDataPage *>(val & ~TypeMask);
+        return dp->GetFilePageId();
+    }
     case ValType::PageId:
     case ValType::Invalid:
         break;
@@ -536,18 +542,6 @@ void MappingSnapshot::Unswizzling(MemIndexPage *page)
     }
 }
 
-MemIndexPage::Handle MappingSnapshot::GetSwizzlingHandle(PageId page_id) const
-{
-    assert(page_id < mapping_tbl_.size());
-    uint64_t val = mapping_tbl_.Get(page_id);
-    if (IsSwizzlingPointer(val))
-    {
-        MemIndexPage *idx_page = reinterpret_cast<MemIndexPage *>(val);
-        return MemIndexPage::Handle(idx_page);
-    }
-    return MemIndexPage::Handle();
-}
-
 void MappingSnapshot::AddSwizzling(PageId page_id, MemIndexPage *idx_page)
 {
     auto &mapping_tbl = mapping_tbl_;
@@ -565,6 +559,43 @@ void MappingSnapshot::AddSwizzling(PageId page_id, MemIndexPage *idx_page)
     }
 }
 
+void MappingSnapshot::Unswizzling(MemDataPage *page)
+{
+    PageId page_id = page->GetPageId();
+    FilePageId file_page_id = page->GetFilePageId();
+
+    auto &mapping_tbl = mapping_tbl_;
+    if (page_id < mapping_tbl.size())
+    {
+        uint64_t val = mapping_tbl.Get(page_id);
+        if (IsDataSwizzlingPointer(val) &&
+            reinterpret_cast<MemDataPage *>(val & ~TypeMask) == page)
+        {
+            mapping_tbl.Set(page_id, EncodeFilePageId(file_page_id));
+        }
+    }
+}
+
+void MappingSnapshot::AddSwizzling(PageId page_id, MemDataPage *data_page)
+{
+    auto &mapping_tbl = mapping_tbl_;
+    assert(page_id < mapping_tbl.size());
+
+    uint64_t val = mapping_tbl.Get(page_id);
+    uint64_t tagged = reinterpret_cast<uint64_t>(data_page);
+    assert((tagged & TypeMask) == 0);
+    tagged |= uint64_t(ValType::DataSwizzlingPointer);
+    if (IsDataSwizzlingPointer(val))
+    {
+        assert((val & ~TypeMask) == reinterpret_cast<uint64_t>(data_page));
+    }
+    else
+    {
+        assert(DecodeId(val) == data_page->GetFilePageId());
+        mapping_tbl.Set(page_id, tagged);
+    }
+}
+
 bool MappingSnapshot::IsSwizzlingPointer(uint64_t val)
 {
     return GetValType(val) == ValType::SwizzlingPointer;
@@ -573,6 +604,11 @@ bool MappingSnapshot::IsSwizzlingPointer(uint64_t val)
 bool MappingSnapshot::IsFilePageId(uint64_t val)
 {
     return GetValType(val) == ValType::FilePageId;
+}
+
+bool MappingSnapshot::IsDataSwizzlingPointer(uint64_t val)
+{
+    return GetValType(val) == ValType::DataSwizzlingPointer;
 }
 
 MappingSnapshot::ValType MappingSnapshot::GetValType(uint64_t val)
@@ -591,6 +627,12 @@ void MappingSnapshot::Serialize(ManifestBuffer &dst) const
         {
             MemIndexPage *p = reinterpret_cast<MemIndexPage *>(val);
             val = EncodeFilePageId(p->GetFilePageId());
+        }
+        else if (IsDataSwizzlingPointer(val))
+        {
+            MemDataPage *dp =
+                reinterpret_cast<MemDataPage *>(val & ~TypeMask);
+            val = EncodeFilePageId(dp->GetFilePageId());
         }
         dst.AppendVarint64(val);
         if (can_yield && (i & 511) == 0)

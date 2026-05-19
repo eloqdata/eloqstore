@@ -278,7 +278,8 @@ KvError BackgroundWrite::DoCompactDataFile(MovingCachedPages &moving_cached)
             for (auto [fp_id, page_id] : batch_ids)
             {
                 MemIndexPage::Handle handle =
-                    cow_meta_.old_mapping_->GetSwizzlingHandle(page_id);
+                    cow_meta_.old_mapping_->GetSwizzlingHandle<MemIndexPage>(
+                        page_id);
                 if (handle && !handle->IsDetached())
                 {
                     auto [_, new_fp_id] = AllocatePage(page_id);

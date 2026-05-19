@@ -59,7 +59,8 @@ std::pair<Page, KvError> LoadPage(const TableIdent &tbl_id,
                                   FilePageId file_page_id);
 std::pair<DataPage, KvError> LoadDataPage(const TableIdent &tbl_id,
                                           PageId page_id,
-                                          FilePageId file_page_id);
+                                          FilePageId file_page_id = MaxFilePageId,
+                                          MappingSnapshot *mapping = nullptr);
 std::pair<OverflowPage, KvError> LoadOverflowPage(const TableIdent &tbl_id,
                                                   PageId page_id,
                                                   FilePageId file_page_id);

@@ -1001,7 +1001,7 @@ KvError BatchWriteTask::FinishIndexPage(MemIndexPage::Handle &prev_handle,
         prev_handle = MemIndexPage::Handle();
         prev_page_id = MaxPageId;
     }
-    MemIndexPage *cur_page = shard->IndexManager()->AllocIndexPage();
+    MemIndexPage *cur_page = shard->IndexManager()->AllocPage<MemIndexPage>();
     if (cur_page == nullptr)
     {
         return KvError::OutOfMem;
@@ -1799,7 +1799,7 @@ std::pair<MemIndexPage::Handle, KvError> BatchWriteTask::TruncateIndexPage(
         return {MemIndexPage::Handle(), KvError::NoError};
     }
     // This index page is partially truncated
-    MemIndexPage *new_page = shard->IndexManager()->AllocIndexPage();
+    MemIndexPage *new_page = shard->IndexManager()->AllocPage<MemIndexPage>();
     if (new_page == nullptr)
     {
         return {MemIndexPage::Handle(), KvError::OutOfMem};
@@ -1815,7 +1815,7 @@ std::pair<MemIndexPage::Handle, KvError> BatchWriteTask::TruncateIndexPage(
         new_handle.Reset();
         CHECK(page->IsDetached());
         CHECK(!page->IsPinned());
-        shard->IndexManager()->FreeIndexPage(page);
+        shard->IndexManager()->FreePage(page);
         return {MemIndexPage::Handle(), err};
     }
     return {std::move(new_handle), KvError::NoError};

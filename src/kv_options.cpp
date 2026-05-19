@@ -253,6 +253,7 @@ int KvOptions::LoadFromIni(const char *path)
     }
 
     write_buffer_ratio = std::clamp(write_buffer_ratio, 0.0, 1.0);
+    data_page_cache_ratio = std::clamp(data_page_cache_ratio, 0.0, 1.0);
     constexpr char sec_permanent[] = "permanent";
     if (!reader.HasSection(sec_permanent))
     {
@@ -409,6 +410,7 @@ bool KvOptions::operator==(const KvOptions &other) const
            write_buffer_size == other.write_buffer_size &&
            non_page_io_batch_size == other.non_page_io_batch_size &&
            write_buffer_ratio == other.write_buffer_ratio &&
+           data_page_cache_ratio == other.data_page_cache_ratio &&
            allow_reuse_local_caches == other.allow_reuse_local_caches &&
            prewarm_cloud_cache == other.prewarm_cloud_cache &&
            prewarm_task_count == other.prewarm_task_count &&

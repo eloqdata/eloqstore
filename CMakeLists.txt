@@ -117,6 +117,7 @@ set(ELOQ_STORE_SOURCES
         src/storage/data_page_builder.cpp
         src/storage/index_page_builder.cpp
         src/storage/index_page_manager.cpp
+        src/storage/mem_data_page.cpp
         src/storage/mem_index_page.cpp
         src/storage/cloud_backend.cpp
         src/storage/object_store.cpp

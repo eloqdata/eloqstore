@@ -53,8 +53,9 @@ KvError LocateAndProcess(const TableIdent &tbl_id,
     err = shard->IndexManager()->SeekIndex(
         mapping.Get(), meta->root_id_, search_key, page_id);
     CHECK_KV_ERR(err);
-    FilePageId file_page = mapping->ToFilePage(page_id);
-    auto [page, err_load] = LoadDataPage(tbl_id, page_id, file_page);
+
+    auto [page, err_load] =
+        LoadDataPage(tbl_id, page_id, MaxFilePageId, mapping.Get());
     CHECK_KV_ERR(err_load);
 
     DataPageIter iter{&page, Options()};

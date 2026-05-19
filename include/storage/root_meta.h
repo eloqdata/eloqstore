@@ -15,6 +15,7 @@
 #include "compression.h"
 #include "kv_options.h"
 #include "manifest_buffer.h"
+#include "storage/mem_data_page.h"
 #include "storage/mem_index_page.h"
 #include "storage/page_mapper.h"
 #include "tasks/task.h"
@@ -99,6 +100,7 @@ struct RootMeta
     absl::flat_hash_set<MappingSnapshot *> mapping_snapshots_;
     absl::flat_hash_set<MappingSnapshot *> segment_mapping_snapshots_;
     absl::flat_hash_set<MemIndexPage *> index_pages_;
+    absl::flat_hash_set<MemDataPage *> data_pages_;
     uint64_t manifest_size_{0};
     uint64_t next_expire_ts_{0};
     std::shared_ptr<compression::DictCompression> compression_{nullptr};

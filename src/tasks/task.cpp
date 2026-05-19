@@ -95,8 +95,22 @@ std::pair<Page, KvError> LoadPage(const TableIdent &tbl_id,
 
 std::pair<DataPage, KvError> LoadDataPage(const TableIdent &tbl_id,
                                           PageId page_id,
-                                          FilePageId file_page_id)
+                                          FilePageId file_page_id,
+                                          MappingSnapshot *mapping)
 {
+    if (mapping != nullptr)
+    {
+        auto [handle, cache_err] =
+            shard->IndexManager()->FindDataPage(mapping, tbl_id, page_id);
+        if (cache_err == KvError::NoError)
+        {
+            DataPage dp;
+            dp.SetPageId(page_id);
+            dp.SetCached(handle.Release());
+            return {std::move(dp), KvError::NoError};
+        }
+        file_page_id = mapping->ToFilePage(page_id);
+    }
     auto [page, err] = LoadPage(tbl_id, file_page_id);
     if (__builtin_expect(err != KvError::NoError, 0))
     {

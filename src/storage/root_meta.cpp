@@ -331,6 +331,13 @@ bool RootMetaMgr::EvictRootForCache(Entry *entry)
         owner_->RecyclePage(page);
     }
     meta.index_pages_.clear();
+    std::vector<MemDataPage *> data_pages(meta.data_pages_.begin(),
+                                           meta.data_pages_.end());
+    for (MemDataPage *page : data_pages)
+    {
+        owner_->RecyclePage(page);
+    }
+    meta.data_pages_.clear();
     return true;
 }
 
@@ -350,6 +357,7 @@ void RootMetaMgr::ReleaseMappers()
         }
         meta.segment_mapping_snapshots_.clear();
         meta.index_pages_.clear();
+        meta.data_pages_.clear();
         meta.mapper_ = nullptr;
         meta.segment_mapper_ = nullptr;
     }

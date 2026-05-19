@@ -26,7 +26,7 @@ namespace eloqstore
 {
 namespace
 {
-size_t EffectiveBufferPoolLimitBytes(const KvOptions *opts)
+size_t ComputeReadBufferLimitBytes(const KvOptions *opts)
 {
     const double ratio = std::clamp(opts->write_buffer_ratio, 0.0, 1.0);
     size_t reserved = static_cast<size_t>(
@@ -61,10 +61,24 @@ size_t RootMetaBytes(const RootMeta &meta)
 IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
     : io_manager_(io_manager), root_meta_mgr_(this, Options())
 {
-    active_head_.EnqueNext(&active_tail_);
-    const size_t page_limit =
-        EffectiveBufferPoolLimitBytes(Options()) / Options()->data_page_size;
-    index_pages_.reserve(page_limit);
+    const size_t read_buf = ComputeReadBufferLimitBytes(Options());
+    const double data_ratio =
+        std::clamp(Options()->data_page_cache_ratio, 0.0, 1.0);
+    index_cache_.limit_bytes_ =
+        static_cast<size_t>(static_cast<double>(read_buf) * (1.0 - data_ratio));
+    data_cache_.limit_bytes_ =
+        static_cast<size_t>(static_cast<double>(read_buf) * data_ratio);
+
+    index_cache_.active_head_.EnqueNext(&index_cache_.active_tail_);
+    data_cache_.active_head_.EnqueNext(&data_cache_.active_tail_);
+    const size_t page_limit = index_cache_.limit_bytes_ / Options()->data_page_size;
+    index_cache_.pages_.reserve(page_limit);
+    if (data_cache_.limit_bytes_ > 0)
+    {
+        const size_t data_page_limit =
+            data_cache_.limit_bytes_ / Options()->data_page_size;
+        data_cache_.pages_.reserve(data_page_limit);
+    }
 }
 
 void IndexPageManager::Shutdown()
@@ -76,16 +90,22 @@ void IndexPageManager::Shutdown()
     shutdown_ = true;
 
     root_meta_mgr_.ReleaseMappers();
-    index_pages_.clear();
+    index_cache_.pages_.clear();
+    data_cache_.pages_.clear();
 
-    active_head_.next_ = &active_tail_;
-    active_head_.prev_ = nullptr;
-    active_tail_.prev_ = &active_head_;
-    active_tail_.next_ = nullptr;
+    index_cache_.active_head_.next_ = &index_cache_.active_tail_;
+    index_cache_.active_head_.prev_ = nullptr;
+    index_cache_.active_tail_.prev_ = &index_cache_.active_head_;
+    index_cache_.active_tail_.next_ = nullptr;
+    index_cache_.free_head_.next_ = nullptr;
+    index_cache_.free_head_.prev_ = nullptr;
 
-    free_head_.next_ = nullptr;
-    free_head_.prev_ = nullptr;
-    free_head_.in_free_list_ = false;
+    data_cache_.active_head_.next_ = &data_cache_.active_tail_;
+    data_cache_.active_head_.prev_ = nullptr;
+    data_cache_.active_tail_.prev_ = &data_cache_.active_head_;
+    data_cache_.active_tail_.next_ = nullptr;
+    data_cache_.free_head_.next_ = nullptr;
+    data_cache_.free_head_.prev_ = nullptr;
 }
 
 const Comparator *IndexPageManager::GetComparator() const
@@ -93,73 +113,19 @@ const Comparator *IndexPageManager::GetComparator() const
     return io_manager_->options_->comparator_;
 }
 
-MemIndexPage *IndexPageManager::AllocIndexPage()
-{
-    MemIndexPage *next_free = free_head_.DequeNext();
-
-    while (next_free == nullptr)
-    {
-        if (!IsFull())
-        {
-            auto &new_page =
-                index_pages_.emplace_back(std::make_unique<MemIndexPage>());
-            next_free = new_page.get();
-        }
-        else
-        {
-            bool success = Evict();
-            if (!success)
-            {
-                // There is no page to evict because all pages are pinned.
-                // Tasks trying to allocate new pages should rollback to unpin
-                // pages in the task's traversal stack.
-                return nullptr;
-            }
-            next_free = free_head_.DequeNext();
-        }
-    }
-    assert(next_free->IsDetached());
-    assert(!next_free->IsPinned());
-    assert(next_free->Error() == KvError::NoError);
-    next_free->in_free_list_ = false;
-    return next_free;
-}
-
-void IndexPageManager::FreeIndexPage(MemIndexPage *page)
-{
-    assert(page->IsDetached());
-    assert(!page->IsPinned());
-    page->SetError(KvError::NoError);
-    page->in_free_list_ = true;
-    free_head_.EnqueNext(page);
-}
-
-void IndexPageManager::EnqueueIndexPage(MemIndexPage *page)
-{
-    if (page->prev_ != nullptr)
-    {
-        assert(page->next_ != nullptr);
-        page->Deque();
-    }
-    assert(page->prev_ == nullptr && page->next_ == nullptr);
-    active_head_.EnqueNext(page);
-}
-
-bool IndexPageManager::IsFull() const
-{
-    // Calculate current total memory usage
-    size_t current_size = index_pages_.size() * Options()->data_page_size;
-    return current_size >= EffectiveBufferPoolLimitBytes(Options());
-}
-
 size_t IndexPageManager::GetBufferPoolUsed() const
 {
-    return index_pages_.size() * Options()->data_page_size;
+    return index_cache_.pages_.size() * Options()->data_page_size;
 }
 
 size_t IndexPageManager::GetBufferPoolLimit() const
 {
-    return EffectiveBufferPoolLimitBytes(Options());
+    return index_cache_.limit_bytes_;
+}
+
+size_t IndexPageManager::GetDataPageCacheLimit() const
+{
+    return data_cache_.limit_bytes_;
 }
 
 std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
@@ -615,11 +581,12 @@ std::pair<MemIndexPage::Handle, KvError> IndexPageManager::FindPage(
     while (true)
     {
         // First checks swizzling pointers.
-        MemIndexPage::Handle handle = mapping->GetSwizzlingHandle(page_id);
+        MemIndexPage::Handle handle =
+            mapping->GetSwizzlingHandle<MemIndexPage>(page_id);
         if (!handle)
         {
             // This is the first request to load the page.
-            MemIndexPage *new_page = AllocIndexPage();
+            MemIndexPage *new_page = AllocPage<MemIndexPage>();
             if (new_page == nullptr)
             {
                 return {MemIndexPage::Handle(), KvError::OutOfMem};
@@ -644,7 +611,7 @@ std::pair<MemIndexPage::Handle, KvError> IndexPageManager::FindPage(
                 else
                 {
                     CHECK(new_page->waiting_.Empty());
-                    FreeIndexPage(new_page);
+                    FreePage(new_page);
                 }
                 return {MemIndexPage::Handle(), err};
             }
@@ -663,7 +630,7 @@ std::pair<MemIndexPage::Handle, KvError> IndexPageManager::FindPage(
                 handle.Reset();
                 if (!page->IsPinned())
                 {
-                    FreeIndexPage(page);
+                    FreePage(page);
                 }
                 return {MemIndexPage::Handle(), err};
             }
@@ -671,7 +638,7 @@ std::pair<MemIndexPage::Handle, KvError> IndexPageManager::FindPage(
         }
         else
         {
-            EnqueueIndexPage(handle.Get());
+            EnqueuePage(handle.Get());
             return {std::move(handle), KvError::NoError};
         }
     }
@@ -706,29 +673,6 @@ void IndexPageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
     CHECK(n == 1);
 }
 
-bool IndexPageManager::Evict()
-{
-    MemIndexPage *node = &active_tail_;
-
-    do
-    {
-        while (node->prev_->IsPinned() && node->prev_ != &active_head_)
-        {
-            node = node->prev_;
-        }
-
-        // Has reached the head of the active list. Eviction failed.
-        if (node->prev_ == &active_head_)
-        {
-            return false;
-        }
-
-        node = node->prev_;
-        RecyclePage(node);
-    } while (free_head_.next_ == nullptr);
-
-    return true;
-}
 
 bool IndexPageManager::RecyclePage(MemIndexPage *page)
 {
@@ -754,7 +698,7 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
     page->file_page_id_ = MaxFilePageId;
     page->tbl_ident_ = nullptr;
 
-    FreeIndexPage(page);
+    FreePage(page);
     return true;
 }
 
@@ -769,7 +713,7 @@ void IndexPageManager::FinishIo(MappingSnapshot *mapping,
     {
         entry->meta_.index_pages_.insert(idx_page);
     }
-    EnqueueIndexPage(idx_page);
+    EnqueuePage(idx_page);
 }
 
 KvError IndexPageManager::SeekIndex(MappingSnapshot *mapping,
@@ -821,4 +765,110 @@ RootMetaMgr *IndexPageManager::RootMetaManager()
     return &root_meta_mgr_;
 }
 
+// ---- Data page cache ----
+
+std::pair<MemDataPage::Handle, KvError> IndexPageManager::FindDataPage(
+    MappingSnapshot *mapping,
+    const TableIdent &tbl_id,
+    PageId page_id)
+{
+    while (true)
+    {
+        MemDataPage::Handle handle =
+            mapping->GetSwizzlingHandle<MemDataPage>(page_id);
+        if (!handle)
+        {
+            MemDataPage *new_page = AllocPage<MemDataPage>();
+            if (new_page == nullptr)
+            {
+                return {MemDataPage::Handle(), KvError::OutOfMem};
+            }
+            FilePageId file_page_id = mapping->ToFilePage(page_id);
+            new_page->SetPageId(page_id);
+            new_page->SetFilePageId(file_page_id);
+            mapping->AddSwizzling(page_id, new_page);
+
+            auto [page, err] = io_manager_->ReadPage(
+                tbl_id, file_page_id, std::move(new_page->page_));
+            new_page->page_ = std::move(page);
+            if (err != KvError::NoError)
+            {
+                mapping->Unswizzling(new_page);
+                if (new_page->IsPinned())
+                {
+                    new_page->SetError(err);
+                    new_page->waiting_.WakeAll();
+                }
+                else
+                {
+                    CHECK(new_page->waiting_.Empty());
+                    FreePage(new_page);
+                }
+                return {MemDataPage::Handle(), err};
+            }
+            FinishIo(mapping, new_page);
+            new_page->waiting_.WakeAll();
+            return {MemDataPage::Handle(new_page), KvError::NoError};
+        }
+        if (handle->IsDetached())
+        {
+            handle->waiting_.Wait(ThdTask());
+            if (handle->Error() != KvError::NoError)
+            {
+                MemDataPage *page = handle.Get();
+                KvError err = page->Error();
+                handle.Reset();
+                if (!page->IsPinned())
+                {
+                    FreePage(page);
+                }
+                return {MemDataPage::Handle(), err};
+            }
+            assert(handle->IsPinned());
+        }
+        else
+        {
+            EnqueuePage(handle.Get());
+            return {std::move(handle), KvError::NoError};
+        }
+    }
+}
+
+void IndexPageManager::FinishIo(MappingSnapshot *mapping,
+                                 MemDataPage *page)
+{
+    page->tbl_ident_ = mapping->tbl_ident_;
+    mapping->AddSwizzling(page->GetPageId(), page);
+
+    auto *entry = root_meta_mgr_.Find(*mapping->tbl_ident_);
+    if (entry != nullptr)
+    {
+        entry->meta_.data_pages_.insert(page);
+    }
+    EnqueuePage(page);
+}
+
+bool IndexPageManager::RecyclePage(MemDataPage *page)
+{
+    assert(!page->IsPinned());
+    RootMetaMgr::Entry *entry =
+        root_meta_mgr_.Find(*page->tbl_ident_);
+    if (entry != nullptr)
+    {
+        RootMeta &meta = entry->meta_;
+        for (auto &mapping : meta.mapping_snapshots_)
+        {
+            mapping->Unswizzling(page);
+        }
+        meta.data_pages_.erase(page);
+    }
+
+    page->Deque();
+    page->page_id_ = MaxPageId;
+    page->file_page_id_ = MaxFilePageId;
+    page->tbl_ident_ = nullptr;
+
+    FreePage(page);
+    return true;
+}
 }  // namespace eloqstore

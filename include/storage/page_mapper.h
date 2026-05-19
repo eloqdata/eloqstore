@@ -9,6 +9,7 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "pool.h"
+#include "storage/mem_data_page.h"
 #include "storage/mem_index_page.h"
 #include "tasks/task.h"
 #include "types.h"
@@ -121,6 +122,7 @@ struct MappingSnapshot
         SwizzlingPointer = 0,
         FilePageId,
         PageId,
+        DataSwizzlingPointer = 3,  // MemDataPage* with type tag
         Invalid = TypeMask
     };
     static constexpr uint64_t InvalidValue = uint64_t(ValType::Invalid);
@@ -139,11 +141,24 @@ struct MappingSnapshot
      * @param page
      */
     void Unswizzling(MemIndexPage *page);
-    MemIndexPage::Handle GetSwizzlingHandle(PageId page_id) const;
+    void Unswizzling(MemDataPage *page);
+
+    /**
+     * @brief Returns a swizzled handle for the given page type.
+     *
+     * Callers specify the page type at compile time, e.g.:
+     *   GetSwizzlingHandle<MemIndexPage>(page_id)
+     *   GetSwizzlingHandle<MemDataPage>(page_id)
+     */
+    template <typename PageType>
+    typename PageType::Handle GetSwizzlingHandle(PageId page_id) const;
+
     void AddSwizzling(PageId page_id, MemIndexPage *idx_page);
+    void AddSwizzling(PageId page_id, MemDataPage *data_page);
 
     static bool IsSwizzlingPointer(uint64_t val);
     static bool IsFilePageId(uint64_t val);
+    static bool IsDataSwizzlingPointer(uint64_t val);
     static ValType GetValType(uint64_t val);
     static uint64_t EncodeFilePageId(FilePageId file_page_id);
     static uint64_t EncodePageId(PageId page_id);
@@ -179,6 +194,30 @@ struct MappingSnapshot
 private:
     size_t ref_cnt_{0};
 };
+
+template <typename PageType>
+inline typename PageType::Handle MappingSnapshot::GetSwizzlingHandle(
+    PageId page_id) const
+{
+    assert(page_id < mapping_tbl_.size());
+    uint64_t val = mapping_tbl_.Get(page_id);
+    if constexpr (std::is_same_v<PageType, MemIndexPage>)
+    {
+        if (IsSwizzlingPointer(val))
+        {
+            return MemIndexPage::Handle(reinterpret_cast<MemIndexPage *>(val));
+        }
+    }
+    else if constexpr (std::is_same_v<PageType, MemDataPage>)
+    {
+        if (IsDataSwizzlingPointer(val))
+        {
+            return MemDataPage::Handle(
+                reinterpret_cast<MemDataPage *>(val & ~TypeMask));
+        }
+    }
+    return typename PageType::Handle();
+}
 
 class MappingChunkArena
 {

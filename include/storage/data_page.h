@@ -19,6 +19,7 @@
 
 namespace eloqstore
 {
+class MemDataPage;
 class DictCompression;
 enum class ValLenBit : uint8_t
 {
@@ -274,15 +275,14 @@ public:
     PageId GetPageId() const;
     char *PagePtr() const;
     void SetPage(Page page);
+    void SetCached(MemDataPage *page);
     void Clear();
-    bool IsRegistered() const
-    {
-        return page_.IsRegistered();
-    }
+    bool IsRegistered() const;
 
 private:
     PageId page_id_{MaxPageId};
     Page page_{false};
+    MemDataPage *cached_page_{nullptr};
 };
 
 std::ostream &operator<<(std::ostream &out, DataPage const &page);

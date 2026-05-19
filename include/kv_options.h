@@ -176,6 +176,12 @@ struct KvOptions
      */
     double write_buffer_ratio = 0.05;
     /**
+     * @brief Fraction of the read portion of buffer_pool_size used for the
+     * data page cache. 0 means no data page caching (current behavior).
+     * The remainder goes to the index page cache.
+     */
+    double data_page_cache_ratio = 0.2;
+    /**
      * @brief Reuse files already present in the local cache directory when the
      * store starts.
      */

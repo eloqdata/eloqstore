@@ -33,21 +33,23 @@ public:
     const Comparator *GetComparator() const;
 
     /**
-     * @brief Allocates an index page from buffer pool. The returned page is not
-     * traced in the cache replacement list, so it cannot be evicted. Whoever
-     * getting a new page should enqueue it later for cache replacement.
-     *
-     * @return MemIndexPage*
+     * @brief Allocates a page from the buffer pool. The returned page is not
+     * traced in the cache replacement list, so it cannot be evicted.
      */
-    MemIndexPage *AllocIndexPage();
-    void FreeIndexPage(MemIndexPage *page);
+    template <typename PageType>
+    PageType *AllocPage();
 
     /**
-     * @brief Enqueues the index page into the cache replacement list.
-     *
-     * @param page
+     * @brief Returns a page to the free list.
      */
-    void EnqueueIndexPage(MemIndexPage *page);
+    template <typename PageType>
+    void FreePage(PageType *page);
+
+    /**
+     * @brief Enqueues the page into the cache replacement list (MRU position).
+     */
+    template <typename PageType>
+    void EnqueuePage(PageType *page);
 
     std::pair<RootMetaMgr::Handle, KvError> FindRoot(
         const TableIdent &tbl_ident);
@@ -95,36 +97,46 @@ public:
      * @return Total buffer pool size limit in bytes.
      */
     size_t GetBufferPoolLimit() const;
+    size_t GetDataPageCacheLimit() const;
+
+    // ---- Data page cache ----
+
+    /**
+     * @brief Find a cached data page or load it from disk.
+     * Returns {Handle(), OutOfMem} when the cache is full and eviction fails.
+     */
+    std::pair<MemDataPage::Handle, KvError> FindDataPage(
+        MappingSnapshot *mapping,
+        const TableIdent &tbl_id,
+        PageId page_id);
+
+    void FinishIo(MappingSnapshot *mapping, MemDataPage *page);
+
+    template <typename PageType>
+    struct PagePool
+    {
+        PageType active_head_{false};
+        PageType active_tail_{false};
+        PageType free_head_{false};
+        std::vector<std::unique_ptr<PageType>> pages_;
+        size_t limit_bytes_{0};
+    };
 
 private:
-    /**
-     * @brief Returns if memory is full. TODO: Replaces with a reasonable
-     * implementation.
-     *
-     * @return true
-     * @return false
-     */
-    bool IsFull() const;
+    template <typename PageType>
+    PagePool<PageType> &GetPool();
 
-    bool Evict();
+    template <typename PageType>
+    bool IsCacheFull() const;
+
+    template <typename PageType>
+    bool EvictPage();
 
     bool RecyclePage(MemIndexPage *page);
+    bool RecyclePage(MemDataPage *page);
 
-    /**
-     * @brief Reserved head and tail for the active list. The head points to the
-     * most-recently accessed, and the tail points to the least-recently
-     * accessed.
-     *
-     */
-    MemIndexPage active_head_{false};
-    MemIndexPage active_tail_{false};
-    MemIndexPage free_head_{false};
-
-    /**
-     * @brief A pool of index pages.
-     *
-     */
-    std::vector<std::unique_ptr<MemIndexPage>> index_pages_;
+    PagePool<MemIndexPage> index_cache_;
+    PagePool<MemDataPage> data_cache_;
 
     AsyncIoManager *io_manager_;
     MappingArena mapping_arena_;
@@ -132,4 +144,77 @@ private:
     RootMetaMgr root_meta_mgr_;
     bool shutdown_{false};
 };
+
+// --- inline template implementations ---
+
+template <typename PageType>
+inline auto IndexPageManager::GetPool() -> PagePool<PageType> &
+{
+    if constexpr (std::is_same_v<PageType, MemIndexPage>)
+        return index_cache_;
+    else
+        return data_cache_;
+}
+
+template <typename PageType>
+inline PageType *IndexPageManager::AllocPage()
+{
+    auto &pool = GetPool<PageType>();
+    PageType *next_free = pool.free_head_.DequeNext();
+    while (next_free == nullptr)
+    {
+        if (!IsCacheFull<PageType>())
+        {
+            auto &new_page =
+                pool.pages_.emplace_back(std::make_unique<PageType>());
+            next_free = new_page.get();
+        }
+        else if (!EvictPage<PageType>())
+            return nullptr;
+        else
+            next_free = pool.free_head_.DequeNext();
+    }
+    next_free->in_free_list_ = false;
+    return next_free;
+}
+
+template <typename PageType>
+inline void IndexPageManager::FreePage(PageType *page)
+{
+    page->SetError(KvError::NoError);
+    page->in_free_list_ = true;
+    GetPool<PageType>().free_head_.EnqueNext(page);
+}
+
+template <typename PageType>
+inline void IndexPageManager::EnqueuePage(PageType *page)
+{
+    if (!page->IsDetached()) page->Deque();
+    GetPool<PageType>().active_head_.EnqueNext(page);
+}
+
+template <typename PageType>
+inline bool IndexPageManager::IsCacheFull() const
+{
+    const auto &pool =
+        const_cast<IndexPageManager *>(this)->GetPool<PageType>();
+    return pool.pages_.size() * Options()->data_page_size >= pool.limit_bytes_;
+}
+
+template <typename PageType>
+inline bool IndexPageManager::EvictPage()
+{
+    auto &pool = GetPool<PageType>();
+    auto *node = &pool.active_tail_;
+    do
+    {
+        while (node->prev_->IsPinned() && node->prev_ != &pool.active_head_)
+            node = node->prev_;
+        if (node->prev_ == &pool.active_head_) return false;
+        node = node->prev_;
+        RecyclePage(node);
+    } while (pool.free_head_.next_ == nullptr);
+    return true;
+}
+
 }  // namespace eloqstore

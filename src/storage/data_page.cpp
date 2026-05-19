@@ -12,6 +12,7 @@
 #include "coding.h"
 #include "compression.h"
 #include "kv_options.h"
+#include "storage/mem_data_page.h"
 
 namespace eloqstore
 {
@@ -21,8 +22,11 @@ DataPage::DataPage(PageId page_id) : page_id_(page_id)
 }
 
 DataPage::DataPage(DataPage &&rhs)
-    : page_id_(rhs.page_id_), page_(std::move(rhs.page_))
+    : page_id_(rhs.page_id_),
+      page_(std::move(rhs.page_)),
+      cached_page_(rhs.cached_page_)
 {
+    rhs.cached_page_ = nullptr;
 }
 
 DataPage &DataPage::operator=(DataPage &&other) noexcept
@@ -32,43 +36,45 @@ DataPage &DataPage::operator=(DataPage &&other) noexcept
         Clear();
         page_id_ = other.page_id_;
         page_ = std::move(other.page_);
+        cached_page_ = other.cached_page_;
+        other.cached_page_ = nullptr;
     }
     return *this;
 }
 
 bool DataPage::IsEmpty() const
 {
-    return page_.Ptr() == nullptr;
+    return PagePtr() == nullptr;
 }
 
 uint16_t DataPage::ContentLength() const
 {
-    return DecodeFixed16(page_.Ptr() + page_size_offset);
+    return DecodeFixed16(PagePtr() + page_size_offset);
 }
 
 uint16_t DataPage::RestartNum() const
 {
-    return DecodeFixed16(page_.Ptr() + ContentLength() - sizeof(uint16_t));
+    return DecodeFixed16(PagePtr() + ContentLength() - sizeof(uint16_t));
 }
 
 PageId DataPage::PrevPageId() const
 {
-    return DecodeFixed32(page_.Ptr() + prev_page_offset);
+    return DecodeFixed32(PagePtr() + prev_page_offset);
 }
 
 PageId DataPage::NextPageId() const
 {
-    return DecodeFixed32(page_.Ptr() + next_page_offset);
+    return DecodeFixed32(PagePtr() + next_page_offset);
 }
 
 void DataPage::SetPrevPageId(PageId page_id)
 {
-    EncodeFixed32(page_.Ptr() + prev_page_offset, page_id);
+    EncodeFixed32(PagePtr() + prev_page_offset, page_id);
 }
 
 void DataPage::SetNextPageId(PageId page_id)
 {
-    EncodeFixed32(page_.Ptr() + next_page_offset, page_id);
+    EncodeFixed32(PagePtr() + next_page_offset, page_id);
 }
 
 void DataPage::SetPageId(PageId page_id)
@@ -83,6 +89,10 @@ PageId DataPage::GetPageId() const
 
 char *DataPage::PagePtr() const
 {
+    if (cached_page_ != nullptr)
+    {
+        return cached_page_->PagePtr();
+    }
     return page_.Ptr();
 }
 
@@ -91,9 +101,29 @@ void DataPage::SetPage(Page page)
     page_ = std::move(page);
 }
 
+void DataPage::SetCached(MemDataPage *page)
+{
+    // Pin has been transferred from Handle via Release().
+    cached_page_ = page;
+}
+
 void DataPage::Clear()
 {
+    if (cached_page_ != nullptr)
+    {
+        cached_page_->Unpin();
+        cached_page_ = nullptr;
+    }
     page_.Free();
+}
+
+bool DataPage::IsRegistered() const
+{
+    if (cached_page_ != nullptr)
+    {
+        return cached_page_->IsRegistered();
+    }
+    return page_.IsRegistered();
 }
 
 std::ostream &operator<<(std::ostream &out, DataPage const &page)
@@ -537,7 +567,7 @@ uint16_t PageRegionIter::RegionOffset(uint16_t region_idx) const
 OverflowPage::OverflowPage(PageId page_id, Page page)
     : page_id_(page_id), page_(std::move(page))
 {
-    assert(TypeOfPage(page_.Ptr()) == PageType::Overflow);
+    assert(TypeOfPage(PagePtr()) == PageType::Overflow);
 }
 
 OverflowPage::OverflowPage(PageId page_id,
@@ -553,12 +583,12 @@ OverflowPage::OverflowPage(PageId page_id,
 
     page_ = Page(true);
 
-    SetPageType(page_.Ptr(), PageType::Overflow);
+    SetPageType(PagePtr(), PageType::Overflow);
 
-    EncodeFixed16(page_.Ptr() + OverflowPage::page_size_offset, val.size());
-    memcpy(page_.Ptr() + OverflowPage::value_offset, val.data(), val.size());
+    EncodeFixed16(PagePtr() + OverflowPage::page_size_offset, val.size());
+    memcpy(PagePtr() + OverflowPage::value_offset, val.data(), val.size());
 
-    char *dst = (page_.Ptr() + opts->data_page_size - 1);
+    char *dst = (PagePtr() + opts->data_page_size - 1);
     *dst = pointers.size();
     if (!pointers.empty())
     {
@@ -579,12 +609,12 @@ OverflowPage::OverflowPage(OverflowPage &&rhs)
 
 uint16_t OverflowPage::ValueSize() const
 {
-    return DecodeFixed16(page_.Ptr() + page_size_offset);
+    return DecodeFixed16(PagePtr() + page_size_offset);
 }
 
 std::string_view OverflowPage::GetValue() const
 {
-    return {page_.Ptr() + value_offset, ValueSize()};
+    return {PagePtr() + value_offset, ValueSize()};
 }
 
 PageId OverflowPage::GetPageId() const
@@ -594,7 +624,7 @@ PageId OverflowPage::GetPageId() const
 
 char *OverflowPage::PagePtr() const
 {
-    return page_.Ptr();
+    return PagePtr();
 }
 
 uint16_t OverflowPage::Capacity(const KvOptions *options, bool end)
@@ -611,7 +641,7 @@ uint16_t OverflowPage::Capacity(const KvOptions *options, bool end)
 
 uint8_t OverflowPage::NumPointers(const KvOptions *options) const
 {
-    return *(page_.Ptr() + options->data_page_size - 1);
+    return *(PagePtr() + options->data_page_size - 1);
 }
 
 std::string_view OverflowPage::GetEncodedPointers(
@@ -623,7 +653,7 @@ std::string_view OverflowPage::GetEncodedPointers(
         return {};
     }
     char *ptr =
-        page_.Ptr() + options->data_page_size - 1 - (n * sizeof(uint32_t));
+        PagePtr() + options->data_page_size - 1 - (n * sizeof(uint32_t));
     return {ptr, n * sizeof(uint32_t)};
 }
 

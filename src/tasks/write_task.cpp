@@ -435,7 +435,7 @@ void WriteTask::WritePageCallback(VarPage page, KvError err)
             {
                 handle.Reset();
                 CHECK(!idx_page->IsPinned());
-                shard->IndexManager()->FreeIndexPage(idx_page);
+                shard->IndexManager()->FreePage(idx_page);
             }
         }
         break;
