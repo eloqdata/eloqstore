@@ -5755,23 +5755,6 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
     return KvError::NoError;
 }
 
-std::string CloudStoreMgr::ToFilename(TypedFileId file_id, uint64_t term)
-{
-    if (file_id == LruFD::kManifest)
-    {
-        return ManifestFileName(term);
-    }
-    else if (file_id.IsSegmentFile())
-    {
-        return SegmentFileName(file_id.ToFileId(), MainBranchName, term);
-    }
-    else
-    {
-        assert(file_id.value_ < TypedFileId::kMaxReserved);
-        return DataFileName(file_id.ToFileId(), term);
-    }
-}
-
 size_t CloudStoreMgr::EstimateFileSize(TypedFileId file_id) const
 {
     if (file_id == LruFD::kManifest)

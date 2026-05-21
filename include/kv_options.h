@@ -109,10 +109,11 @@ struct KvOptions
     /**
      * @brief Move segments in a segment file when its space amplification
      * factor exceeds this value. A value of 0 disables segment file
-     * compaction independently of data file compaction. Defaults to
-     * file_amplify_factor; segment rewrites are ~two orders of magnitude
-     * more expensive per unit than page rewrites, so this knob can be
-     * raised to prefer space over churn.
+     * compaction independently of data file compaction. Default is 2
+     * (same as file_amplify_factor today, but the two knobs are
+     * independent); segment rewrites are ~two orders of magnitude more
+     * expensive per unit than page rewrites, so this can be raised to
+     * prefer space over churn.
      * Only takes effect when data_append_mode is enabled.
      */
     uint8_t segment_file_amplify_factor = 2;

@@ -372,7 +372,7 @@ managers); `IouringMgr` overrides them:
 
 ```
 virtual char *AcquireTailScratch(uint16_t &buf_index);  // yields if empty
-virtual void  ReleaseTailScratch(char *ptr, uint16_t buf_index);
+virtual void  ReleaseTailScratch(char *ptr);
 ```
 
 ### Pinned-arm dispatch in WriteLargeValue
@@ -401,7 +401,7 @@ if (needs_scratch) {
 }
 
 result = WriteLargeValueSegments(size, ptrs, buf_indices, metadata);
-if (needs_scratch) ReleaseTailScratch(scratch, scratch_buf_index);
+if (needs_scratch) ReleaseTailScratch(scratch);
 return result;
 ```
 
