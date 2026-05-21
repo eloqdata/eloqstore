@@ -23,7 +23,9 @@ int main(int argc, char *argv[])
     // and continue so test-listing still works. Actual test runs that need
     // the locked pages will fail loudly later on io_uring registration if
     // the launch wasn't via the recommended systemd-run wrapper above.
-    struct rlimit lim{};
+    struct rlimit lim
+    {
+    };
     if (getrlimit(RLIMIT_MEMLOCK, &lim) != 0)
     {
         std::fprintf(stderr,
