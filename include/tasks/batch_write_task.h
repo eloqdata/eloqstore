@@ -36,13 +36,13 @@ private:
     KvError ApplyOnePage(size_t &cidx, uint64_t now_ms);
 
     KvError LoadApplyingPage(PageId page_id);
-    std::pair<MemIndexPage::Handle, KvError> Pop();
+    std::pair<MemCachedPage::Handle, KvError> Pop();
 
-    KvError FinishIndexPage(MemIndexPage::Handle &prev_handle,
+    KvError FinishIndexPage(MemCachedPage::Handle &prev_handle,
                             std::string &prev_key,
                             PageId &prev_page_id,
                             std::string cur_page_key);
-    KvError FlushIndexPage(MemIndexPage::Handle &new_page,
+    KvError FlushIndexPage(MemCachedPage::Handle &new_page,
                            std::string idx_page_key,
                            PageId page_id,
                            bool split);
@@ -57,7 +57,7 @@ private:
      * @return The current page after redistributing.
      */
     Page Redistribute(DataPage &prev_page, std::string_view cur_page);
-    std::string_view Redistribute(MemIndexPage::Handle &prev_handle,
+    std::string_view Redistribute(MemCachedPage::Handle &prev_handle,
                                   std::string_view cur_page,
                                   std::string &cur_page_key);
 
@@ -204,7 +204,7 @@ private:
      */
     std::pair<bool, KvError> TruncateDataPage(PageId page_id,
                                               std::string_view trunc_pos);
-    std::pair<MemIndexPage::Handle, KvError> TruncateIndexPage(
+    std::pair<MemCachedPage::Handle, KvError> TruncateIndexPage(
         PageId page_id, std::string_view trunc_pos);
 
     static void AdvanceDataPageIter(DataPageIter &iter, bool &is_valid);

@@ -46,9 +46,16 @@ struct KvOptions
      */
     bool skip_verify_checksum = false;
     /**
-     * @brief Max size of cached index pages per shard (in bytes).
+     * @brief Max size of cached index pages per shard (in bytes). When
+     * enable_data_page_cache is on, cached data pages share the same budget.
      */
-    uint64_t buffer_pool_size = 32 * MB;
+    uint64_t buffer_pool_size = 128 * MB;
+    /**
+     * @brief If true, data pages are cached in the same buffer pool as index
+     * pages, evicted by the same LRU. If false (default), every data-page
+     * access reads from storage.
+     */
+    bool enable_data_page_cache = false;
     /**
      * @brief Max size of cached RootMeta mappings (global, in bytes).
      */
@@ -412,6 +419,7 @@ struct KvOptions
      * missing underlying resources in cloud/standby mode.
      */
     uint8_t auto_reopen_retry_times = 10;
+    uint8_t auto_oom_retry_times = 5;
 
     /**
      * @brief Filter function to determine which partitions belong to this

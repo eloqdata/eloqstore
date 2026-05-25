@@ -8,7 +8,7 @@
 
 #include "error.h"
 #include "storage/data_page.h"
-#include "storage/mem_index_page.h"
+#include "storage/mem_cached_page.h"
 #include "storage/root_meta.h"
 #include "tasks/task.h"
 #include "types.h"
@@ -40,13 +40,13 @@ public:
 private:
     struct IndexFrame
     {
-        IndexFrame(MemIndexPage::Handle handle_in, IndexPageIter iter_in)
+        IndexFrame(MemCachedPage::Handle handle_in, IndexPageIter iter_in)
             : iter(std::move(iter_in)), handle(std::move(handle_in))
         {
         }
 
         IndexPageIter iter;
-        MemIndexPage::Handle handle;
+        MemCachedPage::Handle handle;
     };
 
     const TableIdent tbl_id_;

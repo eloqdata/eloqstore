@@ -6,7 +6,7 @@
 #include <string>
 
 #include "global_registered_memory.h"
-#include "storage/mem_index_page.h"
+#include "storage/mem_cached_page.h"
 #include "storage/shard.h"
 #include "utils.h"
 
@@ -27,7 +27,7 @@ public:
             entry.handle->SetFilePageId(entry.src_fp_id);
         }
     }
-    void Add(MemIndexPage::Handle handle, FilePageId src_fp_id)
+    void Add(MemCachedPage::Handle handle, FilePageId src_fp_id)
     {
         pages_.push_back({std::move(handle), src_fp_id});
     }
@@ -44,7 +44,7 @@ public:
 private:
     struct Entry
     {
-        MemIndexPage::Handle handle;
+        MemCachedPage::Handle handle;
         FilePageId src_fp_id;
     };
     std::vector<Entry> pages_;
@@ -277,7 +277,7 @@ KvError BackgroundWrite::DoCompactDataFile(MovingCachedPages &moving_cached)
             move_batch_fp_ids.clear();
             for (auto [fp_id, page_id] : batch_ids)
             {
-                MemIndexPage::Handle handle =
+                MemCachedPage::Handle handle =
                     cow_meta_.old_mapping_->GetSwizzlingHandle(page_id);
                 if (handle && !handle->IsDetached())
                 {

@@ -19,18 +19,18 @@
 
 namespace eloqstore
 {
-class IndexPageManager;
+class PageManager;
 class MappingSnapshot;
 struct TableIdent;
 
-class MemIndexPage
+class MemCachedPage
 {
 public:
     class Handle
     {
     public:
         Handle() = default;
-        explicit Handle(MemIndexPage *page)
+        explicit Handle(MemCachedPage *page)
         {
             Reset(page);
         }
@@ -58,7 +58,7 @@ public:
             Reset();
         }
 
-        void Reset(MemIndexPage *page = nullptr)
+        void Reset(MemCachedPage *page = nullptr)
         {
             if (page_ != nullptr)
             {
@@ -71,12 +71,12 @@ public:
             }
         }
 
-        MemIndexPage *Get() const
+        MemCachedPage *Get() const
         {
             return page_;
         }
 
-        MemIndexPage *operator->() const
+        MemCachedPage *operator->() const
         {
             return page_;
         }
@@ -86,8 +86,18 @@ public:
             return page_ != nullptr;
         }
 
+        // Detach the pinned page from this Handle without unpinning. The
+        // caller is responsible for calling Unpin() on the returned pointer
+        // when done.
+        MemCachedPage *Release()
+        {
+            MemCachedPage *p = page_;
+            page_ = nullptr;
+            return p;
+        }
+
     private:
-        MemIndexPage *page_{nullptr};
+        MemCachedPage *page_{nullptr};
     };
 
     static size_t const max_page_size = 1 << 16;
@@ -95,7 +105,7 @@ public:
     static uint16_t const leftmost_ptr_offset =
         page_size_offset + sizeof(uint16_t);
 
-    explicit MemIndexPage(bool alloc = true) : page_(alloc) {};
+    explicit MemCachedPage(bool alloc = true) : page_(alloc) {};
     uint16_t ContentLength() const;
     uint16_t RestartNum() const;
 
@@ -105,8 +115,8 @@ public:
     }
 
     void Deque();
-    MemIndexPage *DequeNext();
-    void EnqueNext(MemIndexPage *new_page);
+    MemCachedPage *DequeNext();
+    void EnqueNext(MemCachedPage *new_page);
 
     bool IsPointingToLeaf() const;
 
@@ -129,11 +139,6 @@ public:
     bool IsDetached() const
     {
         return prev_ == nullptr && next_ == nullptr;
-    }
-
-    bool InFreeList() const
-    {
-        return in_free_list_;
     }
 
     PageId GetPageId() const
@@ -169,6 +174,14 @@ public:
     bool IsRegistered() const
     {
         return page_.IsRegistered();
+    }
+
+    // Replace this cached page's buffer. Used by writers that build a data
+    // page in a transient Page and then promote it into the cache by routing
+    // the write through WriteTask::WritePage(MemCachedPage::Handle &).
+    void SetPage(Page p)
+    {
+        page_ = std::move(p);
     }
 
     void SetError(KvError err)
@@ -214,11 +227,10 @@ private:
      * in-memory page is either in the active list or in the free list.
      *
      */
-    MemIndexPage *next_{nullptr};
-    MemIndexPage *prev_{nullptr};
+    MemCachedPage *next_{nullptr};
+    MemCachedPage *prev_{nullptr};
     const TableIdent *tbl_ident_{nullptr};
-    bool in_free_list_{false};
-    friend class IndexPageManager;
+    friend class PageManager;
 };
 
 class IndexPageIter
@@ -227,7 +239,7 @@ public:
     using uptr = std::unique_ptr<IndexPageIter>;
 
     IndexPageIter() = delete;
-    IndexPageIter(const MemIndexPage::Handle &handle, const KvOptions *opts);
+    IndexPageIter(const MemCachedPage::Handle &handle, const KvOptions *opts);
     IndexPageIter(std::string_view page_view, const KvOptions *opts);
 
     bool HasNext() const
@@ -287,7 +299,7 @@ public:
 private:
     uint16_t const restart_offset_;
 
-    uint16_t curr_offset_{MemIndexPage::leftmost_ptr_offset};
+    uint16_t curr_offset_{MemCachedPage::leftmost_ptr_offset};
     uint16_t curr_restart_idx_{0};
 
     std::string key_;

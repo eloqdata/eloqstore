@@ -8,9 +8,9 @@
 
 namespace eloqstore
 {
-class IndexPageManager;
+class PageManager;
 class IoStringBuffer;
-class MemIndexPage;
+class MemCachedPage;
 class MappingSnapshot;
 
 class ReadTask : public KvTask

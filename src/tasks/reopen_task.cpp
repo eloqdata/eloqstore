@@ -4,7 +4,7 @@
 
 #include "eloq_store.h"
 #include "standby_service.h"
-#include "storage/index_page_manager.h"
+#include "storage/page_manager.h"
 #include "storage/shard.h"
 #include "tasks/prewarm_task.h"
 

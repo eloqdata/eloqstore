@@ -17,10 +17,10 @@ class Replayer
 public:
     Replayer(const KvOptions *opts);
     KvError Replay(ManifestFile *file);
-    std::unique_ptr<PageMapper> GetMapper(IndexPageManager *idx_mgr,
+    std::unique_ptr<PageMapper> GetMapper(PageManager *idx_mgr,
                                           const TableIdent *tbl_ident,
                                           uint64_t expect_term = 0);
-    std::unique_ptr<PageMapper> GetSegmentMapper(IndexPageManager *idx_mgr,
+    std::unique_ptr<PageMapper> GetSegmentMapper(PageManager *idx_mgr,
                                                  const TableIdent *tbl_ident,
                                                  uint64_t expect_term = 0);
 

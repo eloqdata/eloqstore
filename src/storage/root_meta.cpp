@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "coding.h"
-#include "storage/index_page_manager.h"
+#include "storage/page_manager.h"
 #include "storage/page_mapper.h"
 #include "types.h"
 
@@ -200,7 +200,7 @@ uint64_t ManifestBuilder::CalcChecksum(std::string_view content)
     return agg_checksum;
 }
 
-RootMetaMgr::RootMetaMgr(IndexPageManager *owner, const KvOptions *options)
+RootMetaMgr::RootMetaMgr(PageManager *owner, const KvOptions *options)
     : owner_(owner), options_(options)
 {
     capacity_bytes_ = options_->root_meta_cache_size;
@@ -299,13 +299,13 @@ bool RootMetaMgr::EvictRootForCache(Entry *entry)
                               << " table " << tbl_id;
     if (meta.mapper_ == nullptr)
     {
-        CHECK(meta.index_pages_.empty())
+        CHECK(meta.cached_pages_.empty())
             << "EvictRootForCache: mapper null but index pages exist for table "
             << tbl_id;
         LOG(INFO) << "EvictRootForCache: mapper null table " << tbl_id;
         return true;
     }
-    for (MemIndexPage *page : meta.index_pages_)
+    for (MemCachedPage *page : meta.cached_pages_)
     {
         CHECK(!page->IsPinned())
             << "EvictRootForCache: index page pinned table " << tbl_id;
@@ -324,13 +324,13 @@ bool RootMetaMgr::EvictRootForCache(Entry *entry)
         meta.waiting_.WakeAll();
     }
 
-    std::vector<MemIndexPage *> pages(meta.index_pages_.begin(),
-                                      meta.index_pages_.end());
-    for (MemIndexPage *page : pages)
+    std::vector<MemCachedPage *> pages(meta.cached_pages_.begin(),
+                                       meta.cached_pages_.end());
+    for (MemCachedPage *page : pages)
     {
         owner_->RecyclePage(page);
     }
-    meta.index_pages_.clear();
+    meta.cached_pages_.clear();
     return true;
 }
 
@@ -349,7 +349,7 @@ void RootMetaMgr::ReleaseMappers()
             snapshot->idx_mgr_ = nullptr;
         }
         meta.segment_mapping_snapshots_.clear();
-        meta.index_pages_.clear();
+        meta.cached_pages_.clear();
         meta.mapper_ = nullptr;
         meta.segment_mapper_ = nullptr;
     }

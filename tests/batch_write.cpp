@@ -127,8 +127,9 @@ TEST_CASE("batch write abort releases pinned index pages",
     opts.store_path = {test_path};
     opts.num_threads = 1;
     opts.data_page_size = 4096;
-    opts.buffer_pool_size = 4096;  // Allow only a single MemIndexPage.
+    opts.buffer_pool_size = 4096;  // Allow only a single MemCachedPage.
     opts.max_write_batch_pages = 4;
+    opts.auto_oom_retry_times = 0;
 
     auto build_entries =
         [](uint32_t start, uint32_t count, size_t key_len, size_t value_len)
@@ -313,6 +314,7 @@ TEST_CASE("batch write task pool cleaned after abort", "[batch_write]")
     eloqstore::KvOptions opts = append_opts;
     opts.num_threads = 1;  // route all partitions to the same shard
     opts.buffer_pool_size = opts.data_page_size;  // only one index page buffer
+    opts.auto_oom_retry_times = 0;
 
     eloqstore::EloqStore *store = InitStore(opts);
     const std::vector<eloqstore::TableIdent> partitions = {

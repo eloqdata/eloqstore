@@ -149,6 +149,7 @@ protected:
     uint64_t user_data_{0};
     std::function<void(KvRequest *)> callback_{nullptr};
     uint8_t reopen_retry_remaining_{0};
+    uint8_t oom_retry_remaining_{0};
 #ifdef ELOQ_MODULE_ENABLED
     mutable bthread::ConditionVariable cv_;
     mutable bthread::Mutex mutex_;
@@ -884,6 +885,13 @@ public:
         return store_mode_.load(std::memory_order_acquire);
     }
 
+    // Sum of data-page cache hits/misses across all shards. Bumped only when
+    // KvOptions::enable_data_page_cache is on. Index-page cache traffic is
+    // not counted here. ResetDataCacheCounters() zeroes all shards' counters.
+    size_t DataCacheHits() const;
+    size_t DataCacheMisses() const;
+    void ResetDataCacheCounters();
+
     uint64_t Term() const
     {
         return term_;
@@ -925,6 +933,7 @@ public:
         req->user_data_ = data;
         req->callback_ = std::move(callback);
         req->reopen_retry_remaining_ = options_.auto_reopen_retry_times;
+        req->oom_retry_remaining_ = options_.auto_oom_retry_times;
         return SendRequest(req);
     }
 

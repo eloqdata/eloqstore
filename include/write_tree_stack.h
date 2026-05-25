@@ -3,7 +3,7 @@
 #include <vector>
 
 #include "kv_options.h"
-#include "storage/mem_index_page.h"
+#include "storage/mem_cached_page.h"
 
 namespace eloqstore
 {
@@ -17,7 +17,7 @@ struct IndexOp
 class IndexStackEntry
 {
 public:
-    IndexStackEntry(MemIndexPage::Handle handle, const KvOptions *opts)
+    IndexStackEntry(MemCachedPage::Handle handle, const KvOptions *opts)
         : idx_page_iter_(handle, opts), handle_(std::move(handle))
     {
     }
@@ -26,7 +26,7 @@ public:
     IndexStackEntry(IndexStackEntry &&rhs) = delete;
 
     IndexPageIter idx_page_iter_;
-    MemIndexPage::Handle handle_{};
+    MemCachedPage::Handle handle_{};
     std::vector<IndexOp> changes_{};
     bool is_leaf_index_{false};
 };

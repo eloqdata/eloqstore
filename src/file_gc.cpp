@@ -22,7 +22,7 @@
 #include "error.h"
 #include "kv_options.h"
 #include "replayer.h"
-#include "storage/mem_index_page.h"
+#include "storage/mem_cached_page.h"
 #include "storage/object_store.h"
 #include "storage/shard.h"
 #include "tasks/task.h"
@@ -65,7 +65,7 @@ void GetRetainedFiles(absl::flat_hash_set<RetainedFileKey> &result,
         else if (MappingSnapshot::IsSwizzlingPointer(val))
         {
             // Swizzling pointers only appear in data mapping tables.
-            MemIndexPage *idx_page = reinterpret_cast<MemIndexPage *>(val);
+            MemCachedPage *idx_page = reinterpret_cast<MemCachedPage *>(val);
             FilePageId fp_id = idx_page->GetFilePageId();
             FileId file_id = fp_id >> per_file_shift;
 

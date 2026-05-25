@@ -46,6 +46,7 @@ set(UTEST_SOURCES
     iouring_pinned_lookup.cpp
     iouring_tail_scratch.cpp
     segment_allocator.cpp
+    data_page_cache.cpp
 )
 
 string( REPLACE ".cpp" "" BASENAMES_UTEST "${UTEST_SOURCES}" )

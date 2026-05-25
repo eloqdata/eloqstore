@@ -192,7 +192,7 @@ void Shard::WorkLoop()
     }
 
     task_mgr_.Shutdown();
-    // Unfinished tasks may still own MemIndexPage::Handle instances.
+    // Unfinished tasks may still own MemCachedPage::Handle instances.
     // Release task state before tearing down the index-page pool they
     // reference.
     index_mgr_.Shutdown();
@@ -411,7 +411,7 @@ bool Shard::NeedStop() const
 }
 #endif
 
-IndexPageManager *Shard::IndexManager()
+PageManager *Shard::IndexManager()
 {
     return &index_mgr_;
 }
@@ -889,8 +889,10 @@ void Shard::OnTaskFinished(KvTask *task)
 {
     KvRequest *req = task->req_;
     const bool auto_reopen = task->needs_auto_reopen_;
+    const bool oom_retry = task->needs_oom_retry_;
     task->req_ = nullptr;
     task->needs_auto_reopen_ = false;
+    task->needs_oom_retry_ = false;
 
     if (!task->ReadOnly())
     {
@@ -910,6 +912,24 @@ void Shard::OnTaskFinished(KvTask *task)
     else
     {
         task_mgr_.FreeTask(task);
+    }
+
+    if (oom_retry)
+    {
+        // The aborted task released its pins; re-enqueue the request at the
+        // tail of this shard's queue so other in-flight tasks get a chance
+        // to release their pins before the next attempt.
+        req->err_ = KvError::NoError;
+#ifdef ELOQ_MODULE_ENABLED
+        {
+            std::lock_guard<bthread::Mutex> lk(req->mutex_);
+            req->done_ = false;
+        }
+#else
+        req->done_.store(false, std::memory_order_relaxed);
+#endif
+        AddKvRequest(req);
+        return;
     }
 
     if (__builtin_expect(!auto_reopen, 1))

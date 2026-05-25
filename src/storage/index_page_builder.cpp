@@ -11,7 +11,7 @@
 
 #include "coding.h"
 #include "kv_options.h"
-#include "storage/mem_index_page.h"
+#include "storage/mem_cached_page.h"
 
 namespace eloqstore
 {
@@ -58,7 +58,7 @@ std::string_view IndexPageBuilder::Finish()
 
     uint16_t content_size = buffer_.size();
     // Stores the page size at the header after the page type.
-    EncodeFixed16(buffer_.data() + MemIndexPage::page_size_offset,
+    EncodeFixed16(buffer_.data() + MemCachedPage::page_size_offset,
                   content_size);
 
     assert(buffer_.size() <= options_->data_page_size);
@@ -83,10 +83,10 @@ bool IndexPageBuilder::Add(std::string_view key,
 
         // The leftmost pointer can only be set once.
         assert(DecodeFixed32(buffer_.data() +
-                             MemIndexPage::leftmost_ptr_offset) == 0);
+                             MemCachedPage::leftmost_ptr_offset) == 0);
         char buf[sizeof(uint32_t)];
         EncodeFixed32(buf, page_id);
-        memcpy(buffer_.data() + MemIndexPage::leftmost_ptr_offset,
+        memcpy(buffer_.data() + MemCachedPage::leftmost_ptr_offset,
                buf,
                sizeof(uint32_t));
         ++cnt_;

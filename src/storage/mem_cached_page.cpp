@@ -1,4 +1,4 @@
-#include "storage/mem_index_page.h"
+#include "storage/mem_cached_page.h"
 
 #include <sys/types.h>
 
@@ -14,20 +14,20 @@
 
 namespace eloqstore
 {
-uint16_t MemIndexPage::ContentLength() const
+uint16_t MemCachedPage::ContentLength() const
 {
     return DecodeFixed16(page_.Ptr() + page_size_offset);
 }
 
-uint16_t MemIndexPage::RestartNum() const
+uint16_t MemCachedPage::RestartNum() const
 {
     return DecodeFixed16(page_.Ptr() + ContentLength() - sizeof(uint16_t));
 }
 
-void MemIndexPage::Deque()
+void MemCachedPage::Deque()
 {
-    MemIndexPage *prev = prev_;
-    MemIndexPage *next = next_;
+    MemCachedPage *prev = prev_;
+    MemCachedPage *next = next_;
 
     if (prev != nullptr)
     {
@@ -41,9 +41,9 @@ void MemIndexPage::Deque()
     next_ = nullptr;
 }
 
-MemIndexPage *MemIndexPage::DequeNext()
+MemCachedPage *MemCachedPage::DequeNext()
 {
-    MemIndexPage *target = next_;
+    MemCachedPage *target = next_;
     if (target != nullptr)
     {
         next_ = target->next_;
@@ -59,9 +59,9 @@ MemIndexPage *MemIndexPage::DequeNext()
     return target;
 }
 
-void MemIndexPage::EnqueNext(MemIndexPage *new_page)
+void MemCachedPage::EnqueNext(MemCachedPage *new_page)
 {
-    MemIndexPage *old_next = next_;
+    MemCachedPage *old_next = next_;
     next_ = new_page;
     new_page->prev_ = this;
 
@@ -72,12 +72,12 @@ void MemIndexPage::EnqueNext(MemIndexPage *new_page)
     }
 }
 
-bool MemIndexPage::IsPointingToLeaf() const
+bool MemCachedPage::IsPointingToLeaf() const
 {
     return TypeOfPage(page_.Ptr()) == PageType::LeafIndex;
 }
 
-std::string MemIndexPage::String(const KvOptions *opts) const
+std::string MemCachedPage::String(const KvOptions *opts) const
 {
     std::string str = "{";
     if (IsPointingToLeaf())
@@ -90,7 +90,7 @@ std::string MemIndexPage::String(const KvOptions *opts) const
     }
     str.append(std::to_string(GetPageId()));
     str.push_back('|');
-    MemIndexPage::Handle handle(const_cast<MemIndexPage *>(this));
+    MemCachedPage::Handle handle(const_cast<MemCachedPage *>(this));
     IndexPageIter iter(handle, opts);
     while (iter.HasNext())
     {
@@ -105,13 +105,13 @@ std::string MemIndexPage::String(const KvOptions *opts) const
     return str;
 }
 
-IndexPageIter::IndexPageIter(const MemIndexPage::Handle &handle,
+IndexPageIter::IndexPageIter(const MemCachedPage::Handle &handle,
                              const KvOptions *opts)
     : comparator_(opts->comparator_),
       page_(
           [&handle, opts]()
           {
-              const MemIndexPage *index_page = handle.Get();
+              const MemCachedPage *index_page = handle.Get();
               return index_page == nullptr
                          ? std::string_view{}
                          : std::string_view{index_page->PagePtr(),
@@ -120,20 +120,20 @@ IndexPageIter::IndexPageIter(const MemIndexPage::Handle &handle,
       restart_num_(
           [&handle]()
           {
-              const MemIndexPage *index_page = handle.Get();
+              const MemCachedPage *index_page = handle.Get();
               return index_page == nullptr ? 0 : index_page->RestartNum();
           }()),
       restart_offset_(
           [&handle]()
           {
-              const MemIndexPage *index_page = handle.Get();
+              const MemCachedPage *index_page = handle.Get();
               return index_page == nullptr
                          ? 0
                          : index_page->ContentLength() -
                                (1 + index_page->RestartNum()) *
                                    sizeof(uint16_t);
           }()),
-      curr_offset_(MemIndexPage::leftmost_ptr_offset)
+      curr_offset_(MemCachedPage::leftmost_ptr_offset)
 {
 }
 
@@ -143,9 +143,9 @@ IndexPageIter::IndexPageIter(std::string_view page_view, const KvOptions *opts)
       restart_num_(DecodeFixed16(page_view.data() + page_view.size() -
                                  sizeof(uint16_t))),
       restart_offset_(page_view.size() - (1 + restart_num_) * sizeof(uint16_t)),
-      curr_offset_(MemIndexPage::leftmost_ptr_offset)
+      curr_offset_(MemCachedPage::leftmost_ptr_offset)
 {
-    assert(DecodeFixed16(page_view.data() + MemIndexPage::page_size_offset) ==
+    assert(DecodeFixed16(page_view.data() + MemCachedPage::page_size_offset) ==
            page_view.size());
 }
 
@@ -160,12 +160,12 @@ bool IndexPageIter::ParseNextKey()
         return false;
     }
     else if (curr_offset_ <
-             MemIndexPage::leftmost_ptr_offset + sizeof(uint32_t))
+             MemCachedPage::leftmost_ptr_offset + sizeof(uint32_t))
     {
         key_.clear();
         page_id_ =
-            DecodeFixed32(page_.data() + MemIndexPage::leftmost_ptr_offset);
-        curr_offset_ = MemIndexPage::leftmost_ptr_offset + sizeof(uint32_t);
+            DecodeFixed32(page_.data() + MemCachedPage::leftmost_ptr_offset);
+        curr_offset_ = MemCachedPage::leftmost_ptr_offset + sizeof(uint32_t);
         curr_restart_idx_ = 0;
         return true;
     }
@@ -340,7 +340,7 @@ void IndexPageIter::Seek(std::string_view search_key)
     {
         // The input key is smaller than the first restarting point. Positions
         // to the leftmost pointer.
-        curr_offset_ = MemIndexPage::leftmost_ptr_offset;
+        curr_offset_ = MemCachedPage::leftmost_ptr_offset;
         curr_restart_idx_ = 0;
         ParseNextKey();
     }

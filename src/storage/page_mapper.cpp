@@ -15,14 +15,14 @@
 
 #include "coding.h"
 #include "manifest_buffer.h"
-#include "storage/index_page_manager.h"
-#include "storage/mem_index_page.h"
+#include "storage/mem_cached_page.h"
+#include "storage/page_manager.h"
 #include "storage/shard.h"
 #include "tasks/task.h"
 
 namespace eloqstore
 {
-MappingSnapshot::MappingSnapshot(IndexPageManager *idx_mgr,
+MappingSnapshot::MappingSnapshot(PageManager *idx_mgr,
                                  const TableIdent *tbl_id,
                                  MappingTbl tbl)
     : idx_mgr_(idx_mgr), tbl_ident_(tbl_id), mapping_tbl_(std::move(tbl))
@@ -300,7 +300,7 @@ void MappingSnapshot::MappingTbl::ReleaseChunk(std::unique_ptr<Chunk> chunk)
     }
 }
 
-PageMapper::PageMapper(IndexPageManager *idx_mgr, const TableIdent *tbl_ident)
+PageMapper::PageMapper(PageManager *idx_mgr, const TableIdent *tbl_ident)
 {
     MappingArena *vector_arena = idx_mgr->MapperArena();
     MappingChunkArena *chunk_arena = idx_mgr->MapperChunkArena();
@@ -457,7 +457,7 @@ uint64_t MappingSnapshot::DecodeId(uint64_t val)
 
 MappingSnapshot::~MappingSnapshot()
 {
-    IndexPageManager *mgr = idx_mgr_;
+    PageManager *mgr = idx_mgr_;
     if (mgr == nullptr)
     {
         return;
@@ -482,7 +482,7 @@ FilePageId MappingSnapshot::ToFilePage(uint64_t val) const
     {
     case ValType::SwizzlingPointer:
     {
-        MemIndexPage *idx_page = reinterpret_cast<MemIndexPage *>(val);
+        MemCachedPage *idx_page = reinterpret_cast<MemCachedPage *>(val);
         return idx_page->GetFilePageId();
     }
     case ValType::FilePageId:
@@ -519,7 +519,7 @@ void MappingSnapshot::ClearFreeFilePage()
     to_free_file_pages_.clear();
 }
 
-void MappingSnapshot::Unswizzling(MemIndexPage *page)
+void MappingSnapshot::Unswizzling(MemCachedPage *page)
 {
     PageId page_id = page->GetPageId();
     FilePageId file_page_id = page->GetFilePageId();
@@ -529,26 +529,26 @@ void MappingSnapshot::Unswizzling(MemIndexPage *page)
     {
         uint64_t val = mapping_tbl.Get(page_id);
         if (IsSwizzlingPointer(val) &&
-            reinterpret_cast<MemIndexPage *>(val) == page)
+            reinterpret_cast<MemCachedPage *>(val) == page)
         {
             mapping_tbl.Set(page_id, EncodeFilePageId(file_page_id));
         }
     }
 }
 
-MemIndexPage::Handle MappingSnapshot::GetSwizzlingHandle(PageId page_id) const
+MemCachedPage::Handle MappingSnapshot::GetSwizzlingHandle(PageId page_id) const
 {
     assert(page_id < mapping_tbl_.size());
     uint64_t val = mapping_tbl_.Get(page_id);
     if (IsSwizzlingPointer(val))
     {
-        MemIndexPage *idx_page = reinterpret_cast<MemIndexPage *>(val);
-        return MemIndexPage::Handle(idx_page);
+        MemCachedPage *idx_page = reinterpret_cast<MemCachedPage *>(val);
+        return MemCachedPage::Handle(idx_page);
     }
-    return MemIndexPage::Handle();
+    return MemCachedPage::Handle();
 }
 
-void MappingSnapshot::AddSwizzling(PageId page_id, MemIndexPage *idx_page)
+void MappingSnapshot::AddSwizzling(PageId page_id, MemCachedPage *idx_page)
 {
     auto &mapping_tbl = mapping_tbl_;
     assert(page_id < mapping_tbl.size());
@@ -556,7 +556,7 @@ void MappingSnapshot::AddSwizzling(PageId page_id, MemIndexPage *idx_page)
     uint64_t val = mapping_tbl.Get(page_id);
     if (IsSwizzlingPointer(val))
     {
-        assert(reinterpret_cast<MemIndexPage *>(val) == idx_page);
+        assert(reinterpret_cast<MemCachedPage *>(val) == idx_page);
     }
     else
     {
@@ -589,7 +589,7 @@ void MappingSnapshot::Serialize(ManifestBuffer &dst) const
         uint64_t val = mapping_tbl_.Get(i);
         if (IsSwizzlingPointer(val))
         {
-            MemIndexPage *p = reinterpret_cast<MemIndexPage *>(val);
+            MemCachedPage *p = reinterpret_cast<MemCachedPage *>(val);
             val = EncodeFilePageId(p->GetFilePageId());
         }
         dst.AppendVarint64(val);

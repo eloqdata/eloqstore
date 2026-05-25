@@ -12,6 +12,7 @@
 #include "coding.h"
 #include "compression.h"
 #include "kv_options.h"
+#include "storage/mem_cached_page.h"
 
 namespace eloqstore
 {
@@ -20,9 +21,15 @@ DataPage::DataPage(PageId page_id) : page_id_(page_id)
     page_ = Page{true};
 }
 
-DataPage::DataPage(DataPage &&rhs)
-    : page_id_(rhs.page_id_), page_(std::move(rhs.page_))
+DataPage::DataPage(PageId page_id, MemCachedPage *pinned)
+    : page_id_(page_id), cached_(pinned)
 {
+}
+
+DataPage::DataPage(DataPage &&rhs)
+    : page_id_(rhs.page_id_), page_(std::move(rhs.page_)), cached_(rhs.cached_)
+{
+    rhs.cached_ = nullptr;
 }
 
 DataPage &DataPage::operator=(DataPage &&other) noexcept
@@ -32,42 +39,60 @@ DataPage &DataPage::operator=(DataPage &&other) noexcept
         Clear();
         page_id_ = other.page_id_;
         page_ = std::move(other.page_);
+        cached_ = other.cached_;
+        other.cached_ = nullptr;
     }
     return *this;
 }
 
+DataPage::~DataPage()
+{
+    if (cached_ != nullptr)
+    {
+        cached_->Unpin();
+    }
+}
+
 bool DataPage::IsEmpty() const
 {
-    return page_.Ptr() == nullptr;
+    return cached_ == nullptr && page_.Ptr() == nullptr;
+}
+
+Page DataPage::ExtractPage()
+{
+    assert(cached_ == nullptr);
+    return std::move(page_);
 }
 
 uint16_t DataPage::ContentLength() const
 {
-    return DecodeFixed16(page_.Ptr() + page_size_offset);
+    return DecodeFixed16(PagePtr() + page_size_offset);
 }
 
 uint16_t DataPage::RestartNum() const
 {
-    return DecodeFixed16(page_.Ptr() + ContentLength() - sizeof(uint16_t));
+    return DecodeFixed16(PagePtr() + ContentLength() - sizeof(uint16_t));
 }
 
 PageId DataPage::PrevPageId() const
 {
-    return DecodeFixed32(page_.Ptr() + prev_page_offset);
+    return DecodeFixed32(PagePtr() + prev_page_offset);
 }
 
 PageId DataPage::NextPageId() const
 {
-    return DecodeFixed32(page_.Ptr() + next_page_offset);
+    return DecodeFixed32(PagePtr() + next_page_offset);
 }
 
 void DataPage::SetPrevPageId(PageId page_id)
 {
+    assert(cached_ == nullptr);
     EncodeFixed32(page_.Ptr() + prev_page_offset, page_id);
 }
 
 void DataPage::SetNextPageId(PageId page_id)
 {
+    assert(cached_ == nullptr);
     EncodeFixed32(page_.Ptr() + next_page_offset, page_id);
 }
 
@@ -83,17 +108,32 @@ PageId DataPage::GetPageId() const
 
 char *DataPage::PagePtr() const
 {
-    return page_.Ptr();
+    return cached_ != nullptr ? cached_->PagePtr() : page_.Ptr();
 }
 
 void DataPage::SetPage(Page page)
 {
+    if (cached_ != nullptr)
+    {
+        cached_->Unpin();
+        cached_ = nullptr;
+    }
     page_ = std::move(page);
 }
 
 void DataPage::Clear()
 {
+    if (cached_ != nullptr)
+    {
+        cached_->Unpin();
+        cached_ = nullptr;
+    }
     page_.Free();
+}
+
+bool DataPage::IsRegistered() const
+{
+    return cached_ != nullptr ? cached_->IsRegistered() : page_.IsRegistered();
 }
 
 std::ostream &operator<<(std::ostream &out, DataPage const &page)

@@ -8,7 +8,7 @@
 
 #include "common.h"
 #include "eloq_store.h"
-#include "storage/index_page_manager.h"
+#include "storage/page_manager.h"
 
 // https://github.com/cameron314/concurrentqueue/issues/280
 #undef BLOCK_SIZE
@@ -177,7 +177,7 @@ private:
 
     eloqstore::KvOptions options_;
     eloqstore::MemStoreMgr io_mgr_;
-    eloqstore::IndexPageManager idx_mgr_;
+    eloqstore::PageManager idx_mgr_;
     eloqstore::TableIdent tbl_id_;
 
     uint32_t root_id_;

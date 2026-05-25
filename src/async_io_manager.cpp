@@ -96,8 +96,8 @@ char *VarPagePtr(const VarPage &page)
     char *ptr = nullptr;
     switch (VarPageType(page.index()))
     {
-    case VarPageType::MemIndexPage:
-        ptr = std::get<MemIndexPage::Handle>(page)->PagePtr();
+    case VarPageType::MemCachedPage:
+        ptr = std::get<MemCachedPage::Handle>(page)->PagePtr();
         break;
     case VarPageType::DataPage:
         ptr = std::get<DataPage>(page).PagePtr();
@@ -117,10 +117,10 @@ bool VarPageRegistered(const VarPage &page)
 {
     switch (VarPageType(page.index()))
     {
-    case VarPageType::MemIndexPage:
+    case VarPageType::MemCachedPage:
     {
-        const MemIndexPage::Handle &handle =
-            std::get<MemIndexPage::Handle>(page);
+        const MemCachedPage::Handle &handle =
+            std::get<MemCachedPage::Handle>(page);
         return handle.Get() != nullptr && handle->IsRegistered();
     }
     case VarPageType::DataPage:
@@ -3440,9 +3440,9 @@ void IouringMgr::WriteReq::SetPage(VarPage page)
 {
     switch (VarPageType(page.index()))
     {
-    case VarPageType::MemIndexPage:
-        page_.emplace<MemIndexPage::Handle>(
-            std::move(std::get<MemIndexPage::Handle>(page)));
+    case VarPageType::MemCachedPage:
+        page_.emplace<MemCachedPage::Handle>(
+            std::move(std::get<MemCachedPage::Handle>(page)));
         break;
     case VarPageType::DataPage:
         page_.emplace<DataPage>(std::move(std::get<DataPage>(page)));

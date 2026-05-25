@@ -1,4 +1,4 @@
-#include "storage/index_page_manager.h"
+#include "storage/page_manager.h"
 
 #include <glog/logging.h>
 
@@ -16,7 +16,7 @@
 #include "error.h"
 #include "kv_options.h"
 #include "replayer.h"
-#include "storage/mem_index_page.h"
+#include "storage/mem_cached_page.h"
 #include "storage/page_mapper.h"
 #include "storage/root_meta.h"
 #include "tasks/task.h"
@@ -58,16 +58,16 @@ size_t RootMetaBytes(const RootMeta &meta)
 
 }  // namespace
 
-IndexPageManager::IndexPageManager(AsyncIoManager *io_manager)
+PageManager::PageManager(AsyncIoManager *io_manager)
     : io_manager_(io_manager), root_meta_mgr_(this, Options())
 {
     active_head_.EnqueNext(&active_tail_);
     const size_t page_limit =
         EffectiveBufferPoolLimitBytes(Options()) / Options()->data_page_size;
-    index_pages_.reserve(page_limit);
+    cached_pages_.reserve(page_limit);
 }
 
-void IndexPageManager::Shutdown()
+void PageManager::Shutdown()
 {
     if (shutdown_)
     {
@@ -76,7 +76,7 @@ void IndexPageManager::Shutdown()
     shutdown_ = true;
 
     root_meta_mgr_.ReleaseMappers();
-    index_pages_.clear();
+    cached_pages_.clear();
 
     active_head_.next_ = &active_tail_;
     active_head_.prev_ = nullptr;
@@ -85,24 +85,23 @@ void IndexPageManager::Shutdown()
 
     free_head_.next_ = nullptr;
     free_head_.prev_ = nullptr;
-    free_head_.in_free_list_ = false;
 }
 
-const Comparator *IndexPageManager::GetComparator() const
+const Comparator *PageManager::GetComparator() const
 {
     return io_manager_->options_->comparator_;
 }
 
-MemIndexPage *IndexPageManager::AllocIndexPage()
+MemCachedPage *PageManager::AllocPage()
 {
-    MemIndexPage *next_free = free_head_.DequeNext();
+    MemCachedPage *next_free = free_head_.DequeNext();
 
     while (next_free == nullptr)
     {
         if (!IsFull())
         {
             auto &new_page =
-                index_pages_.emplace_back(std::make_unique<MemIndexPage>());
+                cached_pages_.emplace_back(std::make_unique<MemCachedPage>());
             next_free = new_page.get();
         }
         else
@@ -121,20 +120,18 @@ MemIndexPage *IndexPageManager::AllocIndexPage()
     assert(next_free->IsDetached());
     assert(!next_free->IsPinned());
     assert(next_free->Error() == KvError::NoError);
-    next_free->in_free_list_ = false;
     return next_free;
 }
 
-void IndexPageManager::FreeIndexPage(MemIndexPage *page)
+void PageManager::FreePage(MemCachedPage *page)
 {
     assert(page->IsDetached());
     assert(!page->IsPinned());
     page->SetError(KvError::NoError);
-    page->in_free_list_ = true;
     free_head_.EnqueNext(page);
 }
 
-void IndexPageManager::EnqueueIndexPage(MemIndexPage *page)
+void PageManager::EnqueuePage(MemCachedPage *page)
 {
     if (page->prev_ != nullptr)
     {
@@ -145,24 +142,24 @@ void IndexPageManager::EnqueueIndexPage(MemIndexPage *page)
     active_head_.EnqueNext(page);
 }
 
-bool IndexPageManager::IsFull() const
+bool PageManager::IsFull() const
 {
     // Calculate current total memory usage
-    size_t current_size = index_pages_.size() * Options()->data_page_size;
+    size_t current_size = cached_pages_.size() * Options()->data_page_size;
     return current_size >= EffectiveBufferPoolLimitBytes(Options());
 }
 
-size_t IndexPageManager::GetBufferPoolUsed() const
+size_t PageManager::GetBufferPoolUsed() const
 {
-    return index_pages_.size() * Options()->data_page_size;
+    return cached_pages_.size() * Options()->data_page_size;
 }
 
-size_t IndexPageManager::GetBufferPoolLimit() const
+size_t PageManager::GetBufferPoolLimit() const
 {
     return EffectiveBufferPoolLimitBytes(Options());
 }
 
-std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
+std::pair<RootMetaMgr::Handle, KvError> PageManager::FindRoot(
     const TableIdent &tbl_id)
 {
     auto load_meta = [this](RootMetaMgr::Entry *entry)
@@ -305,9 +302,9 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
             // Partition not found. Possible causes:
             // 1. During the initial write to a non-existent partition,
             //    WriteTask creates a stub RootMeta (with mapper=nullptr).
-            // 2. A MemIndexPage referencing this stub RootMeta is created.
+            // 2. A MemCachedPage referencing this stub RootMeta is created.
             // 3. WriteTask aborts, but the stub RootMeta cannot be cleared
-            //    because it is still referenced by the MemIndexPage.
+            //    because it is still referenced by the MemCachedPage.
             return {RootMetaMgr::Handle(&root_meta_mgr_, entry),
                     KvError::NotFound};
         }
@@ -315,8 +312,8 @@ std::pair<RootMetaMgr::Handle, KvError> IndexPageManager::FindRoot(
     }
 }
 
-KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
-                                      CowRootMeta &cow_meta)
+KvError PageManager::MakeCowRoot(const TableIdent &tbl_ident,
+                                 CowRootMeta &cow_meta)
 {
     cow_meta.root_handle_ = RootMetaMgr::Handle();
     auto [found_handle, err] = FindRoot(tbl_ident);
@@ -394,8 +391,7 @@ KvError IndexPageManager::MakeCowRoot(const TableIdent &tbl_ident,
     return KvError::NoError;
 }
 
-void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
-                                  CowRootMeta new_meta)
+void PageManager::UpdateRoot(const TableIdent &tbl_ident, CowRootMeta new_meta)
 {
     auto *entry = root_meta_mgr_.Find(tbl_ident);
     assert(entry != nullptr);
@@ -422,8 +418,8 @@ void IndexPageManager::UpdateRoot(const TableIdent &tbl_ident,
     root_meta_mgr_.EvictIfNeeded();
 }
 
-KvError IndexPageManager::InstallEmptySnapshot(const TableIdent &tbl_ident,
-                                               CowRootMeta &cow_meta)
+KvError PageManager::InstallEmptySnapshot(const TableIdent &tbl_ident,
+                                          CowRootMeta &cow_meta)
 {
     auto [entry, inserted] = RootMetaManager()->GetOrCreate(tbl_ident);
     static_cast<void>(inserted);
@@ -466,9 +462,9 @@ KvError IndexPageManager::InstallEmptySnapshot(const TableIdent &tbl_ident,
     return KvError::NoError;
 }
 
-KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
-                                                  CowRootMeta &cow_meta,
-                                                  std::string_view reopen_tag)
+KvError PageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
+                                             CowRootMeta &cow_meta,
+                                             std::string_view reopen_tag)
 {
     CHECK(eloq_store != nullptr);
     const StoreMode mode = eloq_store->Mode();
@@ -571,7 +567,7 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
     meta.mapping_snapshots_.insert(mapping);
 
     // Reuse swizzling pointers when file_page_id is unchanged.
-    for (MemIndexPage *page : meta.index_pages_)
+    for (MemCachedPage *page : meta.cached_pages_)
     {
         PageId page_id = page->GetPageId();
         if (page_id >= mapping->mapping_tbl_.size())
@@ -609,20 +605,20 @@ KvError IndexPageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
     return KvError::NoError;
 }
 
-std::pair<MemIndexPage::Handle, KvError> IndexPageManager::FindPage(
+std::pair<MemCachedPage::Handle, KvError> PageManager::FindPage(
     MappingSnapshot *mapping, PageId page_id)
 {
     while (true)
     {
         // First checks swizzling pointers.
-        MemIndexPage::Handle handle = mapping->GetSwizzlingHandle(page_id);
+        MemCachedPage::Handle handle = mapping->GetSwizzlingHandle(page_id);
         if (!handle)
         {
             // This is the first request to load the page.
-            MemIndexPage *new_page = AllocIndexPage();
+            MemCachedPage *new_page = AllocPage();
             if (new_page == nullptr)
             {
-                return {MemIndexPage::Handle(), KvError::OutOfMem};
+                return {MemCachedPage::Handle(), KvError::OutOfMem};
             }
             FilePageId file_page_id = mapping->ToFilePage(page_id);
             new_page->SetPageId(page_id);
@@ -644,13 +640,13 @@ std::pair<MemIndexPage::Handle, KvError> IndexPageManager::FindPage(
                 else
                 {
                     CHECK(new_page->waiting_.Empty());
-                    FreeIndexPage(new_page);
+                    FreePage(new_page);
                 }
-                return {MemIndexPage::Handle(), err};
+                return {MemCachedPage::Handle(), err};
             }
             FinishIo(mapping, new_page);
             new_page->waiting_.WakeAll();
-            return {MemIndexPage::Handle(new_page), KvError::NoError};
+            return {MemCachedPage::Handle(new_page), KvError::NoError};
         }
         if (handle->IsDetached())
         {
@@ -658,26 +654,26 @@ std::pair<MemIndexPage::Handle, KvError> IndexPageManager::FindPage(
             handle->waiting_.Wait(ThdTask());
             if (handle->Error() != KvError::NoError)
             {
-                MemIndexPage *page = handle.Get();
+                MemCachedPage *page = handle.Get();
                 KvError err = page->Error();
                 handle.Reset();
                 if (!page->IsPinned())
                 {
-                    FreeIndexPage(page);
+                    FreePage(page);
                 }
-                return {MemIndexPage::Handle(), err};
+                return {MemCachedPage::Handle(), err};
             }
             assert(handle->IsPinned());
         }
         else
         {
-            EnqueueIndexPage(handle.Get());
+            EnqueuePage(handle.Get());
             return {std::move(handle), KvError::NoError};
         }
     }
 }
 
-void IndexPageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
+void PageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
 {
     const TableIdent &tbl = *mapping->tbl_ident_;
     auto *entry = root_meta_mgr_.Find(tbl);
@@ -706,9 +702,19 @@ void IndexPageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
     CHECK(n == 1);
 }
 
-bool IndexPageManager::Evict()
+void PageManager::TryRecycleCachedPage(MemCachedPage *page)
 {
-    MemIndexPage *node = &active_tail_;
+    if (page == nullptr || page->IsPinned())
+    {
+        return;
+    }
+    assert(page->tbl_ident_ != nullptr && page->page_id_ != MaxPageId);
+    RecyclePage(page);
+}
+
+bool PageManager::Evict()
+{
+    MemCachedPage *node = &active_tail_;
 
     do
     {
@@ -730,7 +736,7 @@ bool IndexPageManager::Evict()
     return true;
 }
 
-bool IndexPageManager::RecyclePage(MemIndexPage *page)
+bool PageManager::RecyclePage(MemCachedPage *page)
 {
     assert(!page->IsPinned());
     RootMetaMgr::Entry *entry = root_meta_mgr_.Find(*page->tbl_ident_);
@@ -743,7 +749,7 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
         {
             mapping->Unswizzling(page);
         }
-        meta.index_pages_.erase(page);
+        meta.cached_pages_.erase(page);
     }
 
     // Removes the page from the active list.
@@ -754,12 +760,11 @@ bool IndexPageManager::RecyclePage(MemIndexPage *page)
     page->file_page_id_ = MaxFilePageId;
     page->tbl_ident_ = nullptr;
 
-    FreeIndexPage(page);
+    FreePage(page);
     return true;
 }
 
-void IndexPageManager::FinishIo(MappingSnapshot *mapping,
-                                MemIndexPage *idx_page)
+void PageManager::FinishIo(MappingSnapshot *mapping, MemCachedPage *idx_page)
 {
     idx_page->tbl_ident_ = mapping->tbl_ident_;
     mapping->AddSwizzling(idx_page->GetPageId(), idx_page);
@@ -767,15 +772,15 @@ void IndexPageManager::FinishIo(MappingSnapshot *mapping,
     auto *entry = root_meta_mgr_.Find(*mapping->tbl_ident_);
     if (entry != nullptr)
     {
-        entry->meta_.index_pages_.insert(idx_page);
+        entry->meta_.cached_pages_.insert(idx_page);
     }
-    EnqueueIndexPage(idx_page);
+    EnqueuePage(idx_page);
 }
 
-KvError IndexPageManager::SeekIndex(MappingSnapshot *mapping,
-                                    PageId page_id,
-                                    std::string_view key,
-                                    PageId &result)
+KvError PageManager::SeekIndex(MappingSnapshot *mapping,
+                               PageId page_id,
+                               std::string_view key,
+                               PageId &result)
 {
     PageId current_id = page_id;
     while (true)
@@ -796,27 +801,27 @@ KvError IndexPageManager::SeekIndex(MappingSnapshot *mapping,
     }
 }
 
-const KvOptions *IndexPageManager::Options() const
+const KvOptions *PageManager::Options() const
 {
     return io_manager_->options_;
 }
 
-AsyncIoManager *IndexPageManager::IoMgr() const
+AsyncIoManager *PageManager::IoMgr() const
 {
     return io_manager_;
 }
 
-MappingArena *IndexPageManager::MapperArena()
+MappingArena *PageManager::MapperArena()
 {
     return &mapping_arena_;
 }
 
-MappingChunkArena *IndexPageManager::MapperChunkArena()
+MappingChunkArena *PageManager::MapperChunkArena()
 {
     return &mapping_chunk_arena_;
 }
 
-RootMetaMgr *IndexPageManager::RootMetaManager()
+RootMetaMgr *PageManager::RootMetaManager()
 {
     return &root_meta_mgr_;
 }

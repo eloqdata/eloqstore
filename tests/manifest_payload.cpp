@@ -8,7 +8,7 @@
 #include <vector>
 
 #include "../include/common.h"
-#include "../include/storage/index_page_manager.h"
+#include "../include/storage/page_manager.h"
 #include "../include/storage/page_mapper.h"
 #include "../include/storage/root_meta.h"
 #include "../include/types.h"
@@ -39,7 +39,7 @@ TEST_CASE(
     eloqstore::TableIdent tbl_id("test", 1);
     eloqstore::KvOptions opts;
     eloqstore::IouringMgr io_mgr(&opts, 1000);
-    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    eloqstore::PageManager idx_mgr(&io_mgr);
     eloqstore::MappingSnapshot::MappingTbl mapping_tbl;
     mapping_tbl.PushBack(MockEncodeFilePageId(100));
     mapping_tbl.PushBack(MockEncodeFilePageId(200));
@@ -125,7 +125,7 @@ TEST_CASE(
     eloqstore::TableIdent tbl_id("test", 2);
     eloqstore::KvOptions opts;
     eloqstore::IouringMgr io_mgr(&opts, 1000);
-    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    eloqstore::PageManager idx_mgr(&io_mgr);
     eloqstore::MappingSnapshot::MappingTbl mapping_tbl;
     mapping_tbl.PushBack(MockEncodeFilePageId(42));
     mapping_tbl.PushBack(MockEncodeFilePageId(43));
@@ -342,7 +342,7 @@ TEST_CASE(
     eloqstore::TableIdent tbl_id("test", 3);
     eloqstore::KvOptions opts;
     eloqstore::IouringMgr io_mgr(&opts, 1000);
-    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    eloqstore::PageManager idx_mgr(&io_mgr);
     eloqstore::MappingSnapshot::MappingTbl mapping_tbl;
     mapping_tbl.PushBack(MockEncodeFilePageId(500));
     eloqstore::MappingSnapshot mapping_snapshot(
@@ -418,7 +418,7 @@ TEST_CASE(
     eloqstore::TableIdent tbl_id("test", 11);
     eloqstore::KvOptions opts;
     eloqstore::IouringMgr io_mgr(&opts, 1000);
-    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    eloqstore::PageManager idx_mgr(&io_mgr);
 
     eloqstore::MappingSnapshot::MappingTbl mapping_tbl;
     mapping_tbl.PushBack(MockEncodeFilePageId(10));
@@ -533,7 +533,7 @@ TEST_CASE(
     eloqstore::TableIdent tbl_id("test", 12);
     eloqstore::KvOptions opts;
     eloqstore::IouringMgr io_mgr(&opts, 1000);
-    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    eloqstore::PageManager idx_mgr(&io_mgr);
     eloqstore::MappingSnapshot::MappingTbl mapping_tbl;
     mapping_tbl.PushBack(MockEncodeFilePageId(1));
     eloqstore::MappingSnapshot mapping_snapshot(
@@ -587,7 +587,7 @@ TEST_CASE(
     eloqstore::TableIdent tbl_id("test", 13);
     eloqstore::KvOptions opts;
     eloqstore::IouringMgr io_mgr(&opts, 1000);
-    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    eloqstore::PageManager idx_mgr(&io_mgr);
 
     eloqstore::MappingSnapshot::MappingTbl mapping_tbl;
     mapping_tbl.PushBack(MockEncodeFilePageId(3));

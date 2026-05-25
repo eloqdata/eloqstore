@@ -19,6 +19,7 @@
 
 namespace eloqstore
 {
+class MemCachedPage;
 class DictCompression;
 enum class ValLenBit : uint8_t
 {
@@ -252,10 +253,16 @@ public:
     DataPage(PageId page_id);
     DataPage(PageId page_id, Page page)
         : page_id_(page_id), page_(std::move(page)) {};
+    // Construct from a pinned MemCachedPage. Takes ownership of the pin: the
+    // returned DataPage Unpins on destruction. Callers obtain @p pinned via
+    // MemCachedPage::Handle::Release() after a successful
+    // PageManager::FindPage.
+    DataPage(PageId page_id, MemCachedPage *pinned);
     DataPage(const DataPage &) = delete;
     DataPage(DataPage &&rhs);
     DataPage &operator=(DataPage &&) noexcept;
     DataPage &operator=(const DataPage &) = delete;
+    ~DataPage();
 
     static uint16_t const page_size_offset = page_type_offset + sizeof(uint8_t);
     static uint16_t const prev_page_offset =
@@ -264,6 +271,10 @@ public:
     static uint16_t const content_offset = next_page_offset + sizeof(PageId);
 
     bool IsEmpty() const;
+    // Move out the owned Page buffer; only valid in owned-buffer mode (not
+    // in cache-handle-backed mode). Leaves the DataPage with an empty
+    // buffer.
+    Page ExtractPage();
     uint16_t ContentLength() const;
     uint16_t RestartNum() const;
     PageId PrevPageId() const;
@@ -275,14 +286,15 @@ public:
     char *PagePtr() const;
     void SetPage(Page page);
     void Clear();
-    bool IsRegistered() const
-    {
-        return page_.IsRegistered();
-    }
+    bool IsRegistered() const;
 
 private:
     PageId page_id_{MaxPageId};
     Page page_{false};
+    // When non-null, the buffer is backed by a pinned cached page (read-only;
+    // must not be mutated). page_ is empty in this mode. At most one of
+    // (page_ owns a buffer) or (cached_ != nullptr) is true.
+    MemCachedPage *cached_{nullptr};
 };
 
 std::ostream &operator<<(std::ostream &out, DataPage const &page);

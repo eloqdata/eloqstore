@@ -12,8 +12,8 @@
 #include "eloq_store.h"
 #include "error.h"
 #include "kv_options.h"
-#include "storage/index_page_manager.h"
 #include "storage/page.h"
+#include "storage/page_manager.h"
 #include "storage/root_meta.h"
 
 namespace eloqstore
@@ -302,7 +302,7 @@ void Replayer::ReplayLog()
     }
 }
 
-std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
+std::unique_ptr<PageMapper> Replayer::GetMapper(PageManager *idx_mgr,
                                                 const TableIdent *tbl_ident,
                                                 uint64_t expect_term)
 {
@@ -429,9 +429,7 @@ std::unique_ptr<PageMapper> Replayer::GetMapper(IndexPageManager *idx_mgr,
     return mapper;
 }
 std::unique_ptr<PageMapper> Replayer::GetSegmentMapper(
-    IndexPageManager *idx_mgr,
-    const TableIdent *tbl_ident,
-    uint64_t expect_term)
+    PageManager *idx_mgr, const TableIdent *tbl_ident, uint64_t expect_term)
 {
     if (segment_mapping_tbl_.size() == 0 && max_segment_fp_id_ == 0)
     {

@@ -9,8 +9,8 @@
 #include "direct_io_buffer.h"
 #include "error.h"
 #include "storage/data_page.h"
-#include "storage/index_page_manager.h"
 #include "storage/object_store.h"
+#include "storage/page_manager.h"
 #include "storage/page_mapper.h"
 #include "storage/root_meta.h"
 #include "tasks/task.h"
@@ -119,7 +119,13 @@ protected:
     void TriggerFileGC() const;
     KvError TriggerLocalFileGC() const;
 
+    // Cache-first read-only load (type 2): use when inspecting a data page
+    // without modifying it.
     std::pair<DataPage, KvError> LoadDataPage(PageId page_id);
+    // Load into a fresh, owned buffer that this task may mutate (type 1).
+    // Goes through the cache to elide the storage read on a hit, then copies
+    // out so the caller's buffer is private.
+    std::pair<DataPage, KvError> LoadDataPageForUpdate(PageId page_id);
     std::pair<OverflowPage, KvError> LoadOverflowPage(PageId page_id);
 
     std::pair<PageId, FilePageId> AllocatePage(PageId page_id);
@@ -148,8 +154,8 @@ protected:
 
     KvError WritePage(DataPage &&page);
     KvError WritePage(OverflowPage &&page);
-    KvError WritePage(MemIndexPage::Handle &page);
-    KvError WritePage(MemIndexPage::Handle &page, FilePageId file_page_id);
+    KvError WritePage(MemCachedPage::Handle &page);
+    KvError WritePage(MemCachedPage::Handle &page, FilePageId file_page_id);
     KvError WritePage(VarPage page, FilePageId file_page_id);
     KvError AppendWritePage(VarPage page, FilePageId file_page_id);
     void FlushAppendWrites();

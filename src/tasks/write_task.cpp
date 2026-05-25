@@ -15,8 +15,8 @@
 #include "error.h"
 #include "file_gc.h"
 #include "storage/data_page.h"
-#include "storage/index_page_manager.h"
-#include "storage/mem_index_page.h"
+#include "storage/mem_cached_page.h"
+#include "storage/page_manager.h"
 #include "storage/page_mapper.h"
 #include "storage/shard.h"
 #include "types.h"
@@ -217,7 +217,31 @@ void WriteTask::Abort()
 KvError WriteTask::WritePage(DataPage &&page)
 {
     SetChecksum({page.PagePtr(), Options()->data_page_size});
-    auto [_, fp_id] = AllocatePage(page.GetPageId());
+    auto [pid, fp_id] = AllocatePage(page.GetPageId());
+
+    if (Options()->enable_data_page_cache)
+    {
+        // Promote the just-written data page into the cache by routing through
+        // the same Handle-based path index-page writes use: a successful
+        // WritePageCallback for VarPageType::MemCachedPage runs FinishIo,
+        // which AddSwizzling's the page into the new mapping and enqueues it
+        // on the LRU. The next reader on this PageId then sees a cache hit
+        // instead of faulting to disk.
+        PageManager *mgr = shard->IndexManager();
+        MemCachedPage *m = mgr->AllocPage();
+        if (m != nullptr)
+        {
+            m->SetPage(page.ExtractPage());
+            m->SetPageId(pid);
+            m->SetFilePageId(fp_id);
+            MemCachedPage::Handle handle(m);
+            return WritePage(VarPage(std::move(handle)), fp_id);
+        }
+        // Cache slot unavailable (full and nothing evictable). Fall through
+        // to the un-promoted write; `page` still owns its buffer because
+        // ExtractPage() wasn't called.
+    }
+
     return WritePage(std::move(page), fp_id);
 }
 
@@ -228,7 +252,7 @@ KvError WriteTask::WritePage(OverflowPage &&page)
     return WritePage(std::move(page), fp_id);
 }
 
-KvError WriteTask::WritePage(MemIndexPage::Handle &page)
+KvError WriteTask::WritePage(MemCachedPage::Handle &page)
 {
     SetChecksum({page->PagePtr(), Options()->data_page_size});
     auto [page_id, file_page_id] = AllocatePage(page->GetPageId());
@@ -237,12 +261,12 @@ KvError WriteTask::WritePage(MemIndexPage::Handle &page)
     return WritePage(page, file_page_id);
 }
 
-KvError WriteTask::WritePage(MemIndexPage::Handle &page,
+KvError WriteTask::WritePage(MemCachedPage::Handle &page,
                              FilePageId file_page_id)
 {
     SetChecksum({page->PagePtr(), Options()->data_page_size});
     // Create a temporary handle for VarPage to keep pinning during IO.
-    MemIndexPage::Handle io_handle(page.Get());
+    MemCachedPage::Handle io_handle(page.Get());
     return WritePage(VarPage(std::move(io_handle)), file_page_id);
 }
 
@@ -419,10 +443,10 @@ void WriteTask::WritePageCallback(VarPage page, KvError err)
 
     switch (VarPageType(page.index()))
     {
-    case VarPageType::MemIndexPage:
+    case VarPageType::MemCachedPage:
     {
-        MemIndexPage::Handle &handle = std::get<MemIndexPage::Handle>(page);
-        MemIndexPage *idx_page = handle.Get();
+        MemCachedPage::Handle &handle = std::get<MemCachedPage::Handle>(page);
+        MemCachedPage *idx_page = handle.Get();
         if (err == KvError::NoError)
         {
             shard->IndexManager()->FinishIo(cow_meta_.mapper_->GetMapping(),
@@ -435,7 +459,7 @@ void WriteTask::WritePageCallback(VarPage page, KvError err)
             {
                 handle.Reset();
                 CHECK(!idx_page->IsPinned());
-                shard->IndexManager()->FreeIndexPage(idx_page);
+                shard->IndexManager()->FreePage(idx_page);
             }
         }
         break;
@@ -461,16 +485,39 @@ KvError WriteTask::WaitWrite()
 
 std::pair<PageId, FilePageId> WriteTask::AllocatePage(PageId page_id)
 {
-    if (!Options()->data_append_mode && page_id != MaxPageId)
+    if (page_id != MaxPageId)
     {
-        FilePageId old_fp_id = ToFilePage(page_id);
-        if (old_fp_id != MaxFilePageId)
+        if (!Options()->data_append_mode)
         {
-            // The page is mapped to a new file page. The old file page will be
-            // recycled. However, the old file page shall only be recycled when
-            // the old mapping snapshot is destructed, i.e., no one is using the
-            // old mapping.
-            cow_meta_.old_mapping_->AddFreeFilePage(old_fp_id);
+            FilePageId old_fp_id = ToFilePage(page_id);
+            if (old_fp_id != MaxFilePageId)
+            {
+                // The page is mapped to a new file page. The old file page
+                // will be recycled. However, the old file page shall only be
+                // recycled when the old mapping snapshot is destructed, i.e.,
+                // no one is using the old mapping.
+                cow_meta_.old_mapping_->AddFreeFilePage(old_fp_id);
+            }
+        }
+        // UpdateMapping below overwrites the swizzling pointer in the new
+        // snapshot, leaving the cached page referenced only by the old
+        // snapshot. This happens in both CoW and append modes -- the mapping
+        // entry is rewritten regardless of how the file page is allocated.
+        // If no reader is pinning it, reclaim its slot now rather than wait
+        // for LRU to notice it. The size guard skips PageIds that were
+        // allocated by this writer (extending the new mapping past the old
+        // mapping's table size).
+        if (cow_meta_.old_mapping_ != nullptr &&
+            page_id < cow_meta_.old_mapping_->mapping_tbl_.size())
+        {
+            MemCachedPage::Handle h =
+                cow_meta_.old_mapping_->GetSwizzlingHandle(page_id);
+            if (h)
+            {
+                MemCachedPage *cached = h.Get();
+                h.Reset();
+                shard->IndexManager()->TryRecycleCachedPage(cached);
+            }
         }
     }
 
@@ -566,6 +613,23 @@ void WriteTask::FreePage(PageId page_id)
         // Free file page.
         FilePageId file_page = ToFilePage(page_id);
         cow_meta_.old_mapping_->AddFreeFilePage(file_page);
+    }
+    // The PageId is being permanently freed; the cached page (if any) is
+    // about to be orphaned by FreePage() below, which overwrites any
+    // swizzling pointer in the new snapshot. The orphan situation is
+    // independent of append mode -- only the file-page freeing above is.
+    // The size guard skips PageIds that aren't in the old mapping's table.
+    if (cow_meta_.old_mapping_ != nullptr &&
+        page_id < cow_meta_.old_mapping_->mapping_tbl_.size())
+    {
+        MemCachedPage::Handle h =
+            cow_meta_.old_mapping_->GetSwizzlingHandle(page_id);
+        if (h)
+        {
+            MemCachedPage *cached = h.Get();
+            h.Reset();
+            shard->IndexManager()->TryRecycleCachedPage(cached);
+        }
     }
     cow_meta_.mapper_->FreePage(page_id);
     wal_builder_.DeleteMapping(page_id);
@@ -925,7 +989,13 @@ KvError WriteTask::TriggerLocalFileGC() const
 
 std::pair<DataPage, KvError> WriteTask::LoadDataPage(PageId page_id)
 {
-    return ::eloqstore::LoadDataPage(tbl_ident_, page_id, ToFilePage(page_id));
+    return ::eloqstore::LoadDataPage(cow_meta_.mapper_->GetMapping(), page_id);
+}
+
+std::pair<DataPage, KvError> WriteTask::LoadDataPageForUpdate(PageId page_id)
+{
+    return ::eloqstore::LoadDataPageForUpdate(cow_meta_.mapper_->GetMapping(),
+                                              page_id);
 }
 
 std::pair<OverflowPage, KvError> WriteTask::LoadOverflowPage(PageId page_id)

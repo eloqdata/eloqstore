@@ -776,6 +776,17 @@ KvError EloqStore::Start(std::string_view branch,
         shard_fd_limit = (options_.fd_limit - used_fd - num_reserved_fd) /
                          options_.num_threads;
     }
+    if (shard_fd_limit == 0)
+    {
+        LOG(ERROR) << "EloqStore::Start cannot proceed: shard_fd_limit is 0. "
+                   << "fd_limit=" << options_.fd_limit
+                   << ", used_fd=" << used_fd
+                   << ", num_reserved_fd=" << num_reserved_fd
+                   << ", num_threads=" << options_.num_threads
+                   << ". Raise fd_limit so that (fd_limit - used_fd - "
+                      "num_reserved_fd) / num_threads >= 1.";
+        return fail_start(KvError::OpenFileLimit);
+    }
 
     shards_.resize(options_.num_threads);
     for (size_t i = 0; i < options_.num_threads; i++)
@@ -1076,6 +1087,7 @@ bool EloqStore::ExecAsyn(KvRequest *req)
     req->user_data_ = 0;
     req->callback_ = nullptr;
     req->reopen_retry_remaining_ = options_.auto_reopen_retry_times;
+    req->oom_retry_remaining_ = options_.auto_oom_retry_times;
     return SendRequest(req);
 }
 
@@ -1084,6 +1096,7 @@ void EloqStore::ExecSync(KvRequest *req)
     req->user_data_ = 0;
     req->callback_ = nullptr;
     req->reopen_retry_remaining_ = options_.auto_reopen_retry_times;
+    req->oom_retry_remaining_ = options_.auto_oom_retry_times;
     if (SendRequest(req))
     {
         req->Wait();
@@ -2310,6 +2323,43 @@ metrics::Meter *EloqStore::GetMetricsMeter(size_t shard_id) const
 const KvOptions &EloqStore::Options() const
 {
     return options_;
+}
+
+size_t EloqStore::DataCacheHits() const
+{
+    size_t total = 0;
+    for (const auto &shard : shards_)
+    {
+        if (shard != nullptr)
+        {
+            total += shard->IndexManager()->DataCacheHits();
+        }
+    }
+    return total;
+}
+
+size_t EloqStore::DataCacheMisses() const
+{
+    size_t total = 0;
+    for (const auto &shard : shards_)
+    {
+        if (shard != nullptr)
+        {
+            total += shard->IndexManager()->DataCacheMisses();
+        }
+    }
+    return total;
+}
+
+void EloqStore::ResetDataCacheCounters()
+{
+    for (const auto &shard : shards_)
+    {
+        if (shard != nullptr)
+        {
+            shard->IndexManager()->ResetDataCacheCounters();
+        }
+    }
 }
 
 uint16_t EloqStore::GlobalRegMemIndexBase(size_t shard_id) const

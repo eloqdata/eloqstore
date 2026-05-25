@@ -5,7 +5,7 @@
 
 #include "error.h"
 #include "io_string_buffer.h"
-#include "storage/mem_index_page.h"
+#include "storage/mem_cached_page.h"
 #include "storage/page_mapper.h"
 #include "storage/root_meta.h"
 #include "storage/shard.h"
@@ -53,8 +53,7 @@ KvError LocateAndProcess(const TableIdent &tbl_id,
     err = shard->IndexManager()->SeekIndex(
         mapping.Get(), meta->root_id_, search_key, page_id);
     CHECK_KV_ERR(err);
-    FilePageId file_page = mapping->ToFilePage(page_id);
-    auto [page, err_load] = LoadDataPage(tbl_id, page_id, file_page);
+    auto [page, err_load] = LoadDataPage(mapping.Get(), page_id);
     CHECK_KV_ERR(err_load);
 
     DataPageIter iter{&page, Options()};
@@ -214,8 +213,7 @@ KvError ReadTask::Floor(const TableIdent &tbl_id,
     err = shard->IndexManager()->SeekIndex(
         mapping.Get(), meta->root_id_, search_key, page_id);
     CHECK_KV_ERR(err);
-    FilePageId file_page = mapping->ToFilePage(page_id);
-    auto [page, err_load] = LoadDataPage(tbl_id, page_id, file_page);
+    auto [page, err_load] = LoadDataPage(mapping.Get(), page_id);
     CHECK_KV_ERR(err_load);
 
     DataPageIter iter{&page, Options()};
@@ -226,8 +224,7 @@ KvError ReadTask::Floor(const TableIdent &tbl_id,
         {
             return KvError::NotFound;
         }
-        FilePageId file_page = mapping->ToFilePage(page_id);
-        auto [prev_page, err] = LoadDataPage(tbl_id, page_id, file_page);
+        auto [prev_page, err] = LoadDataPage(mapping.Get(), page_id);
         CHECK_KV_ERR(err);
         page = std::move(prev_page);
         iter.Reset(&page, Options()->data_page_size);

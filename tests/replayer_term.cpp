@@ -10,7 +10,7 @@
 #include "../include/eloq_store.h"
 #include "../include/kv_options.h"
 #include "../include/replayer.h"
-#include "../include/storage/index_page_manager.h"
+#include "../include/storage/page_manager.h"
 #include "../include/storage/root_meta.h"
 #include "../include/tasks/task.h"
 #include "coding.h"
@@ -105,7 +105,7 @@ TEST_CASE(
 
     eloqstore::ManifestBuilder builder;
     eloqstore::IouringMgr io_mgr(&opts, 1000);
-    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    eloqstore::PageManager idx_mgr(&io_mgr);
     eloqstore::TableIdent tbl_id("test", 1);
     eloqstore::MappingSnapshot mapping(&idx_mgr, &tbl_id, {});
     const eloqstore::FilePageId max_fp_id = 17;
@@ -144,7 +144,7 @@ TEST_CASE("Replayer allocator bumping does not occur when terms match",
     ScopedGlobalStore scoped_store(opts);
     eloqstore::ManifestBuilder builder;
     eloqstore::IouringMgr io_mgr(&opts, 1000);
-    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    eloqstore::PageManager idx_mgr(&io_mgr);
     eloqstore::TableIdent tbl_id("test", 1);
     eloqstore::MappingSnapshot mapping(&idx_mgr, &tbl_id, {});
     const eloqstore::FilePageId max_fp_id = 17;
@@ -174,7 +174,7 @@ TEST_CASE("Replayer allocator bumping does not occur when expect_term==0",
     ScopedGlobalStore scoped_store(opts);
     eloqstore::ManifestBuilder builder;
     eloqstore::IouringMgr io_mgr(&opts, 1000);
-    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    eloqstore::PageManager idx_mgr(&io_mgr);
     eloqstore::TableIdent tbl_id("test", 1);
     eloqstore::MappingSnapshot mapping(&idx_mgr, &tbl_id, {});
     const eloqstore::FilePageId max_fp_id = 17;
@@ -204,7 +204,7 @@ TEST_CASE("Replayer allocator bumping does not occur in local mode",
     ScopedGlobalStore scoped_store(opts);
     eloqstore::ManifestBuilder builder;
     eloqstore::IouringMgr io_mgr(&opts, 1000);
-    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    eloqstore::PageManager idx_mgr(&io_mgr);
     eloqstore::TableIdent tbl_id("test", 1);
     eloqstore::MappingSnapshot mapping(&idx_mgr, &tbl_id, {});
     const eloqstore::FilePageId max_fp_id = 17;
@@ -234,7 +234,7 @@ TEST_CASE("Replayer replay with multi appended mapping table log",
     ScopedGlobalStore scoped_store(opts);
     eloqstore::ManifestBuilder builder;
     eloqstore::IouringMgr io_mgr(&opts, 1000);
-    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    eloqstore::PageManager idx_mgr(&io_mgr);
     eloqstore::TableIdent tbl_id("test", 1);
     eloqstore::MappingSnapshot::MappingTbl mapping_tbl;
 
@@ -337,7 +337,7 @@ TEST_CASE(
                                          false /*append_mode*/);
 
     eloqstore::IouringMgr io_mgr(&opts, 1000);
-    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    eloqstore::PageManager idx_mgr(&io_mgr);
     eloqstore::TableIdent tbl_id("test", 1);
 
     eloqstore::MappingSnapshot::MappingTbl mapping_tbl;
@@ -399,7 +399,7 @@ TEST_CASE(
         MakeOpts(true /*cloud_mode*/, 4 /*pages_per_file_shift*/);
 
     eloqstore::IouringMgr io_mgr(&opts, 1000);
-    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    eloqstore::PageManager idx_mgr(&io_mgr);
     eloqstore::TableIdent tbl_id("test", 1);
 
     eloqstore::MappingSnapshot::MappingTbl mapping_tbl;
@@ -479,7 +479,7 @@ TEST_CASE(
     opts.segments_per_file_shift = 3;  // 8 segments per segment file.
 
     eloqstore::IouringMgr io_mgr(&opts, 1000);
-    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    eloqstore::PageManager idx_mgr(&io_mgr);
     eloqstore::TableIdent tbl_id("test", 1);
 
     eloqstore::MappingSnapshot data_mapping(
@@ -563,7 +563,7 @@ TEST_CASE(
     opts.segments_per_file_shift = 3;  // 8 segments per segment file.
 
     eloqstore::IouringMgr io_mgr(&opts, 1000);
-    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    eloqstore::PageManager idx_mgr(&io_mgr);
     eloqstore::TableIdent tbl_id("test", 1);
 
     eloqstore::MappingSnapshot data_mapping(
@@ -615,7 +615,7 @@ TEST_CASE(
     opts.segments_per_file_shift = 3;
 
     eloqstore::IouringMgr io_mgr(&opts, 1000);
-    eloqstore::IndexPageManager idx_mgr(&io_mgr);
+    eloqstore::PageManager idx_mgr(&io_mgr);
     eloqstore::TableIdent tbl_id("test", 1);
     eloqstore::MappingSnapshot data_mapping(
         &idx_mgr, &tbl_id, eloqstore::MappingSnapshot::MappingTbl{});

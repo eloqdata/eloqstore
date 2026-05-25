@@ -3,13 +3,14 @@
 #include <glog/logging.h>
 
 #include <cassert>
+#include <cstring>
 #include <string>
 #include <utility>
 
 #include "compression.h"
 #include "global_registered_memory.h"
 #include "io_string_buffer.h"
-#include "storage/index_page_manager.h"
+#include "storage/page_manager.h"
 #include "storage/page_mapper.h"
 #include "storage/shard.h"
 
@@ -93,9 +94,9 @@ std::pair<Page, KvError> LoadPage(const TableIdent &tbl_id,
     return {std::move(page), KvError::NoError};
 }
 
-std::pair<DataPage, KvError> LoadDataPage(const TableIdent &tbl_id,
-                                          PageId page_id,
-                                          FilePageId file_page_id)
+std::pair<DataPage, KvError> LoadDataPageStorage(const TableIdent &tbl_id,
+                                                 PageId page_id,
+                                                 FilePageId file_page_id)
 {
     auto [page, err] = LoadPage(tbl_id, file_page_id);
     if (__builtin_expect(err != KvError::NoError, 0))
@@ -103,6 +104,63 @@ std::pair<DataPage, KvError> LoadDataPage(const TableIdent &tbl_id,
         return {DataPage(), err};
     }
     return {DataPage(page_id, std::move(page)), KvError::NoError};
+}
+
+std::pair<DataPage, KvError> LoadDataPage(MappingSnapshot *mapping,
+                                          PageId page_id)
+{
+    if (!Options()->enable_data_page_cache)
+    {
+        return LoadDataPageStorage(
+            *mapping->tbl_ident_, page_id, mapping->ToFilePage(page_id));
+    }
+    PageManager *mgr = shard->IndexManager();
+    {
+        // Peek for hit/miss accounting without affecting LRU order; FindPage
+        // below handles real loading and promotion.
+        MemCachedPage::Handle peek = mapping->GetSwizzlingHandle(page_id);
+        if (peek && !peek->IsDetached())
+        {
+            mgr->IncrDataCacheHit();
+        }
+        else
+        {
+            mgr->IncrDataCacheMiss();
+        }
+    }
+    auto [handle, err] = mgr->FindPage(mapping, page_id);
+    if (__builtin_expect(err != KvError::NoError, 0))
+    {
+        return {DataPage(), err};
+    }
+    return {DataPage(page_id, handle.Release()), KvError::NoError};
+}
+
+std::pair<DataPage, KvError> LoadDataPageForUpdate(MappingSnapshot *mapping,
+                                                   PageId page_id)
+{
+    if (Options()->enable_data_page_cache)
+    {
+        // Fast path: if the page is already cached and loaded, copy its
+        // bytes into a fresh owned buffer. Bypass FindPage() so we don't
+        // bump the page to MRU -- the writer is about to obsolete this
+        // PageId via CoW, and promoting it would only delay its eviction.
+        MemCachedPage::Handle handle = mapping->GetSwizzlingHandle(page_id);
+        if (handle && !handle->IsDetached())
+        {
+            shard->IndexManager()->IncrDataCacheHit();
+            Page fresh(true);
+            std::memcpy(
+                fresh.Ptr(), handle->PagePtr(), Options()->data_page_size);
+            return {DataPage(page_id, std::move(fresh)), KvError::NoError};
+        }
+        // Either a true miss or a concurrent in-flight load: fall through
+        // to a direct storage read. Don't allocate a cache slot for a page
+        // that's about to be overwritten.
+        shard->IndexManager()->IncrDataCacheMiss();
+    }
+    return LoadDataPageStorage(
+        *mapping->tbl_ident_, page_id, mapping->ToFilePage(page_id));
 }
 
 std::pair<OverflowPage, KvError> LoadOverflowPage(const TableIdent &tbl_id,

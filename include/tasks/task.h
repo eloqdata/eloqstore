@@ -16,7 +16,7 @@ namespace eloqstore
 {
 class KvRequest;
 class KvTask;
-class IndexPageManager;
+class PageManager;
 class AsyncIoManager;
 class IoStringBuffer;
 struct KvOptions;
@@ -57,9 +57,22 @@ enum struct TaskType
 
 std::pair<Page, KvError> LoadPage(const TableIdent &tbl_id,
                                   FilePageId file_page_id);
-std::pair<DataPage, KvError> LoadDataPage(const TableIdent &tbl_id,
-                                          PageId page_id,
-                                          FilePageId file_page_id);
+std::pair<DataPage, KvError> LoadDataPageStorage(const TableIdent &tbl_id,
+                                                 PageId page_id,
+                                                 FilePageId file_page_id);
+// Read a data page, going through the shared in-memory cache when
+// KvOptions::enable_data_page_cache is on. Falls back to LoadDataPageStorage()
+// otherwise. The returned DataPage is read-only when the cache hit path is
+// taken: callers that need to mutate the page buffer must use
+// LoadDataPageForUpdate() instead.
+std::pair<DataPage, KvError> LoadDataPage(MappingSnapshot *mapping,
+                                          PageId page_id);
+// Read a data page into a fresh, owned buffer that the caller may mutate.
+// Equivalent to LoadDataPageStorage() when the cache is off; on a cache hit,
+// copies the cached content out so the caller still owns a private buffer
+// without re-reading from storage.
+std::pair<DataPage, KvError> LoadDataPageForUpdate(MappingSnapshot *mapping,
+                                                   PageId page_id);
 std::pair<OverflowPage, KvError> LoadOverflowPage(const TableIdent &tbl_id,
                                                   PageId page_id,
                                                   FilePageId file_page_id);
@@ -188,6 +201,7 @@ public:
     int io_res_{0};
     uint32_t io_flags_{0};
     bool needs_auto_reopen_{false};
+    bool needs_oom_retry_{false};
 
     TaskStatus status_{TaskStatus::Idle};
     KvRequest *req_{nullptr};
