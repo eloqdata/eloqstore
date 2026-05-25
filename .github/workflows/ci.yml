@@ -32,6 +32,10 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Increase locked mem
+        run: |
+          ulimit -l 1024000
+
       - name: Fix permissions
         run: chmod -R a+rwx "$GITHUB_WORKSPACE" || true
 
