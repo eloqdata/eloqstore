@@ -1,11 +1,23 @@
 from ._errors import EloqStoreError
-from .client import AsyncHandle, Client, LargeValueBuffer, Options, RegisteredMemory
+from .client import (
+    Client,
+    ClientOptions,
+    KVCacheCompletion,
+    KVCacheManager,
+    KVCacheManagerOptions,
+    KVCacheRequest,
+    KVCacheWorker,
+    KVCacheWorkerOptions,
+)
 
 __all__ = [
-    "AsyncHandle",
     "Client",
+    "ClientOptions",
     "EloqStoreError",
-    "LargeValueBuffer",
-    "Options",
-    "RegisteredMemory",
+    "KVCacheCompletion",
+    "KVCacheManager",
+    "KVCacheManagerOptions",
+    "KVCacheRequest",
+    "KVCacheWorker",
+    "KVCacheWorkerOptions",
 ]

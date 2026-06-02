@@ -54,6 +54,7 @@ endif ()
 
 find_package(Threads REQUIRED)
 find_package(glog REQUIRED)
+find_package(cppzmq CONFIG REQUIRED)
 
 
 find_package(jsoncpp REQUIRED)
@@ -113,6 +114,9 @@ set(ELOQ_STORE_SOURCES
         src/kv_options.cpp
         src/io_string_buffer.cpp
         src/replayer.cpp
+        src/sdk_runtime/common.cpp
+        src/sdk_runtime/manager.cpp
+        src/sdk_runtime/worker.cpp
         src/storage/data_page.cpp
         src/storage/data_page_builder.cpp
         src/storage/index_page_builder.cpp
@@ -142,7 +146,7 @@ add_library(eloqstore STATIC ${ELOQ_STORE_SOURCES} ${INI_SOURCES})
 set_target_properties(eloqstore PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(eloqstore PUBLIC ${ELOQ_STORE_INCLUDE})
-target_link_libraries(eloqstore PRIVATE ${URING_LIB} glog::glog absl::flat_hash_map ${BOOST_CONTEXT_TARGET} ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} ${AWSSDK_LINK_LIBRARIES} OpenSSL::Crypto)
+target_link_libraries(eloqstore PRIVATE ${URING_LIB} glog::glog cppzmq absl::flat_hash_map ${BOOST_CONTEXT_TARGET} ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} ${AWSSDK_LINK_LIBRARIES} OpenSSL::Crypto)
 
 set(ELOQ_STORE_CAPI_INCLUDE
         ${ELOQ_STORE_INCLUDE}

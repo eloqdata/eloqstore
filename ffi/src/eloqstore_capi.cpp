@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <condition_variable>
 #include <cstring>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -14,6 +15,7 @@
 #include "global_registered_memory.h"
 #include "io_string_buffer.h"
 #include "kv_options.h"
+#include "sdk_runtime.h"
 #include "types.h"
 
 using eloqstore::BatchWriteRequest;
@@ -25,6 +27,9 @@ using eloqstore::KvError;
 using eloqstore::KvOptions;
 using eloqstore::ReadRequest;
 using eloqstore::ScanRequest;
+using eloqstore::sdk::KVCacheManager;
+using eloqstore::sdk::KVCacheOptions;
+using eloqstore::sdk::KVCacheWorker;
 using eloqstore::TableIdent;
 using eloqstore::WriteDataEntry;
 using eloqstore::WriteOp;
@@ -61,6 +66,7 @@ enum class AsyncHandleKind
 {
     BatchWrite,
     LargeRead,
+    PinnedRead,
 };
 
 struct AsyncHandleData
@@ -69,6 +75,11 @@ struct AsyncHandleData
     std::unique_ptr<BatchWriteRequest> req;
     std::unique_ptr<ReadRequest> read_req;
     std::unique_ptr<IoStringBuffer> large_value;
+    std::string pinned_metadata;
+    uint8_t *pinned_dest{nullptr};
+    size_t pinned_dest_size{0};
+    uint64_t pinned_ts{0};
+    uint64_t pinned_expire_ts{0};
     GlobalRegisteredMemory *mem{nullptr};
     uint16_t reg_mem_index_base{0};
     std::mutex mutex;
@@ -81,17 +92,14 @@ struct AsyncHandleData
 };
 
 static void recycle_large_entries(BatchWriteRequest *req,
-                                  GlobalRegisteredMemory *mem,
-                                  uint16_t reg_mem_index_base)
+                                   GlobalRegisteredMemory *mem,
+                                   uint16_t reg_mem_index_base)
 {
     if (!req || !mem)
         return;
     for (auto &entry : req->batch_)
     {
-        if (!entry.large_val_.Fragments().empty())
-        {
-            entry.large_val_.Recycle(mem, reg_mem_index_base);
-        }
+        entry.RecycleLargeValue(mem, reg_mem_index_base);
     }
 }
 
@@ -140,6 +148,36 @@ static CEloqStoreStatus kv_error_to_c(KvError err)
         return CEloqStoreStatus_AlreadyExists;
     default:
         return CEloqStoreStatus_InvalidArgs;
+    }
+}
+
+static uint8_t kv_cache_request_kind_to_c(eloqstore::sdk::KVCacheRequestKind kind)
+{
+    switch (kind)
+    {
+    case eloqstore::sdk::KVCacheRequestKind::Save:
+        return CKVCacheRequestKind_Save;
+    case eloqstore::sdk::KVCacheRequestKind::Load:
+        return CKVCacheRequestKind_Load;
+    default:
+        return 0;
+    }
+}
+
+static uint8_t kv_cache_request_status_to_c(eloqstore::sdk::KVCacheRequestStatus status)
+{
+    switch (status)
+    {
+    case eloqstore::sdk::KVCacheRequestStatus::Submitted:
+        return CKVCacheRequestStatus_Submitted;
+    case eloqstore::sdk::KVCacheRequestStatus::Completed:
+        return CKVCacheRequestStatus_Completed;
+    case eloqstore::sdk::KVCacheRequestStatus::Rejected:
+        return CKVCacheRequestStatus_Rejected;
+    case eloqstore::sdk::KVCacheRequestStatus::Failed:
+        return CKVCacheRequestStatus_Failed;
+    default:
+        return 0;
     }
 }
 
@@ -245,11 +283,10 @@ extern "C"
     }
 
     void CEloqStore_Options_SetRegisteredMemoryChunkSize(CEloqStoreHandle opts,
-                                                         uint64_t size)
+                                                          uint64_t size)
     {
-        if (opts)
-            reinterpret_cast<KvOptions *>(opts)->registered_memory_chunk_size =
-                static_cast<size_t>(size);
+        (void)opts;
+        (void)size;
     }
 
     void CEloqStore_Options_SetSegmentsPerFileShift(CEloqStoreHandle opts,
@@ -273,6 +310,32 @@ extern "C"
         }
         cpp_opts->global_registered_memories[shard_id] =
             reinterpret_cast<GlobalRegisteredMemory *>(mem);
+    }
+
+    void CEloqStore_Options_AddPinnedMemoryChunk(CEloqStoreHandle opts,
+                                                  const char *data,
+                                                  size_t size)
+    {
+        if (!opts || !data || size == 0)
+            return;
+        auto *cpp_opts = reinterpret_cast<KvOptions *>(opts);
+        cpp_opts->pinned_memory_chunks.emplace_back(
+            const_cast<char *>(data), size);
+    }
+
+    void CEloqStore_Options_SetGcGlobalMemSizePerShard(CEloqStoreHandle opts,
+                                                        uint64_t size)
+    {
+        if (opts)
+            reinterpret_cast<KvOptions *>(opts)->gc_global_mem_size_per_shard =
+                static_cast<size_t>(size);
+    }
+
+    void CEloqStore_Options_SetPinnedTailScratchSlots(CEloqStoreHandle opts,
+                                                       uint16_t slots)
+    {
+        if (opts)
+            reinterpret_cast<KvOptions *>(opts)->pinned_tail_scratch_slots = slots;
     }
 
     void CEloqStore_Options_AddStorePath(CEloqStoreHandle opts,
@@ -357,6 +420,616 @@ extern "C"
         if (!opts)
             return false;
         return EloqStore::ValidateOptions(*reinterpret_cast<KvOptions *>(opts));
+    }
+
+    CKVCacheOptionsHandle CEloqStore_KVCacheOptions_Create(void)
+    {
+        clear_last_error();
+        try
+        {
+            return reinterpret_cast<CKVCacheOptionsHandle>(new KVCacheOptions());
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return nullptr;
+        }
+    }
+
+    void CEloqStore_KVCacheOptions_Destroy(CKVCacheOptionsHandle opts)
+    {
+        delete reinterpret_cast<KVCacheOptions *>(opts);
+    }
+
+    void CEloqStore_KVCacheOptions_AddStorePath(CKVCacheOptionsHandle opts,
+                                                const char *path)
+    {
+        if (opts != nullptr && path != nullptr)
+        {
+            reinterpret_cast<KVCacheOptions *>(opts)->store_paths.emplace_back(path);
+        }
+    }
+
+    void CEloqStore_KVCacheOptions_SetTableName(CKVCacheOptionsHandle opts,
+                                                const char *table_name)
+    {
+        if (opts != nullptr && table_name != nullptr)
+        {
+            reinterpret_cast<KVCacheOptions *>(opts)->table_name = table_name;
+        }
+    }
+
+    void CEloqStore_KVCacheOptions_SetBranch(CKVCacheOptionsHandle opts,
+                                             const char *branch)
+    {
+        if (opts != nullptr && branch != nullptr)
+        {
+            reinterpret_cast<KVCacheOptions *>(opts)->branch = branch;
+        }
+    }
+
+    void CEloqStore_KVCacheOptions_SetIpcPath(CKVCacheOptionsHandle opts,
+                                              const char *ipc_path)
+    {
+        if (opts != nullptr && ipc_path != nullptr)
+        {
+            reinterpret_cast<KVCacheOptions *>(opts)->ipc_path = ipc_path;
+        }
+    }
+
+    void CEloqStore_KVCacheOptions_SetSharedMemoryName(CKVCacheOptionsHandle opts,
+                                                       const char *name)
+    {
+        if (opts != nullptr && name != nullptr)
+        {
+            reinterpret_cast<KVCacheOptions *>(opts)->shared_memory_name = name;
+        }
+    }
+
+    void CEloqStore_KVCacheOptions_SetNumThreads(CKVCacheOptionsHandle opts,
+                                                 uint16_t n)
+    {
+        if (opts != nullptr)
+        {
+            reinterpret_cast<KVCacheOptions *>(opts)->num_threads = n;
+        }
+    }
+
+    void CEloqStore_KVCacheOptions_SetPartitionCount(CKVCacheOptionsHandle opts,
+                                                     uint32_t n)
+    {
+        if (opts != nullptr)
+        {
+            reinterpret_cast<KVCacheOptions *>(opts)->partition_count = n;
+        }
+    }
+
+    void CEloqStore_KVCacheOptions_SetTerm(CKVCacheOptionsHandle opts,
+                                           uint64_t term)
+    {
+        if (opts != nullptr)
+        {
+            reinterpret_cast<KVCacheOptions *>(opts)->term = term;
+        }
+    }
+
+    void CEloqStore_KVCacheOptions_SetPartitionGroupId(
+        CKVCacheOptionsHandle opts,
+        uint32_t partition_group_id)
+    {
+        if (opts != nullptr)
+        {
+            reinterpret_cast<KVCacheOptions *>(opts)->partition_group_id =
+                partition_group_id;
+        }
+    }
+
+    void CEloqStore_KVCacheOptions_SetSharedMemoryBytes(CKVCacheOptionsHandle opts,
+                                                        uint64_t bytes)
+    {
+        if (opts != nullptr)
+        {
+            reinterpret_cast<KVCacheOptions *>(opts)->shared_memory_bytes =
+                static_cast<size_t>(bytes);
+        }
+    }
+
+    void CEloqStore_KVCacheOptions_SetSlotSize(CKVCacheOptionsHandle opts,
+                                               uint32_t slot_size)
+    {
+        if (opts != nullptr)
+        {
+            reinterpret_cast<KVCacheOptions *>(opts)->slot_size = slot_size;
+        }
+    }
+
+    void CEloqStore_KVCacheOptions_SetSlotCount(CKVCacheOptionsHandle opts,
+                                                uint32_t slot_count)
+    {
+        if (opts != nullptr)
+        {
+            reinterpret_cast<KVCacheOptions *>(opts)->slot_count = slot_count;
+        }
+    }
+
+    void CEloqStore_KVCacheOptions_SetSlotAlignment(CKVCacheOptionsHandle opts,
+                                                    uint32_t slot_alignment)
+    {
+        if (opts != nullptr)
+        {
+            reinterpret_cast<KVCacheOptions *>(opts)->slot_alignment = slot_alignment;
+        }
+    }
+
+    void CEloqStore_KVCacheOptions_SetSubmissionQueueDepth(
+        CKVCacheOptionsHandle opts,
+        uint32_t depth)
+    {
+        if (opts != nullptr)
+        {
+            reinterpret_cast<KVCacheOptions *>(opts)->submission_queue_depth = depth;
+        }
+    }
+
+    void CEloqStore_KVCacheOptions_SetEagerIoUringRegister(
+        CKVCacheOptionsHandle opts,
+        bool enable)
+    {
+        if (opts != nullptr)
+        {
+            reinterpret_cast<KVCacheOptions *>(opts)->eager_io_uring_register = enable;
+        }
+    }
+
+    CKVCacheManagerHandle CEloqStore_KVCacheManager_Create(
+        CKVCacheOptionsHandle opts)
+    {
+        clear_last_error();
+        if (opts == nullptr)
+        {
+            set_last_error("runtime options handle is null");
+            return nullptr;
+        }
+        try
+        {
+            auto *options = reinterpret_cast<KVCacheOptions *>(opts);
+            return reinterpret_cast<CKVCacheManagerHandle>(
+                new KVCacheManager(*options));
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return nullptr;
+        }
+    }
+
+    void CEloqStore_KVCacheManager_Destroy(CKVCacheManagerHandle runtime)
+    {
+        delete reinterpret_cast<KVCacheManager *>(runtime);
+    }
+
+    bool CEloqStore_KVCacheManager_Start(CKVCacheManagerHandle runtime)
+    {
+        // Start the native manager runtime and surface any C++ error string
+        // through the thread-local C API last-error buffer.
+        clear_last_error();
+        if (runtime == nullptr)
+        {
+            set_last_error("kv cache manager handle is null");
+            return false;
+        }
+        std::string error_message;
+        const bool ok =
+            reinterpret_cast<KVCacheManager *>(runtime)->Start(&error_message);
+        if (!ok)
+        {
+            set_last_error(error_message);
+        }
+        return ok;
+    }
+
+    void CEloqStore_KVCacheManager_Stop(CKVCacheManagerHandle runtime)
+    {
+        // Stop is best-effort and intentionally silent for null handles.
+        if (runtime != nullptr)
+        {
+            reinterpret_cast<KVCacheManager *>(runtime)->Stop();
+        }
+    }
+
+    bool CEloqStore_KVCacheManager_RegisterIoUringBuffers(
+        CKVCacheManagerHandle runtime)
+    {
+        // Register the manager-owned shared-memory region with the native store
+        // so later save/load requests can reuse the same pinned buffer view.
+        clear_last_error();
+        if (runtime == nullptr)
+        {
+            set_last_error("kv cache manager handle is null");
+            return false;
+        }
+        std::string error_message;
+        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)
+                            ->RegisterIoUringBuffers(&error_message);
+        if (!ok)
+        {
+            set_last_error(error_message);
+        }
+        return ok;
+    }
+
+    const char *CEloqStore_KVCacheManager_ExportBufferPool(
+        CKVCacheManagerHandle runtime)
+    {
+        // Return an owned C string because Python must keep the descriptor after
+        // the C++ temporary std::string has gone out of scope.
+        clear_last_error();
+        if (runtime == nullptr)
+        {
+            set_last_error("kv cache manager handle is null");
+            return nullptr;
+        }
+        try
+        {
+            return ::strdup(reinterpret_cast<KVCacheManager *>(runtime)
+                                ->ExportBufferPoolDescriptor()
+                                .c_str());
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return nullptr;
+        }
+    }
+
+    bool CEloqStore_KVCacheManager_SubmitSave(CKVCacheManagerHandle runtime,
+                                              const char *key,
+                                              uint32_t partition_id,
+                                              uint32_t payload_bytes,
+                                              CKVCacheRequest *out_request)
+    {
+        // Convert the C ABI inputs into one native save-slot reservation call.
+        clear_last_error();
+        if (runtime == nullptr || key == nullptr || out_request == nullptr)
+        {
+            set_last_error("invalid submit-save arguments");
+            return false;
+        }
+        eloqstore::sdk::KVCacheRequest request;
+        std::string error_message;
+        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)
+                            ->SubmitSaveRequest(key,
+                                                partition_id,
+                                                payload_bytes,
+                                                &request,
+                                                &error_message);
+        if (!ok)
+        {
+            set_last_error(error_message);
+            return false;
+        }
+        out_request->request_id = request.request_id;
+        out_request->kind = kv_cache_request_kind_to_c(request.kind);
+        out_request->partition_id = request.partition_id;
+        out_request->shard_id = request.shard_id;
+        out_request->slot_id = request.slot_id;
+        out_request->slot_generation = request.slot_generation;
+        out_request->payload_bytes = request.payload_bytes;
+        return true;
+    }
+
+    bool CEloqStore_KVCacheManager_SubmitLoad(CKVCacheManagerHandle runtime,
+                                              const char *key,
+                                              uint32_t partition_id,
+                                              uint32_t payload_bytes,
+                                              CKVCacheRequest *out_request)
+    {
+        // Convert the C ABI inputs into one native load-slot reservation call.
+        clear_last_error();
+        if (runtime == nullptr || key == nullptr || out_request == nullptr)
+        {
+            set_last_error("invalid submit-load arguments");
+            return false;
+        }
+        eloqstore::sdk::KVCacheRequest request;
+        std::string error_message;
+        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)
+                            ->SubmitLoadRequest(key,
+                                                partition_id,
+                                                payload_bytes,
+                                                &request,
+                                                &error_message);
+        if (!ok)
+        {
+            set_last_error(error_message);
+            return false;
+        }
+        out_request->request_id = request.request_id;
+        out_request->kind = kv_cache_request_kind_to_c(request.kind);
+        out_request->partition_id = request.partition_id;
+        out_request->shard_id = request.shard_id;
+        out_request->slot_id = request.slot_id;
+        out_request->slot_generation = request.slot_generation;
+        out_request->payload_bytes = request.payload_bytes;
+        return true;
+    }
+
+    bool CEloqStore_KVCacheManager_MarkSaveReady(CKVCacheManagerHandle runtime,
+                                                 uint64_t request_id)
+    {
+        // Propagate the worker-side ready transition into the native manager.
+        clear_last_error();
+        if (runtime == nullptr)
+        {
+            set_last_error("kv cache manager handle is null");
+            return false;
+        }
+        std::string error_message;
+        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)
+                            ->MarkSaveRequestReady(request_id, &error_message);
+        if (!ok)
+        {
+            set_last_error(error_message);
+        }
+        return ok;
+    }
+
+    bool CEloqStore_KVCacheManager_PollCompletion(CKVCacheManagerHandle runtime,
+                                                  CKVCacheCompletion *out_completion)
+    {
+        // Translate one native completion record into the C ABI struct layout.
+        clear_last_error();
+        if (runtime == nullptr || out_completion == nullptr)
+        {
+            set_last_error("invalid poll-completion arguments");
+            return false;
+        }
+        eloqstore::sdk::KVCacheCompletion completion;
+        std::string error_message;
+        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)
+                            ->PollCompletion(&completion, &error_message);
+        if (!ok)
+        {
+            if (!error_message.empty())
+            {
+                set_last_error(error_message);
+            }
+            return false;
+        }
+        out_completion->request_id = completion.request_id;
+        out_completion->kind = kv_cache_request_kind_to_c(completion.kind);
+        out_completion->status = kv_cache_request_status_to_c(completion.status);
+        out_completion->partition_id = completion.partition_id;
+        out_completion->shard_id = completion.shard_id;
+        out_completion->slot_id = completion.slot_id;
+        out_completion->slot_generation = completion.slot_generation;
+        out_completion->payload_bytes = completion.payload_bytes;
+        return true;
+    }
+
+    bool CEloqStore_KVCacheManager_ContainsKey(CKVCacheManagerHandle runtime,
+                                               const char *key,
+                                               uint32_t partition_id,
+                                               bool *out_exists)
+    {
+        clear_last_error();
+        if (runtime == nullptr || key == nullptr || out_exists == nullptr)
+        {
+            set_last_error("invalid manager contains-key arguments");
+            return false;
+        }
+        std::string error_message;
+        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)
+                            ->ContainsKey(key, partition_id, out_exists, &error_message);
+        if (!ok)
+        {
+            set_last_error(error_message);
+        }
+        return ok;
+    }
+
+    CKVCacheWorkerHandle CEloqStore_KVCacheWorker_Create(CKVCacheOptionsHandle opts)
+    {
+        // Create a worker-side control-plane stub from shared runtime options.
+        clear_last_error();
+        if (opts == nullptr)
+        {
+            set_last_error("runtime options handle is null");
+            return nullptr;
+        }
+        try
+        {
+            auto *options = reinterpret_cast<KVCacheOptions *>(opts);
+            return reinterpret_cast<CKVCacheWorkerHandle>(
+                new KVCacheWorker(*options));
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return nullptr;
+        }
+    }
+
+    void CEloqStore_KVCacheWorker_Destroy(CKVCacheWorkerHandle runtime)
+    {
+        // Worker destruction is a direct delete of the native stub.
+        delete reinterpret_cast<KVCacheWorker *>(runtime);
+    }
+
+    bool CEloqStore_KVCacheWorker_AttachBufferPool(CKVCacheWorkerHandle runtime,
+                                                   const char *descriptor)
+    {
+        // Load one manager-exported descriptor into the native worker stub.
+        clear_last_error();
+        if (runtime == nullptr)
+        {
+            set_last_error("worker runtime handle is null");
+            return false;
+        }
+        std::string error_message;
+        const bool ok = reinterpret_cast<KVCacheWorker *>(runtime)
+                            ->AttachBufferPool(descriptor ? descriptor : "",
+                                               &error_message);
+        if (!ok)
+        {
+            set_last_error(error_message);
+        }
+        return ok;
+    }
+
+    void CEloqStore_KVCacheWorker_DetachBufferPool(CKVCacheWorkerHandle runtime)
+    {
+        // Detach is best-effort and intentionally silent for null handles.
+        if (runtime != nullptr)
+        {
+            reinterpret_cast<KVCacheWorker *>(runtime)->DetachBufferPool();
+        }
+    }
+
+    uint32_t CEloqStore_KVCacheWorker_RecommendPartition(CKVCacheWorkerHandle runtime,
+                                                         uint32_t worker_lane)
+    {
+        // Partition routing is deterministic and cheap, so returning 0 on null is a
+        // safe fallback for defensive callers.
+        if (runtime == nullptr)
+        {
+            return 0;
+        }
+        return reinterpret_cast<KVCacheWorker *>(runtime)->RecommendPartition(worker_lane);
+    }
+
+    bool CEloqStore_KVCacheWorker_SubmitSave(CKVCacheWorkerHandle runtime,
+                                             const char *key,
+                                             uint32_t partition_id,
+                                             uint32_t payload_bytes,
+                                             CKVCacheRequest *out_request)
+    {
+        // Convert one worker-side save request into the native IPC stub call.
+        clear_last_error();
+        if (runtime == nullptr || key == nullptr || out_request == nullptr)
+        {
+            set_last_error("invalid worker submit-save arguments");
+            return false;
+        }
+        eloqstore::sdk::KVCacheRequest request;
+        std::string error_message;
+        const bool ok = reinterpret_cast<KVCacheWorker *>(runtime)
+                            ->SubmitSaveRequest(key,
+                                                partition_id,
+                                                payload_bytes,
+                                                &request,
+                                                &error_message);
+        if (!ok)
+        {
+            set_last_error(error_message);
+            return false;
+        }
+        out_request->request_id = request.request_id;
+        out_request->kind = kv_cache_request_kind_to_c(request.kind);
+        out_request->partition_id = request.partition_id;
+        out_request->shard_id = request.shard_id;
+        out_request->slot_id = request.slot_id;
+        out_request->slot_generation = request.slot_generation;
+        out_request->payload_bytes = request.payload_bytes;
+        return true;
+    }
+
+    bool CEloqStore_KVCacheWorker_SubmitLoad(CKVCacheWorkerHandle runtime,
+                                             const char *key,
+                                             uint32_t partition_id,
+                                             uint32_t payload_bytes,
+                                             CKVCacheRequest *out_request)
+    {
+        // Convert one worker-side load request into the native IPC stub call.
+        clear_last_error();
+        if (runtime == nullptr || key == nullptr || out_request == nullptr)
+        {
+            set_last_error("invalid worker submit-load arguments");
+            return false;
+        }
+        eloqstore::sdk::KVCacheRequest request;
+        std::string error_message;
+        const bool ok = reinterpret_cast<KVCacheWorker *>(runtime)
+                            ->SubmitLoadRequest(key,
+                                                partition_id,
+                                                payload_bytes,
+                                                &request,
+                                                &error_message);
+        if (!ok)
+        {
+            set_last_error(error_message);
+            return false;
+        }
+        out_request->request_id = request.request_id;
+        out_request->kind = kv_cache_request_kind_to_c(request.kind);
+        out_request->partition_id = request.partition_id;
+        out_request->shard_id = request.shard_id;
+        out_request->slot_id = request.slot_id;
+        out_request->slot_generation = request.slot_generation;
+        out_request->payload_bytes = request.payload_bytes;
+        return true;
+    }
+
+    bool CEloqStore_KVCacheWorker_MarkSaveReady(CKVCacheWorkerHandle runtime,
+                                                uint64_t request_id)
+    {
+        // Forward one worker-side ready notification into the native stub.
+        clear_last_error();
+        if (runtime == nullptr)
+        {
+            set_last_error("kv cache worker handle is null");
+            return false;
+        }
+        std::string error_message;
+        const bool ok = reinterpret_cast<KVCacheWorker *>(runtime)
+                            ->MarkSaveRequestReady(request_id, &error_message);
+        if (!ok)
+        {
+            set_last_error(error_message);
+        }
+        return ok;
+    }
+
+    bool CEloqStore_KVCacheWorker_PollCompletion(CKVCacheWorkerHandle runtime,
+                                                 CKVCacheCompletion *out_completion)
+    {
+        // Translate one completion record returned through the worker stub.
+        clear_last_error();
+        if (runtime == nullptr || out_completion == nullptr)
+        {
+            set_last_error("invalid worker poll-completion arguments");
+            return false;
+        }
+        eloqstore::sdk::KVCacheCompletion completion;
+        std::string error_message;
+        const bool ok = reinterpret_cast<KVCacheWorker *>(runtime)
+                            ->PollCompletion(&completion, &error_message);
+        if (!ok)
+        {
+            if (!error_message.empty())
+            {
+                set_last_error(error_message);
+            }
+            return false;
+        }
+        out_completion->request_id = completion.request_id;
+        out_completion->kind = kv_cache_request_kind_to_c(completion.kind);
+        out_completion->status = kv_cache_request_status_to_c(completion.status);
+        out_completion->partition_id = completion.partition_id;
+        out_completion->shard_id = completion.shard_id;
+        out_completion->slot_id = completion.slot_id;
+        out_completion->slot_generation = completion.slot_generation;
+        out_completion->payload_bytes = completion.payload_bytes;
+        return true;
+    }
+
+    void CEloqStore_FreeCString(const char *value)
+    {
+        // Free strings allocated by C API helpers such as ExportBufferPool.
+        if (value != nullptr)
+        {
+            ::free(const_cast<char *>(value));
+        }
     }
 
     // ============================================================
@@ -933,6 +1606,7 @@ extern "C"
             req.SetArgs(
                 *cpp_table,
                 std::string(reinterpret_cast<const char *>(key), key_len));
+            req.large_value_dest_.emplace<IoStringBuffer>();
 
             cpp_store->ExecSync(&req);
             auto err = req.Error();
@@ -943,9 +1617,11 @@ extern "C"
                 out_result->expire_ts = req.expire_ts_;
                 out_result->found = true;
 
-                if (!req.large_value_.Fragments().empty())
+                if (auto *iosb = std::get_if<IoStringBuffer>(
+                        &req.large_value_dest_))
                 {
-                    auto *large = new IoStringBuffer(std::move(req.large_value_));
+                    auto *large =
+                        new IoStringBuffer(std::move(*iosb));
                     out_result->value = reinterpret_cast<CIoStringBufferHandle>(large);
                     out_result->value_len = large->Size();
                     out_result->kind = CValueKind_Large;
@@ -1008,6 +1684,7 @@ extern "C"
             handle->read_req->SetArgs(
                 *cpp_table,
                 std::string(reinterpret_cast<const char *>(key), key_len));
+            handle->read_req->large_value_dest_.emplace<IoStringBuffer>();
 
             bool submitted = cpp_store->ExecAsyn(
                 handle->read_req.get(),
@@ -1019,10 +1696,12 @@ extern "C"
                     auto err = read->Error();
                     if (err == KvError::NoError)
                     {
-                        if (!read->large_value_.Fragments().empty())
+                        if (auto *iosb =
+                                std::get_if<IoStringBuffer>(
+                                    &read->large_value_dest_))
                         {
                             handle->large_value = std::make_unique<IoStringBuffer>(
-                                std::move(read->large_value_));
+                                std::move(*iosb));
                             handle->result.value = reinterpret_cast<CIoStringBufferHandle>(
                                 handle->large_value.get());
                             handle->result.value_len = handle->large_value->Size();
@@ -1111,6 +1790,331 @@ extern "C"
         return CEloqStoreStatus_Ok;
     }
 
+    CEloqStoreStatus CEloqStore_GetPinnedLarge(CEloqStoreHandle store,
+                                                CTableIdentHandle table,
+                                                const uint8_t *key,
+                                                size_t key_len,
+                                                uint8_t *out_value,
+                                                size_t out_value_size,
+                                                CPinnedLargeResult *out_result)
+    {
+        clear_last_error();
+        if (!store || !table || !key || key_len == 0 || !out_value ||
+            out_value_size == 0 || !out_result)
+        {
+            return CEloqStoreStatus_InvalidArgs;
+        }
+
+        auto *cpp_store = reinterpret_cast<EloqStore *>(store);
+        auto *cpp_table = reinterpret_cast<TableIdent *>(table);
+
+        try
+        {
+            ReadRequest req;
+            req.SetArgs(
+                *cpp_table,
+                std::string(reinterpret_cast<const char *>(key), key_len));
+            req.large_value_dest_ = std::make_pair(
+                reinterpret_cast<char *>(out_value), out_value_size);
+
+            cpp_store->ExecSync(&req);
+            auto err = req.Error();
+
+            if (err == KvError::NoError)
+            {
+                out_result->timestamp = req.ts_;
+                out_result->expire_ts = req.expire_ts_;
+                out_result->found = true;
+
+                if (!req.value_.empty())
+                {
+                    auto *copy = new uint8_t[req.value_.size()];
+                    std::memcpy(copy, req.value_.data(), req.value_.size());
+                    out_result->metadata = copy;
+                    out_result->metadata_len = req.value_.size();
+                    out_result->owns_metadata = true;
+                }
+                else
+                {
+                    out_result->metadata = nullptr;
+                    out_result->metadata_len = 0;
+                    out_result->owns_metadata = false;
+                }
+            }
+            else if (err == KvError::NotFound)
+            {
+                out_result->metadata = nullptr;
+                out_result->metadata_len = 0;
+                out_result->timestamp = 0;
+                out_result->expire_ts = 0;
+                out_result->found = false;
+                out_result->owns_metadata = false;
+            }
+            else
+            {
+                return kv_error_to_c(err);
+            }
+            return CEloqStoreStatus_Ok;
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return CEloqStoreStatus_InvalidArgs;
+        }
+    }
+
+    CEloqStoreStatus CEloqStore_GetPinnedLargeOnly(CEloqStoreHandle store,
+                                                    CTableIdentHandle table,
+                                                    const uint8_t *key,
+                                                    size_t key_len,
+                                                    uint8_t *out_value,
+                                                    size_t out_value_size,
+                                                    CPinnedLargeResult *out_result)
+    {
+        clear_last_error();
+        if (!store || !table || !key || key_len == 0 || !out_value ||
+            out_value_size == 0 || !out_result)
+        {
+            return CEloqStoreStatus_InvalidArgs;
+        }
+
+        auto *cpp_store = reinterpret_cast<EloqStore *>(store);
+        auto *cpp_table = reinterpret_cast<TableIdent *>(table);
+
+        try
+        {
+            ReadRequest req;
+            req.SetArgs(
+                *cpp_table,
+                std::string(reinterpret_cast<const char *>(key), key_len));
+            req.large_value_dest_ = std::make_pair(
+                reinterpret_cast<char *>(out_value), out_value_size);
+            req.large_value_only_ = true;
+
+            cpp_store->ExecSync(&req);
+            auto err = req.Error();
+
+            if (err == KvError::NoError)
+            {
+                out_result->metadata = nullptr;
+                out_result->metadata_len = 0;
+                out_result->owns_metadata = false;
+                out_result->timestamp = req.ts_;
+                out_result->expire_ts = req.expire_ts_;
+                out_result->found = true;
+            }
+            else if (err == KvError::NotFound)
+            {
+                out_result->metadata = nullptr;
+                out_result->metadata_len = 0;
+                out_result->timestamp = 0;
+                out_result->expire_ts = 0;
+                out_result->found = false;
+                out_result->owns_metadata = false;
+            }
+            else
+            {
+                return kv_error_to_c(err);
+            }
+            return CEloqStoreStatus_Ok;
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return CEloqStoreStatus_InvalidArgs;
+        }
+    }
+
+    CAsyncHandle CEloqStore_GetPinnedLargeAsync(CEloqStoreHandle store,
+                                                 CTableIdentHandle table,
+                                                 const uint8_t *key,
+                                                 size_t key_len,
+                                                 uint8_t *out_value,
+                                                 size_t out_value_size)
+    {
+        clear_last_error();
+        if (!store || !table || !key || key_len == 0 || !out_value ||
+            out_value_size == 0)
+        {
+            return nullptr;
+        }
+
+        auto *cpp_store = reinterpret_cast<EloqStore *>(store);
+        auto *cpp_table = reinterpret_cast<TableIdent *>(table);
+
+        try
+        {
+            auto *handle = new AsyncHandleData();
+            handle->kind = AsyncHandleKind::PinnedRead;
+            handle->pinned_dest = out_value;
+            handle->pinned_dest_size = out_value_size;
+            handle->read_req = std::make_unique<ReadRequest>();
+            handle->read_req->SetArgs(
+                *cpp_table,
+                std::string(reinterpret_cast<const char *>(key), key_len));
+            handle->read_req->large_value_dest_ = std::make_pair(
+                reinterpret_cast<char *>(out_value), out_value_size);
+
+            bool submitted = cpp_store->ExecAsyn(
+                handle->read_req.get(),
+                0,
+                [handle](eloqstore::KvRequest *done_req)
+                {
+                    auto *read = static_cast<ReadRequest *>(done_req);
+                    std::lock_guard<std::mutex> lock(handle->mutex);
+                    auto err = read->Error();
+                    if (err == KvError::NoError)
+                    {
+                        handle->pinned_ts = read->ts_;
+                        handle->pinned_expire_ts = read->expire_ts_;
+                        if (!read->value_.empty())
+                        {
+                            handle->pinned_metadata = std::move(read->value_);
+                        }
+                        handle->status = CEloqStoreStatus_Ok;
+                    }
+                    else if (err == KvError::NotFound)
+                    {
+                        handle->status = CEloqStoreStatus_NotFound;
+                    }
+                    else
+                    {
+                        handle->status = kv_error_to_c(err);
+                    }
+                    handle->done = true;
+                    handle->cv.notify_all();
+                });
+            if (!submitted)
+            {
+                std::lock_guard<std::mutex> lock(handle->mutex);
+                handle->status = CEloqStoreStatus_NotRunning;
+                handle->done = true;
+                handle->cv.notify_all();
+            }
+            return reinterpret_cast<CAsyncHandle>(handle);
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return nullptr;
+        }
+    }
+
+    CAsyncHandle CEloqStore_GetPinnedLargeOnlyAsync(CEloqStoreHandle store,
+                                                     CTableIdentHandle table,
+                                                     const uint8_t *key,
+                                                     size_t key_len,
+                                                     uint8_t *out_value,
+                                                     size_t out_value_size)
+    {
+        clear_last_error();
+        if (!store || !table || !key || key_len == 0 || !out_value ||
+            out_value_size == 0)
+        {
+            return nullptr;
+        }
+
+        auto *cpp_store = reinterpret_cast<EloqStore *>(store);
+        auto *cpp_table = reinterpret_cast<TableIdent *>(table);
+
+        try
+        {
+            auto *handle = new AsyncHandleData();
+            handle->kind = AsyncHandleKind::PinnedRead;
+            handle->pinned_dest = out_value;
+            handle->pinned_dest_size = out_value_size;
+            handle->read_req = std::make_unique<ReadRequest>();
+            handle->read_req->SetArgs(
+                *cpp_table,
+                std::string(reinterpret_cast<const char *>(key), key_len));
+            handle->read_req->large_value_dest_ = std::make_pair(
+                reinterpret_cast<char *>(out_value), out_value_size);
+            handle->read_req->large_value_only_ = true;
+
+            bool submitted = cpp_store->ExecAsyn(
+                handle->read_req.get(),
+                0,
+                [handle](eloqstore::KvRequest *done_req)
+                {
+                    auto *read = static_cast<ReadRequest *>(done_req);
+                    std::lock_guard<std::mutex> lock(handle->mutex);
+                    auto err = read->Error();
+                    if (err == KvError::NoError)
+                    {
+                        handle->pinned_ts = read->ts_;
+                        handle->pinned_expire_ts = read->expire_ts_;
+                        handle->status = CEloqStoreStatus_Ok;
+                    }
+                    else if (err == KvError::NotFound)
+                    {
+                        handle->status = CEloqStoreStatus_NotFound;
+                    }
+                    else
+                    {
+                        handle->status = kv_error_to_c(err);
+                    }
+                    handle->done = true;
+                    handle->cv.notify_all();
+                });
+            if (!submitted)
+            {
+                std::lock_guard<std::mutex> lock(handle->mutex);
+                handle->status = CEloqStoreStatus_NotRunning;
+                handle->done = true;
+                handle->cv.notify_all();
+            }
+            return reinterpret_cast<CAsyncHandle>(handle);
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return nullptr;
+        }
+    }
+
+    CEloqStoreStatus CEloqStore_AsyncGetPinnedResult(
+        CAsyncHandle handle,
+        CPinnedLargeResult *out_result)
+    {
+        clear_last_error();
+        if (!handle || !out_result)
+        {
+            return CEloqStoreStatus_InvalidArgs;
+        }
+        auto *async = reinterpret_cast<AsyncHandleData *>(handle);
+        CEloqStoreStatus status = CEloqStore_AsyncWait(handle);
+        if (status != CEloqStoreStatus_Ok)
+        {
+            return status;
+        }
+
+        std::lock_guard<std::mutex> lock(async->mutex);
+        if (async->kind != AsyncHandleKind::PinnedRead || async->result_claimed)
+        {
+            return CEloqStoreStatus_InvalidArgs;
+        }
+        out_result->timestamp = async->pinned_ts;
+        out_result->expire_ts = async->pinned_expire_ts;
+        if (!async->pinned_metadata.empty())
+        {
+            auto *copy = new uint8_t[async->pinned_metadata.size()];
+            std::memcpy(copy, async->pinned_metadata.data(),
+                        async->pinned_metadata.size());
+            out_result->metadata = copy;
+            out_result->metadata_len = async->pinned_metadata.size();
+            out_result->owns_metadata = true;
+        }
+        else
+        {
+            out_result->metadata = nullptr;
+            out_result->metadata_len = 0;
+            out_result->owns_metadata = false;
+        }
+        out_result->found = true;
+        async->result_claimed = true;
+        return CEloqStoreStatus_Ok;
+    }
+
     CEloqStoreStatus CEloqStore_PutLarge(CEloqStoreHandle store,
                                          CTableIdentHandle table,
                                          const uint8_t *key,
@@ -1148,11 +2152,61 @@ extern "C"
 
             cpp_store->ExecSync(&req);
             auto err = req.Error();
-            if (!req.batch_.empty() && !req.batch_[0].large_val_.Fragments().empty())
+            if (!req.batch_.empty())
             {
-                req.batch_[0].large_val_.Recycle(global_mem, reg_mem_index_base);
+                req.batch_[0].RecycleLargeValue(global_mem, reg_mem_index_base);
             }
             return kv_error_to_c(err);
+        }
+        catch (const std::exception &e)
+        {
+            set_last_error(e.what());
+            return CEloqStoreStatus_InvalidArgs;
+        }
+    }
+
+    CEloqStoreStatus CEloqStore_PutPinnedLarge(CEloqStoreHandle store,
+                                                CTableIdentHandle table,
+                                                const uint8_t *key,
+                                                size_t key_len,
+                                                const uint8_t *value,
+                                                size_t value_len,
+                                                const uint8_t *metadata,
+                                                size_t metadata_len,
+                                                uint64_t timestamp)
+    {
+        clear_last_error();
+        if (!store || !table || !key || key_len == 0 || !value || value_len == 0)
+        {
+            return CEloqStoreStatus_InvalidArgs;
+        }
+
+        auto *cpp_store = reinterpret_cast<EloqStore *>(store);
+        auto *cpp_table = reinterpret_cast<TableIdent *>(table);
+
+        try
+        {
+            std::string meta_str;
+            if (metadata && metadata_len > 0)
+            {
+                meta_str.assign(reinterpret_cast<const char *>(metadata),
+                                metadata_len);
+            }
+
+            WriteDataEntry entry(
+                std::string(reinterpret_cast<const char *>(key), key_len),
+                std::move(meta_str),
+                std::make_pair(reinterpret_cast<const char *>(value), value_len),
+                timestamp,
+                WriteOp::Upsert);
+
+            BatchWriteRequest req;
+            std::vector<WriteDataEntry> batch;
+            batch.push_back(std::move(entry));
+            req.SetArgs(*cpp_table, std::move(batch));
+
+            cpp_store->ExecSync(&req);
+            return kv_error_to_c(req.Error());
         }
         catch (const std::exception &e)
         {
@@ -1533,6 +2587,37 @@ extern "C"
         }
     }
 
+    void CEloqStore_BatchWrite_AddPinnedLargeEntry(CBatchWriteHandle req,
+                                                    const uint8_t *key,
+                                                    size_t key_len,
+                                                    const uint8_t *value,
+                                                    size_t value_len,
+                                                    const uint8_t *metadata,
+                                                    size_t metadata_len,
+                                                    uint64_t timestamp,
+                                                    CWriteOp op,
+                                                    uint64_t expire_ts)
+    {
+        if (req && key && key_len > 0 && value && value_len > 0)
+        {
+            auto *cpp_req = reinterpret_cast<BatchWriteRequest *>(req);
+            std::string meta_str;
+            if (metadata && metadata_len > 0)
+            {
+                meta_str.assign(reinterpret_cast<const char *>(metadata),
+                                metadata_len);
+            }
+            WriteDataEntry entry(
+                std::string(reinterpret_cast<const char *>(key), key_len),
+                std::move(meta_str),
+                std::make_pair(reinterpret_cast<const char *>(value), value_len),
+                timestamp,
+                static_cast<WriteOp>(op),
+                expire_ts);
+            cpp_req->batch_.push_back(std::move(entry));
+        }
+    }
+
     void CEloqStore_BatchWrite_Clear(CBatchWriteHandle req)
     {
         if (req)
@@ -1722,6 +2807,28 @@ extern "C"
                    : 0;
     }
 
+    size_t CEloqStore_GlobalMemory_ChunkCount(
+        CGlobalRegisteredMemoryHandle mem)
+    {
+        if (!mem)
+            return 0;
+        return reinterpret_cast<GlobalRegisteredMemory *>(mem)->MemChunks().size();
+    }
+
+    bool CEloqStore_GlobalMemory_ChunkAt(CGlobalRegisteredMemoryHandle mem,
+                                         size_t index,
+                                         CMemoryChunk *out_chunk)
+    {
+        if (!mem || !out_chunk)
+            return false;
+        const auto chunks = reinterpret_cast<GlobalRegisteredMemory *>(mem)->MemChunks();
+        if (index >= chunks.size())
+            return false;
+        out_chunk->data = reinterpret_cast<uint8_t *>(chunks[index].base_);
+        out_chunk->len = chunks[index].size_;
+        return true;
+    }
+
     CIoStringBufferHandle CEloqStore_GlobalMemory_AllocateIoString(
         CGlobalRegisteredMemoryHandle mem,
         size_t size,
@@ -1782,9 +2889,38 @@ extern "C"
         return buf ? reinterpret_cast<IoStringBuffer *>(buf)->Fragments().size() : 0;
     }
 
+    static bool fill_io_string_fragment(CIoStringBufferHandle buf,
+                                        size_t index,
+                                        size_t segment_size,
+                                        uint16_t reg_mem_index_base,
+                                        CIoStringFragment *out_fragment)
+    {
+        if (!buf || !out_fragment || segment_size == 0)
+            return false;
+        auto *cpp_buf = reinterpret_cast<IoStringBuffer *>(buf);
+        const auto &fragments = cpp_buf->Fragments();
+        if (index >= fragments.size())
+            return false;
+
+        const size_t used_before = index * segment_size;
+        if (used_before >= cpp_buf->Size())
+            return false;
+
+        const auto &frag = fragments[index];
+        const size_t len = std::min(segment_size, cpp_buf->Size() - used_before);
+        out_fragment->data = reinterpret_cast<uint8_t *>(frag.data_);
+        out_fragment->len = len;
+        out_fragment->buf_index = frag.buf_index_;
+        out_fragment->chunk_index = frag.buf_index_ >= reg_mem_index_base
+                                        ? frag.buf_index_ - reg_mem_index_base
+                                        : frag.buf_index_;
+        out_fragment->offset = 0;
+        return true;
+    }
+
     bool CEloqStore_IoStringBuffer_FragmentAt(CIoStringBufferHandle buf,
-                                              size_t index,
-                                              CIoStringFragment *out_fragment)
+                                               size_t index,
+                                               CIoStringFragment *out_fragment)
     {
         if (!buf || !out_fragment)
             return false;
@@ -1792,36 +2928,38 @@ extern "C"
         const auto &fragments = cpp_buf->Fragments();
         if (index >= fragments.size())
             return false;
-        const auto &frag = fragments[index];
-        const size_t segment_size =
-            cpp_buf->Size() == 0 ? 0 : cpp_buf->Size();
-        size_t remaining = 0;
-        if (cpp_buf->Size() > 0)
+        if (cpp_buf->Size() == 0)
+            return false;
+
+        size_t segment_size = 0;
+        for (size_t i = 1; i < fragments.size(); ++i)
         {
-            // Fragment payload length is the full segment except for the last
-            // fragment. The exact segment size is not stored in IoStringBuffer,
-            // so infer it from the distance to the next fragment when possible.
-            if (index + 1 < fragments.size())
+            if (fragments[i].data_ > fragments[i - 1].data_)
             {
-                remaining = static_cast<size_t>(fragments[index + 1].data_ -
-                                                frag.data_);
+                const auto delta = static_cast<size_t>(fragments[i].data_ -
+                                                       fragments[i - 1].data_);
+                if (delta > 0 && (segment_size == 0 || delta < segment_size))
+                {
+                    segment_size = delta;
+                }
             }
-            if (remaining == 0 || remaining > cpp_buf->Size())
-            {
-                remaining = (cpp_buf->Size() + fragments.size() - 1) /
-                            fragments.size();
-            }
-            const size_t used_before = index * remaining;
-            remaining = used_before >= cpp_buf->Size()
-                            ? 0
-                            : std::min(remaining, cpp_buf->Size() - used_before);
         }
-        out_fragment->data = reinterpret_cast<uint8_t *>(frag.data_);
-        out_fragment->len = remaining == 0 ? segment_size : remaining;
-        out_fragment->buf_index = frag.buf_index_;
-        out_fragment->chunk_index = frag.buf_index_;
-        out_fragment->offset = 0;
-        return true;
+        if (segment_size == 0 || segment_size > cpp_buf->Size())
+        {
+            segment_size = cpp_buf->Size();
+        }
+        return fill_io_string_fragment(buf, index, segment_size, 0, out_fragment);
+    }
+
+    bool CEloqStore_IoStringBuffer_FragmentAtEx(
+        CIoStringBufferHandle buf,
+        size_t index,
+        uint32_t segment_size,
+        uint16_t reg_mem_index_base,
+        CIoStringFragment *out_fragment)
+    {
+        return fill_io_string_fragment(
+            buf, index, segment_size, reg_mem_index_base, out_fragment);
     }
 
     // ============================================================
@@ -1869,6 +3007,21 @@ extern "C"
             }
             result->key_len = 0;
             result->value_len = 0;
+            result->found = false;
+        }
+    }
+
+    void CEloqStore_FreePinnedResult(CPinnedLargeResult *result)
+    {
+        if (result)
+        {
+            if (result->metadata && result->owns_metadata)
+            {
+                delete[] result->metadata;
+                result->metadata = nullptr;
+            }
+            result->metadata_len = 0;
+            result->owns_metadata = false;
             result->found = false;
         }
     }
