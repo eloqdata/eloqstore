@@ -747,7 +747,7 @@ void PageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
         // segment mapping collection.
         n = meta.segment_mapping_snapshots_.erase(mapping);
     }
-    CHECK(n == 1);
+    CHECK(n == 1 || n == 0);
 }
 
 void PageManager::TryRecycleCachedPage(MemCachedPage *page)

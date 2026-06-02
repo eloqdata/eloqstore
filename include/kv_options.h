@@ -420,6 +420,12 @@ struct KvOptions
      */
     uint8_t auto_reopen_retry_times = 10;
     uint8_t auto_oom_retry_times = 5;
+    /**
+     * @brief Pending time in microseconds for auto-reopen requests.
+     * The reopen will wait up to this duration for pending writes to complete
+     * before executing.
+     */
+    uint64_t auto_reopen_pending_time_us = 10'000'000;
 
     /**
      * @brief Filter function to determine which partitions belong to this

@@ -22,6 +22,7 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
     }
     StandbyService *standby_service = nullptr;
     std::string tag;
+    KvError sync_err = KvError::NoError;
     if (mode == StoreMode::StandbyReplica)
     {
         standby_service = shard->store_->GetStandbyService();
@@ -46,7 +47,7 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
                 return enqueue_err;
             }
             current_task->WaitIo();
-            KvError sync_err = static_cast<KvError>(current_task->io_res_);
+            sync_err = static_cast<KvError>(current_task->io_res_);
             if (sync_err != KvError::NoError && sync_err != KvError::NotFound &&
                 sync_err != KvError::ResourceMissing)
             {
@@ -59,7 +60,8 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
     }
 
     KvError err = KvError::NoError;
-    if (request->Clean())
+    if (request->Clean() || sync_err == KvError::NotFound ||
+        sync_err == KvError::ResourceMissing)
     {
         // Remote partition no longer exists — delete local manifest and
         // clear in-memory state instead of writing an empty snapshot.
