@@ -49,6 +49,7 @@
 
 #include <butil/time.h>
 
+#include "absl/strings/string_view.h"
 #include "cloud_storage_service.h"
 #include "coding.h"
 #include "common.h"
@@ -1875,12 +1876,13 @@ void IouringMgr::RollbackBranchFileTail(const TableIdent &tbl_id,
 
 std::string_view IouringMgr::InternBranchName(std::string_view name)
 {
-    auto it = branch_name_pool_.find(name);
+    absl::string_view absl_name(name.data(), name.size());
+    auto it = branch_name_pool_.find(absl_name);
     if (it != branch_name_pool_.end())
     {
         return *it;
     }
-    auto [inserted_it, inserted] = branch_name_pool_.emplace(name);
+    auto [inserted_it, inserted] = branch_name_pool_.emplace(std::string(name));
     return *inserted_it;
 }
 
