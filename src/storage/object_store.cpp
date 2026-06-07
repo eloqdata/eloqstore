@@ -1,6 +1,10 @@
 #include "storage/object_store.h"
 
+// AWS SDK init/shutdown is only needed when the cloud (S3/GCS) storage backend is compiled in
+// (see CreateBackend() in cloud_backend.cpp, gated the same way).
+#ifdef ELOQSTORE_WITH_CLOUD
 #include <aws/core/Aws.h>
+#endif
 #include <glog/logging.h>
 
 #include <algorithm>
@@ -29,11 +33,13 @@ namespace eloqstore
 namespace fs = std::filesystem;
 namespace
 {
+#ifdef ELOQSTORE_WITH_CLOUD
 std::mutex g_aws_mutex;
 size_t g_aws_refcount = 0;
 bool g_aws_initialized = false;
 Aws::SDKOptions g_sdk_options;
 bool g_aws_cleanup_registered = false;
+#endif
 
 size_t AppendToString(void *contents, size_t size, size_t nmemb, void *userp)
 {
@@ -47,6 +53,7 @@ size_t AppendToString(void *contents, size_t size, size_t nmemb, void *userp)
     return total;
 }
 
+#ifdef ELOQSTORE_WITH_CLOUD
 void CleanupAws()
 {
     std::lock_guard lk(g_aws_mutex);
@@ -56,6 +63,7 @@ void CleanupAws()
         g_aws_initialized = false;
     }
 }
+#endif
 
 CloudPathInfo ParseCloudPath(const std::string &spec)
 {
@@ -104,6 +112,7 @@ ObjectStore::ObjectStore(const KvOptions *options, CloudStorageService *service)
 {
     CHECK(cloud_service_ != nullptr);
     curl_global_init(CURL_GLOBAL_DEFAULT);
+#ifdef ELOQSTORE_WITH_CLOUD
     {
         std::lock_guard lk(g_aws_mutex);
         if (g_aws_refcount == 0 && !g_aws_initialized)
@@ -118,6 +127,7 @@ ObjectStore::ObjectStore(const KvOptions *options, CloudStorageService *service)
             g_aws_cleanup_registered = true;
         }
     }
+#endif
     async_http_mgr_ = std::make_unique<AsyncHttpManager>(options, service);
 }
 
@@ -140,6 +150,7 @@ void ObjectStore::UploadTask::CompleteCloudTask()
 ObjectStore::~ObjectStore()
 {
     async_http_mgr_.reset();
+#ifdef ELOQSTORE_WITH_CLOUD
     {
         std::lock_guard lk(g_aws_mutex);
         if (g_aws_refcount > 0)
@@ -147,6 +158,7 @@ ObjectStore::~ObjectStore()
             g_aws_refcount--;
         }
     }
+#endif
     curl_global_cleanup();
 }
 
