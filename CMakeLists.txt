@@ -59,7 +59,16 @@ find_package(glog REQUIRED)
 find_package(jsoncpp REQUIRED)
 find_package(CURL REQUIRED)
 find_library(ZSTD_LIBRARY zstd)
-find_package(AWSSDK REQUIRED COMPONENTS s3)
+
+# EloqDB (lintao-mod): cloud (S3/GCS) object storage is a runtime-optional backend
+# (StoreMode::Cloud) — gate its compile-time AWS SDK dependency so local-only builds
+# don't need to fetch/build aws-sdk-cpp. Default ON to match upstream behavior.
+option(WITH_CLOUD_STORAGE "Build EloqStore with AWS S3 / GCS cloud storage backend support" ON)
+message(STATUS "WITH_CLOUD_STORAGE: ${WITH_CLOUD_STORAGE}")
+if (WITH_CLOUD_STORAGE)
+    add_compile_definitions(ELOQSTORE_WITH_CLOUD)
+    find_package(AWSSDK REQUIRED COMPONENTS s3)
+endif ()
 find_package(OpenSSL REQUIRED)
 
 find_path(URING_INCLUDE_PATH NAMES liburing.h)
@@ -140,7 +149,10 @@ add_library(eloqstore STATIC ${ELOQ_STORE_SOURCES} ${INI_SOURCES})
 set_target_properties(eloqstore PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(eloqstore PUBLIC ${ELOQ_STORE_INCLUDE})
-target_link_libraries(eloqstore PRIVATE ${URING_LIB} glog::glog absl::flat_hash_map ${BOOST_CONTEXT_TARGET} ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} ${AWSSDK_LINK_LIBRARIES} OpenSSL::Crypto)
+target_link_libraries(eloqstore PRIVATE ${URING_LIB} glog::glog absl::flat_hash_map ${BOOST_CONTEXT_TARGET} ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} OpenSSL::Crypto)
+if (WITH_CLOUD_STORAGE)
+    target_link_libraries(eloqstore PRIVATE ${AWSSDK_LINK_LIBRARIES})
+endif ()
 
 set(ELOQ_STORE_CAPI_INCLUDE
         ${ELOQ_STORE_INCLUDE}

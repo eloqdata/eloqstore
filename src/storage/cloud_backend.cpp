@@ -1,5 +1,10 @@
 #include "storage/cloud_backend.h"
 
+// EloqDB (lintao-mod): the AWS/GCS backend implementation below is compiled in only when
+// ELOQSTORE_WITH_CLOUD is defined. Local-only deployments (no S3/GCS object storage) don't
+// need the AWS SDK at link time — gating it here lets the umbrella build skip aws-sdk-cpp
+// entirely. See CreateBackend() at the bottom of this file for the no-cloud stub.
+#ifdef ELOQSTORE_WITH_CLOUD
 #include <aws/core/Aws.h>
 #include <aws/core/auth/AWSCredentialsProvider.h>
 #include <aws/core/auth/AWSCredentialsProviderChain.h>
@@ -9,6 +14,7 @@
 #include <aws/core/http/standard/StandardHttpRequest.h>
 #include <aws/core/utils/memory/stl/AWSStringStream.h>
 #include <aws/s3/S3Client.h>
+#endif
 #include <curl/curl.h>
 #include <glog/logging.h>
 #include <jsoncpp/json/json.h>
@@ -38,6 +44,7 @@
 
 namespace eloqstore
 {
+#ifdef ELOQSTORE_WITH_CLOUD
 namespace
 {
 size_t AppendToString(void *contents, size_t size, size_t nmemb, void *userp)
@@ -1557,5 +1564,16 @@ std::unique_ptr<CloudBackend> CreateBackend(const KvOptions *options,
         return std::make_unique<AwsCloudBackend>(options, path);
     }
 }
+#else   // !ELOQSTORE_WITH_CLOUD
+std::unique_ptr<CloudBackend> CreateBackend(const KvOptions *options,
+                                            const CloudPathInfo &path)
+{
+    LOG(FATAL) << "EloqStore was built without cloud storage support "
+                  "(ELOQSTORE_WITH_CLOUD=OFF) — cannot open a cloud-backed "
+                  "store (cloud_store_path='"
+               << path.bucket << "/" << path.prefix << "')";
+    return nullptr;
+}
+#endif  // ELOQSTORE_WITH_CLOUD
 
 }  // namespace eloqstore
