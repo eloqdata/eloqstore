@@ -29,7 +29,6 @@ using eloqstore::ReadRequest;
 using eloqstore::ScanRequest;
 using eloqstore::sdk::KVCacheManager;
 using eloqstore::sdk::KVCacheOptions;
-using eloqstore::sdk::KVCacheRuntimeMetrics;
 using eloqstore::sdk::KVCacheWorker;
 using eloqstore::TableIdent;
 using eloqstore::WriteDataEntry;
@@ -805,47 +804,6 @@ extern "C"
         return ok;
     }
 
-    bool CEloqStore_KVCacheManager_GetMetrics(CKVCacheManagerHandle runtime,
-                                              CKVCacheRuntimeMetrics *out_metrics)
-    {
-        clear_last_error();
-        if (runtime == nullptr || out_metrics == nullptr)
-        {
-            set_last_error("invalid manager get-metrics arguments");
-            return false;
-        }
-        std::string error_message;
-        KVCacheRuntimeMetrics metrics;
-        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)
-                            ->GetMetrics(&metrics, &error_message);
-        if (!ok)
-        {
-            set_last_error(error_message);
-            return false;
-        }
-        out_metrics->flush_batches_submitted = metrics.flush_batches_submitted;
-        out_metrics->flush_batches_completed = metrics.flush_batches_completed;
-        out_metrics->flush_batches_failed = metrics.flush_batches_failed;
-        out_metrics->flush_entries_submitted = metrics.flush_entries_submitted;
-        out_metrics->flush_entries_completed = metrics.flush_entries_completed;
-        out_metrics->flush_entries_failed = metrics.flush_entries_failed;
-        out_metrics->flush_batch_latency_ns_total = metrics.flush_batch_latency_ns_total;
-        out_metrics->contains_memory_hits = metrics.contains_memory_hits;
-        out_metrics->contains_store_hits = metrics.contains_store_hits;
-        out_metrics->contains_store_misses = metrics.contains_store_misses;
-        out_metrics->contains_store_errors = metrics.contains_store_errors;
-        out_metrics->contains_store_lookup_ns_total = metrics.contains_store_lookup_ns_total;
-        out_metrics->load_memory_hits = metrics.load_memory_hits;
-        out_metrics->load_store_hits = metrics.load_store_hits;
-        out_metrics->load_store_errors = metrics.load_store_errors;
-        out_metrics->load_store_bytes = metrics.load_store_bytes;
-        out_metrics->load_store_latency_ns_total = metrics.load_store_latency_ns_total;
-        out_metrics->dirty_entries_current = metrics.dirty_entries_current;
-        out_metrics->flush_queue_entries_current = metrics.flush_queue_entries_current;
-        out_metrics->flush_inflight_entries_current = metrics.flush_inflight_entries_current;
-        return true;
-    }
-
     CKVCacheWorkerHandle CEloqStore_KVCacheWorker_Create(CKVCacheOptionsHandle opts)
     {
         // Create a worker-side control-plane stub from shared runtime options.
@@ -996,38 +954,6 @@ extern "C"
         return true;
     }
 
-    bool CEloqStore_KVCacheWorker_WaitRequests(CKVCacheWorkerHandle runtime,
-                                               const uint64_t *request_ids,
-                                               size_t request_count,
-                                               double timeout_sec,
-                                               CKVCacheRequestState *out_states)
-    {
-        (void) timeout_sec;
-        clear_last_error();
-        if (runtime == nullptr || (request_count > 0 && (request_ids == nullptr || out_states == nullptr)))
-        {
-            set_last_error("invalid worker wait-requests arguments");
-            return false;
-        }
-        std::vector<uint64_t> ids(request_ids, request_ids + request_count);
-        std::vector<eloqstore::sdk::KVCacheRequestState> states;
-        std::string error_message;
-        const bool ok = reinterpret_cast<KVCacheWorker *>(runtime)
-                            ->CheckRequests(ids, &states, &error_message);
-        if (!ok)
-        {
-            set_last_error(error_message);
-            return false;
-        }
-        for (size_t i = 0; i < states.size(); ++i)
-        {
-            out_states[i].request_id = states[i].request_id;
-            out_states[i].status = kv_cache_request_status_to_c(states[i].status);
-            out_states[i].offset_bytes = states[i].offset_bytes;
-            out_states[i].payload_bytes = states[i].payload_bytes;
-        }
-        return true;
-    }
 
     bool CEloqStore_KVCacheWorker_GetReadyBuffer(CKVCacheWorkerHandle runtime,
                                                  uint64_t request_id,

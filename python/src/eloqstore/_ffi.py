@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from ctypes import CDLL, POINTER, Structure, c_bool, c_char_p, c_double, c_size_t, c_uint16, c_uint32, c_uint64, c_uint8, c_void_p, cdll
+from ctypes import CDLL, POINTER, Structure, c_bool, c_char_p, c_size_t, c_uint16, c_uint32, c_uint64, c_uint8, c_void_p, cdll
 from pathlib import Path
 import os
 
@@ -30,31 +30,6 @@ class CKVCacheRequestState(Structure):
         ("status", c_uint8),
         ("offset_bytes", c_uint64),
         ("payload_bytes", c_uint32),
-    ]
-
-
-class CKVCacheRuntimeMetrics(Structure):
-    _fields_ = [
-        ("flush_batches_submitted", c_uint64),
-        ("flush_batches_completed", c_uint64),
-        ("flush_batches_failed", c_uint64),
-        ("flush_entries_submitted", c_uint64),
-        ("flush_entries_completed", c_uint64),
-        ("flush_entries_failed", c_uint64),
-        ("flush_batch_latency_ns_total", c_uint64),
-        ("contains_memory_hits", c_uint64),
-        ("contains_store_hits", c_uint64),
-        ("contains_store_misses", c_uint64),
-        ("contains_store_errors", c_uint64),
-        ("contains_store_lookup_ns_total", c_uint64),
-        ("load_memory_hits", c_uint64),
-        ("load_store_hits", c_uint64),
-        ("load_store_errors", c_uint64),
-        ("load_store_bytes", c_uint64),
-        ("load_store_latency_ns_total", c_uint64),
-        ("dirty_entries_current", c_uint64),
-        ("flush_queue_entries_current", c_uint64),
-        ("flush_inflight_entries_current", c_uint64),
     ]
 
 
@@ -171,8 +146,6 @@ def _configure_library(lib) -> None:
     lib.CEloqStore_KVCacheManager_GetReadyBuffer.restype = c_bool
     lib.CEloqStore_KVCacheManager_ContainsKey.argtypes = [c_void_p, c_char_p, POINTER(c_bool)]
     lib.CEloqStore_KVCacheManager_ContainsKey.restype = c_bool
-    lib.CEloqStore_KVCacheManager_GetMetrics.argtypes = [c_void_p, POINTER(CKVCacheRuntimeMetrics)]
-    lib.CEloqStore_KVCacheManager_GetMetrics.restype = c_bool
 
     lib.CEloqStore_KVCacheWorker_Create.argtypes = [c_void_p]
     lib.CEloqStore_KVCacheWorker_Create.restype = c_void_p
@@ -188,8 +161,6 @@ def _configure_library(lib) -> None:
     lib.CEloqStore_KVCacheWorker_BeginLoad.restype = c_bool
     lib.CEloqStore_KVCacheWorker_CheckRequest.argtypes = [c_void_p, c_uint64, POINTER(CKVCacheRequestState)]
     lib.CEloqStore_KVCacheWorker_CheckRequest.restype = c_bool
-    lib.CEloqStore_KVCacheWorker_WaitRequests.argtypes = [c_void_p, POINTER(c_uint64), c_size_t, c_double, POINTER(CKVCacheRequestState)]
-    lib.CEloqStore_KVCacheWorker_WaitRequests.restype = c_bool
     lib.CEloqStore_KVCacheWorker_GetReadyBuffer.argtypes = [c_void_p, c_uint64, POINTER(CKVCacheBufferHandle)]
     lib.CEloqStore_KVCacheWorker_GetReadyBuffer.restype = c_bool
 

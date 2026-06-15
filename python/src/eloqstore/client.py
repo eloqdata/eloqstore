@@ -9,12 +9,13 @@ import os
 import time
 from typing import Sequence
 
+import torch
+
 from ._errors import EloqStoreError
 from ._ffi import (
     CGetResult,
     CKVCacheBufferHandle,
     CKVCacheRequestState,
-    CKVCacheRuntimeMetrics,
     last_error,
     lib,
 )
@@ -106,6 +107,7 @@ class KVCacheSharedBuffer:
     partition_count: int
     fd: int | None = None
     mmap_obj: mmap.mmap | None = None
+    tensor: torch.Tensor | None = None
     cuda_registered: bool = False
     cuda_base_ptr: int = 0
 
@@ -142,6 +144,7 @@ class KVCacheSharedBuffer:
             raise
         self.fd = fd
         self.mmap_obj = mm
+        self.tensor = torch.frombuffer(memoryview(mm), dtype=torch.uint8, count=self.mapped_bytes)
 
     def register_cuda(self) -> None:
         if self.cuda_registered:
@@ -171,6 +174,13 @@ class KVCacheSharedBuffer:
             raise RuntimeError("shared buffer is not attached")
         return memoryview(self.mmap_obj)[offset : offset + length].cast("B")
 
+    def slice_tensor(self, offset: int, length: int) -> torch.Tensor:
+        if self.tensor is None:
+            self.attach()
+        if self.tensor is None:
+            raise RuntimeError("shared buffer tensor is not attached")
+        return self.tensor.narrow(0, offset, length)
+
     def close(self) -> None:
         if self.cuda_registered and self.cuda_base_ptr:
             cudart = _load_cudart()
@@ -178,6 +188,7 @@ class KVCacheSharedBuffer:
                 cudart.cudaHostUnregister(ctypes.c_void_p(self.cuda_base_ptr))
         self.cuda_registered = False
         self.cuda_base_ptr = 0
+        self.tensor = None
         if self.mmap_obj is not None:
             self.mmap_obj.close()
             self.mmap_obj = None
@@ -545,14 +556,6 @@ class KVCacheManager:
     def contains_keys(self, keys: Sequence[str]) -> list[bool]:
         return [self.contains_key(key) for key in keys]
 
-    def get_metrics(self) -> dict[str, int]:
-        native = CKVCacheRuntimeMetrics()
-        _ok(lib().CEloqStore_KVCacheManager_GetMetrics(self._handle, byref(native)))
-        return {
-            field_name: int(getattr(native, field_name))
-            for field_name, *_ in native._fields_
-        }
-
     def wait_requests(
         self, request_ids: Sequence[int], timeout_s: float = 30.0
     ) -> dict[int, KVCacheRequestResult]:
@@ -561,33 +564,18 @@ class KVCacheManager:
         deadline = time.time() + timeout_s
         while pending:
             progressed = False
-            request_order = list(pending)
-            request_vec = (c_uint64 * len(request_order))(*request_order)
-            native_states = (CKVCacheRequestState * len(request_order))()
-            remaining = max(0.0, deadline - time.time())
-            _ok(
-                lib().CEloqStore_KVCacheWorker_WaitRequests(
-                    self._handle,
-                    request_vec,
-                    len(request_order),
-                    c_double(remaining),
-                    native_states,
-                )
-            )
-            for native in native_states:
-                request_id = int(native.request_id)
-                status = _decode_request_status(native.status)
+            for request_id in list(pending):
+                status = self.check_request(request_id)
                 if status == "pending":
                     continue
                 pending.remove(request_id)
                 progressed = True
-                offset = int(native.offset_bytes)
-                length = int(native.payload_bytes)
-                tracked = self._tracked_requests.get(request_id)
-                if tracked is not None:
-                    tracked.status = status
-                    tracked.offset = offset
-                    tracked.length = length
+                if status == "ready":
+                    offset, length = self.get_ready_buffer(request_id)
+                else:
+                    tracked = self._tracked_requests.get(request_id)
+                    offset = 0 if tracked is None else tracked.offset
+                    length = 0 if tracked is None else tracked.length
                 results[request_id] = KVCacheRequestResult(
                     request_id=request_id,
                     status=status,

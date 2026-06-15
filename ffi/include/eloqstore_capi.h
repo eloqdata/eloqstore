@@ -360,8 +360,6 @@ extern "C"
     bool CEloqStore_KVCacheManager_ContainsKey(CKVCacheManagerHandle runtime,
                                                const char *key,
                                                bool *out_exists);
-    bool CEloqStore_KVCacheManager_GetMetrics(CKVCacheManagerHandle runtime,
-                                              CKVCacheRuntimeMetrics *out_metrics);
 
     // Create one worker-side KV cache control-plane stub from native options.
     CKVCacheWorkerHandle CEloqStore_KVCacheWorker_Create(CKVCacheOptionsHandle opts);
@@ -390,11 +388,6 @@ extern "C"
                                                uint64_t request_id,
                                                CKVCacheRequestState *out_state);
     // Wait for a batch of requests and return their states in order.
-    bool CEloqStore_KVCacheWorker_WaitRequests(CKVCacheWorkerHandle runtime,
-                                               const uint64_t *request_ids,
-                                               size_t request_count,
-                                               double timeout_sec,
-                                               CKVCacheRequestState *out_states);
     // Return the ready shared-buffer slice for one completed request.
     bool CEloqStore_KVCacheWorker_GetReadyBuffer(CKVCacheWorkerHandle runtime,
                                                  uint64_t request_id,

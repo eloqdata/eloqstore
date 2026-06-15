@@ -5,8 +5,6 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
-import hashlib
-import numpy as np
 import re
 import resource
 from typing import TYPE_CHECKING, Any, cast
@@ -18,6 +16,7 @@ from vllm.distributed.kv_transfer.kv_connector.v1.base import (
     KVConnectorBase_V1,
     KVConnectorMetadata,
     KVConnectorRole,
+    SupportsHMA,
 )
 from vllm.distributed.kv_transfer.kv_connector.v1.metrics import KVConnectorPromMetrics
 from vllm.distributed.kv_transfer.kv_connector.v1.metrics import KVConnectorStats
@@ -150,56 +149,32 @@ class EloqStoreConnectorStats(KVConnectorStats):
 class ReqMeta:
     """Serialized per-request work description shipped from scheduler to worker.
 
-    `token_ids` contains the prompt prefix relevant to this connector action.
-    `block_ids` points at the local vLLM KV blocks that should be loaded or
-    saved. `slot_mapping` is kept in the same block order so the worker can walk
-    the request in fixed-size block chunks without reconstructing vLLM state.
+    The connector uses vLLM's own `block_hashes` as the authoritative block
+    identity. The worker only needs the local `block_ids` plus the matching
+    block-hash slice for the current request segment.
     """
 
-    token_ids: torch.Tensor
     block_ids: torch.Tensor
-    slot_mapping: torch.Tensor
+    block_hashes: list[bytes]
     is_store: bool
-    mm_hashes: list[str]
-    start_block: int = 0
 
     @staticmethod
     def make_meta(
-        token_ids: list[int],
         block_ids: list[int],
+        block_hashes: list[bytes],
         block_size: int,
         is_store: bool,
-        mm_hashes: list[str],
         start_token: int = 0,
-        token_limit: int | None = None,
+        token_limit: int = 0,
     ) -> "ReqMeta":
-        # Only complete blocks participate in external KV transfer. The worker
-        # will handle every block in the range [start_block, valid_num_tokens)
-        # and ignore any partial tail.
-        max_tokens_from_blocks = len(block_ids) * block_size
-        token_limit = len(token_ids) if token_limit is None else token_limit
-        valid_num_tokens = align_to_block_size(
-            min(len(token_ids), token_limit, start_token + max_tokens_from_blocks),
-            block_size,
-        )
-        token_ids_tensor = torch.as_tensor(token_ids, dtype=torch.long)[:valid_num_tokens]
+        valid_num_tokens = align_to_block_size(token_limit, block_size)
         block_ids_tensor = torch.as_tensor(block_ids, dtype=torch.long)
-        num_blocks = block_ids_tensor.shape[0]
-        block_offsets = torch.arange(0, block_size, dtype=torch.long)
-        slot_mapping = (
-            block_offsets.reshape((1, block_size))
-            + block_ids_tensor.reshape((num_blocks, 1)) * block_size
-        )
         start_block = start_token // block_size
         num_request_blocks = max(valid_num_tokens // block_size - start_block, 0)
-        slot_mapping = slot_mapping.flatten()[: num_request_blocks * block_size]
         return ReqMeta(
-            token_ids=token_ids_tensor,
-            block_ids=block_ids_tensor,
-            slot_mapping=slot_mapping,
+            block_ids=block_ids_tensor[start_block : start_block + num_request_blocks],
+            block_hashes=block_hashes[start_block : start_block + num_request_blocks],
             is_store=is_store,
-            mm_hashes=mm_hashes,
-            start_block=start_block,
         )
 
 
@@ -214,12 +189,10 @@ class _PendingLoadRequest:
 @dataclass
 class _PendingLoadBlock:
     # Worker-side runtime state after `start_load_kv()` has submitted a load.
-    # Unlike `_PreparedBlockPlan`, this already has a runtime request id and the
-    # byte layout needed to scatter the completed payload back into tensors.
+    # Unlike `_PreparedBlockPlan`, this already has a runtime request id.
     block_key: str
     block_id: int
     payload_bytes: int
-    layer_slices: dict[str, tuple[int, int]]
     request_id: int
 
 
@@ -233,12 +206,11 @@ class _PreparedBlockPlan:
 
 @dataclass
 class _BlockRuntimePayload:
-    # Full runtime description of one block transfer. `layer_slices` records how
-    # the concatenated block payload is laid out inside the shared host buffer.
+    # Full runtime description of one block transfer.
     block_key: str
     block_id: int
     payload_bytes: int
-    layer_slices: dict[str, tuple[int, int]]
+    buffer_view: torch.Tensor | None = None
     request_id: int = 0
     buffer_offset: int = 0
 
@@ -256,28 +228,26 @@ class EloqStoreConnectorMetadata(KVConnectorMetadata):
 
     def add_request(
         self,
-        token_ids: list[int],
         block_ids: list[int],
+        block_hashes: list[bytes],
         block_size: int,
         is_store: bool,
-        mm_hashes: list[str],
         start_token: int = 0,
-        token_limit: int | None = None,
+        token_limit: int = 0,
     ) -> None:
         self.requests.append(
             ReqMeta.make_meta(
-                token_ids,
                 block_ids,
+                block_hashes,
                 block_size,
                 is_store,
-                mm_hashes,
                 start_token,
                 token_limit,
             )
         )
 
 
-class EloqStoreConnector(KVConnectorBase_V1):
+class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
     """vLLM KV connector backed by EloqStore.
 
     There are two distinct roles with different responsibilities:
@@ -315,6 +285,9 @@ class EloqStoreConnector(KVConnectorBase_V1):
         self._table_name = self._resolve_table_name()
         self._layer_order = self._resolve_layer_order()
         self._block_payload_bytes = self._resolve_block_payload_bytes()
+        self._registered_block_views: dict[str, torch.Tensor] = {}
+        self._layer_block_offsets: dict[str, tuple[int, int]] = {}
+        self._ordered_block_views: list[tuple[int, int, torch.Tensor]] = []
         # Worker-side view of live KV cache tensors, normalized into layer-major
         # form so all later save/load helpers can treat every layer uniformly.
         self._registered_kv_caches: dict[str, torch.Tensor] = {}
@@ -414,13 +387,25 @@ class EloqStoreConnector(KVConnectorBase_V1):
         self._prepared_save_blocks.clear()
 
     def register_kv_caches(self, kv_caches: dict[str, torch.Tensor]):
-        # Preserve model layer order so payload layout is deterministic across
-        # save and load, even if the caller provides a plain dict.
+        # Preserve model layer order and build per-layer raw block views so the
+        # data plane can operate in block-sized units without relying on vLLM to
+        # provide a dedicated cross-layer cache tensor.
         self._registered_kv_caches = {
             layer_name: kv_caches[layer_name]
             for layer_name in self._layer_order
             if layer_name in kv_caches
         }
+        self._registered_block_views.clear()
+        self._layer_block_offsets.clear()
+        self._ordered_block_views.clear()
+        offset = 0
+        for layer_name, kv_layer in self._registered_kv_caches.items():
+            block_view = self._build_layer_block_view(kv_layer)
+            layer_bytes = block_view.shape[1]
+            self._registered_block_views[layer_name] = block_view
+            self._layer_block_offsets[layer_name] = (offset, layer_bytes)
+            self._ordered_block_views.append((offset, layer_bytes, block_view))
+            offset += layer_bytes
         self._ensure_worker_runtime_attached()
 
     def register_cross_layers_kv_cache(
@@ -442,6 +427,17 @@ class EloqStoreConnector(KVConnectorBase_V1):
             layer_name: layer_major_kv_cache[layer_idx]
             for layer_idx, layer_name in enumerate(self._layer_order)
         }
+        self._registered_block_views.clear()
+        self._layer_block_offsets.clear()
+        self._ordered_block_views.clear()
+        offset = 0
+        for layer_name, kv_layer in self._registered_kv_caches.items():
+            block_view = self._build_layer_block_view(kv_layer)
+            layer_bytes = block_view.shape[1]
+            self._registered_block_views[layer_name] = block_view
+            self._layer_block_offsets[layer_name] = (offset, layer_bytes)
+            self._ordered_block_views.append((offset, layer_bytes, block_view))
+            offset += layer_bytes
         self._ensure_worker_runtime_attached()
 
     def start_load_kv(self, forward_context: "ForwardContext", **kwargs: Any) -> None:
@@ -483,7 +479,6 @@ class EloqStoreConnector(KVConnectorBase_V1):
                     block_key=payload.block_key,
                     block_id=payload.block_id,
                     payload_bytes=payload.payload_bytes,
-                    layer_slices=dict(payload.layer_slices),
                     request_id=request_id,
                 )
             )
@@ -507,16 +502,22 @@ class EloqStoreConnector(KVConnectorBase_V1):
         attn_metadata: Any,
         **kwargs: Any,
     ) -> None:
-        del attn_metadata, kwargs
+        del layer_name, kv_layer, attn_metadata, kwargs
         if self._role != KVConnectorRole.WORKER:
             raise RuntimeError("save_kv_layer is worker-only for EloqStoreConnector")
         metadata = self._get_connector_metadata() if self.has_connector_metadata() else None
         if not isinstance(metadata, EloqStoreConnectorMetadata):
             return
         self._ensure_worker_runtime_attached()
-        # Save is staged block-by-block across repeated layer callbacks. The
-        # first layer that touches a block allocates the shared-buffer region and
-        # submits the async save request; later layers only fill their slice.
+        # Save is now block-batched instead of layer-batched. The layer hook is
+        # intentionally a no-op hot path; all bytes are gathered once in
+        # `wait_for_save()` from the registered KV cache tensors.
+        return
+
+    def wait_for_save(self):
+        if self._role != KVConnectorRole.WORKER:
+            raise RuntimeError("wait_for_save is worker-only for EloqStoreConnector")
+        self._ensure_worker_runtime_attached()
         for block_plan in self._prepared_save_blocks:
             payload = self._pending_save_blocks.get(block_plan.block_key)
             if payload is None:
@@ -530,20 +531,11 @@ class EloqStoreConnector(KVConnectorBase_V1):
                 )
                 payload.request_id = buffer_handle.request_id
                 payload.buffer_offset = buffer_handle.offset
+                self._bind_payload_buffer_view(payload)
                 self._pending_save_blocks[block_plan.block_key] = payload
-            if layer_name not in payload.layer_slices:
-                continue
-            self._copy_layer_into_shared_buffer(
-                payload,
-                layer_name,
-                kv_layer,
-                block_plan.block_id,
-            )
 
-    def wait_for_save(self):
-        if self._role != KVConnectorRole.WORKER:
-            raise RuntimeError("wait_for_save is worker-only for EloqStoreConnector")
-        self._ensure_worker_runtime_attached()
+            self._copy_block_into_shared_buffer(payload, block_plan.block_id)
+
         pending_saves: dict[int, _BlockRuntimePayload] = {}
         for payload in self._pending_save_blocks.values():
             # `finish_save` tells the runtime that all bytes for this block have
@@ -592,8 +584,8 @@ class EloqStoreConnector(KVConnectorBase_V1):
         # boundary between scheduler reasoning and worker execution.
         for request in connector_metadata.requests:
             target = self._prepared_save_blocks if request.is_store else self._prepared_load_blocks
-            for block_id, block_end, block_token_ids, _ in self._iter_request_blocks(request):
-                block_key = self._block_key(block_token_ids, request.mm_hashes, block_end)
+            for block_id, block_hash in self._iter_request_blocks(request):
+                block_key = self._block_key(block_hash)
                 target.append(
                     _PreparedBlockPlan(
                         block_key=block_key,
@@ -663,8 +655,8 @@ class EloqStoreConnector(KVConnectorBase_V1):
         self._kv_cache_worker.finish_save(request_id)
 
     def _wait_for_pending_loads(self) -> None:
-        # Wait for every submitted block as one batch, then scatter the bytes
-        # back into the registered layer tensors using the recorded layout.
+        # Wait for every submitted block as one batch, then restore each full
+        # block payload back into the registered cross-layer KV cache view.
         pending = {block.request_id: block for block in self._pending_load_blocks}
         if self._kv_cache_worker is None:
             raise RuntimeError("kv cache worker runtime is not available for load wait")
@@ -684,7 +676,6 @@ class EloqStoreConnector(KVConnectorBase_V1):
                 block_id=block.block_id,
                 buffer_offset=result.offset,
                 payload_bytes=result.length,
-                layer_slices=block.layer_slices,
             )
             self._stats.record_load(1, result.length)
         self._pending_load_blocks.clear()
@@ -718,128 +709,101 @@ class EloqStoreConnector(KVConnectorBase_V1):
         # bytes; tensor shapes are restored later from the registered KV cache.
         return self._kv_cache_worker.shared_buffer().slice(buffer_offset, payload_bytes)
 
-    def _extract_block_tensor(self, kv_layer: torch.Tensor, block_id: int) -> torch.Tensor:
-        # vLLM KV tensors may be laid out either as [2, num_blocks, ...] for
-        # separate K/V heads or [num_blocks, ...] for already packed tensors.
-        if kv_layer.shape[0] == 2:
-            return kv_layer[:, block_id, ...]
-        return kv_layer[block_id, ...]
+    def _buffer_slice_tensor(self, buffer_offset: int, payload_bytes: int) -> torch.Tensor:
+        # Expose one shared-buffer slice as a CPU uint8 tensor without creating
+        # an intermediate Python bytes object. The underlying buffer is the
+        # shared pinned host region owned by the runtime.
+        self._ensure_worker_runtime_attached()
+        if self._kv_cache_worker is None:
+            raise RuntimeError("worker shared buffer is not attached")
+        return self._kv_cache_worker.shared_buffer().slice_tensor(buffer_offset, payload_bytes)
 
-    def _layer_payload_bytes(self, layer_name: str, block_id: int) -> int:
-        # Payload size is derived from the live registered tensor instead of any
-        # external schema so the connector follows the active backend layout.
-        kv_layer = self._registered_kv_caches.get(layer_name)
-        if kv_layer is None:
-            raise RuntimeError(f"registered kv cache missing layer {layer_name}")
-        block_tensor = self._extract_block_tensor(kv_layer, block_id)
-        return int(block_tensor.numel() * block_tensor.element_size())
+    def _bind_payload_buffer_view(self, payload: _BlockRuntimePayload) -> None:
+        payload.buffer_view = self._buffer_slice_tensor(
+            payload.buffer_offset,
+            payload.payload_bytes,
+        )
+
+    def _build_layer_block_view(self, kv_layer: torch.Tensor) -> torch.Tensor:
+        # Normalize one registered KV tensor into a raw `(num_blocks,
+        # page_size_bytes)` uint8 view. This matches how vLLM's CPU offloading
+        # implementations flatten backend-specific layouts into block-sized raw
+        # byte rows.
+        block_tensor = kv_layer.detach()
+        if block_tensor.shape[0] == 2:
+            block_tensor = block_tensor.permute(1, 0, *range(2, block_tensor.ndim)).contiguous()
+        else:
+            block_tensor = block_tensor.contiguous()
+        num_blocks = block_tensor.shape[0]
+        return block_tensor.view(num_blocks, -1).view(torch.uint8)
 
     def _build_block_layout(
         self,
         block_key: str,
         block_id: int,
-    ) -> tuple[int, dict[str, tuple[int, int]]]:
-        del block_key
-        # Concatenate all participating layers into one flat payload. The return
-        # value is both the total payload length and the byte range for each
-        # individual layer inside that flat region.
-        layer_slices: dict[str, tuple[int, int]] = {}
-        offset = 0
-        for layer_name in self._layer_order:
-            if layer_name not in self._registered_kv_caches:
-                continue
-            payload_bytes = self._layer_payload_bytes(layer_name, block_id)
-            layer_slices[layer_name] = (offset, payload_bytes)
-            offset += payload_bytes
-        return offset, layer_slices
+    ) -> int:
+        del block_key, block_id
+        return self._block_payload_bytes
 
     def _build_block_runtime_payload(
         self,
         block_key: str,
         block_id: int,
     ) -> _BlockRuntimePayload:
-        # Attach the storage key to the computed byte layout so later calls can
-        # submit, fill, or scatter the block without recomputing structure.
-        payload_bytes, layer_slices = self._build_block_layout(block_key, block_id)
+        # One runtime payload now always corresponds to one full block-sized
+        # shared-memory slot.
+        payload_bytes = self._build_block_layout(block_key, block_id)
         return _BlockRuntimePayload(
             block_key=block_key,
             block_id=block_id,
             payload_bytes=payload_bytes,
-            layer_slices=layer_slices,
         )
 
-    def _copy_layer_into_shared_buffer(
+    def _copy_block_into_shared_buffer(
         self,
         payload: _BlockRuntimePayload,
-        layer_name: str,
-        kv_layer: torch.Tensor,
         block_id: int,
     ) -> None:
-        # Save path: materialize one layer's block on CPU, then append its raw
-        # bytes into the pre-assigned slice of the shared host buffer.
-        offset, payload_bytes = payload.layer_slices[layer_name]
-        block_tensor = self._extract_block_tensor(kv_layer, block_id).detach().contiguous()
-        cpu_tensor = block_tensor.to("cpu")
-        src = cpu_tensor.view(torch.uint8).numpy().reshape(-1)
-        dst = np.frombuffer(
-            self._buffer_slice(
-                payload.buffer_offset + offset,
-                payload_bytes,
-            ),
-            dtype=np.uint8,
-            count=payload_bytes,
-        )
-        np.copyto(dst, src, casting="no")
+        assert payload.buffer_view is not None
+        for offset, layer_bytes, block_view in self._ordered_block_views:
+            payload.buffer_view.narrow(0, offset, layer_bytes).copy_(block_view[block_id])
 
     def _copy_buffer_into_block(
         self,
         block_id: int,
         buffer_offset: int,
         payload_bytes: int,
-        layer_slices: dict[str, tuple[int, int]],
     ) -> None:
-        # The layout was computed once when the request was submitted. Reuse it
-        # directly here instead of rebuilding block offsets during completion.
-        for layer_name, (offset, layer_bytes) in layer_slices.items():
-            kv_layer = self._registered_kv_caches.get(layer_name)
-            if kv_layer is None:
-                continue
-            block_tensor = self._extract_block_tensor(kv_layer, block_id)
-            cpu_tensor = torch.frombuffer(
-                self._buffer_slice(buffer_offset, payload_bytes)[offset : offset + layer_bytes],
-                dtype=torch.uint8,
-                count=layer_bytes,
-            ).view(block_tensor.dtype).reshape(tuple(block_tensor.shape))
-            block_tensor.copy_(cpu_tensor.to(device=block_tensor.device, dtype=block_tensor.dtype))
+        # Restore one full block payload back into the registered per-layer raw
+        # block views.
+        payload_tensor = self._buffer_slice_tensor(buffer_offset, payload_bytes)
+        for offset, layer_bytes, block_view in self._ordered_block_views:
+            block_view[block_id].copy_(payload_tensor.narrow(0, offset, layer_bytes))
 
     def _get_num_matched_tokens_for_request(self, request: "Request") -> int:
-        # Scheduler helper that extracts the request fields relevant to cache key
-        # generation and delegates to the prompt-oriented matcher.
         return self._get_num_matched_tokens_for_prompt(
-            list(request.prompt_token_ids or []),
-            [f.identifier for f in request.mm_features],
+            request.num_prompt_tokens,
+            list(request.block_hashes),
         )
 
     def _get_num_matched_tokens_for_prompt(
         self,
-        prompt_token_ids: list[int],
-        mm_hashes: list[str],
+        prompt_num_tokens: int,
+        block_hashes: list[bytes],
     ) -> int:
         # Prefix matching is conservative: probe storage one full block at a
         # time and stop on the first miss so only the longest contiguous prefix
         # is considered externally reusable.
-        max_probe_tokens = max(len(prompt_token_ids) - 1, 0)
+        max_probe_tokens = max(prompt_num_tokens - 1, 0)
         aligned_probe_tokens = align_to_block_size(max_probe_tokens, self._block_size)
         matched_tokens = 0
         hit_blocks = 0
         miss_blocks = 0
         probe_keys: list[tuple[int, str]] = []
-        for token_end in range(self._block_size, aligned_probe_tokens + 1, self._block_size):
-            block_token_ids = torch.as_tensor(
-                prompt_token_ids[token_end - self._block_size : token_end],
-                dtype=torch.long,
-            )
-            probe_keys.append((token_end, self._block_key(block_token_ids, mm_hashes, token_end)))
+        num_probe_blocks = min(aligned_probe_tokens // self._block_size, len(block_hashes))
+        for block_index in range(num_probe_blocks):
+            token_end = (block_index + 1) * self._block_size
+            probe_keys.append((token_end, self._block_key(block_hashes[block_index])))
         existence = self._kv_cache_manager.contains_keys([key for _, key in probe_keys])
         for (token_end, _), exists in zip(probe_keys, existence, strict=False):
             if not exists:
@@ -848,13 +812,13 @@ class EloqStoreConnector(KVConnectorBase_V1):
             hit_blocks += 1
             matched_tokens = token_end
         self._stats.record_match_query(
-            query_tokens=len(prompt_token_ids),
+            query_tokens=prompt_num_tokens,
             aligned_tokens=aligned_probe_tokens,
             hit_tokens=matched_tokens,
             hit_blocks=hit_blocks,
             miss_blocks=miss_blocks,
-            reserved_tail_tokens=1 if prompt_token_ids else 0,
-            unaligned_tail_tokens=max(len(prompt_token_ids) - 1 - aligned_probe_tokens, 0),
+            reserved_tail_tokens=1 if prompt_num_tokens else 0,
+            unaligned_tail_tokens=max(prompt_num_tokens - 1 - aligned_probe_tokens, 0),
         )
         return matched_tokens
 
@@ -930,27 +894,29 @@ class EloqStoreConnector(KVConnectorBase_V1):
             pending_load = self._requests_need_load.get(new_req.req_id)
             token_limit = min(new_req.num_computed_tokens + num_new_tokens, len(token_ids))
             if pending_load is not None:
+                request = pending_load.request
                 # The worker will load only the externally reusable prefix,
                 # capped by the number of tokens actually scheduled this step.
                 token_limit = min(token_limit, pending_load.num_external_tokens)
                 meta.add_request(
-                    token_ids=token_ids,
                     block_ids=new_req.block_ids[0],
+                    block_hashes=list(request.block_hashes),
                     block_size=self._block_size,
                     is_store=False,
-                    mm_hashes=mm_hashes,
                     start_token=0,
                     token_limit=token_limit,
                 )
             elif token_limit > new_req.num_computed_tokens:
+                request = self._requests_need_store.get(new_req.req_id)
+                if request is None:
+                    continue
                 # No external load for this request, so publish any full blocks
                 # that became complete during this scheduling step.
                 meta.add_request(
-                    token_ids=token_ids,
                     block_ids=new_req.block_ids[0],
+                    block_hashes=list(request.block_hashes),
                     block_size=self._block_size,
                     is_store=True,
-                    mm_hashes=mm_hashes,
                     start_token=new_req.num_computed_tokens,
                     token_limit=token_limit,
                 )
@@ -971,11 +937,10 @@ class EloqStoreConnector(KVConnectorBase_V1):
                 # new full block. Emit an empty store request so the next step can
                 # continue from the updated start token without persisting bytes.
                 meta.add_request(
-                    token_ids=request.all_token_ids[:num_computed_tokens],
                     block_ids=[],
+                    block_hashes=[],
                     block_size=self._block_size,
                     is_store=True,
-                    mm_hashes=[f.identifier for f in request.mm_features],
                     start_token=num_computed_tokens,
                     token_limit=num_computed_tokens,
                 )
@@ -985,16 +950,30 @@ class EloqStoreConnector(KVConnectorBase_V1):
                 request.num_prompt_tokens,
             )
             meta.add_request(
-                token_ids=request.all_token_ids[:total_tokens],
                 block_ids=new_block_ids[0],
+                block_hashes=list(request.block_hashes),
                 block_size=self._block_size,
                 is_store=True,
-                mm_hashes=[f.identifier for f in request.mm_features],
                 start_token=num_computed_tokens,
                 token_limit=total_tokens,
             )
         self._requests_need_load.clear()
         return meta
+
+    def request_finished(
+        self,
+        request: "Request",
+        block_ids: list[int],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        return self.request_finished_all_groups(request, (block_ids,))
+
+    def request_finished_all_groups(
+        self,
+        request: "Request",
+        block_ids: tuple[list[int], ...],
+    ) -> tuple[bool, dict[str, Any] | None]:
+        del request, block_ids
+        return False, None
 
     def _build_runtime_options(self) -> Any:
         # The public connector config is intentionally small. Everything else is
@@ -1090,44 +1069,25 @@ class EloqStoreConnector(KVConnectorBase_V1):
             raise RuntimeError("derived block payload bytes must be greater than zero")
         return total_bytes
 
-    def _block_key(
-        self,
-        block_token_ids: torch.Tensor,
-        mm_hashes: list[str],
-        block_end: int,
-    ) -> str:
-        # Key by full block contents plus multimodal feature identities and the
-        # logical block end position. Including `block_end` distinguishes equal
-        # token chunks that appear at different prefix depths.
-        digest = hashlib.sha256()
-        digest.update(block_token_ids.cpu().numpy().tobytes())
-        for mm_hash in mm_hashes:
-            digest.update(mm_hash.encode("utf-8"))
-        prefix_hash = safe_hash(digest.digest(), usedforsecurity=False).hexdigest()
-        return f"kv:{_SCHEMA_VERSION}:{prefix_hash}:{block_end}"
+    def _block_key(self, block_hash: bytes) -> str:
+        # Reuse vLLM's own block hash as the sole block identity. This matches
+        # the other block-hash-based KV cache implementations in vLLM and avoids
+        # mixing in a second token/end-position-based key namespace.
+        prefix_hash = safe_hash(block_hash, usedforsecurity=False).hexdigest()
+        return f"kv:{_SCHEMA_VERSION}:{prefix_hash}"
 
     def _iter_request_blocks(
         self, request: ReqMeta
-    ) -> list[tuple[int, int, torch.Tensor, torch.Tensor]]:
-        # Flatten one request into block-sized units in the same order vLLM will
-        # expect them in local KV cache. The returned slot mapping slice is kept
-        # for parity with the base connector contract even though this adapter
-        # currently only needs block id and token chunk information.
-        blocks: list[tuple[int, int, torch.Tensor, torch.Tensor]] = []
-        if request.token_ids.numel() == 0 or request.slot_mapping.numel() == 0:
+    ) -> list[tuple[int, bytes]]:
+        blocks: list[tuple[int, bytes]] = []
+        if request.block_ids.numel() == 0:
             return blocks
-        block_count = request.slot_mapping.numel() // self._block_size
+        block_count = min(request.block_ids.numel(), len(request.block_hashes))
         for local_index in range(block_count):
-            token_start = (request.start_block + local_index) * self._block_size
-            token_end = token_start + self._block_size
-            slot_start = local_index * self._block_size
-            slot_end = slot_start + self._block_size
             blocks.append(
                 (
                     int(request.block_ids[local_index]),
-                    token_end,
-                    request.token_ids[token_start:token_end],
-                    request.slot_mapping[slot_start:slot_end],
+                    request.block_hashes[local_index],
                 )
             )
         return blocks
