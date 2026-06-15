@@ -7,8 +7,6 @@
 
 [![License: BSL 2.0](https://img.shields.io/badge/License-BSL_2.0-blue.svg)](https://github.com/eloqdata/eloqstore/blob/main/LICENSE.md) [![License: AGPL v3](https://img.shields.io/badge/License-AGPL_v3-green.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![Language](https://img.shields.io/badge/language-C++-orange)](https://isocpp.org/)
-[![PyPI](https://img.shields.io/pypi/v/eloqstore)](https://pypi.org/project/eloqstore/)
-[![Crates.io](https://img.shields.io/crates/v/eloqstore)](https://crates.io/crates/eloqstore)
 [![GitHub issues](https://img.shields.io/github/issues/eloqdata/eloqstore)](https://github.com/eloqdata/eloqstore/issues)
 [![Release](https://img.shields.io/badge/release-latest-blue)](https://www.eloqdata.com/download)
 <a href="https://discord.com/invite/nmYjBkfak6">
@@ -142,6 +140,20 @@ client.close()
 
 See [python/examples/](python/examples/) for more usage examples.
 
+### vLLM KV Cache Connector
+
+EloqStore also provides an external vLLM KV cache connector module:
+
+```text
+eloqstore.vllm_connector
+```
+
+The current connector documentation is intentionally limited to two canonical
+documents:
+
+- design: [docs/design/vllm_kvcache.md](docs/design/vllm_kvcache.md)
+- install and local usage: [docs/vllm_eloqstore_connector_local_install.md](docs/vllm_eloqstore_connector_local_install.md)
+
 ### Rust SDK
 
 Add to your `Cargo.toml`:
@@ -202,6 +214,15 @@ ctest --test-dir build/tests/
 # run
 ./build/benchmark/simple_bench --kvoptions=./benchmark/opts_append.ini --workload=write-read --kv_size=1024 --batch_size=20000 --max_key=10000000 --read_per_part=4 --partitions=1
 ```
+
+### Install git hooks
+
+```shell
+git config core.hooksPath .githooks
+```
+
+The pre-commit hook auto-syncs `pyproject.toml` / `Cargo.toml` versions from `VERSION`.
+Run once after cloning. Bypass with `git commit --no-verify`.
 
 ### Install Format Tool
 

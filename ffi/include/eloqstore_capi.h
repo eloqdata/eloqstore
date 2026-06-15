@@ -41,6 +41,19 @@ extern "C"
     typedef void *CTableIdentHandle;
     typedef void *CScanRequestHandle;
     typedef void *CBatchWriteHandle;
+    typedef void *CGlobalRegisteredMemoryHandle;
+    typedef void *CIoStringBufferHandle;
+    typedef void *CAsyncHandle;
+    typedef void *CKVCacheOptionsHandle;
+    typedef void *CKVCacheManagerHandle;
+    typedef void *CKVCacheWorkerHandle;
+
+    typedef enum CValueKind
+    {
+        CValueKind_NotFound = 0,
+        CValueKind_Small = 1,
+        CValueKind_Large = 2,
+    } CValueKind;
 
     // ============================================================
     // Write operation enum
@@ -89,6 +102,87 @@ extern "C"
         bool found;
         bool owns_value;
     } CGetResult;
+
+    typedef struct CLargeValueResult
+    {
+        CIoStringBufferHandle value;
+        size_t value_len;
+        uint64_t timestamp;
+        uint64_t expire_ts;
+        bool found;
+        CValueKind kind;
+    } CLargeValueResult;
+
+    typedef struct CPinnedLargeResult
+    {
+        const uint8_t *metadata;
+        size_t metadata_len;
+        uint64_t timestamp;
+        uint64_t expire_ts;
+        bool found;
+        bool owns_metadata;
+    } CPinnedLargeResult;
+
+    typedef struct CIoStringFragment
+    {
+        uint8_t *data;
+        size_t len;
+        uint16_t buf_index;
+        uint32_t chunk_index;
+        size_t offset;
+    } CIoStringFragment;
+
+    typedef struct CMemoryChunk
+    {
+        uint8_t *data;
+        size_t len;
+    } CMemoryChunk;
+
+    typedef enum CKVCacheRequestStatus
+    {
+        CKVCacheRequestStatus_Pending = 1,
+        CKVCacheRequestStatus_Ready = 2,
+        CKVCacheRequestStatus_Failed = 3,
+    } CKVCacheRequestStatus;
+
+    typedef struct CKVCacheBufferHandle
+    {
+        uint64_t request_id;
+        uint64_t offset_bytes;
+        uint32_t payload_bytes;
+    } CKVCacheBufferHandle;
+
+    typedef struct CKVCacheRequestState
+    {
+        uint64_t request_id;
+        uint8_t status;
+        uint64_t offset_bytes;
+        uint32_t payload_bytes;
+    } CKVCacheRequestState;
+
+    typedef struct CKVCacheRuntimeMetrics
+    {
+        uint64_t flush_batches_submitted;
+        uint64_t flush_batches_completed;
+        uint64_t flush_batches_failed;
+        uint64_t flush_entries_submitted;
+        uint64_t flush_entries_completed;
+        uint64_t flush_entries_failed;
+        uint64_t flush_batch_latency_ns_total;
+        uint64_t contains_memory_hits;
+        uint64_t contains_store_hits;
+        uint64_t contains_store_misses;
+        uint64_t contains_store_errors;
+        uint64_t contains_store_lookup_ns_total;
+        uint64_t load_memory_hits;
+        uint64_t load_store_hits;
+        uint64_t load_store_errors;
+        uint64_t load_store_bytes;
+        uint64_t load_store_latency_ns_total;
+        uint64_t dirty_entries_current;
+        uint64_t flush_queue_entries_current;
+        uint64_t flush_inflight_entries_current;
+    } CKVCacheRuntimeMetrics;
 
     // Floor operation result
     typedef struct CFloorResult
@@ -144,7 +238,24 @@ extern "C"
     void CEloqStore_Options_SetDataAppendMode(CEloqStoreHandle opts,
                                               bool enable);
     void CEloqStore_Options_SetEnableCompression(CEloqStoreHandle opts,
-                                                 bool enable);
+                                                  bool enable);
+    void CEloqStore_Options_SetSegmentSize(CEloqStoreHandle opts,
+                                           uint32_t size);
+    void CEloqStore_Options_SetRegisteredMemoryChunkSize(CEloqStoreHandle opts,
+                                                         uint64_t size);
+    void CEloqStore_Options_SetSegmentsPerFileShift(CEloqStoreHandle opts,
+                                                     uint8_t shift);
+    void CEloqStore_Options_SetGlobalRegisteredMemory(
+        CEloqStoreHandle opts,
+        uint32_t shard_id,
+        CGlobalRegisteredMemoryHandle mem);
+    void CEloqStore_Options_AddPinnedMemoryChunk(CEloqStoreHandle opts,
+                                                  const char *data,
+                                                  size_t size);
+    void CEloqStore_Options_SetGcGlobalMemSizePerShard(CEloqStoreHandle opts,
+                                                        uint64_t size);
+    void CEloqStore_Options_SetPinnedTailScratchSlots(CEloqStoreHandle opts,
+                                                       uint16_t slots);
 
     void CEloqStore_Options_AddStorePath(CEloqStoreHandle opts,
                                          const char *path);
@@ -167,6 +278,131 @@ extern "C"
     bool CEloqStore_Options_Validate(CEloqStoreHandle opts);
 
     // ============================================================
+    // SDK runtime API
+    // ============================================================
+
+    CKVCacheOptionsHandle CEloqStore_KVCacheOptions_Create(void);
+    void CEloqStore_KVCacheOptions_Destroy(CKVCacheOptionsHandle opts);
+    void CEloqStore_KVCacheOptions_AddStorePath(CKVCacheOptionsHandle opts,
+                                                const char *path);
+    void CEloqStore_KVCacheOptions_SetTableName(CKVCacheOptionsHandle opts,
+                                                const char *table_name);
+    void CEloqStore_KVCacheOptions_SetBranch(CKVCacheOptionsHandle opts,
+                                             const char *branch);
+    void CEloqStore_KVCacheOptions_SetIpcPath(CKVCacheOptionsHandle opts,
+                                              const char *ipc_path);
+    void CEloqStore_KVCacheOptions_SetSharedMemoryName(
+        CKVCacheOptionsHandle opts,
+        const char *name);
+    void CEloqStore_KVCacheOptions_SetNumThreads(CKVCacheOptionsHandle opts,
+                                                 uint16_t n);
+    void CEloqStore_KVCacheOptions_SetPartitionCount(CKVCacheOptionsHandle opts,
+                                                     uint32_t n);
+    void CEloqStore_KVCacheOptions_SetTerm(CKVCacheOptionsHandle opts,
+                                           uint64_t term);
+    void CEloqStore_KVCacheOptions_SetPartitionGroupId(
+        CKVCacheOptionsHandle opts,
+        uint32_t partition_group_id);
+    void CEloqStore_KVCacheOptions_SetSharedMemoryBytes(
+        CKVCacheOptionsHandle opts,
+        uint64_t bytes);
+    void CEloqStore_KVCacheOptions_SetEntrySize(CKVCacheOptionsHandle opts,
+                                                uint32_t entry_size);
+    void CEloqStore_KVCacheOptions_SetEntryCount(CKVCacheOptionsHandle opts,
+                                                 uint32_t entry_count);
+    void CEloqStore_KVCacheOptions_SetEntryAlignment(CKVCacheOptionsHandle opts,
+                                                     uint32_t entry_alignment);
+    void CEloqStore_KVCacheOptions_SetSubmissionQueueDepth(
+        CKVCacheOptionsHandle opts,
+        uint32_t depth);
+    void CEloqStore_KVCacheOptions_SetEagerIoUringRegister(
+        CKVCacheOptionsHandle opts,
+        bool enable);
+
+    // Create one engine-core-side KV cache manager runtime from native options.
+    CKVCacheManagerHandle CEloqStore_KVCacheManager_Create(
+        CKVCacheOptionsHandle opts);
+    // Destroy a manager runtime previously created by the C API.
+    void CEloqStore_KVCacheManager_Destroy(CKVCacheManagerHandle runtime);
+    // Start the manager runtime: allocate shared memory, initialize groups, and
+    // bring up the optional IPC listener.
+    bool CEloqStore_KVCacheManager_Start(CKVCacheManagerHandle runtime);
+    // Stop the manager runtime and release its resources.
+    void CEloqStore_KVCacheManager_Stop(CKVCacheManagerHandle runtime);
+    // Register the manager-owned shared-memory region with native I/O paths.
+    bool CEloqStore_KVCacheManager_RegisterIoUringBuffers(
+        CKVCacheManagerHandle runtime);
+    // Export the manager-owned buffer pool as a descriptor string for workers.
+    const char *CEloqStore_KVCacheManager_ExportBufferPool(
+        CKVCacheManagerHandle runtime);
+    // Begin one asynchronous save and return a writable shared-buffer slice.
+    bool CEloqStore_KVCacheManager_BeginSave(CKVCacheManagerHandle runtime,
+                                             const char *key,
+                                             uint32_t payload_bytes,
+                                             CKVCacheBufferHandle *out_buffer);
+    // Finish one previously started save after the worker has filled the buffer.
+    bool CEloqStore_KVCacheManager_FinishSave(CKVCacheManagerHandle runtime,
+                                              uint64_t request_id);
+    // Begin one asynchronous load and return its request id.
+    bool CEloqStore_KVCacheManager_BeginLoad(CKVCacheManagerHandle runtime,
+                                             const char *key,
+                                             uint32_t payload_bytes,
+                                             uint64_t *out_request_id);
+    // Query one request state directly.
+    bool CEloqStore_KVCacheManager_CheckRequest(CKVCacheManagerHandle runtime,
+                                                uint64_t request_id,
+                                                CKVCacheRequestState *out_state);
+    // Return the ready shared-buffer slice for one completed request.
+    bool CEloqStore_KVCacheManager_GetReadyBuffer(CKVCacheManagerHandle runtime,
+                                                  uint64_t request_id,
+                                                  CKVCacheBufferHandle *out_buffer);
+    // Probe whether one key exists through the manager runtime.
+    bool CEloqStore_KVCacheManager_ContainsKey(CKVCacheManagerHandle runtime,
+                                               const char *key,
+                                               bool *out_exists);
+    bool CEloqStore_KVCacheManager_GetMetrics(CKVCacheManagerHandle runtime,
+                                              CKVCacheRuntimeMetrics *out_metrics);
+
+    // Create one worker-side KV cache control-plane stub from native options.
+    CKVCacheWorkerHandle CEloqStore_KVCacheWorker_Create(CKVCacheOptionsHandle opts);
+    // Destroy a worker runtime previously created by the C API.
+    void CEloqStore_KVCacheWorker_Destroy(CKVCacheWorkerHandle runtime);
+    // Load one manager-exported buffer-pool descriptor into the worker stub.
+    bool CEloqStore_KVCacheWorker_AttachBufferPool(CKVCacheWorkerHandle runtime,
+                                                   const char *descriptor);
+    // Drop the currently attached descriptor from the worker stub.
+    void CEloqStore_KVCacheWorker_DetachBufferPool(CKVCacheWorkerHandle runtime);
+    // Begin one asynchronous save and return a writable shared-buffer slice.
+    bool CEloqStore_KVCacheWorker_BeginSave(CKVCacheWorkerHandle runtime,
+                                            const char *key,
+                                            uint32_t payload_bytes,
+                                            CKVCacheBufferHandle *out_buffer);
+    // Finish one previously started save after the worker has filled the buffer.
+    bool CEloqStore_KVCacheWorker_FinishSave(CKVCacheWorkerHandle runtime,
+                                             uint64_t request_id);
+    // Begin one asynchronous load and return its request id.
+    bool CEloqStore_KVCacheWorker_BeginLoad(CKVCacheWorkerHandle runtime,
+                                            const char *key,
+                                            uint32_t payload_bytes,
+                                            uint64_t *out_request_id);
+    // Query one request state directly.
+    bool CEloqStore_KVCacheWorker_CheckRequest(CKVCacheWorkerHandle runtime,
+                                               uint64_t request_id,
+                                               CKVCacheRequestState *out_state);
+    // Wait for a batch of requests and return their states in order.
+    bool CEloqStore_KVCacheWorker_WaitRequests(CKVCacheWorkerHandle runtime,
+                                               const uint64_t *request_ids,
+                                               size_t request_count,
+                                               double timeout_sec,
+                                               CKVCacheRequestState *out_states);
+    // Return the ready shared-buffer slice for one completed request.
+    bool CEloqStore_KVCacheWorker_GetReadyBuffer(CKVCacheWorkerHandle runtime,
+                                                 uint64_t request_id,
+                                                 CKVCacheBufferHandle *out_buffer);
+    // Free C strings returned by APIs such as ExportBufferPool.
+    void CEloqStore_FreeCString(const char *value);
+
+    // ============================================================
     // Engine lifecycle
     // ============================================================
 
@@ -180,6 +416,8 @@ extern "C"
                                                 uint32_t partition_group_id);
     void CEloqStore_Stop(CEloqStoreHandle store);
     bool CEloqStore_IsStopped(CEloqStoreHandle store);
+    uint16_t CEloqStore_GlobalRegMemIndexBase(CEloqStoreHandle store,
+                                              size_t shard_id);
 
     // ============================================================
     // Table identifier
@@ -266,6 +504,66 @@ extern "C"
                                         uint8_t *out_value,
                                         size_t out_capacity,
                                         CGetResult *out_result);
+    CEloqStoreStatus CEloqStore_GetLarge(CEloqStoreHandle store,
+                                         CTableIdentHandle table,
+                                         const uint8_t *key,
+                                         size_t key_len,
+                                         CLargeValueResult *out_result);
+    CAsyncHandle CEloqStore_GetLargeAsync(CEloqStoreHandle store,
+                                          CTableIdentHandle table,
+                                          const uint8_t *key,
+                                          size_t key_len,
+                                          CGlobalRegisteredMemoryHandle mem,
+                                          uint16_t reg_mem_index_base);
+    CEloqStoreStatus CEloqStore_AsyncGetLargeResult(
+        CAsyncHandle handle,
+        CLargeValueResult *out_result);
+    CEloqStoreStatus CEloqStore_PutLarge(CEloqStoreHandle store,
+                                         CTableIdentHandle table,
+                                         const uint8_t *key,
+                                         size_t key_len,
+                                         CIoStringBufferHandle value,
+                                         CGlobalRegisteredMemoryHandle mem,
+                                         uint16_t reg_mem_index_base,
+                                         uint64_t timestamp);
+    CEloqStoreStatus CEloqStore_PutPinnedLarge(CEloqStoreHandle store,
+                                                CTableIdentHandle table,
+                                                const uint8_t *key,
+                                                size_t key_len,
+                                                const uint8_t *value,
+                                                size_t value_len,
+                                                const uint8_t *metadata,
+                                                size_t metadata_len,
+                                                uint64_t timestamp);
+    CEloqStoreStatus CEloqStore_GetPinnedLarge(CEloqStoreHandle store,
+                                                CTableIdentHandle table,
+                                                const uint8_t *key,
+                                                size_t key_len,
+                                                uint8_t *out_value,
+                                                size_t out_value_size,
+                                                CPinnedLargeResult *out_result);
+    CEloqStoreStatus CEloqStore_GetPinnedLargeOnly(CEloqStoreHandle store,
+                                                    CTableIdentHandle table,
+                                                    const uint8_t *key,
+                                                    size_t key_len,
+                                                    uint8_t *out_value,
+                                                    size_t out_value_size,
+                                                    CPinnedLargeResult *out_result);
+    CAsyncHandle CEloqStore_GetPinnedLargeAsync(CEloqStoreHandle store,
+                                                 CTableIdentHandle table,
+                                                 const uint8_t *key,
+                                                 size_t key_len,
+                                                 uint8_t *out_value,
+                                                 size_t out_value_size);
+    CAsyncHandle CEloqStore_GetPinnedLargeOnlyAsync(CEloqStoreHandle store,
+                                                     CTableIdentHandle table,
+                                                     const uint8_t *key,
+                                                     size_t key_len,
+                                                     uint8_t *out_value,
+                                                     size_t out_value_size);
+    CEloqStoreStatus CEloqStore_AsyncGetPinnedResult(
+        CAsyncHandle handle,
+        CPinnedLargeResult *out_result);
     CEloqStoreStatus CEloqStore_Exists(CEloqStoreHandle store,
                                        CTableIdentHandle table,
                                        const uint8_t *key,
@@ -283,6 +581,9 @@ extern "C"
 
     // Free Floor result (allocated by C++)
     void CEloqStore_FreeFloorResult(CFloorResult *result);
+
+    // Free Pinned large result (allocated by C++)
+    void CEloqStore_FreePinnedResult(CPinnedLargeResult *result);
 
     // ============================================================
     // Scan request API (complex operations - preserve Request pattern)
@@ -330,10 +631,81 @@ extern "C"
                                         uint64_t timestamp,
                                         CWriteOp op,
                                         uint64_t expire_ts);
+    void CEloqStore_BatchWrite_AddLargeEntry(CBatchWriteHandle req,
+                                             const uint8_t *key,
+                                             size_t key_len,
+                                             CIoStringBufferHandle value,
+                                             uint64_t timestamp,
+                                             CWriteOp op,
+                                             uint64_t expire_ts);
+    void CEloqStore_BatchWrite_AddPinnedLargeEntry(CBatchWriteHandle req,
+                                                    const uint8_t *key,
+                                                    size_t key_len,
+                                                    const uint8_t *value,
+                                                    size_t value_len,
+                                                    const uint8_t *metadata,
+                                                    size_t metadata_len,
+                                                    uint64_t timestamp,
+                                                    CWriteOp op,
+                                                    uint64_t expire_ts);
     void CEloqStore_BatchWrite_Clear(CBatchWriteHandle req);
+    void CEloqStore_BatchWrite_RecycleLargeEntries(
+        CBatchWriteHandle req,
+        CGlobalRegisteredMemoryHandle mem,
+        uint16_t reg_mem_index_base);
 
     CEloqStoreStatus CEloqStore_ExecBatchWrite(CEloqStoreHandle store,
                                                CBatchWriteHandle req);
+    CAsyncHandle CEloqStore_ExecBatchWriteAsync(
+        CEloqStoreHandle store,
+        CBatchWriteHandle req,
+        CGlobalRegisteredMemoryHandle mem,
+        uint16_t reg_mem_index_base);
+    bool CEloqStore_AsyncIsDone(CAsyncHandle handle);
+    CEloqStoreStatus CEloqStore_AsyncWait(CAsyncHandle handle);
+    CEloqStoreStatus CEloqStore_AsyncStatus(CAsyncHandle handle);
+    void CEloqStore_AsyncDestroy(CAsyncHandle handle);
+
+    // ============================================================
+    // Zero-copy registered memory and large-value buffers
+    // ============================================================
+
+    CGlobalRegisteredMemoryHandle CEloqStore_GlobalMemory_Create(
+        uint32_t segment_size,
+        uint64_t chunk_size,
+        uint64_t total_size);
+    void CEloqStore_GlobalMemory_Destroy(CGlobalRegisteredMemoryHandle mem);
+    uint32_t CEloqStore_GlobalMemory_SegmentSize(
+        CGlobalRegisteredMemoryHandle mem);
+    size_t CEloqStore_GlobalMemory_TotalSegments(
+        CGlobalRegisteredMemoryHandle mem);
+    size_t CEloqStore_GlobalMemory_FreeSegments(
+        CGlobalRegisteredMemoryHandle mem);
+    size_t CEloqStore_GlobalMemory_ChunkCount(
+        CGlobalRegisteredMemoryHandle mem);
+    bool CEloqStore_GlobalMemory_ChunkAt(CGlobalRegisteredMemoryHandle mem,
+                                         size_t index,
+                                         CMemoryChunk *out_chunk);
+    CIoStringBufferHandle CEloqStore_GlobalMemory_AllocateIoString(
+        CGlobalRegisteredMemoryHandle mem,
+        size_t size,
+        uint16_t reg_mem_index_base);
+
+    void CEloqStore_IoStringBuffer_Destroy(CIoStringBufferHandle buf);
+    void CEloqStore_IoStringBuffer_Recycle(CIoStringBufferHandle buf,
+                                           CGlobalRegisteredMemoryHandle mem,
+                                           uint16_t reg_mem_index_base);
+    size_t CEloqStore_IoStringBuffer_Size(CIoStringBufferHandle buf);
+    size_t CEloqStore_IoStringBuffer_FragmentCount(CIoStringBufferHandle buf);
+    bool CEloqStore_IoStringBuffer_FragmentAt(CIoStringBufferHandle buf,
+                                               size_t index,
+                                               CIoStringFragment *out_fragment);
+    bool CEloqStore_IoStringBuffer_FragmentAtEx(
+        CIoStringBufferHandle buf,
+        size_t index,
+        uint32_t segment_size,
+        uint16_t reg_mem_index_base,
+        CIoStringFragment *out_fragment);
 
     // ============================================================
     // Error message query

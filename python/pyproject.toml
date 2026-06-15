@@ -4,33 +4,20 @@ build-backend = "hatchling.build"
 
 [project]
 name = "eloqstore"
-version = "1.1.1"
-description = "Python SDK for EloqStore — high-performance hybrid-tier KV storage engine"
+version = "1.1.0"
+description = "Python SDK for EloqStore"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "BSL-2.0 OR AGPL-3.0-only"}
 authors = [
   {name = "EloqData"},
 ]
-keywords = ["eloqstore", "key-value", "storage", "embedded", "database", "kv-store"]
-classifiers = [
-  "Development Status :: 4 - Beta",
-  "Intended Audience :: Developers",
-  "License :: Other/Proprietary License",
-  "Operating System :: POSIX :: Linux",
-  "Programming Language :: Python :: 3",
-  "Programming Language :: Python :: 3.10",
-  "Programming Language :: Python :: 3.11",
-  "Programming Language :: Python :: 3.12",
-  "Topic :: Database :: Database Engines/Servers",
-  "Topic :: Software Development :: Libraries :: Python Modules",
-]
-urls = {Repository = "https://github.com/eloqdata/eloqstore"}
 dependencies = []
 
 [tool.hatch.build]
 artifacts = [
   "build/native/libeloqstore_capi.so",
+  "build/native/.libs/**/*",
 ]
 
 [tool.hatch.build.hooks.custom]
@@ -39,7 +26,7 @@ path = "build_hooks.py"
 [tool.hatch.build.targets.wheel]
 packages = ["src/eloqstore"]
 pure-python = false
-force-include = { "build/native/libeloqstore_capi.so" = "eloqstore/.libs/libeloqstore_capi.so" }
+force-include = { "build/native/.libs" = "eloqstore/.libs" }
 
 [tool.hatch.build.targets.sdist]
 include = [
