@@ -285,9 +285,7 @@ class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
         self._table_name = self._resolve_table_name()
         self._layer_order = self._resolve_layer_order()
         self._block_payload_bytes = self._resolve_block_payload_bytes()
-        self._registered_block_views: dict[str, torch.Tensor] = {}
         self._layer_block_offsets: dict[str, tuple[int, int]] = {}
-        self._ordered_block_views: list[tuple[int, int, torch.Tensor]] = []
         # Worker-side view of live KV cache tensors, normalized into layer-major
         # form so all later save/load helpers can treat every layer uniformly.
         self._registered_kv_caches: dict[str, torch.Tensor] = {}
@@ -387,24 +385,18 @@ class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
         self._prepared_save_blocks.clear()
 
     def register_kv_caches(self, kv_caches: dict[str, torch.Tensor]):
-        # Preserve model layer order and build per-layer raw block views so the
-        # data plane can operate in block-sized units without relying on vLLM to
-        # provide a dedicated cross-layer cache tensor.
+        # Preserve model layer order and precompute only the byte offsets for
+        # each layer inside one concatenated block payload.
         self._registered_kv_caches = {
             layer_name: kv_caches[layer_name]
             for layer_name in self._layer_order
             if layer_name in kv_caches
         }
-        self._registered_block_views.clear()
         self._layer_block_offsets.clear()
-        self._ordered_block_views.clear()
         offset = 0
         for layer_name, kv_layer in self._registered_kv_caches.items():
-            block_view = self._build_layer_block_view(kv_layer)
-            layer_bytes = block_view.shape[1]
-            self._registered_block_views[layer_name] = block_view
+            layer_bytes = self._layer_payload_bytes(kv_layer, 0)
             self._layer_block_offsets[layer_name] = (offset, layer_bytes)
-            self._ordered_block_views.append((offset, layer_bytes, block_view))
             offset += layer_bytes
         self._ensure_worker_runtime_attached()
 
@@ -427,16 +419,11 @@ class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
             layer_name: layer_major_kv_cache[layer_idx]
             for layer_idx, layer_name in enumerate(self._layer_order)
         }
-        self._registered_block_views.clear()
         self._layer_block_offsets.clear()
-        self._ordered_block_views.clear()
         offset = 0
         for layer_name, kv_layer in self._registered_kv_caches.items():
-            block_view = self._build_layer_block_view(kv_layer)
-            layer_bytes = block_view.shape[1]
-            self._registered_block_views[layer_name] = block_view
+            layer_bytes = self._layer_payload_bytes(kv_layer, 0)
             self._layer_block_offsets[layer_name] = (offset, layer_bytes)
-            self._ordered_block_views.append((offset, layer_bytes, block_view))
             offset += layer_bytes
         self._ensure_worker_runtime_attached()
 
@@ -724,18 +711,16 @@ class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
             payload.payload_bytes,
         )
 
-    def _build_layer_block_view(self, kv_layer: torch.Tensor) -> torch.Tensor:
-        # Normalize one registered KV tensor into a raw `(num_blocks,
-        # page_size_bytes)` uint8 view. This matches how vLLM's CPU offloading
-        # implementations flatten backend-specific layouts into block-sized raw
-        # byte rows.
-        block_tensor = kv_layer.detach()
-        if block_tensor.shape[0] == 2:
-            block_tensor = block_tensor.permute(1, 0, *range(2, block_tensor.ndim)).contiguous()
-        else:
-            block_tensor = block_tensor.contiguous()
-        num_blocks = block_tensor.shape[0]
-        return block_tensor.view(num_blocks, -1).view(torch.uint8)
+    def _extract_block_tensor(self, kv_layer: torch.Tensor, block_id: int) -> torch.Tensor:
+        # vLLM KV tensors may be laid out either as [2, num_blocks, ...] for
+        # separate K/V heads or [num_blocks, ...] for already packed tensors.
+        if kv_layer.shape[0] == 2:
+            return kv_layer[:, block_id, ...]
+        return kv_layer[block_id, ...]
+
+    def _layer_payload_bytes(self, kv_layer: torch.Tensor, block_id: int) -> int:
+        block_tensor = self._extract_block_tensor(kv_layer, block_id)
+        return int(block_tensor.numel() * block_tensor.element_size())
 
     def _build_block_layout(
         self,
@@ -765,8 +750,17 @@ class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
         block_id: int,
     ) -> None:
         assert payload.buffer_view is not None
-        for offset, layer_bytes, block_view in self._ordered_block_views:
-            payload.buffer_view.narrow(0, offset, layer_bytes).copy_(block_view[block_id])
+        for layer_name in self._layer_order:
+            kv_layer = self._registered_kv_caches.get(layer_name)
+            layer_layout = self._layer_block_offsets.get(layer_name)
+            if kv_layer is None or layer_layout is None:
+                continue
+            offset, layer_bytes = layer_layout
+            block_tensor = self._extract_block_tensor(kv_layer, block_id).detach().contiguous()
+            cpu_tensor = block_tensor.to("cpu")
+            payload.buffer_view.narrow(0, offset, layer_bytes).copy_(
+                cpu_tensor.view(torch.uint8).reshape(-1)
+            )
 
     def _copy_buffer_into_block(
         self,
@@ -774,11 +768,18 @@ class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
         buffer_offset: int,
         payload_bytes: int,
     ) -> None:
-        # Restore one full block payload back into the registered per-layer raw
-        # block views.
         payload_tensor = self._buffer_slice_tensor(buffer_offset, payload_bytes)
-        for offset, layer_bytes, block_view in self._ordered_block_views:
-            block_view[block_id].copy_(payload_tensor.narrow(0, offset, layer_bytes))
+        for layer_name in self._layer_order:
+            kv_layer = self._registered_kv_caches.get(layer_name)
+            layer_layout = self._layer_block_offsets.get(layer_name)
+            if kv_layer is None or layer_layout is None:
+                continue
+            offset, layer_bytes = layer_layout
+            block_tensor = self._extract_block_tensor(kv_layer, block_id)
+            cpu_tensor = payload_tensor.narrow(0, offset, layer_bytes).view(
+                block_tensor.dtype
+            ).reshape(tuple(block_tensor.shape))
+            block_tensor.copy_(cpu_tensor.to(device=block_tensor.device, dtype=block_tensor.dtype))
 
     def _get_num_matched_tokens_for_request(self, request: "Request") -> int:
         return self._get_num_matched_tokens_for_prompt(
