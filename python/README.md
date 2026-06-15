@@ -84,4 +84,4 @@ eloqstore.vllm_connector
 
 Keep only this document for connector usage:
 
-- `../docs/vllm_eloqstore_connector_local_install.md`
+- `../docs/vllm_kvcache_guide.md`

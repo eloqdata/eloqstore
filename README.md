@@ -151,7 +151,7 @@ eloqstore.vllm_connector
 The current connector documentation is intentionally limited to two canonical
 documents:
 
-- vLLM KV cache architecture, install, startup, and benchmark guide: [docs/vllm_eloqstore_connector_local_install.md](docs/vllm_eloqstore_connector_local_install.md)
+- vLLM KV cache architecture, install, startup, and benchmark guide: [docs/vllm_kvcache_guide.md](docs/vllm_kvcache_guide.md)
 
 ### Rust SDK
 
