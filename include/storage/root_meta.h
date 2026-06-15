@@ -188,6 +188,10 @@ public:
 
     std::pair<Entry *, bool> GetOrCreate(const TableIdent &tbl_id);
     Entry *Find(const TableIdent &tbl_id);
+    // Plain lookup that does NOT run ProcessPendingErase(). Used by
+    // PageManager::RecyclePage(), which must not trigger deferred table erase
+    // (it can run inside Erase() and would re-enter the erase logic).
+    Entry *FindNoErase(const TableIdent &tbl_id);
     void Erase(const TableIdent &tbl_id);
 
     void Pin(Entry *entry);

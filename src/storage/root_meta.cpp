@@ -229,15 +229,20 @@ std::pair<RootMetaMgr::Entry *, bool> RootMetaMgr::GetOrCreate(
     return {entry, inserted};
 }
 
-RootMetaMgr::Entry *RootMetaMgr::Find(const TableIdent &tbl_id)
+RootMetaMgr::Entry *RootMetaMgr::FindNoErase(const TableIdent &tbl_id)
 {
-    ProcessPendingErase();
     auto it = entries_.find(tbl_id);
     if (it == entries_.end())
     {
         return nullptr;
     }
     return &it->second;
+}
+
+RootMetaMgr::Entry *RootMetaMgr::Find(const TableIdent &tbl_id)
+{
+    ProcessPendingErase();
+    return FindNoErase(tbl_id);
 }
 
 void RootMetaMgr::Erase(const TableIdent &tbl_id)
@@ -250,6 +255,33 @@ void RootMetaMgr::Erase(const TableIdent &tbl_id)
 
     Entry *entry = &it->second;
     CHECK(entry->meta_.ref_cnt_ == 0);
+
+    // Recycle the index pages still cached for this table before destroying the
+    // entry. Each MemCachedPage::tbl_ident_ points at this entry's tbl_id_;
+    // erasing the entry without recycling them leaves orphaned pages on the
+    // PageManager active list with a dangling tbl_ident_, so the next
+    // AllocPage()->Evict()->RecyclePage() dereferences freed memory and
+    // crashes. BatchWriteTask::Drop() clears the RootMeta but cannot recycle
+    // the pages itself (a yielded reader may still hold the root Handle then);
+    // here ref_cnt_ == 0, so no reader is mid-traversal and recycling is safe.
+    //
+    // The entry is still in entries_ here, so RecyclePage()'s
+    // root_meta_mgr_.FindNoErase(*page->tbl_ident_) resolves to this same valid
+    // entry (and, being a plain lookup, does not re-enter the erase logic).
+    // Snapshot into a vector first because RecyclePage() erases from
+    // cached_pages_ as it goes.
+    RootMeta &meta = entry->meta_;
+    if (!meta.cached_pages_.empty())
+    {
+        std::vector<MemCachedPage *> pages(meta.cached_pages_.begin(),
+                                           meta.cached_pages_.end());
+        for (MemCachedPage *page : pages)
+        {
+            owner_->RecyclePage(page);
+        }
+        meta.cached_pages_.clear();
+    }
+
     Dequeue(entry);
     used_bytes_ -= entry->bytes_;
     entries_.erase(it);

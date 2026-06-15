@@ -787,7 +787,11 @@ bool PageManager::Evict()
 bool PageManager::RecyclePage(MemCachedPage *page)
 {
     assert(!page->IsPinned());
-    RootMetaMgr::Entry *entry = root_meta_mgr_.Find(*page->tbl_ident_);
+    // FindNoErase, not Find: RecyclePage() runs during eviction and inside
+    // RootMetaMgr::Erase(); triggering ProcessPendingErase() here would
+    // re-enter the erase logic and could destroy the entry being erased
+    // underneath us.
+    RootMetaMgr::Entry *entry = root_meta_mgr_.FindNoErase(*page->tbl_ident_);
     if (entry != nullptr)
     {
         RootMeta &meta = entry->meta_;
