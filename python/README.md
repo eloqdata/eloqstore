@@ -82,7 +82,6 @@ The EloqStore vLLM KV cache connector lives in:
 eloqstore.vllm_connector
 ```
 
-Keep only these two documents for connector usage:
+Keep only this document for connector usage:
 
-- `../docs/design/vllm_kvcache.md`
 - `../docs/vllm_eloqstore_connector_local_install.md`
