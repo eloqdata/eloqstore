@@ -2368,42 +2368,56 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
         }
     }
 
-    std::vector<CloseReq> reqs;
-    reqs.reserve(pendings.size());
-
-    for (size_t idx = 0; idx < pendings.size(); ++idx)
+    KvError close_err = KvError::NoError;
+    // Chunk close submission. Closing a partition's many accumulated files used
+    // to build one close SQE per fd in a single uninterrupted loop before a
+    // single WaitIo, holding the shard worker thread for tens of ms (observed
+    // in GC:DeleteSegment) and stalling Redis serving on the same core. Process
+    // in bounded chunks with a WaitIo per chunk so the worker yields between
+    // batches. Not-yet-processed pendings stay fd-locked across a chunk's
+    // WaitIo; that is brief, lock-ordered contention (the eloqstore Mutex
+    // yields, never deadlocks), released as each chunk completes.
+    constexpr size_t kCloseChunk = 128;
+    for (size_t base = 0; base < pendings.size(); base += kCloseChunk)
     {
-        PendingClose &pending = pendings[idx];
-        if (!pending.locked)
+        const size_t chunk_end = std::min(base + kCloseChunk, pendings.size());
+        std::vector<CloseReq> reqs;
+        reqs.reserve(chunk_end - base);
+
+        for (size_t idx = base; idx < chunk_end; ++idx)
+        {
+            PendingClose &pending = pendings[idx];
+            if (!pending.locked)
+            {
+                continue;
+            }
+            LruFD *lru_fd = pending.lru_fd;
+            LruFD::Ref &fd_ref = *pending.fd_ref;
+
+            CloseReq &req = reqs.emplace_back(ThdTask(), std::move(fd_ref));
+            io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, &req);
+            if (lru_fd->reg_idx_ < 0)
+            {
+                req.fd_ = lru_fd->fd_;
+                lru_fd->fd_ = LruFD::FdEmpty;
+                io_uring_prep_close(sqe, req.fd_);
+            }
+            else
+            {
+                req.reg_idx_ = pending.reg_idx;
+                lru_fd->reg_idx_ = -1;
+                lru_fd->fd_ = LruFD::FdEmpty;
+                io_uring_prep_close_direct(sqe, req.reg_idx_);
+            }
+
+            lru_fd->mu_.Unlock();
+            pending.locked = false;
+        }
+
+        if (reqs.empty())
         {
             continue;
         }
-        LruFD *lru_fd = pending.lru_fd;
-        LruFD::Ref &fd_ref = *pending.fd_ref;
-
-        CloseReq &req = reqs.emplace_back(ThdTask(), std::move(fd_ref));
-        io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, &req);
-        if (lru_fd->reg_idx_ < 0)
-        {
-            req.fd_ = lru_fd->fd_;
-            lru_fd->fd_ = LruFD::FdEmpty;
-            io_uring_prep_close(sqe, req.fd_);
-        }
-        else
-        {
-            req.reg_idx_ = pending.reg_idx;
-            lru_fd->reg_idx_ = -1;
-            lru_fd->fd_ = LruFD::FdEmpty;
-            io_uring_prep_close_direct(sqe, req.reg_idx_);
-        }
-
-        lru_fd->mu_.Unlock();
-        pending.locked = false;
-    }
-
-    KvError close_err = KvError::NoError;
-    if (!reqs.empty())
-    {
         ThdTask()->WaitIo();
 
         for (const CloseReq &req : reqs)
@@ -3410,29 +3424,42 @@ KvError IouringMgr::DeleteFiles(const std::vector<std::string> &file_paths)
     {
         std::string path;
     };
-    std::vector<UnlinkReq> reqs;
-    reqs.reserve(file_paths.size());
-
-    // Submit all unlink operations
-    for (const std::string &file_path : file_paths)
-    {
-        reqs.emplace_back();
-        reqs.back().task_ = current_task;
-        reqs.back().path = file_path;
-        io_uring_sqe *unlink_sqe = GetSQE(UserDataType::BaseReq, &reqs.back());
-        io_uring_prep_unlinkat(unlink_sqe, AT_FDCWD, file_path.c_str(), 0);
-    }
-
-    current_task->WaitIo();
 
     KvError first_error = KvError::NoError;
-    for (const auto &req : reqs)
+    // Chunk submission. GC of a partition that accumulated many dead files used
+    // to build one unlink SQE per file in a single uninterrupted loop before a
+    // single WaitIo -- with thousands of files that loop held the shard worker
+    // thread for tens of ms (observed ~27ms in GC:DeleteSegment), stalling Redis
+    // serving on the same core. WaitIo() between chunks yields the worker so
+    // foreground requests are served between batches; the bounded per-chunk
+    // build keeps any single resume short.
+    constexpr size_t kUnlinkChunk = 128;
+    for (size_t base = 0; base < file_paths.size(); base += kUnlinkChunk)
     {
-        if (req.res_ < 0 && first_error == KvError::NoError)
+        const size_t end = std::min(base + kUnlinkChunk, file_paths.size());
+        std::vector<UnlinkReq> reqs;
+        reqs.reserve(end - base);
+        for (size_t i = base; i < end; ++i)
         {
-            LOG(ERROR) << "Failed to unlink file: " << req.path
-                       << ", error: " << req.res_;
-            first_error = ToKvError(req.res_);
+            reqs.emplace_back();
+            reqs.back().task_ = current_task;
+            reqs.back().path = file_paths[i];
+            io_uring_sqe *unlink_sqe =
+                GetSQE(UserDataType::BaseReq, &reqs.back());
+            io_uring_prep_unlinkat(
+                unlink_sqe, AT_FDCWD, reqs.back().path.c_str(), 0);
+        }
+
+        current_task->WaitIo();
+
+        for (const auto &req : reqs)
+        {
+            if (req.res_ < 0 && first_error == KvError::NoError)
+            {
+                LOG(ERROR) << "Failed to unlink file: " << req.path
+                           << ", error: " << req.res_;
+                first_error = ToKvError(req.res_);
+            }
         }
     }
 

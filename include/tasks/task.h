@@ -33,6 +33,13 @@ AsyncIoManager *IoMgr();
 const KvOptions *Options();
 const Comparator *Comp();
 
+// Cooperative time-budgeted yield for long background loops (compaction / file
+// GC). Yields the running task to the low-priority queue once it has held the
+// worker thread past eloqstore_compaction_yield_budget_us since its last
+// resume. Cheap to call frequently (one rdtsc-based read + compare); only the
+// background paths call it, so foreground latency is unaffected.
+void MaybeYieldForCompaction();
+
 enum class TaskStatus : uint8_t
 {
     Idle = 0,

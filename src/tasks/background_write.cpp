@@ -237,6 +237,9 @@ KvError BackgroundWrite::DoCompactDataFile(MovingCachedPages &moving_cached)
             YieldToLowPQ();
             round_cnt = 0;
         }
+        // Time-budgeted yield: bound how long this rewrite pass can hold the
+        // worker thread between the coarse per-256-file yields above.
+        MaybeYieldForCompaction();
         FilePageId end_fp_id = (file_id + 1) << opts->pages_per_file_shift;
         while (it_high != fp_ids.end() && it_high->first < end_fp_id)
         {
@@ -416,6 +419,7 @@ KvError BackgroundWrite::DoCompactSegmentFile()
             YieldToLowPQ();
             round_cnt = 0;
         }
+        MaybeYieldForCompaction();
         FilePageId end_fp_id = FilePageId(file_id + 1)
                                << opts->segments_per_file_shift;
         while (it_high != fp_ids.end() && it_high->first < end_fp_id)

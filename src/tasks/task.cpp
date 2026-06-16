@@ -1,5 +1,6 @@
 #include "tasks/task.h"
 
+#include <gflags/gflags.h>
 #include <glog/logging.h>
 
 #include <cassert>
@@ -16,6 +17,11 @@
 
 namespace eloqstore
 {
+// Defined in shard.cpp inside namespace eloqstore -- the DECLARE must share that
+// namespace or the FLAGS_ symbol resolves to ::fLU64::FLAGS_... and fails to
+// link.
+DECLARE_uint64(eloqstore_compaction_yield_budget_us);
+
 void KvTask::Yield()
 {
     // Check if we're in a valid coroutine context (running_ should be set to
@@ -594,6 +600,22 @@ void Mutex::Unlock()
 KvTask *ThdTask()
 {
     return shard->running_;
+}
+
+void MaybeYieldForCompaction()
+{
+    // Null-safe: some callers (e.g. ListLocalFiles) may also run outside a
+    // coroutine task context (startup/recovery); only yield when a task is
+    // actually running on this shard.
+    if (shard == nullptr || shard->running_ == nullptr)
+    {
+        return;
+    }
+    if (shard->CurResumeElapsedUs() >=
+        FLAGS_eloqstore_compaction_yield_budget_us)
+    {
+        shard->running_->YieldToLowPQ();
+    }
 }
 
 AsyncIoManager *IoMgr()

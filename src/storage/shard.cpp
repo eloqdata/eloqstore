@@ -46,6 +46,16 @@ DEFINE_uint64(max_processing_time_microseconds,
               "Max processing time in microseconds for low priority tasks.");
 #endif
 
+// Cooperative yield budget: background compaction / file-GC loops poll
+// CurResumeElapsedUs() and YieldToLowPQ() once a single uninterrupted segment
+// exceeds this many microseconds. This bounds how long one segment can stall
+// the brpc worker (and the Redis serving it co-drives in module mode), which is
+// the direct cause of foreground SET/GET tail-latency spikes during compaction.
+DEFINE_uint64(eloqstore_compaction_yield_budget_us,
+              500,
+              "Max microseconds a compaction/GC coroutine segment may hold the "
+              "shard worker thread before cooperatively yielding.");
+
 Shard::Shard(EloqStore *store, size_t shard_id, uint32_t fd_limit)
     : store_(store),
       shard_id_(shard_id),
@@ -776,6 +786,9 @@ bool Shard::ProcessReq(KvRequest *req)
     }
     case RequestType::Compact:
     {
+        // Compaction is a write task; its concurrency is bounded by the shared
+        // max_write_concurrency limit inside GetBackgroundWrite (returns null
+        // when at the limit, leaving the request pending for retry).
         BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());
         if (task == nullptr)
         {
@@ -862,6 +875,9 @@ bool Shard::ExecuteReadyTasks()
         ready_tasks_.Dequeue();
         assert(task->status_ == TaskStatus::Ongoing);
         running_ = task;
+        // Mark the resume start so cooperative background loops can measure how
+        // long they have held the worker via CurResumeElapsedUs().
+        cur_resume_start_us_ = ReadTimeMicroseconds();
         task->coro_ = task->coro_.resume();
         if (task->status_ == TaskStatus::Finished)
         {
@@ -880,6 +896,7 @@ bool Shard::ExecuteReadyTasks()
         low_priority_ready_tasks_.Dequeue();
         task->status_ = TaskStatus::Ongoing;
         running_ = task;
+        cur_resume_start_us_ = ReadTimeMicroseconds();
         task->coro_ = task->coro_.resume();
         if (task->status_ == TaskStatus::Finished)
         {

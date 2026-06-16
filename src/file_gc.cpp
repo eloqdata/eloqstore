@@ -366,6 +366,10 @@ KvError ListLocalFiles(const TableIdent &tbl_id,
         {
             return KvError::NoError;
         }
+        // Synchronous readdir+stat per entry; a partition dir with many data
+        // files can otherwise hold the worker thread for tens of ms in one
+        // uninterrupted segment. Yield once the budget is exceeded.
+        MaybeYieldForCompaction();
         const std::string name = it->path().filename();
         if (boost::algorithm::ends_with(name, TmpSuffix))
         {
@@ -454,6 +458,9 @@ void ClassifyFiles(const std::vector<std::string> &files,
 
     for (const std::string &file_name : files)
     {
+        // Per-file CPU parse; with many accumulated files this loop can hold
+        // the worker thread for tens of ms. Yield once over budget.
+        MaybeYieldForCompaction();
         // Ignore temporary files.
         if (boost::algorithm::ends_with(file_name, TmpSuffix))
         {
@@ -632,11 +639,34 @@ KvError AugmentRetainedFilesFromBranchManifests(
     CloudStoreMgr *cloud_mgr =
         is_cloud ? static_cast<CloudStoreMgr *>(io_mgr) : nullptr;
 
+    // Optimization: the active branch's current-term retained files were already
+    // derived from the in-memory mapping by BuildRetainedFiles, and its guard by
+    // SeedActiveBranchGuardFromInMemory -- and the in-memory RootMeta is at least
+    // as current as the on-disk manifest for the active branch (see the note in
+    // SeedActiveBranchGuardFromInMemory). So re-reading and replaying the active
+    // branch's current manifest from disk here is pure redundant work -- it is
+    // the dominant GC:Augment cost (manifest replay + full mapping-table walk on
+    // every compaction). Skip it, but ONLY when the in-memory RootMeta is present
+    // (otherwise the disk manifest is the sole reference and MUST be processed).
+    // Non-active branches and archives still go through disk: they may be updated
+    // by other instances and have no trustworthy in-memory mapping here.
+    const std::string_view active_branch = io_mgr->GetActiveBranch();
+    const uint64_t active_term = io_mgr->ProcessTerm();
+    const bool active_in_memory =
+        shard != nullptr &&
+        shard->IndexManager()->RootMetaManager()->Find(tbl_id) != nullptr;
+
     // --- Process regular manifests ---
     for (size_t i = 0; i < manifest_branch_names.size(); ++i)
     {
+        MaybeYieldForCompaction();
         const std::string &branch = manifest_branch_names[i];
         uint64_t term = manifest_terms[i];
+        if (active_in_memory && term == active_term && branch == active_branch)
+        {
+            // Already covered from memory; avoid the redundant replay.
+            continue;
+        }
         std::string filename = BranchManifestFileName(branch, term);
 
         DirectIoBuffer buf;
@@ -1077,6 +1107,7 @@ KvError DeleteUnreferencedLocalFiles(
 
     for (const std::string &file_name : data_files)
     {
+        MaybeYieldForCompaction();
         auto ret = ParseFileName(file_name);
         if (ret.first != FileNameData)
         {
@@ -1137,6 +1168,9 @@ KvError DeleteUnreferencedLocalFiles(
                << files_to_delete.size();
     if (!files_to_delete.empty())
     {
+        // Keep the fdatasync (see the matching note in
+        // DeleteUnreferencedLocalSegmentFiles): skipping it makes the stall
+        // ~10x worse via uncontrolled kernel writeback.
         KvError close_err = io_mgr->CloseFiles(tbl_id, file_ids_to_close);
         if (close_err != KvError::NoError)
         {
@@ -1195,6 +1229,7 @@ KvError DeleteUnreferencedLocalSegmentFiles(
 
     for (const std::string &file_name : segment_files)
     {
+        MaybeYieldForCompaction();
         auto ret = ParseFileName(file_name);
         if (ret.first != FileNameSegment)
         {
@@ -1250,6 +1285,12 @@ KvError DeleteUnreferencedLocalSegmentFiles(
         return KvError::NoError;
     }
 
+    // NOTE: keep the fdatasync (sync_dirty defaults true) even though these
+    // files are about to be unlinked. Skipping it does NOT save the I/O -- it
+    // lets dirty pages accumulate and the kernel flushes them in an
+    // uncontrolled synchronous burst at close()/unlink(), which measured ~10x
+    // WORSE (single GC segment 365ms vs 25ms). The explicit batched io_uring
+    // fdatasync here is controlled writeback.
     KvError close_err = io_mgr->CloseFiles(tbl_id, file_ids_to_close);
     if (close_err != KvError::NoError)
     {
@@ -1294,6 +1335,7 @@ KvError DeleteUnreferencedCloudSegmentFiles(
 
     for (const std::string &file_name : segment_files)
     {
+        MaybeYieldForCompaction();
         auto ret = ParseFileName(file_name);
         if (ret.first != FileNameSegment)
         {

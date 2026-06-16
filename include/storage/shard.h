@@ -75,6 +75,9 @@ public:
     const size_t shard_id_{0};
     boost::context::continuation main_;
     uint64_t ts_{};
+    // Wall-clock (us) when the currently-running coroutine was last resumed.
+    // Drives CurResumeElapsedUs() for cooperative time-budgeted yielding.
+    uint64_t cur_resume_start_us_{};
     KvTask *running_{};
     CircularQueue<KvTask *> ready_tasks_;
     CircularQueue<KvTask *> low_priority_ready_tasks_;
@@ -112,6 +115,19 @@ private:
 
     uint64_t DurationMicroseconds(uint64_t start_us);
 
+public:
+    // Microseconds the currently-running coroutine has held the worker thread
+    // since its last resume (i.e. since its last yield). Long-running background
+    // loops (compaction / file GC) poll this and YieldToLowPQ() once it exceeds
+    // the cooperative yield budget (see MaybeYieldForCompaction), so a single
+    // segment never stalls the brpc worker -- and the Redis serving the worker
+    // also drives, in module mode -- for more than ~budget.
+    uint64_t CurResumeElapsedUs()
+    {
+        return ReadTimeMicroseconds() - cur_resume_start_us_;
+    }
+
+private:
     template <typename F>
     void StartTask(KvTask *task, KvRequest *req, F lbd)
     {
