@@ -60,3 +60,4 @@ __pycache__/
 dist/
 *.whl
 *.egg-info/
+python/src/eloqstore/.libs/
