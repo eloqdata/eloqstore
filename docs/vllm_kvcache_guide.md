@@ -112,7 +112,8 @@ If `RLIMIT_MEMLOCK` is too small, EloqStore startup fails.
 
 On the test machine used during validation, the default limit was only 8 MiB.
 
-Raise it before starting `vllm`:
+Raise it before starting `vllm`. This is mandatory for EloqStore KV-cache
+startup; there is no supported mode that skips io_uring buffer registration.
 
 ```bash
 sudo prlimit --memlock=unlimited:unlimited -- bash -lc 'prlimit --pid $$ --memlock'

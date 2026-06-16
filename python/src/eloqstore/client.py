@@ -242,7 +242,6 @@ class _KVCacheRuntimeOptions:
     entry_count: int = 0
     entry_alignment: int = 4096
     submission_queue_depth: int = 128
-    eager_io_uring_register: bool = True
 
     def to_handle(self):
         """Materialize this Python options object as a native C options handle."""
@@ -279,9 +278,6 @@ class _KVCacheRuntimeOptions:
             lib().CEloqStore_KVCacheOptions_SetSubmissionQueueDepth(
                 native, self.submission_queue_depth
             )
-            lib().CEloqStore_KVCacheOptions_SetEagerIoUringRegister(
-                native, self.eager_io_uring_register
-            )
             return native
         except Exception:
             lib().CEloqStore_KVCacheOptions_Destroy(native)
@@ -305,7 +301,6 @@ class KVCacheManagerOptions:
     entry_count: int = 0
     entry_alignment: int = 4096
     submission_queue_depth: int = 128
-    eager_io_uring_register: bool = True
 
     @classmethod
     def from_budget(
@@ -321,7 +316,6 @@ class KVCacheManagerOptions:
         shared_memory_name: str = "",
         term: int = 0,
         partition_group_id: int = 0,
-        eager_io_uring_register: bool = True,
     ) -> "KVCacheManagerOptions":
         entry_size, entry_count, entry_alignment, partition_count, submission_queue_depth = (
             _derive_runtime_shape(memory_bytes, cpu_threads, block_payload_bytes)
@@ -341,7 +335,6 @@ class KVCacheManagerOptions:
             entry_count=entry_count,
             entry_alignment=entry_alignment,
             submission_queue_depth=submission_queue_depth,
-            eager_io_uring_register=eager_io_uring_register,
         )
 
     def to_runtime_options(self) -> _KVCacheRuntimeOptions:
@@ -361,7 +354,6 @@ class KVCacheManagerOptions:
             entry_count=self.entry_count,
             entry_alignment=self.entry_alignment,
             submission_queue_depth=self.submission_queue_depth,
-            eager_io_uring_register=self.eager_io_uring_register,
         )
 
 

@@ -330,9 +330,8 @@ class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
             assert KVCacheManager is not None
             runtime = KVCacheManager(options)
             runtime.start()
-            if options.eager_io_uring_register:
-                self._validate_memlock_budget(options.shared_memory_bytes)
-                runtime.register_io_uring_buffers()
+            self._validate_memlock_budget(options.shared_memory_bytes)
+            runtime.register_io_uring_buffers()
             self._buffer_pool_descriptor = runtime.export_buffer_pool()
             self._kv_transfer_config.kv_connector_extra_config[
                 "shared_memory_descriptor"
@@ -986,7 +985,6 @@ class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
             store_paths = [store_paths]
         memory_bytes = int(extra.get("memory_bytes", 512 << 20))
         cpu_threads = int(extra.get("cpu_threads", 1))
-        eager_io_uring_register = bool(extra.get("eager_io_uring_register", True))
         ipc_path = str(extra.get("ipc_path") or _DEFAULT_IPC_PATH)
         # One machine uses one EloqStore runtime here, so keep the shared-memory
         # name fixed across LLMs and restarts unless the user explicitly
@@ -1005,7 +1003,6 @@ class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
                 shared_memory_name=shm_name,
                 term=int(extra.get("term", 0)),
                 partition_group_id=int(extra.get("partition_group_id", 0)),
-                eager_io_uring_register=eager_io_uring_register,
             )
         assert KVCacheWorkerOptions is not None
         return KVCacheWorkerOptions.from_budget(
