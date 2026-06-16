@@ -67,10 +67,23 @@ small number of oversized slots and exhausted allocatable entries early.
 
 ## Install
 
-Create or reuse a target Python environment, then install `vllm` as a wheel:
+Use the official upstream `vllm` release tag `v0.23.0` baseline.
+EloqStore does not require a custom `vllm` fork or branch.
+
+Create or reuse a target Python environment, then install `vllm` `0.23.0` as a
+wheel:
 
 ```bash
-uv pip install vllm --torch-backend=auto
+uv pip install "vllm==0.23.0" --torch-backend=auto
+```
+
+If you also clone the `vllm` repository for benchmark scripts or inspection,
+use upstream directly:
+
+```bash
+git clone https://github.com/vllm-project/vllm.git
+cd vllm
+git checkout v0.23.0
 ```
 
 When validating an installed wheel, do not run Python from inside a `vllm`
