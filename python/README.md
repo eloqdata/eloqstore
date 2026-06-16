@@ -48,10 +48,10 @@ export ELOQSTORE_PY_LIB=/abs/path/to/libeloqstore_capi.so
 ## Example
 
 ```python
-from eloqstore import Client, Options
+from eloqstore import Client, ClientOptions
 
 client = Client(
-    Options(
+    ClientOptions(
         store_paths=["/tmp/eloqstore"],
         table_name="example",
         partition_id=0,

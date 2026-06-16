@@ -2,8 +2,8 @@
 
 #include <algorithm>
 #include <condition_variable>
-#include <cstring>
 #include <cstdlib>
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -27,12 +27,12 @@ using eloqstore::KvError;
 using eloqstore::KvOptions;
 using eloqstore::ReadRequest;
 using eloqstore::ScanRequest;
-using eloqstore::sdk::KVCacheManager;
-using eloqstore::sdk::KVCacheOptions;
-using eloqstore::sdk::KVCacheWorker;
 using eloqstore::TableIdent;
 using eloqstore::WriteDataEntry;
 using eloqstore::WriteOp;
+using eloqstore::sdk::KVCacheManager;
+using eloqstore::sdk::KVCacheOptions;
+using eloqstore::sdk::KVCacheWorker;
 
 // ============================================================
 // Thread-local storage for error messages (no mutex: each thread
@@ -92,8 +92,8 @@ struct AsyncHandleData
 };
 
 static void recycle_large_entries(BatchWriteRequest *req,
-                                   GlobalRegisteredMemory *mem,
-                                   uint16_t reg_mem_index_base)
+                                  GlobalRegisteredMemory *mem,
+                                  uint16_t reg_mem_index_base)
 {
     if (!req || !mem)
         return;
@@ -151,7 +151,8 @@ static CEloqStoreStatus kv_error_to_c(KvError err)
     }
 }
 
-static uint8_t kv_cache_request_status_to_c(eloqstore::sdk::KVCacheRequestStatus status)
+static uint8_t kv_cache_request_status_to_c(
+    eloqstore::sdk::KVCacheRequestStatus status)
 {
     switch (status)
     {
@@ -254,31 +255,31 @@ extern "C"
     }
 
     void CEloqStore_Options_SetEnableCompression(CEloqStoreHandle opts,
-                                                  bool enable)
+                                                 bool enable)
     {
         if (opts)
             reinterpret_cast<KvOptions *>(opts)->enable_compression = enable;
     }
 
-    void CEloqStore_Options_SetSegmentSize(CEloqStoreHandle opts,
-                                           uint32_t size)
+    void CEloqStore_Options_SetSegmentSize(CEloqStoreHandle opts, uint32_t size)
     {
         if (opts)
             reinterpret_cast<KvOptions *>(opts)->segment_size = size;
     }
 
     void CEloqStore_Options_SetRegisteredMemoryChunkSize(CEloqStoreHandle opts,
-                                                          uint64_t size)
+                                                         uint64_t size)
     {
-        (void)opts;
-        (void)size;
+        (void) opts;
+        (void) size;
     }
 
     void CEloqStore_Options_SetSegmentsPerFileShift(CEloqStoreHandle opts,
                                                     uint8_t shift)
     {
         if (opts)
-            reinterpret_cast<KvOptions *>(opts)->segments_per_file_shift = shift;
+            reinterpret_cast<KvOptions *>(opts)->segments_per_file_shift =
+                shift;
     }
 
     void CEloqStore_Options_SetGlobalRegisteredMemory(
@@ -298,18 +299,18 @@ extern "C"
     }
 
     void CEloqStore_Options_AddPinnedMemoryChunk(CEloqStoreHandle opts,
-                                                  const char *data,
-                                                  size_t size)
+                                                 const char *data,
+                                                 size_t size)
     {
         if (!opts || !data || size == 0)
             return;
         auto *cpp_opts = reinterpret_cast<KvOptions *>(opts);
-        cpp_opts->pinned_memory_chunks.emplace_back(
-            const_cast<char *>(data), size);
+        cpp_opts->pinned_memory_chunks.emplace_back(const_cast<char *>(data),
+                                                    size);
     }
 
     void CEloqStore_Options_SetGcGlobalMemSizePerShard(CEloqStoreHandle opts,
-                                                        uint64_t size)
+                                                       uint64_t size)
     {
         if (opts)
             reinterpret_cast<KvOptions *>(opts)->gc_global_mem_size_per_shard =
@@ -317,14 +318,15 @@ extern "C"
     }
 
     void CEloqStore_Options_SetPinnedTailScratchSlots(CEloqStoreHandle opts,
-                                                       uint16_t slots)
+                                                      uint16_t slots)
     {
         if (opts)
-            reinterpret_cast<KvOptions *>(opts)->pinned_tail_scratch_slots = slots;
+            reinterpret_cast<KvOptions *>(opts)->pinned_tail_scratch_slots =
+                slots;
     }
 
     void CEloqStore_Options_AddStorePath(CEloqStoreHandle opts,
-                                          const char *path)
+                                         const char *path)
     {
         if (opts && path)
             reinterpret_cast<KvOptions *>(opts)->store_path.push_back(path);
@@ -412,7 +414,8 @@ extern "C"
         clear_last_error();
         try
         {
-            return reinterpret_cast<CKVCacheOptionsHandle>(new KVCacheOptions());
+            return reinterpret_cast<CKVCacheOptionsHandle>(
+                new KVCacheOptions());
         }
         catch (const std::exception &e)
         {
@@ -431,7 +434,8 @@ extern "C"
     {
         if (opts != nullptr && path != nullptr)
         {
-            reinterpret_cast<KVCacheOptions *>(opts)->store_paths.emplace_back(path);
+            reinterpret_cast<KVCacheOptions *>(opts)->store_paths.emplace_back(
+                path);
         }
     }
 
@@ -462,8 +466,8 @@ extern "C"
         }
     }
 
-    void CEloqStore_KVCacheOptions_SetSharedMemoryName(CKVCacheOptionsHandle opts,
-                                                       const char *name)
+    void CEloqStore_KVCacheOptions_SetSharedMemoryName(
+        CKVCacheOptionsHandle opts, const char *name)
     {
         if (opts != nullptr && name != nullptr)
         {
@@ -499,8 +503,7 @@ extern "C"
     }
 
     void CEloqStore_KVCacheOptions_SetPartitionGroupId(
-        CKVCacheOptionsHandle opts,
-        uint32_t partition_group_id)
+        CKVCacheOptionsHandle opts, uint32_t partition_group_id)
     {
         if (opts != nullptr)
         {
@@ -509,8 +512,8 @@ extern "C"
         }
     }
 
-    void CEloqStore_KVCacheOptions_SetSharedMemoryBytes(CKVCacheOptionsHandle opts,
-                                                        uint64_t bytes)
+    void CEloqStore_KVCacheOptions_SetSharedMemoryBytes(
+        CKVCacheOptionsHandle opts, uint64_t bytes)
     {
         if (opts != nullptr)
         {
@@ -542,27 +545,28 @@ extern "C"
     {
         if (opts != nullptr)
         {
-            reinterpret_cast<KVCacheOptions *>(opts)->entry_alignment = entry_alignment;
+            reinterpret_cast<KVCacheOptions *>(opts)->entry_alignment =
+                entry_alignment;
         }
     }
 
     void CEloqStore_KVCacheOptions_SetSubmissionQueueDepth(
-        CKVCacheOptionsHandle opts,
-        uint32_t depth)
+        CKVCacheOptionsHandle opts, uint32_t depth)
     {
         if (opts != nullptr)
         {
-            reinterpret_cast<KVCacheOptions *>(opts)->submission_queue_depth = depth;
+            reinterpret_cast<KVCacheOptions *>(opts)->submission_queue_depth =
+                depth;
         }
     }
 
     void CEloqStore_KVCacheOptions_SetEagerIoUringRegister(
-        CKVCacheOptionsHandle opts,
-        bool enable)
+        CKVCacheOptionsHandle opts, bool enable)
     {
         if (opts != nullptr)
         {
-            reinterpret_cast<KVCacheOptions *>(opts)->eager_io_uring_register = enable;
+            reinterpret_cast<KVCacheOptions *>(opts)->eager_io_uring_register =
+                enable;
         }
     }
 
@@ -634,8 +638,9 @@ extern "C"
             return false;
         }
         std::string error_message;
-        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)
-                            ->RegisterIoUringBuffers(&error_message);
+        const bool ok =
+            reinterpret_cast<KVCacheManager *>(runtime)->RegisterIoUringBuffers(
+                &error_message);
         if (!ok)
         {
             set_last_error(error_message);
@@ -646,8 +651,8 @@ extern "C"
     const char *CEloqStore_KVCacheManager_ExportBufferPool(
         CKVCacheManagerHandle runtime)
     {
-        // Return an owned C string because Python must keep the descriptor after
-        // the C++ temporary std::string has gone out of scope.
+        // Return an owned C string because Python must keep the descriptor
+        // after the C++ temporary std::string has gone out of scope.
         clear_last_error();
         if (runtime == nullptr)
         {
@@ -680,8 +685,8 @@ extern "C"
         }
         eloqstore::sdk::KVCacheBufferHandle buffer;
         std::string error_message;
-        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)
-                            ->BeginSave(key, payload_bytes, &buffer, &error_message);
+        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)->BeginSave(
+            key, payload_bytes, &buffer, &error_message);
         if (!ok)
         {
             set_last_error(error_message);
@@ -703,8 +708,8 @@ extern "C"
             return false;
         }
         std::string error_message;
-        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)
-                            ->FinishSave(request_id, &error_message);
+        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)->FinishSave(
+            request_id, &error_message);
         if (!ok)
         {
             set_last_error(error_message);
@@ -724,8 +729,8 @@ extern "C"
             return false;
         }
         std::string error_message;
-        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)
-                            ->BeginLoad(key, payload_bytes, out_request_id, &error_message);
+        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)->BeginLoad(
+            key, payload_bytes, out_request_id, &error_message);
         if (!ok)
         {
             set_last_error(error_message);
@@ -745,8 +750,9 @@ extern "C"
         }
         eloqstore::sdk::KVCacheRequestState state;
         std::string error_message;
-        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)
-                            ->CheckRequest(request_id, &state, &error_message);
+        const bool ok =
+            reinterpret_cast<KVCacheManager *>(runtime)->CheckRequest(
+                request_id, &state, &error_message);
         if (!ok)
         {
             set_last_error(error_message);
@@ -759,9 +765,10 @@ extern "C"
         return true;
     }
 
-    bool CEloqStore_KVCacheManager_GetReadyBuffer(CKVCacheManagerHandle runtime,
-                                                  uint64_t request_id,
-                                                  CKVCacheBufferHandle *out_buffer)
+    bool CEloqStore_KVCacheManager_GetReadyBuffer(
+        CKVCacheManagerHandle runtime,
+        uint64_t request_id,
+        CKVCacheBufferHandle *out_buffer)
     {
         clear_last_error();
         if (runtime == nullptr || out_buffer == nullptr)
@@ -771,8 +778,9 @@ extern "C"
         }
         eloqstore::sdk::KVCacheBufferHandle buffer;
         std::string error_message;
-        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)
-                            ->GetReadyBuffer(request_id, &buffer, &error_message);
+        const bool ok =
+            reinterpret_cast<KVCacheManager *>(runtime)->GetReadyBuffer(
+                request_id, &buffer, &error_message);
         if (!ok)
         {
             set_last_error(error_message);
@@ -795,8 +803,9 @@ extern "C"
             return false;
         }
         std::string error_message;
-        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)
-                            ->ContainsKey(key, out_exists, &error_message);
+        const bool ok =
+            reinterpret_cast<KVCacheManager *>(runtime)->ContainsKey(
+                key, out_exists, &error_message);
         if (!ok)
         {
             set_last_error(error_message);
@@ -804,7 +813,8 @@ extern "C"
         return ok;
     }
 
-    CKVCacheWorkerHandle CEloqStore_KVCacheWorker_Create(CKVCacheOptionsHandle opts)
+    CKVCacheWorkerHandle CEloqStore_KVCacheWorker_Create(
+        CKVCacheOptionsHandle opts)
     {
         // Create a worker-side control-plane stub from shared runtime options.
         clear_last_error();
@@ -843,9 +853,9 @@ extern "C"
             return false;
         }
         std::string error_message;
-        const bool ok = reinterpret_cast<KVCacheWorker *>(runtime)
-                            ->AttachBufferPool(descriptor ? descriptor : "",
-                                               &error_message);
+        const bool ok =
+            reinterpret_cast<KVCacheWorker *>(runtime)->AttachBufferPool(
+                descriptor ? descriptor : "", &error_message);
         if (!ok)
         {
             set_last_error(error_message);
@@ -875,8 +885,8 @@ extern "C"
         }
         eloqstore::sdk::KVCacheBufferHandle buffer;
         std::string error_message;
-        const bool ok = reinterpret_cast<KVCacheWorker *>(runtime)
-                            ->BeginSave(key, payload_bytes, &buffer, &error_message);
+        const bool ok = reinterpret_cast<KVCacheWorker *>(runtime)->BeginSave(
+            key, payload_bytes, &buffer, &error_message);
         if (!ok)
         {
             set_last_error(error_message);
@@ -898,8 +908,8 @@ extern "C"
             return false;
         }
         std::string error_message;
-        const bool ok = reinterpret_cast<KVCacheWorker *>(runtime)
-                            ->FinishSave(request_id, &error_message);
+        const bool ok = reinterpret_cast<KVCacheWorker *>(runtime)->FinishSave(
+            request_id, &error_message);
         if (!ok)
         {
             set_last_error(error_message);
@@ -919,8 +929,8 @@ extern "C"
             return false;
         }
         std::string error_message;
-        const bool ok = reinterpret_cast<KVCacheWorker *>(runtime)
-                            ->BeginLoad(key, payload_bytes, out_request_id, &error_message);
+        const bool ok = reinterpret_cast<KVCacheWorker *>(runtime)->BeginLoad(
+            key, payload_bytes, out_request_id, &error_message);
         if (!ok)
         {
             set_last_error(error_message);
@@ -940,8 +950,9 @@ extern "C"
         }
         eloqstore::sdk::KVCacheRequestState state;
         std::string error_message;
-        const bool ok = reinterpret_cast<KVCacheWorker *>(runtime)
-                            ->CheckRequest(request_id, &state, &error_message);
+        const bool ok =
+            reinterpret_cast<KVCacheWorker *>(runtime)->CheckRequest(
+                request_id, &state, &error_message);
         if (!ok)
         {
             set_last_error(error_message);
@@ -954,10 +965,10 @@ extern "C"
         return true;
     }
 
-
-    bool CEloqStore_KVCacheWorker_GetReadyBuffer(CKVCacheWorkerHandle runtime,
-                                                 uint64_t request_id,
-                                                 CKVCacheBufferHandle *out_buffer)
+    bool CEloqStore_KVCacheWorker_GetReadyBuffer(
+        CKVCacheWorkerHandle runtime,
+        uint64_t request_id,
+        CKVCacheBufferHandle *out_buffer)
     {
         clear_last_error();
         if (runtime == nullptr || out_buffer == nullptr)
@@ -967,8 +978,9 @@ extern "C"
         }
         eloqstore::sdk::KVCacheBufferHandle buffer;
         std::string error_message;
-        const bool ok = reinterpret_cast<KVCacheWorker *>(runtime)
-                            ->GetReadyBuffer(request_id, &buffer, &error_message);
+        const bool ok =
+            reinterpret_cast<KVCacheWorker *>(runtime)->GetReadyBuffer(
+                request_id, &buffer, &error_message);
         if (!ok)
         {
             set_last_error(error_message);
@@ -1092,8 +1104,8 @@ extern "C"
     uint16_t CEloqStore_GlobalRegMemIndexBase(CEloqStoreHandle store,
                                               size_t shard_id)
     {
-        return store ? reinterpret_cast<EloqStore *>(store)->GlobalRegMemIndexBase(
-                           shard_id)
+        return store ? reinterpret_cast<EloqStore *>(store)
+                           ->GlobalRegMemIndexBase(shard_id)
                      : 0;
     }
 
@@ -1574,12 +1586,12 @@ extern "C"
                 out_result->expire_ts = req.expire_ts_;
                 out_result->found = true;
 
-                if (auto *iosb = std::get_if<IoStringBuffer>(
-                        &req.large_value_dest_))
+                if (auto *iosb =
+                        std::get_if<IoStringBuffer>(&req.large_value_dest_))
                 {
-                    auto *large =
-                        new IoStringBuffer(std::move(*iosb));
-                    out_result->value = reinterpret_cast<CIoStringBufferHandle>(large);
+                    auto *large = new IoStringBuffer(std::move(*iosb));
+                    out_result->value =
+                        reinterpret_cast<CIoStringBufferHandle>(large);
                     out_result->value_len = large->Size();
                     out_result->kind = CValueKind_Large;
                 }
@@ -1653,15 +1665,17 @@ extern "C"
                     auto err = read->Error();
                     if (err == KvError::NoError)
                     {
-                        if (auto *iosb =
-                                std::get_if<IoStringBuffer>(
-                                    &read->large_value_dest_))
+                        if (auto *iosb = std::get_if<IoStringBuffer>(
+                                &read->large_value_dest_))
                         {
-                            handle->large_value = std::make_unique<IoStringBuffer>(
-                                std::move(*iosb));
-                            handle->result.value = reinterpret_cast<CIoStringBufferHandle>(
-                                handle->large_value.get());
-                            handle->result.value_len = handle->large_value->Size();
+                            handle->large_value =
+                                std::make_unique<IoStringBuffer>(
+                                    std::move(*iosb));
+                            handle->result.value =
+                                reinterpret_cast<CIoStringBufferHandle>(
+                                    handle->large_value.get());
+                            handle->result.value_len =
+                                handle->large_value->Size();
                             handle->result.timestamp = read->ts_;
                             handle->result.expire_ts = read->expire_ts_;
                             handle->result.found = true;
@@ -1678,18 +1692,14 @@ extern "C"
                             handle->result.kind = CValueKind_Small;
                             handle->status = CEloqStoreStatus_InvalidArgs;
                             handle->error_message =
-                                "value is not stored as a zero-copy large value";
+                                "value is not stored as a zero-copy large "
+                                "value";
                         }
                     }
                     else if (err == KvError::NotFound)
                     {
-                        handle->result =
-                            CLargeValueResult{nullptr,
-                                              0,
-                                              0,
-                                              0,
-                                              false,
-                                              CValueKind_NotFound};
+                        handle->result = CLargeValueResult{
+                            nullptr, 0, 0, 0, false, CValueKind_NotFound};
                         handle->status = CEloqStoreStatus_Ok;
                     }
                     else
@@ -1716,8 +1726,7 @@ extern "C"
     }
 
     CEloqStoreStatus CEloqStore_AsyncGetLargeResult(
-        CAsyncHandle handle,
-        CLargeValueResult *out_result)
+        CAsyncHandle handle, CLargeValueResult *out_result)
     {
         clear_last_error();
         if (!handle || !out_result)
@@ -1748,12 +1757,12 @@ extern "C"
     }
 
     CEloqStoreStatus CEloqStore_GetPinnedLarge(CEloqStoreHandle store,
-                                                CTableIdentHandle table,
-                                                const uint8_t *key,
-                                                size_t key_len,
-                                                uint8_t *out_value,
-                                                size_t out_value_size,
-                                                CPinnedLargeResult *out_result)
+                                               CTableIdentHandle table,
+                                               const uint8_t *key,
+                                               size_t key_len,
+                                               uint8_t *out_value,
+                                               size_t out_value_size,
+                                               CPinnedLargeResult *out_result)
     {
         clear_last_error();
         if (!store || !table || !key || key_len == 0 || !out_value ||
@@ -1820,13 +1829,14 @@ extern "C"
         }
     }
 
-    CEloqStoreStatus CEloqStore_GetPinnedLargeOnly(CEloqStoreHandle store,
-                                                    CTableIdentHandle table,
-                                                    const uint8_t *key,
-                                                    size_t key_len,
-                                                    uint8_t *out_value,
-                                                    size_t out_value_size,
-                                                    CPinnedLargeResult *out_result)
+    CEloqStoreStatus CEloqStore_GetPinnedLargeOnly(
+        CEloqStoreHandle store,
+        CTableIdentHandle table,
+        const uint8_t *key,
+        size_t key_len,
+        uint8_t *out_value,
+        size_t out_value_size,
+        CPinnedLargeResult *out_result)
     {
         clear_last_error();
         if (!store || !table || !key || key_len == 0 || !out_value ||
@@ -1883,11 +1893,11 @@ extern "C"
     }
 
     CAsyncHandle CEloqStore_GetPinnedLargeAsync(CEloqStoreHandle store,
-                                                 CTableIdentHandle table,
-                                                 const uint8_t *key,
-                                                 size_t key_len,
-                                                 uint8_t *out_value,
-                                                 size_t out_value_size)
+                                                CTableIdentHandle table,
+                                                const uint8_t *key,
+                                                size_t key_len,
+                                                uint8_t *out_value,
+                                                size_t out_value_size)
     {
         clear_last_error();
         if (!store || !table || !key || key_len == 0 || !out_value ||
@@ -1958,11 +1968,11 @@ extern "C"
     }
 
     CAsyncHandle CEloqStore_GetPinnedLargeOnlyAsync(CEloqStoreHandle store,
-                                                     CTableIdentHandle table,
-                                                     const uint8_t *key,
-                                                     size_t key_len,
-                                                     uint8_t *out_value,
-                                                     size_t out_value_size)
+                                                    CTableIdentHandle table,
+                                                    const uint8_t *key,
+                                                    size_t key_len,
+                                                    uint8_t *out_value,
+                                                    size_t out_value_size)
     {
         clear_last_error();
         if (!store || !table || !key || key_len == 0 || !out_value ||
@@ -2030,8 +2040,7 @@ extern "C"
     }
 
     CEloqStoreStatus CEloqStore_AsyncGetPinnedResult(
-        CAsyncHandle handle,
-        CPinnedLargeResult *out_result)
+        CAsyncHandle handle, CPinnedLargeResult *out_result)
     {
         clear_last_error();
         if (!handle || !out_result)
@@ -2055,7 +2064,8 @@ extern "C"
         if (!async->pinned_metadata.empty())
         {
             auto *copy = new uint8_t[async->pinned_metadata.size()];
-            std::memcpy(copy, async->pinned_metadata.data(),
+            std::memcpy(copy,
+                        async->pinned_metadata.data(),
                         async->pinned_metadata.size());
             out_result->metadata = copy;
             out_result->metadata_len = async->pinned_metadata.size();
@@ -2123,17 +2133,18 @@ extern "C"
     }
 
     CEloqStoreStatus CEloqStore_PutPinnedLarge(CEloqStoreHandle store,
-                                                CTableIdentHandle table,
-                                                const uint8_t *key,
-                                                size_t key_len,
-                                                const uint8_t *value,
-                                                size_t value_len,
-                                                const uint8_t *metadata,
-                                                size_t metadata_len,
-                                                uint64_t timestamp)
+                                               CTableIdentHandle table,
+                                               const uint8_t *key,
+                                               size_t key_len,
+                                               const uint8_t *value,
+                                               size_t value_len,
+                                               const uint8_t *metadata,
+                                               size_t metadata_len,
+                                               uint64_t timestamp)
     {
         clear_last_error();
-        if (!store || !table || !key || key_len == 0 || !value || value_len == 0)
+        if (!store || !table || !key || key_len == 0 || !value ||
+            value_len == 0)
         {
             return CEloqStoreStatus_InvalidArgs;
         }
@@ -2153,7 +2164,8 @@ extern "C"
             WriteDataEntry entry(
                 std::string(reinterpret_cast<const char *>(key), key_len),
                 std::move(meta_str),
-                std::make_pair(reinterpret_cast<const char *>(value), value_len),
+                std::make_pair(reinterpret_cast<const char *>(value),
+                               value_len),
                 timestamp,
                 WriteOp::Upsert);
 
@@ -2545,15 +2557,15 @@ extern "C"
     }
 
     void CEloqStore_BatchWrite_AddPinnedLargeEntry(CBatchWriteHandle req,
-                                                    const uint8_t *key,
-                                                    size_t key_len,
-                                                    const uint8_t *value,
-                                                    size_t value_len,
-                                                    const uint8_t *metadata,
-                                                    size_t metadata_len,
-                                                    uint64_t timestamp,
-                                                    CWriteOp op,
-                                                    uint64_t expire_ts)
+                                                   const uint8_t *key,
+                                                   size_t key_len,
+                                                   const uint8_t *value,
+                                                   size_t value_len,
+                                                   const uint8_t *metadata,
+                                                   size_t metadata_len,
+                                                   uint64_t timestamp,
+                                                   CWriteOp op,
+                                                   uint64_t expire_ts)
     {
         if (req && key && key_len > 0 && value && value_len > 0)
         {
@@ -2567,7 +2579,8 @@ extern "C"
             WriteDataEntry entry(
                 std::string(reinterpret_cast<const char *>(key), key_len),
                 std::move(meta_str),
-                std::make_pair(reinterpret_cast<const char *>(value), value_len),
+                std::make_pair(reinterpret_cast<const char *>(value),
+                               value_len),
                 timestamp,
                 static_cast<WriteOp>(op),
                 expire_ts);
@@ -2719,16 +2732,15 @@ extern "C"
     // ============================================================
 
     CGlobalRegisteredMemoryHandle CEloqStore_GlobalMemory_Create(
-        uint32_t segment_size,
-        uint64_t chunk_size,
-        uint64_t total_size)
+        uint32_t segment_size, uint64_t chunk_size, uint64_t total_size)
     {
         clear_last_error();
         try
         {
-            auto *mem = new GlobalRegisteredMemory(segment_size,
-                                                   static_cast<size_t>(chunk_size),
-                                                   static_cast<size_t>(total_size));
+            auto *mem =
+                new GlobalRegisteredMemory(segment_size,
+                                           static_cast<size_t>(chunk_size),
+                                           static_cast<size_t>(total_size));
             return reinterpret_cast<CGlobalRegisteredMemoryHandle>(mem);
         }
         catch (const std::exception &e)
@@ -2746,30 +2758,34 @@ extern "C"
     uint32_t CEloqStore_GlobalMemory_SegmentSize(
         CGlobalRegisteredMemoryHandle mem)
     {
-        return mem ? reinterpret_cast<GlobalRegisteredMemory *>(mem)->SegmentSize()
+        return mem ? reinterpret_cast<GlobalRegisteredMemory *>(mem)
+                         ->SegmentSize()
                    : 0;
     }
 
     size_t CEloqStore_GlobalMemory_TotalSegments(
         CGlobalRegisteredMemoryHandle mem)
     {
-        return mem ? reinterpret_cast<GlobalRegisteredMemory *>(mem)->TotalSegments()
+        return mem ? reinterpret_cast<GlobalRegisteredMemory *>(mem)
+                         ->TotalSegments()
                    : 0;
     }
 
     size_t CEloqStore_GlobalMemory_FreeSegments(
         CGlobalRegisteredMemoryHandle mem)
     {
-        return mem ? reinterpret_cast<GlobalRegisteredMemory *>(mem)->FreeSegments()
+        return mem ? reinterpret_cast<GlobalRegisteredMemory *>(mem)
+                         ->FreeSegments()
                    : 0;
     }
 
-    size_t CEloqStore_GlobalMemory_ChunkCount(
-        CGlobalRegisteredMemoryHandle mem)
+    size_t CEloqStore_GlobalMemory_ChunkCount(CGlobalRegisteredMemoryHandle mem)
     {
         if (!mem)
             return 0;
-        return reinterpret_cast<GlobalRegisteredMemory *>(mem)->MemChunks().size();
+        return reinterpret_cast<GlobalRegisteredMemory *>(mem)
+            ->MemChunks()
+            .size();
     }
 
     bool CEloqStore_GlobalMemory_ChunkAt(CGlobalRegisteredMemoryHandle mem,
@@ -2778,7 +2794,8 @@ extern "C"
     {
         if (!mem || !out_chunk)
             return false;
-        const auto chunks = reinterpret_cast<GlobalRegisteredMemory *>(mem)->MemChunks();
+        const auto chunks =
+            reinterpret_cast<GlobalRegisteredMemory *>(mem)->MemChunks();
         if (index >= chunks.size())
             return false;
         out_chunk->data = reinterpret_cast<uint8_t *>(chunks[index].base_);
@@ -2807,9 +2824,9 @@ extern "C"
             for (size_t i = 0; i < segments; ++i)
             {
                 auto [ptr, chunk_index] = global_mem->GetSegment([]() {});
-                buf->Append({ptr,
-                             static_cast<uint16_t>(reg_mem_index_base +
-                                                   chunk_index)});
+                buf->Append(
+                    {ptr,
+                     static_cast<uint16_t>(reg_mem_index_base + chunk_index)});
             }
             buf->SetSize(size);
             return reinterpret_cast<CIoStringBufferHandle>(buf);
@@ -2833,7 +2850,8 @@ extern "C"
         if (!buf || !mem)
             return;
         reinterpret_cast<IoStringBuffer *>(buf)->Recycle(
-            reinterpret_cast<GlobalRegisteredMemory *>(mem), reg_mem_index_base);
+            reinterpret_cast<GlobalRegisteredMemory *>(mem),
+            reg_mem_index_base);
     }
 
     size_t CEloqStore_IoStringBuffer_Size(CIoStringBufferHandle buf)
@@ -2843,7 +2861,8 @@ extern "C"
 
     size_t CEloqStore_IoStringBuffer_FragmentCount(CIoStringBufferHandle buf)
     {
-        return buf ? reinterpret_cast<IoStringBuffer *>(buf)->Fragments().size() : 0;
+        return buf ? reinterpret_cast<IoStringBuffer *>(buf)->Fragments().size()
+                   : 0;
     }
 
     static bool fill_io_string_fragment(CIoStringBufferHandle buf,
@@ -2864,7 +2883,8 @@ extern "C"
             return false;
 
         const auto &frag = fragments[index];
-        const size_t len = std::min(segment_size, cpp_buf->Size() - used_before);
+        const size_t len =
+            std::min(segment_size, cpp_buf->Size() - used_before);
         out_fragment->data = reinterpret_cast<uint8_t *>(frag.data_);
         out_fragment->len = len;
         out_fragment->buf_index = frag.buf_index_;
@@ -2876,8 +2896,8 @@ extern "C"
     }
 
     bool CEloqStore_IoStringBuffer_FragmentAt(CIoStringBufferHandle buf,
-                                               size_t index,
-                                               CIoStringFragment *out_fragment)
+                                              size_t index,
+                                              CIoStringFragment *out_fragment)
     {
         if (!buf || !out_fragment)
             return false;
@@ -2905,15 +2925,15 @@ extern "C"
         {
             segment_size = cpp_buf->Size();
         }
-        return fill_io_string_fragment(buf, index, segment_size, 0, out_fragment);
+        return fill_io_string_fragment(
+            buf, index, segment_size, 0, out_fragment);
     }
 
-    bool CEloqStore_IoStringBuffer_FragmentAtEx(
-        CIoStringBufferHandle buf,
-        size_t index,
-        uint32_t segment_size,
-        uint16_t reg_mem_index_base,
-        CIoStringFragment *out_fragment)
+    bool CEloqStore_IoStringBuffer_FragmentAtEx(CIoStringBufferHandle buf,
+                                                size_t index,
+                                                uint32_t segment_size,
+                                                uint16_t reg_mem_index_base,
+                                                CIoStringFragment *out_fragment)
     {
         return fill_io_string_fragment(
             buf, index, segment_size, reg_mem_index_base, out_fragment);

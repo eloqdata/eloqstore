@@ -84,7 +84,8 @@ bool DecodePayloadMetadata(const std::string &metadata,
 
 size_t AlignUp(size_t value, size_t alignment)
 {
-    return alignment == 0 ? value : ((value + alignment - 1) / alignment) * alignment;
+    return alignment == 0 ? value
+                          : ((value + alignment - 1) / alignment) * alignment;
 }
 
 size_t PinnedReadBytes(uint32_t payload_bytes)
@@ -95,9 +96,10 @@ size_t PinnedReadBytes(uint32_t payload_bytes)
     {
         return 0;
     }
-    const size_t prefix_bytes = payload_bytes <= kSegmentSize
-                                    ? 0
-                                    : ((payload_bytes - 1) / kSegmentSize) * kSegmentSize;
+    const size_t prefix_bytes =
+        payload_bytes <= kSegmentSize
+            ? 0
+            : ((payload_bytes - 1) / kSegmentSize) * kSegmentSize;
     const size_t tail_bytes = payload_bytes - prefix_bytes;
     return prefix_bytes + AlignUp(tail_bytes, kPageAlignment);
 }
@@ -159,10 +161,13 @@ std::optional<uint64_t> ParseUint64(std::string_view value)
     }
 }
 
-uint32_t PartitionIdForKey(const KVCacheOptions &options, const std::string &key)
+uint32_t PartitionIdForKey(const KVCacheOptions &options,
+                           const std::string &key)
 {
-    const uint32_t partition_count = std::max<uint32_t>(1, options.partition_count);
-    return static_cast<uint32_t>(std::hash<std::string>{}(key) % partition_count);
+    const uint32_t partition_count =
+        std::max<uint32_t>(1, options.partition_count);
+    return static_cast<uint32_t>(std::hash<std::string>{}(key) %
+                                 partition_count);
 }
 
 bool SendFrames(zmq::socket_t &socket,
@@ -173,8 +178,9 @@ bool SendFrames(zmq::socket_t &socket,
     {
         for (size_t i = 0; i < frames.size(); ++i)
         {
-            const zmq::send_flags flags =
-                i + 1 < frames.size() ? zmq::send_flags::sndmore : zmq::send_flags::none;
+            const zmq::send_flags flags = i + 1 < frames.size()
+                                              ? zmq::send_flags::sndmore
+                                              : zmq::send_flags::none;
             socket.send(zmq::buffer(frames[i]), flags);
         }
         return true;
@@ -212,7 +218,8 @@ bool ReceiveFrames(zmq::socket_t &socket,
             {
                 return false;
             }
-            frames->emplace_back(static_cast<const char *>(frame.data()), frame.size());
+            frames->emplace_back(static_cast<const char *>(frame.data()),
+                                 frame.size());
             if (!socket.get(zmq::sockopt::rcvmore))
             {
                 return true;
@@ -240,7 +247,9 @@ uint64_t MakeRequestId(std::atomic<uint64_t> &next_request_sequence,
 
 size_t RequestShardIndex(uint64_t request_id, size_t shard_count)
 {
-    return shard_count == 0 ? 0 : static_cast<size_t>((request_id - 1) % shard_count);
+    return shard_count == 0
+               ? 0
+               : static_cast<size_t>((request_id - 1) % shard_count);
 }
 
 std::string MakeResidentIndexKey(const std::string &key, uint32_t partition_id)
@@ -248,7 +257,8 @@ std::string MakeResidentIndexKey(const std::string &key, uint32_t partition_id)
     return std::to_string(partition_id) + "|" + key;
 }
 
-std::vector<std::string> EncodeBufferHandleRecord(const KVCacheBufferHandle &buffer)
+std::vector<std::string> EncodeBufferHandleRecord(
+    const KVCacheBufferHandle &buffer)
 {
     return {
         std::to_string(buffer.request_id),
@@ -257,7 +267,8 @@ std::vector<std::string> EncodeBufferHandleRecord(const KVCacheBufferHandle &buf
     };
 }
 
-std::vector<std::string> EncodeRequestStateRecord(const KVCacheRequestState &state)
+std::vector<std::string> EncodeRequestStateRecord(
+    const KVCacheRequestState &state)
 {
     return {
         std::to_string(state.request_id),
@@ -279,7 +290,8 @@ bool DecodeBufferHandleRecord(const std::vector<std::string> &frames,
     const auto request_id = ParseUint64(frames[offset + 0]);
     const auto offset_bytes = ParseUint64(frames[offset + 1]);
     const auto payload_bytes = ParseUint32(frames[offset + 2]);
-    if (!request_id.has_value() || !offset_bytes.has_value() || !payload_bytes.has_value())
+    if (!request_id.has_value() || !offset_bytes.has_value() ||
+        !payload_bytes.has_value())
     {
         return false;
     }
@@ -301,8 +313,8 @@ bool DecodeRequestStateRecord(const std::vector<std::string> &frames,
     const auto status = ParseUint32(frames[offset + 1]);
     const auto offset_bytes = ParseUint64(frames[offset + 2]);
     const auto payload_bytes = ParseUint32(frames[offset + 3]);
-    if (!request_id.has_value() || !status.has_value() || !offset_bytes.has_value() ||
-        !payload_bytes.has_value())
+    if (!request_id.has_value() || !status.has_value() ||
+        !offset_bytes.has_value() || !payload_bytes.has_value())
     {
         return false;
     }
@@ -315,8 +327,7 @@ bool DecodeRequestStateRecord(const std::vector<std::string> &frames,
 }
 
 std::vector<std::string> HandleManagerIpcMessage(
-    KVCacheManager *manager,
-    const std::vector<std::string> &request_frames)
+    KVCacheManager *manager, const std::vector<std::string> &request_frames)
 {
     if (request_frames.empty())
     {
@@ -336,7 +347,8 @@ std::vector<std::string> HandleManagerIpcMessage(
             return {"error", "failed to parse begin-save payload bytes"};
         }
         KVCacheBufferHandle buffer;
-        if (!manager->BeginSave(request_frames[1], *payload_bytes, &buffer, &error_message))
+        if (!manager->BeginSave(
+                request_frames[1], *payload_bytes, &buffer, &error_message))
         {
             return {"error", error_message};
         }
@@ -373,7 +385,8 @@ std::vector<std::string> HandleManagerIpcMessage(
             return {"error", "failed to parse begin-load payload bytes"};
         }
         uint64_t request_id = 0;
-        if (!manager->BeginLoad(request_frames[1], *payload_bytes, &request_id, &error_message))
+        if (!manager->BeginLoad(
+                request_frames[1], *payload_bytes, &request_id, &error_message))
         {
             return {"error", error_message};
         }
@@ -451,7 +464,8 @@ bool EnsureWorkerSocketConnected(const KVCacheOptions &options,
         }
         if (*socket == nullptr)
         {
-            auto new_socket = std::make_unique<zmq::socket_t>(**context, zmq::socket_type::req);
+            auto new_socket = std::make_unique<zmq::socket_t>(
+                **context, zmq::socket_type::req);
             new_socket->set(zmq::sockopt::linger, 0);
             new_socket->set(zmq::sockopt::rcvtimeo, 5000);
             new_socket->set(zmq::sockopt::sndtimeo, 5000);
@@ -466,7 +480,8 @@ bool EnsureWorkerSocketConnected(const KVCacheOptions &options,
         context->reset();
         if (error_message != nullptr)
         {
-            *error_message = std::string("ZeroMQ worker connect failed: ") + e.what();
+            *error_message =
+                std::string("ZeroMQ worker connect failed: ") + e.what();
         }
         return false;
     }
@@ -505,7 +520,8 @@ bool ExchangeWorkerIpc(zmq::socket_t *socket,
     {
         if (error_message != nullptr)
         {
-            *error_message = std::string("ZeroMQ worker exchange failed: ") + e.what();
+            *error_message =
+                std::string("ZeroMQ worker exchange failed: ") + e.what();
         }
         return false;
     }
@@ -513,18 +529,22 @@ bool ExchangeWorkerIpc(zmq::socket_t *socket,
 
 }  // namespace runtime_internal
 
-bool KVCacheRuntimeHelpers::IsResidentState(KVCacheManager::Impl::EntryStateKind state)
+bool KVCacheRuntimeHelpers::IsResidentState(
+    KVCacheManager::Impl::EntryStateKind state)
 {
     return state == KVCacheManager::Impl::EntryStateKind::MemoryOnlyDirty ||
-           state == KVCacheManager::Impl::EntryStateKind::MemoryAndEloqStoreClean;
+           state ==
+               KVCacheManager::Impl::EntryStateKind::MemoryAndEloqStoreClean;
 }
 
-bool KVCacheRuntimeHelpers::IsDirtyState(KVCacheManager::Impl::EntryStateKind state)
+bool KVCacheRuntimeHelpers::IsDirtyState(
+    KVCacheManager::Impl::EntryStateKind state)
 {
     return state == KVCacheManager::Impl::EntryStateKind::MemoryOnlyDirty;
 }
 
-void KVCacheRuntimeHelpers::ResetEntryToFree(KVCacheManager::Impl::BufferEntryState *entry)
+void KVCacheRuntimeHelpers::ResetEntryToFree(
+    KVCacheManager::Impl::BufferEntryState *entry)
 {
     if (entry == nullptr)
     {
@@ -539,15 +559,16 @@ void KVCacheRuntimeHelpers::ResetEntryToFree(KVCacheManager::Impl::BufferEntrySt
     entry->key.clear();
 }
 
-void KVCacheRuntimeHelpers::TouchResidentLru(KVCacheManager::Impl::ShardState *shard,
-                                             uint32_t entry_id)
+void KVCacheRuntimeHelpers::TouchResidentLru(
+    KVCacheManager::Impl::ShardState *shard, uint32_t entry_id)
 {
     if (shard == nullptr)
     {
         return;
     }
     shard->resident_lru.erase(
-        std::remove(shard->resident_lru.begin(), shard->resident_lru.end(), entry_id),
+        std::remove(
+            shard->resident_lru.begin(), shard->resident_lru.end(), entry_id),
         shard->resident_lru.end());
     shard->resident_lru.push_back(entry_id);
 }
@@ -560,17 +581,20 @@ void KVCacheRuntimeHelpers::RemoveResidentEntryMapping(
     {
         return;
     }
-    shard->resident_entries.erase(runtime_internal::MakeResidentIndexKey(entry->key, entry->partition_id));
-    shard->resident_lru.erase(
-        std::remove(shard->resident_lru.begin(), shard->resident_lru.end(), entry->entry_id),
-        shard->resident_lru.end());
+    shard->resident_entries.erase(runtime_internal::MakeResidentIndexKey(
+        entry->key, entry->partition_id));
+    shard->resident_lru.erase(std::remove(shard->resident_lru.begin(),
+                                          shard->resident_lru.end(),
+                                          entry->entry_id),
+                              shard->resident_lru.end());
 }
 
-bool KVCacheRuntimeHelpers::EnqueueFlushWork(KVCacheManager::Impl *impl,
-                                             KVCacheManager::Impl::ShardState *shard,
-                                             uint32_t shard_index,
-                                             KVCacheManager::Impl::BufferEntryState *entry,
-                                             bool release_after_write)
+bool KVCacheRuntimeHelpers::EnqueueFlushWork(
+    KVCacheManager::Impl *impl,
+    KVCacheManager::Impl::ShardState *shard,
+    uint32_t shard_index,
+    KVCacheManager::Impl::BufferEntryState *entry,
+    bool release_after_write)
 {
     if (impl == nullptr || shard == nullptr || entry == nullptr)
     {
@@ -600,9 +624,11 @@ bool KVCacheRuntimeHelpers::EnqueueFlushWork(KVCacheManager::Impl *impl,
     return true;
 }
 
-uint64_t KVCacheRuntimeHelpers::EntryOffsetBytes(const KVCacheOptions &options, uint32_t entry_id)
+uint64_t KVCacheRuntimeHelpers::EntryOffsetBytes(const KVCacheOptions &options,
+                                                 uint32_t entry_id)
 {
-    return static_cast<uint64_t>(entry_id) * static_cast<uint64_t>(options.entry_size);
+    return static_cast<uint64_t>(entry_id) *
+           static_cast<uint64_t>(options.entry_size);
 }
 
 bool KVCacheRuntimeHelpers::AllocateEntryForRequest(
@@ -626,9 +652,10 @@ bool KVCacheRuntimeHelpers::AllocateEntryForRequest(
     }
 
     auto &impl = *manager->impl_;
-    auto try_reuse_existing_entry = [&]() -> std::optional<uint32_t> {
-        const auto existing_it =
-            shard->resident_entries.find(runtime_internal::MakeResidentIndexKey(key, partition_id));
+    auto try_reuse_existing_entry = [&]() -> std::optional<uint32_t>
+    {
+        const auto existing_it = shard->resident_entries.find(
+            runtime_internal::MakeResidentIndexKey(key, partition_id));
         if (existing_it == shard->resident_entries.end())
         {
             return std::nullopt;
@@ -644,13 +671,15 @@ bool KVCacheRuntimeHelpers::AllocateEntryForRequest(
         return entry.entry_id;
     };
 
-    auto try_take_clean_victim = [&]() -> std::optional<uint32_t> {
+    auto try_take_clean_victim = [&]() -> std::optional<uint32_t>
+    {
         while (!shard->resident_lru.empty())
         {
             const uint32_t candidate_entry_id = shard->resident_lru.front();
             shard->resident_lru.pop_front();
             auto &candidate_entry = impl.entries[candidate_entry_id];
-            if (!IsResidentState(candidate_entry.state) || candidate_entry.flush_in_progress)
+            if (!IsResidentState(candidate_entry.state) ||
+                candidate_entry.flush_in_progress)
             {
                 continue;
             }
@@ -668,7 +697,8 @@ bool KVCacheRuntimeHelpers::AllocateEntryForRequest(
         return std::nullopt;
     };
 
-    auto queue_pressure_flush = [&]() -> bool {
+    auto queue_pressure_flush = [&]() -> bool
+    {
         const size_t resident_count = shard->resident_lru.size();
         for (size_t idx = 0; idx < resident_count; ++idx)
         {
@@ -678,8 +708,11 @@ bool KVCacheRuntimeHelpers::AllocateEntryForRequest(
             {
                 continue;
             }
-            if (EnqueueFlushWork(
-                    &impl, shard, static_cast<uint32_t>(shard_index), &candidate_entry, true))
+            if (EnqueueFlushWork(&impl,
+                                 shard,
+                                 static_cast<uint32_t>(shard_index),
+                                 &candidate_entry,
+                                 true))
             {
                 return true;
             }
@@ -690,7 +723,8 @@ bool KVCacheRuntimeHelpers::AllocateEntryForRequest(
     std::unique_lock<std::mutex> lock(shard->mutex);
     while (true)
     {
-        if (const auto entry_id = try_reuse_existing_entry(); entry_id.has_value())
+        if (const auto entry_id = try_reuse_existing_entry();
+            entry_id.has_value())
         {
             auto &entry = impl.entries[*entry_id];
             entry.state = reserved_state;
@@ -728,14 +762,19 @@ bool KVCacheRuntimeHelpers::AllocateEntryForRequest(
         {
             if (error_message != nullptr)
             {
-                *error_message = "no block slot available and no dirty resident slot can be flushed";
+                *error_message =
+                    "no block slot available and no dirty resident slot can be "
+                    "flushed";
             }
             return false;
         }
-        shard->cv.wait(lock, [&]() {
-            return impl.stopping.load() || !shard->free_entries.empty() ||
-                   !shard->last_flush_error.empty();
-        });
+        shard->cv.wait(lock,
+                       [&]()
+                       {
+                           return impl.stopping.load() ||
+                                  !shard->free_entries.empty() ||
+                                  !shard->last_flush_error.empty();
+                       });
         if (impl.stopping.load())
         {
             if (error_message != nullptr)

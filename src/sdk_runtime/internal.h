@@ -1,6 +1,10 @@
 #pragma once
 
-#include "sdk_runtime.h"
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
@@ -20,16 +24,10 @@
 #include <unordered_set>
 #include <utility>
 #include <vector>
-
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <unistd.h>
-
 #include <zmq.hpp>
 
 #include "eloq_store.h"
+#include "sdk_runtime.h"
 
 namespace eloqstore::sdk
 {
@@ -123,23 +121,27 @@ struct KVCacheRuntimeHelpers
     static bool IsResidentState(KVCacheManager::Impl::EntryStateKind state);
     static bool IsDirtyState(KVCacheManager::Impl::EntryStateKind state);
     static void ResetEntryToFree(KVCacheManager::Impl::BufferEntryState *entry);
-    static void TouchResidentLru(KVCacheManager::Impl::ShardState *shard, uint32_t entry_id);
-    static void RemoveResidentEntryMapping(KVCacheManager::Impl::ShardState *shard,
-                                           KVCacheManager::Impl::BufferEntryState *entry);
+    static void TouchResidentLru(KVCacheManager::Impl::ShardState *shard,
+                                 uint32_t entry_id);
+    static void RemoveResidentEntryMapping(
+        KVCacheManager::Impl::ShardState *shard,
+        KVCacheManager::Impl::BufferEntryState *entry);
     static bool EnqueueFlushWork(KVCacheManager::Impl *impl,
                                  KVCacheManager::Impl::ShardState *shard,
                                  uint32_t shard_index,
                                  KVCacheManager::Impl::BufferEntryState *entry,
                                  bool release_after_write);
-    static uint64_t EntryOffsetBytes(const KVCacheOptions &options, uint32_t entry_id);
-    static bool AllocateEntryForRequest(KVCacheManager *manager,
-                                        size_t shard_index,
-                                        KVCacheManager::Impl::ShardState *shard,
-                                        const std::string &key,
-                                        uint32_t partition_id,
-                                        KVCacheManager::Impl::EntryStateKind reserved_state,
-                                        uint32_t *out_entry_id,
-                                        std::string *error_message);
+    static uint64_t EntryOffsetBytes(const KVCacheOptions &options,
+                                     uint32_t entry_id);
+    static bool AllocateEntryForRequest(
+        KVCacheManager *manager,
+        size_t shard_index,
+        KVCacheManager::Impl::ShardState *shard,
+        const std::string &key,
+        uint32_t partition_id,
+        KVCacheManager::Impl::EntryStateKind reserved_state,
+        uint32_t *out_entry_id,
+        std::string *error_message);
 };
 
 struct KVCacheRuntimeManagerOps
@@ -197,8 +199,10 @@ uint64_t MakeRequestId(std::atomic<uint64_t> &next_request_sequence,
                        uint32_t shard_id);
 size_t RequestShardIndex(uint64_t request_id, size_t shard_count);
 std::string MakeResidentIndexKey(const std::string &key, uint32_t partition_id);
-std::vector<std::string> EncodeBufferHandleRecord(const KVCacheBufferHandle &buffer);
-std::vector<std::string> EncodeRequestStateRecord(const KVCacheRequestState &state);
+std::vector<std::string> EncodeBufferHandleRecord(
+    const KVCacheBufferHandle &buffer);
+std::vector<std::string> EncodeRequestStateRecord(
+    const KVCacheRequestState &state);
 bool DecodeBufferHandleRecord(const std::vector<std::string> &frames,
                               size_t offset,
                               KVCacheBufferHandle *out_buffer);
@@ -206,8 +210,7 @@ bool DecodeRequestStateRecord(const std::vector<std::string> &frames,
                               size_t offset,
                               KVCacheRequestState *out_state);
 std::vector<std::string> HandleManagerIpcMessage(
-    KVCacheManager *manager,
-    const std::vector<std::string> &request_frames);
+    KVCacheManager *manager, const std::vector<std::string> &request_frames);
 bool EnsureWorkerSocketConnected(const KVCacheOptions &options,
                                  std::unique_ptr<zmq::context_t> *context,
                                  std::unique_ptr<zmq::socket_t> *socket,
@@ -216,7 +219,8 @@ bool ExchangeWorkerIpc(zmq::socket_t *socket,
                        const std::vector<std::string> &request_frames,
                        std::vector<std::string> *response_frames,
                        std::string *error_message);
-uint32_t PartitionIdForKey(const KVCacheOptions &options, const std::string &key);
+uint32_t PartitionIdForKey(const KVCacheOptions &options,
+                           const std::string &key);
 
 }  // namespace runtime_internal
 

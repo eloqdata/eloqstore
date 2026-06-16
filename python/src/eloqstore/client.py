@@ -839,9 +839,12 @@ class Client:
             byref(result),
         )
         _ok_status(status)
-        if not result.found:
-            return None
-        return bytes(cast(result.value, POINTER(c_uint8))[: result.value_len])
+        try:
+            if not result.found:
+                return None
+            return bytes(cast(result.value, POINTER(c_uint8))[: result.value_len])
+        finally:
+            lib().CEloqStore_FreeGetResult(byref(result))
 
     def delete(self, key: str | bytes, timestamp: int = 0) -> None:
         """Delete one key through the ordinary CRUD client."""

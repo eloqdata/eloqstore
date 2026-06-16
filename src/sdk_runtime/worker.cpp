@@ -52,19 +52,23 @@ bool KVCacheWorker::AttachBufferPool(const std::string &descriptor,
             return false;
         }
         options_.shared_memory_name = parts[0];
-        options_.shared_memory_bytes = static_cast<size_t>(std::stoull(parts[2]));
+        options_.shared_memory_bytes =
+            static_cast<size_t>(std::stoull(parts[2]));
         options_.entry_size = static_cast<uint32_t>(std::stoul(parts[3]));
         options_.entry_count = static_cast<uint32_t>(std::stoul(parts[4]));
         options_.entry_alignment = static_cast<uint32_t>(std::stoul(parts[5]));
         options_.num_threads = static_cast<uint16_t>(std::stoul(parts[6]));
-        options_.submission_queue_depth = static_cast<uint32_t>(std::stoul(parts[7]));
+        options_.submission_queue_depth =
+            static_cast<uint32_t>(std::stoul(parts[7]));
         options_.partition_count = static_cast<uint32_t>(std::stoul(parts[8]));
     }
     catch (const std::exception &e)
     {
         if (error_message != nullptr)
         {
-            *error_message = std::string("failed to parse buffer pool descriptor: ") + e.what();
+            *error_message =
+                std::string("failed to parse buffer pool descriptor: ") +
+                e.what();
         }
         return false;
     }
@@ -102,10 +106,11 @@ bool KVCacheWorker::BeginSave(const std::string &key,
     }
     std::vector<std::string> response_frames;
     std::lock_guard<std::mutex> lock(ipc_mutex_);
-    if (!EnsureWorkerSocketConnected(options_,
-                                     impl_ != nullptr ? &impl_->ipc_context : nullptr,
-                                     impl_ != nullptr ? &impl_->ipc_socket : nullptr,
-                                     error_message) ||
+    if (!EnsureWorkerSocketConnected(
+            options_,
+            impl_ != nullptr ? &impl_->ipc_context : nullptr,
+            impl_ != nullptr ? &impl_->ipc_socket : nullptr,
+            error_message) ||
         !ExchangeWorkerIpc(impl_ != nullptr ? impl_->ipc_socket.get() : nullptr,
                            {"begin_save", key, std::to_string(payload_bytes)},
                            &response_frames,
@@ -130,12 +135,14 @@ bool KVCacheWorker::BeginSave(const std::string &key,
     {
         if (error_message != nullptr)
         {
-            *error_message = response_frames.size() > 1 ? response_frames[1]
-                                                        : "begin-save ipc request failed";
+            *error_message = response_frames.size() > 1
+                                 ? response_frames[1]
+                                 : "begin-save ipc request failed";
         }
         return false;
     }
-    if (response_frames[0] != "ok" || !DecodeBufferHandleRecord(response_frames, 1, out_buffer))
+    if (response_frames[0] != "ok" ||
+        !DecodeBufferHandleRecord(response_frames, 1, out_buffer))
     {
         if (error_message != nullptr)
         {
@@ -146,15 +153,15 @@ bool KVCacheWorker::BeginSave(const std::string &key,
     return true;
 }
 
-bool KVCacheWorker::FinishSave(uint64_t request_id,
-                               std::string *error_message)
+bool KVCacheWorker::FinishSave(uint64_t request_id, std::string *error_message)
 {
     std::vector<std::string> response_frames;
     std::lock_guard<std::mutex> lock(ipc_mutex_);
-    if (!EnsureWorkerSocketConnected(options_,
-                                     impl_ != nullptr ? &impl_->ipc_context : nullptr,
-                                     impl_ != nullptr ? &impl_->ipc_socket : nullptr,
-                                     error_message) ||
+    if (!EnsureWorkerSocketConnected(
+            options_,
+            impl_ != nullptr ? &impl_->ipc_context : nullptr,
+            impl_ != nullptr ? &impl_->ipc_socket : nullptr,
+            error_message) ||
         !ExchangeWorkerIpc(impl_ != nullptr ? impl_->ipc_socket.get() : nullptr,
                            {"finish_save", std::to_string(request_id)},
                            &response_frames,
@@ -179,8 +186,9 @@ bool KVCacheWorker::FinishSave(uint64_t request_id,
     {
         if (error_message != nullptr)
         {
-            *error_message = response_frames.size() > 1 ? response_frames[1]
-                                                        : "finish-save ipc request failed";
+            *error_message = response_frames.size() > 1
+                                 ? response_frames[1]
+                                 : "finish-save ipc request failed";
         }
         return false;
     }
@@ -202,10 +210,11 @@ bool KVCacheWorker::BeginLoad(const std::string &key,
     }
     std::vector<std::string> response_frames;
     std::lock_guard<std::mutex> lock(ipc_mutex_);
-    if (!EnsureWorkerSocketConnected(options_,
-                                     impl_ != nullptr ? &impl_->ipc_context : nullptr,
-                                     impl_ != nullptr ? &impl_->ipc_socket : nullptr,
-                                     error_message) ||
+    if (!EnsureWorkerSocketConnected(
+            options_,
+            impl_ != nullptr ? &impl_->ipc_context : nullptr,
+            impl_ != nullptr ? &impl_->ipc_socket : nullptr,
+            error_message) ||
         !ExchangeWorkerIpc(impl_ != nullptr ? impl_->ipc_socket.get() : nullptr,
                            {"begin_load", key, std::to_string(payload_bytes)},
                            &response_frames,
@@ -230,8 +239,9 @@ bool KVCacheWorker::BeginLoad(const std::string &key,
     {
         if (error_message != nullptr)
         {
-            *error_message = response_frames.size() > 1 ? response_frames[1]
-                                                        : "begin-load ipc request failed";
+            *error_message = response_frames.size() > 1
+                                 ? response_frames[1]
+                                 : "begin-load ipc request failed";
         }
         return false;
     }
@@ -270,10 +280,11 @@ bool KVCacheWorker::CheckRequest(uint64_t request_id,
     }
     std::vector<std::string> response_frames;
     std::lock_guard<std::mutex> lock(ipc_mutex_);
-    if (!EnsureWorkerSocketConnected(options_,
-                                     impl_ != nullptr ? &impl_->ipc_context : nullptr,
-                                     impl_ != nullptr ? &impl_->ipc_socket : nullptr,
-                                     error_message) ||
+    if (!EnsureWorkerSocketConnected(
+            options_,
+            impl_ != nullptr ? &impl_->ipc_context : nullptr,
+            impl_ != nullptr ? &impl_->ipc_socket : nullptr,
+            error_message) ||
         !ExchangeWorkerIpc(impl_ != nullptr ? impl_->ipc_socket.get() : nullptr,
                            {"check_request", std::to_string(request_id)},
                            &response_frames,
@@ -298,12 +309,14 @@ bool KVCacheWorker::CheckRequest(uint64_t request_id,
     {
         if (error_message != nullptr)
         {
-            *error_message = response_frames.size() > 1 ? response_frames[1]
-                                                        : "check-request ipc request failed";
+            *error_message = response_frames.size() > 1
+                                 ? response_frames[1]
+                                 : "check-request ipc request failed";
         }
         return false;
     }
-    if (response_frames[0] != "ok" || !DecodeRequestStateRecord(response_frames, 1, out_state))
+    if (response_frames[0] != "ok" ||
+        !DecodeRequestStateRecord(response_frames, 1, out_state))
     {
         if (error_message != nullptr)
         {
@@ -336,10 +349,11 @@ bool KVCacheWorker::CheckRequests(const std::vector<uint64_t> &request_ids,
 
     std::vector<std::string> response_frames;
     std::lock_guard<std::mutex> lock(ipc_mutex_);
-    if (!EnsureWorkerSocketConnected(options_,
-                                     impl_ != nullptr ? &impl_->ipc_context : nullptr,
-                                     impl_ != nullptr ? &impl_->ipc_socket : nullptr,
-                                     error_message) ||
+    if (!EnsureWorkerSocketConnected(
+            options_,
+            impl_ != nullptr ? &impl_->ipc_context : nullptr,
+            impl_ != nullptr ? &impl_->ipc_socket : nullptr,
+            error_message) ||
         !ExchangeWorkerIpc(impl_ != nullptr ? impl_->ipc_socket.get() : nullptr,
                            request_frames,
                            &response_frames,
@@ -356,8 +370,9 @@ bool KVCacheWorker::CheckRequests(const std::vector<uint64_t> &request_ids,
     {
         if (error_message != nullptr)
         {
-            *error_message = response_frames.size() > 1 ? response_frames[1]
-                                                        : "check-requests ipc request failed";
+            *error_message = response_frames.size() > 1
+                                 ? response_frames[1]
+                                 : "check-requests ipc request failed";
         }
         return false;
     }
@@ -397,7 +412,8 @@ bool KVCacheWorker::CheckRequests(const std::vector<uint64_t> &request_ids,
         {
             if (error_message != nullptr)
             {
-                *error_message = "failed to decode check-requests response state";
+                *error_message =
+                    "failed to decode check-requests response state";
             }
             return false;
         }
@@ -421,10 +437,11 @@ bool KVCacheWorker::GetReadyBuffer(uint64_t request_id,
     }
     std::vector<std::string> response_frames;
     std::lock_guard<std::mutex> lock(ipc_mutex_);
-    if (!EnsureWorkerSocketConnected(options_,
-                                     impl_ != nullptr ? &impl_->ipc_context : nullptr,
-                                     impl_ != nullptr ? &impl_->ipc_socket : nullptr,
-                                     error_message) ||
+    if (!EnsureWorkerSocketConnected(
+            options_,
+            impl_ != nullptr ? &impl_->ipc_context : nullptr,
+            impl_ != nullptr ? &impl_->ipc_socket : nullptr,
+            error_message) ||
         !ExchangeWorkerIpc(impl_ != nullptr ? impl_->ipc_socket.get() : nullptr,
                            {"get_ready_buffer", std::to_string(request_id)},
                            &response_frames,
@@ -449,12 +466,14 @@ bool KVCacheWorker::GetReadyBuffer(uint64_t request_id,
     {
         if (error_message != nullptr)
         {
-            *error_message = response_frames.size() > 1 ? response_frames[1]
-                                                        : "get-ready-buffer ipc request failed";
+            *error_message = response_frames.size() > 1
+                                 ? response_frames[1]
+                                 : "get-ready-buffer ipc request failed";
         }
         return false;
     }
-    if (response_frames[0] != "ok" || !DecodeBufferHandleRecord(response_frames, 1, out_buffer))
+    if (response_frames[0] != "ok" ||
+        !DecodeBufferHandleRecord(response_frames, 1, out_buffer))
     {
         if (error_message != nullptr)
         {

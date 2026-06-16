@@ -101,6 +101,7 @@ def _configure_library(lib) -> None:
     lib.CEloqStore_Put.restype = c_uint32
     lib.CEloqStore_Get.argtypes = [c_void_p, c_void_p, POINTER(c_uint8), c_size_t, POINTER(CGetResult)]
     lib.CEloqStore_Get.restype = c_uint32
+    lib.CEloqStore_FreeGetResult.argtypes = [POINTER(CGetResult)]
     lib.CEloqStore_Delete.argtypes = [c_void_p, c_void_p, POINTER(c_uint8), c_size_t, c_uint64]
     lib.CEloqStore_Delete.restype = c_uint32
     lib.CEloqStore_Exists.argtypes = [c_void_p, c_void_p, POINTER(c_uint8), c_size_t, POINTER(c_bool)]

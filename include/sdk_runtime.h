@@ -2,9 +2,9 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <mutex>
 #include <optional>
 #include <string>
-#include <mutex>
 #include <vector>
 
 namespace eloqstore::sdk
@@ -96,7 +96,7 @@ struct KVCacheRuntimeMetrics
 
 class KVCacheManager
 {
-  public:
+public:
     // The manager is the scheduler-side owner. It creates shared memory,
     // registers the process-local EloqStore pinned buffer view, accepts worker
     // IPC requests, and drives the real save/load I/O.
@@ -147,13 +147,25 @@ class KVCacheManager
                      std::string *error_message);
     bool GetMetrics(KVCacheRuntimeMetrics *out_metrics,
                     std::string *error_message);
-    const std::vector<ShardLayout> &shards() const { return shards_; }
+    const std::vector<ShardLayout> &shards() const
+    {
+        return shards_;
+    }
 
-    bool started() const { return started_; }
-    bool io_uring_registered() const { return io_uring_registered_; }
-    const KVCacheOptions &options() const { return options_; }
+    bool started() const
+    {
+        return started_;
+    }
+    bool io_uring_registered() const
+    {
+        return io_uring_registered_;
+    }
+    const KVCacheOptions &options() const
+    {
+        return options_;
+    }
 
-  private:
+private:
     friend struct KVCacheRuntimeHelpers;
     friend struct KVCacheRuntimeManagerOps;
     KVCacheOptions options_;
@@ -169,7 +181,7 @@ class KVCacheManager
 
 class KVCacheWorker
 {
-  public:
+public:
     // The worker is only a control-plane stub. It attaches the exported buffer
     // pool descriptor and forwards save/load state transitions to the manager
     // over IPC.
@@ -181,7 +193,8 @@ class KVCacheWorker
 
     // Parse and store the manager-exported descriptor. This does not mmap the
     // segment; higher layers decide how to map and register shared pages.
-    bool AttachBufferPool(const std::string &descriptor, std::string *error_message);
+    bool AttachBufferPool(const std::string &descriptor,
+                          std::string *error_message);
     // Drop the attached descriptor from the worker stub.
     void DetachBufferPool();
     bool BeginSave(const std::string &key,
@@ -202,10 +215,16 @@ class KVCacheWorker
     bool GetReadyBuffer(uint64_t request_id,
                         KVCacheBufferHandle *out_buffer,
                         std::string *error_message);
-    bool attached() const { return attached_; }
-    const std::string &buffer_pool_descriptor() const { return buffer_pool_descriptor_; }
+    bool attached() const
+    {
+        return attached_;
+    }
+    const std::string &buffer_pool_descriptor() const
+    {
+        return buffer_pool_descriptor_;
+    }
 
-  private:
+private:
     struct Impl;
     KVCacheOptions options_;
     bool attached_{false};
