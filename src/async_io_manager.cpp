@@ -53,6 +53,7 @@
 #include "coding.h"
 #include "common.h"
 #include "eloq_store.h"
+#include "fail_point.h"
 #include "kill_point.h"
 #include "kv_options.h"
 #include "standby_service.h"
@@ -1843,6 +1844,33 @@ void IouringMgr::SetBranchFileMapping(const TableIdent &tbl_id,
                                       BranchFileMapping mapping)
 {
     branch_file_mapping_[tbl_id] = std::move(mapping);
+}
+
+void IouringMgr::RollbackBranchFileTail(const TableIdent &tbl_id,
+                                        size_t pre_size,
+                                        FileId pre_max_file_id,
+                                        FileId pre_max_segment_file_id)
+{
+    auto it = branch_file_mapping_.find(tbl_id);
+    if (it == branch_file_mapping_.end())
+    {
+        return;
+    }
+    BranchFileMapping &mapping = it->second;
+    // Drop the (branch, term) entries this aborted task appended (at most one,
+    // but pop defensively until the size matches the snapshot).
+    while (mapping.size() > pre_size)
+    {
+        mapping.pop_back();
+    }
+    // Restore the surviving tail's high-water marks; the task had extended them
+    // in place. When pre_size == 0 the mapping was empty before the task, so
+    // there is nothing left to restore after the pops above.
+    if (pre_size > 0 && !mapping.empty())
+    {
+        mapping.back().max_file_id_ = pre_max_file_id;
+        mapping.back().max_segment_file_id_ = pre_max_segment_file_id;
+    }
 }
 
 std::string_view IouringMgr::InternBranchName(std::string_view name)
@@ -5555,7 +5583,24 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
 KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
                                  std::span<LruFD::Ref> fds)
 {
-    if (options_->data_append_mode && CurrentWriteTask() != nullptr)
+    // Test seam: lets a test force a write task to abort at the flush step
+    // (after it has allocated files and advanced the branch high-water) without
+    // crashing the process, to exercise WriteTask::Abort's rollback.
+    TEST_FAIL_POINT_RETURN("SyncFiles", KvError::Corrupted);
+
+    // The "at most one dirty data file per write task" invariant only holds
+    // when the write-buffer pool is active. With the pool, AppendWritePage
+    // seals each completed data file (uploads it and clears its dirty flag, see
+    // OnDataFileSealed) as the write crosses into the next file, so only the
+    // tail file is left dirty here. Without the pool (HasWriteBufferPool() ==
+    // false) writes take the direct path with no per-file sealing, so a single
+    // write task that legitimately spans several data files -- e.g. a large
+    // overflow value -- leaves all of them dirty, and they are all uploaded
+    // together below. Only enforce the guard when the sealing path is in
+    // effect; firing it otherwise turns a valid large-value write into a
+    // spurious Corrupted/abort.
+    if (options_->data_append_mode && HasWriteBufferPool() &&
+        CurrentWriteTask() != nullptr)
     {
         size_t dirty_data_files = 0;
         for (LruFD::Ref fd : fds)

@@ -14,6 +14,7 @@
 
 #include "common.h"
 #include "error.h"
+#include "fail_point.h"
 #include "kv_options.h"
 #include "test_utils.h"
 #include "types.h"
@@ -428,6 +429,63 @@ TEST_CASE("append mode with restart", "[persist]")
             tbl->Validate();
         }
     }
+}
+
+TEST_CASE("write an overflow page without a write buffer pool (cloud)",
+          "[persist][overflow_kv][cloud]")
+{
+    eloqstore::KvOptions options = cloud_options;
+    options.buffer_pool_size = 1 * eloqstore::MB;  // 1MB buffer pool
+    options.pages_per_file_shift = 0;              // one 4K page per data file
+    eloqstore::EloqStore *store = InitStore(options);
+
+    const eloqstore::TableIdent tbl_id{"overflow-no-wbuf-cloud", 0};
+
+    MapVerifier verify(tbl_id, store);
+    verify.SetValueSize(20 * 1024);  // 20K value (stored via overflow pages)
+
+    // Write the 20K key-value once. MapVerifier::Upsert asserts the write
+    // returns NoError and validates the readback.
+    constexpr uint64_t kKey = 1;
+    verify.Upsert(kKey);
+}
+
+// A write task that aborts after advancing the BranchFileMapping file-id
+// high-water must roll that advance back. Otherwise the next write to the same
+// table allocates a lower file id than the stale recorded max and trips the
+// ascending-order CHECK in SetBranchFileIdTerm (which aborts the process). The
+// SyncFiles fail point forces the abort deterministically; the tiny data files
+// (one 4K page each) make the first write span several files so its high-water
+// is well past file 0.
+TEST_CASE("write task abort rolls back branch file-id high-water (cloud)",
+          "[persist][overflow_kv][cloud][abort]")
+{
+    eloqstore::KvOptions options = cloud_options;
+    options.buffer_pool_size = 1 * eloqstore::MB;  // no write-buffer pool
+    options.pages_per_file_shift = 0;              // one 4K page per data file
+    eloqstore::EloqStore *store = InitStore(options);
+
+    const eloqstore::TableIdent tbl_id{"abort-rollback-cloud", 0};
+
+    auto write = [&](uint64_t key, uint32_t value_len, uint64_t ts)
+    {
+        eloqstore::BatchWriteRequest req;
+        req.SetTableId(tbl_id);
+        req.AddWrite(
+            Key(key), Value(key, value_len), ts, eloqstore::WriteOp::Upsert);
+        store->ExecSync(&req);
+        return req.Error();
+    };
+
+    // Arm the flush fail point: the first SyncFiles returns Corrupted, aborting
+    // the write task after it has stamped file ids well past file 0.
+    eloqstore::FailPoint::GetInstance().ArmOnce("SyncFiles");
+    REQUIRE(write(1, 20 * 1024, 1) == eloqstore::KvError::Corrupted);
+    eloqstore::FailPoint::GetInstance().Disarm();
+
+    // The next write must succeed: Abort rolled the high-water back to its
+    // pre-task value. Without the rollback it regresses and aborts the process.
+    REQUIRE(write(2, 64, 2) == eloqstore::KvError::NoError);
 }
 
 TEST_CASE("append mode survives compression toggles across restarts",

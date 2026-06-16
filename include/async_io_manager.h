@@ -481,6 +481,22 @@ public:
         return empty;
     }
 
+    // Roll back the tail of a table's BranchFileMapping to a pre-write-task
+    // snapshot (size + the tail's two high-water marks). Used by
+    // WriteTask::Abort() to undo the file-id high-water advances an aborted
+    // task made via SetBranchFileIdTerm, so a subsequent write does not
+    // regress.
+    virtual void RollbackBranchFileTail(const TableIdent &tbl_id,
+                                        size_t pre_size,
+                                        FileId pre_max_file_id,
+                                        FileId pre_max_segment_file_id)
+    {
+        (void) tbl_id;
+        (void) pre_size;
+        (void) pre_max_file_id;
+        (void) pre_max_segment_file_id;
+    }
+
     virtual uint64_t ProcessTerm() const
     {
         return 0;
@@ -609,6 +625,12 @@ public:
     // Return the current BranchFileMapping for a table.
     const BranchFileMapping &GetBranchFileMapping(
         const TableIdent &tbl_id) override;
+
+    // Roll back a table's BranchFileMapping tail to a pre-write-task snapshot.
+    void RollbackBranchFileTail(const TableIdent &tbl_id,
+                                size_t pre_size,
+                                FileId pre_max_file_id,
+                                FileId pre_max_segment_file_id) override;
 
     // Process term management for term-aware file naming.
     // Local mode always returns 0.

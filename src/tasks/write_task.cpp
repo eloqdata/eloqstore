@@ -182,6 +182,7 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     seg_mapping_deltas_.clear();
     last_append_file_id_.reset();
     last_seen_segment_file_id_.reset();
+    pre_branch_tail_.size = BranchTailSnapshot::kNotCaptured;
     cow_meta_ = CowRootMeta();
     size_t buf_size = Options()->write_buffer_size;
     if (buf_size == 0)
@@ -207,6 +208,18 @@ void WriteTask::Abort()
     // Always invoke AbortWrite so CloudStoreMgr can clear per-table upload
     // segments and io manager can reset dirty state.
     IoMgr()->AbortWrite(tbl_ident_);
+
+    // Roll back the BranchFileMapping high-water marks this task advanced. The
+    // CoW allocator is discarded below, so without this the branch tail would
+    // stay ahead of it and the next write would regress the file-id order.
+    if (pre_branch_tail_.size != BranchTailSnapshot::kNotCaptured)
+    {
+        IoMgr()->RollbackBranchFileTail(tbl_ident_,
+                                        pre_branch_tail_.size,
+                                        pre_branch_tail_.max_file_id,
+                                        pre_branch_tail_.max_segment_file_id);
+        pre_branch_tail_.size = BranchTailSnapshot::kNotCaptured;
+    }
 
     if (cow_meta_.old_mapping_ != nullptr)
     {
@@ -490,6 +503,25 @@ KvError WriteTask::WaitWrite()
     return err;
 }
 
+void WriteTask::SnapshotBranchTailIfNeeded()
+{
+    // Invoked on every file-id allocation but captures only once per task (on
+    // the first); mark the capture branch cold so the steady-state path stays
+    // cheap.
+    if (__builtin_expect(
+            pre_branch_tail_.size == BranchTailSnapshot::kNotCaptured, 0))
+    {
+        const BranchFileMapping &m = IoMgr()->GetBranchFileMapping(tbl_ident_);
+        pre_branch_tail_.size = m.size();
+        if (!m.empty())
+        {
+            pre_branch_tail_.max_file_id = m.back().max_file_id_;
+            pre_branch_tail_.max_segment_file_id =
+                m.back().max_segment_file_id_;
+        }
+    }
+}
+
 std::pair<PageId, FilePageId> WriteTask::AllocatePage(PageId page_id)
 {
     if (page_id != MaxPageId)
@@ -538,6 +570,7 @@ std::pair<PageId, FilePageId> WriteTask::AllocatePage(PageId page_id)
     FilePageId file_page_id = cow_meta_.mapper_->FilePgAllocator()->Allocate();
     FileId file_id_after_allocate =
         cow_meta_.mapper_->FilePgAllocator()->CurrentFileId();
+    SnapshotBranchTailIfNeeded();
     std::string unused_branch;
     uint64_t unused_term;
     if (!IoMgr()->GetBranchNameAndTerm(tbl_ident_,
@@ -575,6 +608,8 @@ std::pair<PageId, FilePageId> WriteTask::AllocateSegment(PageId page_id)
     FileId file_id_before = seg_mapper->FilePgAllocator()->CurrentFileId();
     FilePageId file_page_id = seg_mapper->FilePgAllocator()->Allocate();
     FileId file_id_after = seg_mapper->FilePgAllocator()->CurrentFileId();
+
+    SnapshotBranchTailIfNeeded();
 
     // After a restart with a new term, the allocator is bumped to a new file
     // whose (branch, term) hasn't been recorded yet. Stamp it on first
