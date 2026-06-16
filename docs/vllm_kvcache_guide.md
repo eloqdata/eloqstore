@@ -94,7 +94,7 @@ such as `ModuleNotFoundError: No module named 'vllm._C'`.
 Install the local EloqStore package:
 
 ```bash
-cd /home/starrysky/workspace/llm/eloqstore
+cd /path/to/eloqstore
 uv pip install -e python
 ```
 
@@ -109,13 +109,13 @@ before building or installing the package.
 To force loading a specific locally built native library during debugging:
 
 ```bash
-export ELOQSTORE_PY_LIB=/home/starrysky/workspace/llm/eloqstore/build/libeloqstore_capi.so
+export ELOQSTORE_PY_LIB=/path/to/eloqstore/build/libeloqstore_capi.so
 ```
 
 Install the multi-turn benchmark dependencies:
 
 ```bash
-uv pip install -r /home/starrysky/workspace/llm/vllm/benchmarks/multi_turn/requirements.txt
+uv pip install -r /path/to/vllm/benchmarks/multi_turn/requirements.txt
 ```
 
 ## Memlock
@@ -167,8 +167,8 @@ Then start EloqStore-backed `vllm` with raised memlock. Example:
 
 ```bash
 sudo prlimit --memlock=unlimited:unlimited -- bash -lc 'nohup \
-  /home/starrysky/workspace/llm/.venv/bin/vllm serve \
-  /home/starrysky/.cache/huggingface/hub/models--Qwen--Qwen3-4B/snapshots/1cfa9a7208912126459214e8b04321603b3df60c \
+  /path/to/venv/bin/vllm serve \
+  Qwen/Qwen3-4B \
   --served-model-name qwen3-4b-eloq \
   --port 8015 \
   --dtype half \
@@ -182,18 +182,18 @@ sudo prlimit --memlock=unlimited:unlimited -- bash -lc 'nohup \
     "kv_connector_module_path": "eloqstore.vllm_connector",
     "kv_role": "kv_both",
     "kv_connector_extra_config": {
-      "store_paths": ["/home/starrysky/workspace/llm/run-artifacts/eloqstore-store"],
+      "store_paths": ["/path/to/eloqstore-store"],
       "memory_bytes": 5368709120,
       "cpu_threads": 2
     }
   }'"'"' \
-  > /home/starrysky/workspace/llm/run-artifacts/eloqstore.log 2>&1 < /dev/null &'
+  > /path/to/logs/eloqstore.log 2>&1 < /dev/null &'
 ```
 
 Check the server:
 
 ```bash
-/home/starrysky/workspace/llm/.venv/bin/python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8015/v1/models', timeout=20).read().decode())"
+/path/to/venv/bin/python -c "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8015/v1/models', timeout=20).read().decode())"
 ```
 
 ## Benchmark
@@ -207,18 +207,18 @@ vllm/benchmarks/multi_turn/benchmark_serving_multi_turn.py
 Example command:
 
 ```bash
-/home/starrysky/workspace/llm/.venv/bin/python \
-  /home/starrysky/workspace/llm/vllm/benchmarks/multi_turn/benchmark_serving_multi_turn.py \
-  --model /home/starrysky/.cache/huggingface/hub/models--Qwen--Qwen3-4B/snapshots/1cfa9a7208912126459214e8b04321603b3df60c \
+/path/to/venv/bin/python \
+  /path/to/vllm/benchmarks/multi_turn/benchmark_serving_multi_turn.py \
+  --model Qwen/Qwen3-4B \
   --served-model-name qwen3-4b-eloq \
   --url http://127.0.0.1:8015 \
-  --input-file /home/starrysky/workspace/llm/run-artifacts/high_hit_over5g_conversations.json \
+  --input-file /path/to/high_hit_over5g_conversations.json \
   --num-clients 1 \
   --max-active-conversations 64 \
   --max-num-requests 128 \
   --max-turns 4 \
   --request-timeout-sec 300 \
-  --stats-json-output /home/starrysky/workspace/llm/run-artifacts/high_hit_stats_eloq.json
+  --stats-json-output /path/to/high_hit_stats_eloq.json
 ```
 
 The benchmark input can either be:
