@@ -3426,13 +3426,13 @@ KvError IouringMgr::DeleteFiles(const std::vector<std::string> &file_paths)
     };
 
     KvError first_error = KvError::NoError;
-    // Chunk submission. GC of a partition that accumulated many dead files used
-    // to build one unlink SQE per file in a single uninterrupted loop before a
-    // single WaitIo -- with thousands of files that loop held the shard worker
-    // thread for tens of ms (observed ~27ms in GC:DeleteSegment), stalling Redis
-    // serving on the same core. WaitIo() between chunks yields the worker so
-    // foreground requests are served between batches; the bounded per-chunk
-    // build keeps any single resume short.
+    // Chunk submission. GC of a partition that accumulated many dead files
+    // used to build one unlink SQE per file in a single uninterrupted loop
+    // before a single WaitIo -- with thousands of files that loop held the
+    // shard worker thread for tens of ms (observed ~27ms in GC:DeleteSegment),
+    // stalling Redis serving on the same core. WaitIo() between chunks yields
+    // the worker so foreground requests are served between batches; the
+    // bounded per-chunk build keeps any single resume short.
     constexpr size_t kUnlinkChunk = 128;
     for (size_t base = 0; base < file_paths.size(); base += kUnlinkChunk)
     {
@@ -3441,24 +3441,25 @@ KvError IouringMgr::DeleteFiles(const std::vector<std::string> &file_paths)
         reqs.reserve(end - base);
         for (size_t i = base; i < end; ++i)
         {
-            reqs.emplace_back();
-            reqs.back().task_ = current_task;
-            reqs.back().path = file_paths[i];
-            io_uring_sqe *unlink_sqe =
-                GetSQE(UserDataType::BaseReq, &reqs.back());
-            io_uring_prep_unlinkat(
-                unlink_sqe, AT_FDCWD, reqs.back().path.c_str(), 0);
+            UnlinkReq &req = reqs.emplace_back();
+            req.task_ = current_task;
+            req.path = file_paths[i];
+            io_uring_sqe *unlink_sqe = GetSQE(UserDataType::BaseReq, &req);
+            io_uring_prep_unlinkat(unlink_sqe, AT_FDCWD, req.path.c_str(), 0);
         }
 
         current_task->WaitIo();
 
         for (const auto &req : reqs)
         {
-            if (req.res_ < 0 && first_error == KvError::NoError)
+            if (req.res_ < 0)
             {
                 LOG(ERROR) << "Failed to unlink file: " << req.path
                            << ", error: " << req.res_;
-                first_error = ToKvError(req.res_);
+                if (first_error == KvError::NoError)
+                {
+                    first_error = ToKvError(req.res_);
+                }
             }
         }
     }

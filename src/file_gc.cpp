@@ -639,22 +639,33 @@ KvError AugmentRetainedFilesFromBranchManifests(
     CloudStoreMgr *cloud_mgr =
         is_cloud ? static_cast<CloudStoreMgr *>(io_mgr) : nullptr;
 
-    // Optimization: the active branch's current-term retained files were already
-    // derived from the in-memory mapping by BuildRetainedFiles, and its guard by
-    // SeedActiveBranchGuardFromInMemory -- and the in-memory RootMeta is at least
-    // as current as the on-disk manifest for the active branch (see the note in
-    // SeedActiveBranchGuardFromInMemory). So re-reading and replaying the active
-    // branch's current manifest from disk here is pure redundant work -- it is
-    // the dominant GC:Augment cost (manifest replay + full mapping-table walk on
-    // every compaction). Skip it, but ONLY when the in-memory RootMeta is present
-    // (otherwise the disk manifest is the sole reference and MUST be processed).
-    // Non-active branches and archives still go through disk: they may be updated
-    // by other instances and have no trustworthy in-memory mapping here.
+    // Optimization: the active branch's current-term retained files were
+    // already derived from the in-memory mapping by BuildRetainedFiles, and
+    // its in-flight guard by SeedActiveBranchGuardFromInMemory -- and the
+    // in-memory RootMeta is at least as current as the on-disk active-branch
+    // manifest (see the rationale in ExecuteLocalGC step 2a). So re-reading
+    // and replaying the active branch's current manifest from disk here is
+    // pure redundant work -- the dominant GC:Augment cost (manifest replay +
+    // full mapping-table walk on every compaction). Skip it, but ONLY when a
+    // non-stub in-memory RootMeta is present -- the same condition under which
+    // BuildRetainedFiles actually populated retained_files from memory:
+    // FindRoot returns NotFound for a stub RootMeta (mapper_ == nullptr) and
+    // BuildRetainedFiles then leaves the active branch with no retained files,
+    // so matching that predicate here avoids skipping the disk manifest when
+    // memory in fact holds nothing for the active branch. Non-active branches
+    // and archives still go through disk: they may be updated by other
+    // instances and have no trustworthy in-memory mapping here.
     const std::string_view active_branch = io_mgr->GetActiveBranch();
     const uint64_t active_term = io_mgr->ProcessTerm();
+    // Pure in-memory, no load/yield: mirror FindRoot's stub detection
+    // (mapper_ == nullptr -> NotFound) without its side effects. No yields
+    // between Find() and the mapper_ read, so the entry cannot be evicted.
+    RootMetaMgr::Entry *active_entry =
+        shard != nullptr
+            ? shard->IndexManager()->RootMetaManager()->Find(tbl_id)
+            : nullptr;
     const bool active_in_memory =
-        shard != nullptr &&
-        shard->IndexManager()->RootMetaManager()->Find(tbl_id) != nullptr;
+        active_entry != nullptr && active_entry->meta_.mapper_ != nullptr;
 
     // --- Process regular manifests ---
     for (size_t i = 0; i < manifest_branch_names.size(); ++i)
@@ -1285,11 +1296,12 @@ KvError DeleteUnreferencedLocalSegmentFiles(
         return KvError::NoError;
     }
 
-    // NOTE: keep the fdatasync (sync_dirty defaults true) even though these
-    // files are about to be unlinked. Skipping it does NOT save the I/O -- it
-    // lets dirty pages accumulate and the kernel flushes them in an
-    // uncontrolled synchronous burst at close()/unlink(), which measured ~10x
-    // WORSE (single GC segment 365ms vs 25ms). The explicit batched io_uring
+    // NOTE: keep the fdatasync (CloseFiles unconditionally fdatasyncs dirty
+    // FDs before closing) even though these files are about to be unlinked.
+    // Skipping it does NOT save the I/O -- it lets dirty pages accumulate and
+    // the kernel flushes them in an uncontrolled synchronous burst at
+    // close()/unlink(), which measured ~10x WORSE (one GC segment 365ms vs
+    // 25ms, write-heavy overwrite workload). The explicit batched io_uring
     // fdatasync here is controlled writeback.
     KvError close_err = io_mgr->CloseFiles(tbl_id, file_ids_to_close);
     if (close_err != KvError::NoError)

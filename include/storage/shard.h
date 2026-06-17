@@ -66,6 +66,18 @@ public:
     PagesPool *PagePool();
     GlobalRegisteredMemory *GlobalRegMem();
 
+    // Microseconds the currently-running coroutine has held the worker thread
+    // since its last resume (i.e. since its last yield). Long-running
+    // background loops (compaction / file GC) poll this and YieldToLowPQ()
+    // once it exceeds the cooperative yield budget (see
+    // MaybeYieldForCompaction), so no single segment holds the brpc worker --
+    // and, in module mode, the Redis request it co-drives -- for much longer
+    // than the budget.
+    uint64_t CurResumeElapsedUs()
+    {
+        return DurationMicroseconds(cur_resume_start_us_);
+    }
+
     std::atomic<bool> io_mgr_and_page_pool_inited_{false};
 
 #ifdef ELOQ_MODULE_ENABLED
@@ -115,19 +127,6 @@ private:
 
     uint64_t DurationMicroseconds(uint64_t start_us);
 
-public:
-    // Microseconds the currently-running coroutine has held the worker thread
-    // since its last resume (i.e. since its last yield). Long-running background
-    // loops (compaction / file GC) poll this and YieldToLowPQ() once it exceeds
-    // the cooperative yield budget (see MaybeYieldForCompaction), so a single
-    // segment never stalls the brpc worker -- and the Redis serving the worker
-    // also drives, in module mode -- for more than ~budget.
-    uint64_t CurResumeElapsedUs()
-    {
-        return ReadTimeMicroseconds() - cur_resume_start_us_;
-    }
-
-private:
     template <typename F>
     void StartTask(KvTask *task, KvRequest *req, F lbd)
     {
@@ -136,6 +135,10 @@ private:
         task->needs_auto_reopen_ = false;
         task->needs_oom_retry_ = false;
         running_ = task;
+        // Mark the resume start so a cooperative background loop measures this
+        // first segment from now, not from the previously resumed task's
+        // timestamp (see CurResumeElapsedUs / MaybeYieldForCompaction).
+        cur_resume_start_us_ = ReadTimeMicroseconds();
         task->coro_ = boost::context::callcc(
             std::allocator_arg,
             stack_allocator_,

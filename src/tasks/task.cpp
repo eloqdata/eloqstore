@@ -17,9 +17,10 @@
 
 namespace eloqstore
 {
-// Defined in shard.cpp inside namespace eloqstore -- the DECLARE must share that
-// namespace or the FLAGS_ symbol resolves to ::fLU64::FLAGS_... and fails to
-// link.
+// eloqstore_compaction_yield_budget_us is DEFINE_uint64'd in shard.cpp inside
+// namespace eloqstore. The DECLARE must share that namespace: gflags exports
+// FLAGS_<name> relative to the enclosing namespace, so declaring it elsewhere
+// references a different symbol and fails to link.
 DECLARE_uint64(eloqstore_compaction_yield_budget_us);
 
 void KvTask::Yield()
@@ -604,9 +605,10 @@ KvTask *ThdTask()
 
 void MaybeYieldForCompaction()
 {
-    // Null-safe: some callers (e.g. ListLocalFiles) may also run outside a
-    // coroutine task context (startup/recovery); only yield when a task is
-    // actually running on this shard.
+    // Null-safe defensive guard: only yield when a task is actually running on
+    // this shard. Every current caller (the compaction / file-GC loops) runs
+    // as a coroutine body with running_ set, so the guard does not fire in
+    // practice; it just keeps the helper safe to call from any context.
     if (shard == nullptr || shard->running_ == nullptr)
     {
         return;

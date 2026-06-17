@@ -238,7 +238,8 @@ KvError BackgroundWrite::DoCompactDataFile(MovingCachedPages &moving_cached)
             round_cnt = 0;
         }
         // Time-budgeted yield: bound how long this rewrite pass can hold the
-        // worker thread between the coarse per-256-file yields above.
+        // worker thread between the coarse yields above, which fire only every
+        // 256 processed page mappings (round_cnt counts mappings, not files).
         MaybeYieldForCompaction();
         FilePageId end_fp_id = (file_id + 1) << opts->pages_per_file_shift;
         while (it_high != fp_ids.end() && it_high->first < end_fp_id)
