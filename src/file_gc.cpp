@@ -369,7 +369,7 @@ KvError ListLocalFiles(const TableIdent &tbl_id,
         // Synchronous readdir+stat per entry; a partition dir with many data
         // files can otherwise hold the worker thread for tens of ms in one
         // uninterrupted segment. Yield once the budget is exceeded.
-        MaybeYieldForCompaction();
+        MaybeYield();
         const std::string name = it->path().filename();
         if (boost::algorithm::ends_with(name, TmpSuffix))
         {
@@ -460,7 +460,7 @@ void ClassifyFiles(const std::vector<std::string> &files,
     {
         // Per-file CPU parse; with many accumulated files this loop can hold
         // the worker thread for tens of ms. Yield once over budget.
-        MaybeYieldForCompaction();
+        MaybeYield();
         // Ignore temporary files.
         if (boost::algorithm::ends_with(file_name, TmpSuffix))
         {
@@ -670,7 +670,7 @@ KvError AugmentRetainedFilesFromBranchManifests(
     // --- Process regular manifests ---
     for (size_t i = 0; i < manifest_branch_names.size(); ++i)
     {
-        MaybeYieldForCompaction();
+        MaybeYield();
         const std::string &branch = manifest_branch_names[i];
         uint64_t term = manifest_terms[i];
         if (active_in_memory && term == active_term && branch == active_branch)
@@ -1118,7 +1118,7 @@ KvError DeleteUnreferencedLocalFiles(
 
     for (const std::string &file_name : data_files)
     {
-        MaybeYieldForCompaction();
+        MaybeYield();
         auto ret = ParseFileName(file_name);
         if (ret.first != FileNameData)
         {
@@ -1240,7 +1240,7 @@ KvError DeleteUnreferencedLocalSegmentFiles(
 
     for (const std::string &file_name : segment_files)
     {
-        MaybeYieldForCompaction();
+        MaybeYield();
         auto ret = ParseFileName(file_name);
         if (ret.first != FileNameSegment)
         {
@@ -1347,7 +1347,7 @@ KvError DeleteUnreferencedCloudSegmentFiles(
 
     for (const std::string &file_name : segment_files)
     {
-        MaybeYieldForCompaction();
+        MaybeYield();
         auto ret = ParseFileName(file_name);
         if (ret.first != FileNameSegment)
         {

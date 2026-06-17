@@ -67,10 +67,9 @@ public:
     GlobalRegisteredMemory *GlobalRegMem();
 
     // Microseconds the currently-running coroutine has held the worker thread
-    // since its last resume (i.e. since its last yield). Long-running
-    // background loops (compaction / file GC) poll this and YieldToLowPQ()
-    // once it exceeds the cooperative yield budget (see
-    // MaybeYieldForCompaction), so no single segment holds the brpc worker --
+    // since its last resume (i.e. since its last yield). Long-running task
+    // loops poll this via MaybeYield() and YieldToLowPQ() once it exceeds the
+    // cooperative yield budget, so no single segment holds the brpc worker --
     // and, in module mode, the Redis request it co-drives -- for much longer
     // than the budget.
     uint64_t CurResumeElapsedUs()
@@ -137,7 +136,7 @@ private:
         running_ = task;
         // Mark the resume start so a cooperative background loop measures this
         // first segment from now, not from the previously resumed task's
-        // timestamp (see CurResumeElapsedUs / MaybeYieldForCompaction).
+        // timestamp (see CurResumeElapsedUs / MaybeYield).
         cur_resume_start_us_ = ReadTimeMicroseconds();
         task->coro_ = boost::context::callcc(
             std::allocator_arg,

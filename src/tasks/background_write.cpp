@@ -229,22 +229,16 @@ KvError BackgroundWrite::DoCompactDataFile(MovingCachedPages &moving_cached)
     const FileId end_file_id = allocator->CurrentFileId();
     FileId min_file_id = end_file_id;
     uint32_t empty_file_cnt = 0;
-    size_t round_cnt = 0;
     for (FileId file_id = begin_file_id; file_id < end_file_id; file_id++)
     {
-        if ((round_cnt & 0xFF) == 0)
-        {
-            YieldToLowPQ();
-            round_cnt = 0;
-        }
-        // Time-budgeted yield: bound how long this rewrite pass can hold the
-        // worker thread between the coarse yields above, which fire only every
-        // 256 processed page mappings (round_cnt counts mappings, not files).
-        MaybeYieldForCompaction();
+        // Time-budgeted cooperative yield: bound how long this rewrite pass
+        // holds the worker thread in one segment. Replaces the old coarse
+        // count-based yield (every 256 mappings); the time budget self-tunes
+        // to actual segment cost.
+        MaybeYield();
         FilePageId end_fp_id = (file_id + 1) << opts->pages_per_file_shift;
         while (it_high != fp_ids.end() && it_high->first < end_fp_id)
         {
-            ++round_cnt;
             it_high++;
         }
         if (it_low == it_high)
@@ -405,7 +399,6 @@ KvError BackgroundWrite::DoCompactSegmentFile()
     const FileId end_file_id = seg_allocator->CurrentFileId();
     FileId min_file_id = end_file_id;
     uint32_t empty_file_cnt = 0;
-    size_t round_cnt = 0;
     size_t segments_since_yield = 0;
     const uint32_t yield_every = opts->segment_compact_yield_every;
 
@@ -415,17 +408,13 @@ KvError BackgroundWrite::DoCompactSegmentFile()
         fp_ids.front().first >> opts->segments_per_file_shift;
     for (FileId file_id = begin_file_id; file_id < end_file_id; ++file_id)
     {
-        if ((round_cnt & 0xFF) == 0)
-        {
-            YieldToLowPQ();
-            round_cnt = 0;
-        }
-        MaybeYieldForCompaction();
+        // Time-budgeted cooperative yield (see DoCompactDataFile): replaces the
+        // old coarse count-based yield with a self-tuning per-segment budget.
+        MaybeYield();
         FilePageId end_fp_id = FilePageId(file_id + 1)
                                << opts->segments_per_file_shift;
         while (it_high != fp_ids.end() && it_high->first < end_fp_id)
         {
-            ++round_cnt;
             ++it_high;
         }
         if (it_low == it_high)

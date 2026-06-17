@@ -46,15 +46,19 @@ DEFINE_uint64(max_processing_time_microseconds,
               "Max processing time in microseconds for low priority tasks.");
 #endif
 
-// Cooperative yield budget: background compaction / file-GC loops poll
-// CurResumeElapsedUs() and YieldToLowPQ() once a single uninterrupted segment
-// exceeds this many microseconds. This bounds how long one segment can stall
-// the brpc worker (and the Redis serving it co-drives in module mode), which is
-// the direct cause of foreground SET/GET tail-latency spikes during compaction.
-DEFINE_uint64(eloqstore_compaction_yield_budget_us,
-              500,
-              "Max microseconds a compaction/GC coroutine segment may hold the "
-              "shard worker thread before cooperatively yielding.");
+// Per-segment cooperative yield budget. Any long-running task loop polls
+// MaybeYield(), which calls YieldToLowPQ() once the current coroutine segment
+// (time since its last resume, via CurResumeElapsedUs()) exceeds this many
+// microseconds. This bounds how long one uninterrupted segment can stall the
+// brpc worker (and, in module mode, the Redis request it co-drives) -- the
+// direct cause of foreground SET/GET tail-latency spikes during compaction/GC.
+// Distinct from max_processing_time_microseconds, which is a per-round budget
+// the scheduler checks only between task resumes and so cannot preempt a single
+// non-yielding segment.
+DEFINE_uint64(eloqstore_yield_budget_us,
+              20,
+              "Max microseconds a long-running task coroutine segment may hold "
+              "the shard worker thread before cooperatively yielding.");
 
 Shard::Shard(EloqStore *store, size_t shard_id, uint32_t fd_limit)
     : store_(store),
