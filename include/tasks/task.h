@@ -37,8 +37,10 @@ const Comparator *Comp();
 // file GC, manifest replay, large scans, ...). Yields the running task to the
 // low-priority queue once it has held the worker thread past
 // eloqstore_yield_budget_us since its last resume, so no single uninterrupted
-// segment stalls foreground serving. Cheap to call every iteration (one
-// rdtsc-based read + compare).
+// segment stalls foreground serving. The check reads the clock (one rdtsc +
+// divide); call it every iteration in loops whose body is a syscall / IO, but
+// in very cheap loop bodies poll it once every N iterations to amortize the
+// read.
 void MaybeYield();
 
 enum class TaskStatus : uint8_t

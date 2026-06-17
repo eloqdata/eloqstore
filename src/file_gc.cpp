@@ -96,6 +96,16 @@ namespace FileGarbageCollector
 
 namespace
 {
+// Amortized cooperative-yield poll rate for the cheap per-file scan loops
+// (ClassifyFiles / DeleteUnreferenced*): their body is a single filename parse,
+// so calling MaybeYield() -- which reads the clock -- every iteration would be
+// a large fraction of the loop. Poll the budget once per this many iterations
+// instead; the time-based yield still bounds the stall (a few hundred parses is
+// tens of us, vs the tens-of-ms segments this targets). Loops doing a syscall /
+// IO per iteration (ListLocalFiles, manifest replay) keep calling MaybeYield()
+// every iteration -- there the clock read is already negligible.
+constexpr uint64_t kYieldPollStride = 256;
+
 // For the local active branch, derive the in-flight boundary from the
 // in-memory RootMeta. The boundary is RootMeta::first_unflushed_*_fp_id_,
 // which is the FilePageAllocator's MaxFilePageId() at the moment of the
@@ -456,11 +466,16 @@ void ClassifyFiles(const std::vector<std::string> &files,
         segment_files->clear();
     }
 
+    uint64_t poll_i = 0;
     for (const std::string &file_name : files)
     {
         // Per-file CPU parse; with many accumulated files this loop can hold
-        // the worker thread for tens of ms. Yield once over budget.
-        MaybeYield();
+        // the worker thread for tens of ms. Poll the yield budget amortized
+        // (kYieldPollStride) so the clock read is not paid on every file.
+        if (poll_i++ % kYieldPollStride == 0)
+        {
+            MaybeYield();
+        }
         // Ignore temporary files.
         if (boost::algorithm::ends_with(file_name, TmpSuffix))
         {
@@ -1116,9 +1131,15 @@ KvError DeleteUnreferencedLocalFiles(
     filenames_to_delete.reserve(data_files.size());
     file_ids_to_close.reserve(data_files.size());
 
+    uint64_t poll_i = 0;
     for (const std::string &file_name : data_files)
     {
-        MaybeYield();
+        // Cheap per-file parse: amortize the yield-budget check
+        // (kYieldPollStride) instead of reading the clock every iteration.
+        if (poll_i++ % kYieldPollStride == 0)
+        {
+            MaybeYield();
+        }
         auto ret = ParseFileName(file_name);
         if (ret.first != FileNameData)
         {
@@ -1238,9 +1259,15 @@ KvError DeleteUnreferencedLocalSegmentFiles(
     filenames_to_delete.reserve(segment_files.size());
     file_ids_to_close.reserve(segment_files.size());
 
+    uint64_t poll_i = 0;
     for (const std::string &file_name : segment_files)
     {
-        MaybeYield();
+        // Cheap per-file parse: amortize the yield-budget check
+        // (kYieldPollStride) instead of reading the clock every iteration.
+        if (poll_i++ % kYieldPollStride == 0)
+        {
+            MaybeYield();
+        }
         auto ret = ParseFileName(file_name);
         if (ret.first != FileNameSegment)
         {
@@ -1345,9 +1372,15 @@ KvError DeleteUnreferencedCloudSegmentFiles(
     std::vector<std::string> files_to_delete;
     const uint64_t process_term = cloud_mgr->ProcessTerm();
 
+    uint64_t poll_i = 0;
     for (const std::string &file_name : segment_files)
     {
-        MaybeYield();
+        // Cheap per-file parse: amortize the yield-budget check
+        // (kYieldPollStride) instead of reading the clock every iteration.
+        if (poll_i++ % kYieldPollStride == 0)
+        {
+            MaybeYield();
+        }
         auto ret = ParseFileName(file_name);
         if (ret.first != FileNameSegment)
         {
