@@ -253,7 +253,7 @@ KvError BatchWriteTask::Apply()
 {
     // directly go to low priority queue and wait for scheduling
     YieldToLowPQ();
-    KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
+    KvError err = MakeCowRoot();
     cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     CHECK_KV_ERR(err);
     err = ApplyBatch(cow_meta_.root_id_, true);
@@ -1831,7 +1831,7 @@ std::pair<MemCachedPage::Handle, KvError> BatchWriteTask::TruncateIndexPage(
 
 KvError BatchWriteTask::Truncate(std::string_view trunc_pos)
 {
-    KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
+    KvError err = MakeCowRoot();
     CHECK_KV_ERR(err);
     if (cow_meta_.root_id_ == MaxPageId)
     {
@@ -2048,7 +2048,7 @@ KvError BatchWriteTask::CleanExpiredKeys()
         return KvError::NoError;
     }
 
-    err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
+    err = MakeCowRoot();
     CHECK_KV_ERR(err);
     assert(cow_meta_.next_expire_ts_ != 0 &&
            cow_meta_.next_expire_ts_ <= now_ts_ms);

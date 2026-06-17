@@ -102,7 +102,7 @@ KvError BackgroundWrite::Compact()
     const KvOptions *opts = Options();
 
     LOG(INFO) << "begin compaction on " << tbl_ident_;
-    KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
+    KvError err = MakeCowRoot();
     CHECK_KV_ERR(err);
 
     // Short-circuit when there is nothing to compact and nothing to GC:

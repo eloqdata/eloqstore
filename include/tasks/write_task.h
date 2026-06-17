@@ -159,9 +159,16 @@ protected:
     KvError WritePage(VarPage page, FilePageId file_page_id);
     KvError AppendWritePage(VarPage page, FilePageId file_page_id);
     void FlushAppendWrites();
-    // Capture pre_branch_tail_ on this task's first file-id allocation so
-    // Abort() can roll back the BranchFileMapping high-water advances.
-    void SnapshotBranchTailIfNeeded();
+    // Build this task's CoW root and snapshot the branch-file-mapping tail in
+    // one step: forwards to PageManager::MakeCowRoot, and on success captures
+    // the tail (before any allocation can advance it) so Abort() can roll the
+    // BranchFileMapping high-water marks back. On failure returns the
+    // PageManager error without capturing. Call this instead of
+    // shard->IndexManager()->MakeCowRoot() from write paths.
+    KvError MakeCowRoot();
+    // Capture pre_branch_tail_ once, from MakeCowRoot() at task start. Asserts
+    // it has not already been captured this task (Reset() clears it).
+    void SnapshotBranchTail();
     KvError WaitPendingUploads();
     KvError ConsumePendingUploadResults();
     std::pair<FileId, uint32_t> ConvFilePageId(FilePageId file_page_id) const;
@@ -191,14 +198,14 @@ protected:
     // next write to allocate a lower file id than the recorded max and trip the
     // ascending-order CHECK. A task only ever touches the tail, so remembering
     // the pre-task size and the tail's two maxima is enough to undo it -- no
-    // need to copy the whole mapping. size == kNotCaptured means not captured
+    // need to copy the whole mapping. size_ == kNotCaptured means not captured
     // yet.
     struct BranchTailSnapshot
     {
         static constexpr size_t kNotCaptured = ~size_t{0};
-        size_t size{kNotCaptured};
-        FileId max_file_id{0};
-        FileId max_segment_file_id{0};
+        size_t size_{kNotCaptured};
+        FileId max_file_id_{0};
+        FileId max_segment_file_id_{0};
     };
     BranchTailSnapshot pre_branch_tail_;
 

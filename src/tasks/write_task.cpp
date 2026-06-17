@@ -182,7 +182,7 @@ void WriteTask::Reset(const TableIdent &tbl_id)
     seg_mapping_deltas_.clear();
     last_append_file_id_.reset();
     last_seen_segment_file_id_.reset();
-    pre_branch_tail_.size = BranchTailSnapshot::kNotCaptured;
+    pre_branch_tail_.size_ = BranchTailSnapshot::kNotCaptured;
     cow_meta_ = CowRootMeta();
     size_t buf_size = Options()->write_buffer_size;
     if (buf_size == 0)
@@ -212,13 +212,13 @@ void WriteTask::Abort()
     // Roll back the BranchFileMapping high-water marks this task advanced. The
     // CoW allocator is discarded below, so without this the branch tail would
     // stay ahead of it and the next write would regress the file-id order.
-    if (pre_branch_tail_.size != BranchTailSnapshot::kNotCaptured)
+    if (pre_branch_tail_.size_ != BranchTailSnapshot::kNotCaptured)
     {
         IoMgr()->RollbackBranchFileTail(tbl_ident_,
-                                        pre_branch_tail_.size,
-                                        pre_branch_tail_.max_file_id,
-                                        pre_branch_tail_.max_segment_file_id);
-        pre_branch_tail_.size = BranchTailSnapshot::kNotCaptured;
+                                        pre_branch_tail_.size_,
+                                        pre_branch_tail_.max_file_id_,
+                                        pre_branch_tail_.max_segment_file_id_);
+        pre_branch_tail_.size_ = BranchTailSnapshot::kNotCaptured;
     }
 
     if (cow_meta_.old_mapping_ != nullptr)
@@ -503,22 +503,28 @@ KvError WriteTask::WaitWrite()
     return err;
 }
 
-void WriteTask::SnapshotBranchTailIfNeeded()
+KvError WriteTask::MakeCowRoot()
 {
-    // Invoked on every file-id allocation but captures only once per task (on
-    // the first); mark the capture branch cold so the steady-state path stays
-    // cheap.
-    if (__builtin_expect(
-            pre_branch_tail_.size == BranchTailSnapshot::kNotCaptured, 0))
+    KvError err = shard->IndexManager()->MakeCowRoot(tbl_ident_, cow_meta_);
+    CHECK_KV_ERR(err);
+    SnapshotBranchTail();
+    return KvError::NoError;
+}
+
+void WriteTask::SnapshotBranchTail()
+{
+    // Called exactly once per task, from MakeCowRoot(), before any allocation
+    // can advance the branch tail. Abort() rolls the BranchFileMapping
+    // high-water marks back to this captured value. Reset() leaves size_ at
+    // kNotCaptured at task start, and each task makes exactly one CoW root, so
+    // a second capture would mean a clobbered snapshot -- assert against it.
+    assert(pre_branch_tail_.size_ == BranchTailSnapshot::kNotCaptured);
+    const BranchFileMapping &m = IoMgr()->GetBranchFileMapping(tbl_ident_);
+    pre_branch_tail_.size_ = m.size();
+    if (!m.empty())
     {
-        const BranchFileMapping &m = IoMgr()->GetBranchFileMapping(tbl_ident_);
-        pre_branch_tail_.size = m.size();
-        if (!m.empty())
-        {
-            pre_branch_tail_.max_file_id = m.back().max_file_id_;
-            pre_branch_tail_.max_segment_file_id =
-                m.back().max_segment_file_id_;
-        }
+        pre_branch_tail_.max_file_id_ = m.back().max_file_id_;
+        pre_branch_tail_.max_segment_file_id_ = m.back().max_segment_file_id_;
     }
 }
 
@@ -570,7 +576,6 @@ std::pair<PageId, FilePageId> WriteTask::AllocatePage(PageId page_id)
     FilePageId file_page_id = cow_meta_.mapper_->FilePgAllocator()->Allocate();
     FileId file_id_after_allocate =
         cow_meta_.mapper_->FilePgAllocator()->CurrentFileId();
-    SnapshotBranchTailIfNeeded();
     std::string unused_branch;
     uint64_t unused_term;
     if (!IoMgr()->GetBranchNameAndTerm(tbl_ident_,
@@ -608,8 +613,6 @@ std::pair<PageId, FilePageId> WriteTask::AllocateSegment(PageId page_id)
     FileId file_id_before = seg_mapper->FilePgAllocator()->CurrentFileId();
     FilePageId file_page_id = seg_mapper->FilePgAllocator()->Allocate();
     FileId file_id_after = seg_mapper->FilePgAllocator()->CurrentFileId();
-
-    SnapshotBranchTailIfNeeded();
 
     // After a restart with a new term, the allocator is bumped to a new file
     // whose (branch, term) hasn't been recorded yet. Stamp it on first
