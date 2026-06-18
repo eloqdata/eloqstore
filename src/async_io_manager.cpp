@@ -2378,11 +2378,15 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     // WaitIo; that is brief, lock-ordered contention (the eloqstore Mutex
     // yields, never deadlocks), released as each chunk completes.
     constexpr size_t kCloseChunk = 128;
+    // Reused across chunks: the backing buffer (and the CloseReq addresses
+    // handed to io_uring) is allocated once. clear() runs at the top of each
+    // chunk, after the previous chunk's WaitIo has drained its SQEs.
+    std::vector<CloseReq> reqs;
+    reqs.reserve(std::min(kCloseChunk, pendings.size()));
     for (size_t base = 0; base < pendings.size(); base += kCloseChunk)
     {
         const size_t chunk_end = std::min(base + kCloseChunk, pendings.size());
-        std::vector<CloseReq> reqs;
-        reqs.reserve(chunk_end - base);
+        reqs.clear();
 
         for (size_t idx = base; idx < chunk_end; ++idx)
         {
@@ -3434,11 +3438,15 @@ KvError IouringMgr::DeleteFiles(const std::vector<std::string> &file_paths)
     // the worker so foreground requests are served between batches; the
     // bounded per-chunk build keeps any single resume short.
     constexpr size_t kUnlinkChunk = 128;
+    // Reused across chunks: allocated once, cleared at the top of each chunk
+    // (after the previous chunk's WaitIo drained its SQEs), so a GC pass over
+    // many files does not malloc/free the buffer per chunk.
+    std::vector<UnlinkReq> reqs;
+    reqs.reserve(std::min(kUnlinkChunk, file_paths.size()));
     for (size_t base = 0; base < file_paths.size(); base += kUnlinkChunk)
     {
         const size_t end = std::min(base + kUnlinkChunk, file_paths.size());
-        std::vector<UnlinkReq> reqs;
-        reqs.reserve(end - base);
+        reqs.clear();
         for (size_t i = base; i < end; ++i)
         {
             UnlinkReq &req = reqs.emplace_back();
