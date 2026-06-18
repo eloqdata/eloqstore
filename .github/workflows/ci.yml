@@ -43,7 +43,7 @@ jobs:
       - name: Install CI-only system dependencies
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends libzmq3-dev
+          apt-get install -y --no-install-recommends libzmq3-dev cppzmq-dev
 
       - name: Configure CMake
         run: |
