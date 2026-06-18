@@ -756,8 +756,7 @@ bool KVCacheRuntimeHelpers::AllocateEntryForRequest(
             // flushed. If there is a lingering flush error, surface it so the
             // caller knows storage is unhealthy, but only after attempting a
             // pressure flush first.
-            if (error_message != nullptr &&
-                !shard->last_flush_error.empty())
+            if (error_message != nullptr && !shard->last_flush_error.empty())
             {
                 *error_message = shard->last_flush_error;
             }

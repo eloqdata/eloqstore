@@ -206,7 +206,8 @@ bool KVCacheRuntimeManagerOps::BeginLoad(KVCacheManager *manager,
         }
         std::lock_guard<std::mutex> lock(shard.mutex);
         auto &entry = manager->impl_->entries[entry_id];
-        if (entry.state == KVCacheManager::Impl::EntryStateKind::ReservedForLoad)
+        if (entry.state ==
+            KVCacheManager::Impl::EntryStateKind::ReservedForLoad)
         {
             entry.generation += 1;
             KVCacheRuntimeHelpers::ResetEntryToFree(&entry);
@@ -232,25 +233,27 @@ bool KVCacheRuntimeManagerOps::BeginLoad(KVCacheManager *manager,
         if (error_message != nullptr)
         {
             *error_message = read_req.Error() == KvError::NotFound
-                                  ? "kv cache key not found"
-                                  : "eloqstore load failed";
+                                 ? "kv cache key not found"
+                                 : "eloqstore load failed";
         }
         std::lock_guard<std::mutex> lock(shard.mutex);
         auto &entry = manager->impl_->entries[entry_id];
-        if (entry.state == KVCacheManager::Impl::EntryStateKind::ReservedForLoad)
+        if (entry.state ==
+            KVCacheManager::Impl::EntryStateKind::ReservedForLoad)
         {
             entry.generation += 1;
             KVCacheRuntimeHelpers::ResetEntryToFree(&entry);
             shard.free_entries.push_back(entry_id);
             shard.cv.notify_all();
         }
-        manager->impl_->load_store_errors.fetch_add(1, std::memory_order_relaxed);
+        manager->impl_->load_store_errors.fetch_add(1,
+                                                    std::memory_order_relaxed);
         return false;
     }
 
     uint32_t loaded_payload_bytes = payload_bytes;
-    if (!DecodePayloadMetadata(read_req.value_, payload_bytes,
-                                &loaded_payload_bytes))
+    if (!DecodePayloadMetadata(
+            read_req.value_, payload_bytes, &loaded_payload_bytes))
     {
         if (error_message != nullptr)
         {
@@ -258,14 +261,16 @@ bool KVCacheRuntimeManagerOps::BeginLoad(KVCacheManager *manager,
         }
         std::lock_guard<std::mutex> lock(shard.mutex);
         auto &entry = manager->impl_->entries[entry_id];
-        if (entry.state == KVCacheManager::Impl::EntryStateKind::ReservedForLoad)
+        if (entry.state ==
+            KVCacheManager::Impl::EntryStateKind::ReservedForLoad)
         {
             entry.generation += 1;
             KVCacheRuntimeHelpers::ResetEntryToFree(&entry);
             shard.free_entries.push_back(entry_id);
             shard.cv.notify_all();
         }
-        manager->impl_->load_store_errors.fetch_add(1, std::memory_order_relaxed);
+        manager->impl_->load_store_errors.fetch_add(1,
+                                                    std::memory_order_relaxed);
         return false;
     }
     if (loaded_payload_bytes > manager->options_.entry_size)
@@ -276,14 +281,16 @@ bool KVCacheRuntimeManagerOps::BeginLoad(KVCacheManager *manager,
         }
         std::lock_guard<std::mutex> lock(shard.mutex);
         auto &entry = manager->impl_->entries[entry_id];
-        if (entry.state == KVCacheManager::Impl::EntryStateKind::ReservedForLoad)
+        if (entry.state ==
+            KVCacheManager::Impl::EntryStateKind::ReservedForLoad)
         {
             entry.generation += 1;
             KVCacheRuntimeHelpers::ResetEntryToFree(&entry);
             shard.free_entries.push_back(entry_id);
             shard.cv.notify_all();
         }
-        manager->impl_->load_store_errors.fetch_add(1, std::memory_order_relaxed);
+        manager->impl_->load_store_errors.fetch_add(1,
+                                                    std::memory_order_relaxed);
         return false;
     }
 
@@ -316,7 +323,7 @@ bool KVCacheRuntimeManagerOps::BeginLoad(KVCacheManager *manager,
     }
     manager->impl_->load_store_hits.fetch_add(1, std::memory_order_relaxed);
     manager->impl_->load_store_bytes.fetch_add(loaded_payload_bytes,
-                                                std::memory_order_relaxed);
+                                               std::memory_order_relaxed);
     if (out_request_id != nullptr)
     {
         *out_request_id = request_id;
@@ -416,8 +423,8 @@ bool KVCacheRuntimeManagerOps::ContainsKeys(
             needs_store_probe[i] = true;
         }
     }
-    manager->impl_->contains_memory_hits.fetch_add(
-        memory_hits, std::memory_order_relaxed);
+    manager->impl_->contains_memory_hits.fetch_add(memory_hits,
+                                                   std::memory_order_relaxed);
 
     EloqStore *store = manager->impl_->store.get();
     if (store == nullptr)
@@ -474,10 +481,10 @@ bool KVCacheRuntimeManagerOps::ContainsKeys(
 
     manager->impl_->contains_store_lookup_ns_total.fetch_add(
         SteadyNowNs() - probe_start_ns, std::memory_order_relaxed);
-    manager->impl_->contains_store_hits.fetch_add(
-        store_hits, std::memory_order_relaxed);
-    manager->impl_->contains_store_misses.fetch_add(
-        store_misses, std::memory_order_relaxed);
+    manager->impl_->contains_store_hits.fetch_add(store_hits,
+                                                  std::memory_order_relaxed);
+    manager->impl_->contains_store_misses.fetch_add(store_misses,
+                                                    std::memory_order_relaxed);
     if (store_errors > 0)
     {
         manager->impl_->contains_store_errors.fetch_add(
@@ -530,7 +537,7 @@ bool KVCacheRuntimeManagerOps::BeginLoads(
                 if (KVCacheRuntimeHelpers::IsResidentState(entry.state))
                 {
                     KVCacheRuntimeHelpers::TouchResidentLru(&shard,
-                                                           entry.entry_id);
+                                                            entry.entry_id);
                     std::lock_guard<std::mutex> state_lock(
                         manager->impl_->request_state_mutex);
                     manager->impl_->request_states[request_id] =
@@ -605,16 +612,14 @@ bool KVCacheRuntimeManagerOps::BeginLoads(
     {
         const size_t i = pending.index;
         const uint32_t entry_id = pending.entry_id;
-        void *entry_ptr =
-            static_cast<char *>(manager->shm_addr_) +
-            KVCacheRuntimeHelpers::EntryOffsetBytes(manager->options_,
-                                                     entry_id);
+        void *entry_ptr = static_cast<char *>(manager->shm_addr_) +
+                          KVCacheRuntimeHelpers::EntryOffsetBytes(
+                              manager->options_, entry_id);
 
         TableIdent table(manager->options_.table_name, partition_ids[i]);
         ReadRequest read_req;
         read_req.SetArgs(table, keys[i]);
-        const size_t read_bytes =
-            PinnedReadBytes(payload_bytes_list[i]);
+        const size_t read_bytes = PinnedReadBytes(payload_bytes_list[i]);
         read_req.large_value_dest_ =
             std::make_pair(reinterpret_cast<char *>(entry_ptr), read_bytes);
         store->ExecSync(&read_req);
@@ -624,8 +629,8 @@ bool KVCacheRuntimeManagerOps::BeginLoads(
             if (error_message != nullptr)
             {
                 *error_message = read_req.Error() == KvError::NotFound
-                                      ? "kv cache key not found"
-                                      : "eloqstore load failed";
+                                     ? "kv cache key not found"
+                                     : "eloqstore load failed";
             }
             auto &shard = manager->impl_->shards[shard_indices[i]];
             std::lock_guard<std::mutex> lock(shard.mutex);
@@ -643,8 +648,8 @@ bool KVCacheRuntimeManagerOps::BeginLoads(
         }
 
         uint32_t loaded_payload_bytes = payload_bytes_list[i];
-        if (!DecodePayloadMetadata(read_req.value_, payload_bytes_list[i],
-                                   &loaded_payload_bytes))
+        if (!DecodePayloadMetadata(
+                read_req.value_, payload_bytes_list[i], &loaded_payload_bytes))
         {
             if (error_message != nullptr)
             {
@@ -697,8 +702,9 @@ bool KVCacheRuntimeManagerOps::BeginLoads(
             entry.partition_id = partition_ids[i];
             entry.payload_bytes = loaded_payload_bytes;
             entry.key = keys[i];
-            manager->impl_->shards[shard_indices[i]].resident_entries
-                [MakeResidentIndexKey(keys[i], partition_ids[i])] = entry_id;
+            manager->impl_->shards[shard_indices[i]]
+                .resident_entries[MakeResidentIndexKey(
+                    keys[i], partition_ids[i])] = entry_id;
             KVCacheRuntimeHelpers::TouchResidentLru(
                 &manager->impl_->shards[shard_indices[i]], entry_id);
         }
@@ -710,23 +716,22 @@ bool KVCacheRuntimeManagerOps::BeginLoads(
                 KVCacheRequestState{
                     .request_id = (*out_request_ids)[i],
                     .status = KVCacheRequestStatus::Ready,
-                    .offset_bytes =
-                        KVCacheRuntimeHelpers::EntryOffsetBytes(
-                            manager->options_, entry_id),
+                    .offset_bytes = KVCacheRuntimeHelpers::EntryOffsetBytes(
+                        manager->options_, entry_id),
                     .payload_bytes = loaded_payload_bytes,
                 };
         }
         ++store_hits;
-        manager->impl_->load_store_bytes.fetch_add(
-            loaded_payload_bytes, std::memory_order_relaxed);
+        manager->impl_->load_store_bytes.fetch_add(loaded_payload_bytes,
+                                                   std::memory_order_relaxed);
     }
 
     manager->impl_->load_store_latency_ns_total.fetch_add(
         SteadyNowNs() - load_start_ns, std::memory_order_relaxed);
-    manager->impl_->load_store_hits.fetch_add(
-        store_hits, std::memory_order_relaxed);
-    manager->impl_->load_store_errors.fetch_add(
-        store_errors, std::memory_order_relaxed);
+    manager->impl_->load_store_hits.fetch_add(store_hits,
+                                              std::memory_order_relaxed);
+    manager->impl_->load_store_errors.fetch_add(store_errors,
+                                                std::memory_order_relaxed);
 
     if (store_errors > 0)
     {
@@ -1021,19 +1026,15 @@ void KVCacheManager::Stop()
         if (impl_->flush_thread.joinable())
         {
             const auto drain_deadline =
-                std::chrono::steady_clock::now() +
-                std::chrono::seconds(30);
-            for (size_t shard_idx = 0;
-                 shard_idx < impl_->shards.size();
+                std::chrono::steady_clock::now() + std::chrono::seconds(30);
+            for (size_t shard_idx = 0; shard_idx < impl_->shards.size();
                  ++shard_idx)
             {
                 auto &shard = impl_->shards[shard_idx];
                 std::lock_guard<std::mutex> lock(shard.mutex);
                 const uint32_t start = shard.layout.start_entry;
                 const uint32_t end = start + shard.layout.entry_count;
-                for (uint32_t entry_idx = start;
-                     entry_idx < end;
-                     ++entry_idx)
+                for (uint32_t entry_idx = start; entry_idx < end; ++entry_idx)
                 {
                     auto &entry = impl_->entries[entry_idx];
                     if (KVCacheRuntimeHelpers::IsDirtyState(entry.state))
@@ -1069,7 +1070,7 @@ void KVCacheManager::Stop()
                         std::lock_guard<std::mutex> lock(shard.mutex);
                         for (uint32_t entry_idx = shard.layout.start_entry;
                              entry_idx < shard.layout.start_entry +
-                                 shard.layout.entry_count;
+                                             shard.layout.entry_count;
                              ++entry_idx)
                         {
                             if (impl_->entries[entry_idx].flush_in_progress)
@@ -1094,8 +1095,7 @@ void KVCacheManager::Stop()
                                     "some dirty entries may not be persisted";
                     break;
                 }
-                std::this_thread::sleep_for(
-                    std::chrono::milliseconds(10));
+                std::this_thread::sleep_for(std::chrono::milliseconds(10));
             }
         }
 
@@ -1221,8 +1221,7 @@ bool KVCacheManager::RegisterIoUringBuffers(std::string *error_message)
             impl_->store.reset();
             if (error_message != nullptr)
             {
-                *error_message =
-                    "eloqstore start failed for kv cache manager";
+                *error_message = "eloqstore start failed for kv cache manager";
             }
             return false;
         }
@@ -1280,17 +1279,14 @@ bool KVCacheManager::RegisterIoUringBuffers(std::string *error_message)
                         while (!shard.flush_queue.empty() &&
                                batch_entries.size() < kMaxFlushBatchEntries)
                         {
-                            const auto flush_item =
-                                shard.flush_queue.front();
+                            const auto flush_item = shard.flush_queue.front();
                             shard.flush_queue.pop_front();
-                            if (flush_item.entry_id >=
-                                impl_->entries.size())
+                            if (flush_item.entry_id >= impl_->entries.size())
                             {
                                 continue;
                             }
 
-                            auto &entry =
-                                impl_->entries[flush_item.entry_id];
+                            auto &entry = impl_->entries[flush_item.entry_id];
                             if (entry.generation !=
                                     flush_item.entry_generation ||
                                 !KVCacheRuntimeHelpers::IsDirtyState(
@@ -1305,8 +1301,7 @@ bool KVCacheManager::RegisterIoUringBuffers(std::string *error_message)
                             {
                                 batch_partition_id = entry.partition_id;
                             }
-                            else if (entry.partition_id !=
-                                     batch_partition_id)
+                            else if (entry.partition_id != batch_partition_id)
                             {
                                 shard.flush_queue.push_front(flush_item);
                                 break;
@@ -1316,12 +1311,10 @@ bool KVCacheManager::RegisterIoUringBuffers(std::string *error_message)
                             entry.flush_in_progress = true;
                             batch_entries.push_back(PendingFlushEntry{
                                 .entry_id = flush_item.entry_id,
-                                .entry_generation =
-                                    flush_item.entry_generation,
+                                .entry_generation = flush_item.entry_generation,
                                 .partition_id = entry.partition_id,
                                 .payload_bytes = entry.payload_bytes,
-                                .release_after_write =
-                                    entry.flush_after_write,
+                                .release_after_write = entry.flush_after_write,
                                 .key = entry.key,
                             });
                         }
@@ -1338,27 +1331,26 @@ bool KVCacheManager::RegisterIoUringBuffers(std::string *error_message)
                         {
                             std::lock_guard<std::mutex> scheduler_lock(
                                 impl_->flush_scheduler_mutex);
-                            impl_->runnable_flush_shards.push_back(
-                                shard_index);
+                            impl_->runnable_flush_shards.push_back(shard_index);
                             impl_->flush_scheduler_cv.notify_one();
                         }
                         continue;
                     }
 
-                        std::sort(batch_entries.begin(),
-                                  batch_entries.end(),
-                                  [](const PendingFlushEntry &lhs,
-                                     const PendingFlushEntry &rhs)
-                                  { return lhs.key < rhs.key; });
-                        batch_entries.erase(
-                            std::unique(batch_entries.begin(),
-                                        batch_entries.end(),
-                                        [](const PendingFlushEntry &lhs,
-                                           const PendingFlushEntry &rhs)
-                                        { return lhs.key == rhs.key; }),
-                            batch_entries.end());
+                    std::sort(batch_entries.begin(),
+                              batch_entries.end(),
+                              [](const PendingFlushEntry &lhs,
+                                 const PendingFlushEntry &rhs)
+                              { return lhs.key < rhs.key; });
+                    batch_entries.erase(
+                        std::unique(batch_entries.begin(),
+                                    batch_entries.end(),
+                                    [](const PendingFlushEntry &lhs,
+                                       const PendingFlushEntry &rhs)
+                                    { return lhs.key == rhs.key; }),
+                        batch_entries.end());
 
-std::string flush_error;
+                    std::string flush_error;
                     EloqStore *store = impl_->store.get();
                     if (store == nullptr)
                     {
@@ -1366,9 +1358,8 @@ std::string flush_error;
                     }
                     else
                     {
-                        TableIdent table(
-                            options_.table_name,
-                            batch_entries.front().partition_id);
+                        TableIdent table(options_.table_name,
+                                         batch_entries.front().partition_id);
                         auto *write_req = new BatchWriteRequest();
                         std::vector<WriteDataEntry> batch;
                         batch.reserve(batch_entries.size());
@@ -1383,108 +1374,85 @@ std::string flush_error;
                                 EncodePayloadMetadata(
                                     flush_entry.payload_bytes),
                                 std::make_pair(
-                                    reinterpret_cast<const char *>(
-                                        entry_ptr),
+                                    reinterpret_cast<const char *>(entry_ptr),
                                     static_cast<size_t>(
                                         flush_entry.payload_bytes)),
                                 0,
                                 WriteOp::Upsert);
                         }
                         write_req->SetArgs(table, std::move(batch));
-                        const uint32_t callback_shard_index =
-                            shard_index;
+                        const uint32_t callback_shard_index = shard_index;
                         Impl *callback_impl = impl_;
                         const uint64_t batch_start_ns = SteadyNowNs();
                         impl_->flush_batches_submitted.fetch_add(
                             1, std::memory_order_relaxed);
                         impl_->flush_entries_submitted.fetch_add(
-                            batch_entries.size(),
-                            std::memory_order_relaxed);
+                            batch_entries.size(), std::memory_order_relaxed);
                         const bool submitted = store->ExecAsyn(
                             write_req,
                             0,
                             [callback_impl,
                              callback_shard_index,
-                             callback_entries =
-                                 std::move(batch_entries),
+                             callback_entries = std::move(batch_entries),
                              batch_start_ns](KvRequest *done_req)
                             {
                                 auto *batch_req =
-                                    static_cast<BatchWriteRequest *>(
-                                        done_req);
+                                    static_cast<BatchWriteRequest *>(done_req);
                                 auto &callback_shard =
-                                    callback_impl
-                                        ->shards[callback_shard_index];
+                                    callback_impl->shards[callback_shard_index];
                                 {
                                     std::lock_guard<std::mutex> lock(
                                         callback_shard.mutex);
                                     const bool success =
-                                        batch_req->Error() ==
-                                        KvError::NoError;
-                                    callback_impl
-                                        ->flush_batch_latency_ns_total
+                                        batch_req->Error() == KvError::NoError;
+                                    callback_impl->flush_batch_latency_ns_total
                                         .fetch_add(
-                                            SteadyNowNs() -
-                                                batch_start_ns,
+                                            SteadyNowNs() - batch_start_ns,
                                             std::memory_order_relaxed);
                                     if (success)
                                     {
-                                        callback_impl
-                                            ->flush_batches_completed
+                                        callback_impl->flush_batches_completed
                                             .fetch_add(
-                                                1,
-                                                std::
-                                                    memory_order_relaxed);
-                                        callback_impl
-                                            ->flush_entries_completed
+                                                1, std::memory_order_relaxed);
+                                        callback_impl->flush_entries_completed
                                             .fetch_add(
                                                 callback_entries.size(),
-                                                std::
-                                                    memory_order_relaxed);
+                                                std::memory_order_relaxed);
                                     }
                                     else
                                     {
-                                        callback_impl
-                                            ->flush_batches_failed
+                                        callback_impl->flush_batches_failed
                                             .fetch_add(
-                                                1,
-                                                std::
-                                                    memory_order_relaxed);
-                                        callback_impl
-                                            ->flush_entries_failed
+                                                1, std::memory_order_relaxed);
+                                        callback_impl->flush_entries_failed
                                             .fetch_add(
                                                 callback_entries.size(),
-                                                std::
-                                                    memory_order_relaxed);
+                                                std::memory_order_relaxed);
                                     }
                                     if (!success)
                                     {
-                                        callback_shard
-                                            .last_flush_error =
+                                        callback_shard.last_flush_error =
                                             "eloqstore flush failed";
                                     }
                                     else
                                     {
-                                        callback_shard.last_flush_error
-                                            .clear();
+                                        callback_shard.last_flush_error.clear();
                                     }
 
                                     for (const auto &flush_entry :
                                          callback_entries)
                                     {
                                         if (flush_entry.entry_id >=
-                                            callback_impl->entries
-                                                .size())
+                                            callback_impl->entries.size())
                                         {
                                             continue;
                                         }
 
                                         auto &entry =
-                                            callback_impl->entries
-                                                [flush_entry.entry_id];
+                                            callback_impl
+                                                ->entries[flush_entry.entry_id];
                                         if (entry.generation !=
-                                            flush_entry
-                                                .entry_generation)
+                                            flush_entry.entry_generation)
                                         {
                                             continue;
                                         }
@@ -1495,34 +1463,27 @@ std::string flush_error;
                                             continue;
                                         }
 
-                                        if (flush_entry
-                                                .release_after_write)
+                                        if (flush_entry.release_after_write)
                                         {
                                             KVCacheRuntimeHelpers::
                                                 RemoveResidentEntryMapping(
-                                                    &callback_shard,
-                                                    &entry);
+                                                    &callback_shard, &entry);
                                             entry.generation += 1;
                                             KVCacheRuntimeHelpers::
-                                                ResetEntryToFree(
-                                                    &entry);
+                                                ResetEntryToFree(&entry);
                                             callback_shard.free_entries
                                                 .push_back(
-                                                    flush_entry
-                                                        .entry_id);
+                                                    flush_entry.entry_id);
                                         }
                                         else
                                         {
-                                            entry.state =
-                                                Impl::EntryStateKind::
-                                                    MemoryAndEloqStoreClean;
-                                            entry.flush_after_write =
-                                                false;
+                                            entry.state = Impl::EntryStateKind::
+                                                MemoryAndEloqStoreClean;
+                                            entry.flush_after_write = false;
                                             KVCacheRuntimeHelpers::
                                                 TouchResidentLru(
                                                     &callback_shard,
-                                                    flush_entry
-                                                        .entry_id);
+                                                    flush_entry.entry_id);
                                         }
                                     }
                                     callback_shard.cv.notify_all();
@@ -1537,58 +1498,54 @@ std::string flush_error;
                             impl_->flush_entries_failed.fetch_add(
                                 batch_entries.size(),
                                 std::memory_order_relaxed);
-                            flush_error =
-                                "eloqstore async flush submit failed";
+                            flush_error = "eloqstore async flush submit failed";
                         }
                     }
 
-                        if (!flush_error.empty())
+                    if (!flush_error.empty())
+                    {
+                        std::lock_guard<std::mutex> lock(shard.mutex);
+                        for (const auto &flush_entry : batch_entries)
                         {
-                            std::lock_guard<std::mutex> lock(shard.mutex);
-                            for (const auto &flush_entry : batch_entries)
+                            if (flush_entry.entry_id >= impl_->entries.size())
                             {
-                                if (flush_entry.entry_id >=
-                                    impl_->entries.size())
-                                {
-                                    continue;
-                                }
-                                auto &entry =
-                                    impl_->entries[flush_entry.entry_id];
-                                if (entry.generation ==
-                                    flush_entry.entry_generation)
-                                {
-                                    entry.flush_in_progress = false;
-                                    shard.last_flush_error = flush_error;
-                                    KVCacheRuntimeHelpers::EnqueueFlushWork(
-                                        impl_,
-                                        &shard,
-                                        static_cast<uint32_t>(shard_index),
-                                        &entry,
-                                        entry.flush_after_write);
-                                }
+                                continue;
                             }
-                            shard.cv.notify_all();
+                            auto &entry = impl_->entries[flush_entry.entry_id];
+                            if (entry.generation ==
+                                flush_entry.entry_generation)
+                            {
+                                entry.flush_in_progress = false;
+                                shard.last_flush_error = flush_error;
+                                KVCacheRuntimeHelpers::EnqueueFlushWork(
+                                    impl_,
+                                    &shard,
+                                    static_cast<uint32_t>(shard_index),
+                                    &entry,
+                                    entry.flush_after_write);
+                            }
                         }
+                        shard.cv.notify_all();
+                    }
 
-                        // Re-enqueue the shard for fair round-robin
-                        // scheduling if it still has pending flush work,
-                        // giving other shards a chance to be processed.
+                    // Re-enqueue the shard for fair round-robin
+                    // scheduling if it still has pending flush work,
+                    // giving other shards a chance to be processed.
+                    {
+                        std::lock_guard<std::mutex> lock(shard.mutex);
+                        if (shard.flush_queue.empty())
                         {
-                            std::lock_guard<std::mutex> lock(shard.mutex);
-                            if (shard.flush_queue.empty())
-                            {
-                                shard.queued_for_flusher = false;
-                            }
-                            else
-                            {
-                                std::lock_guard<std::mutex> scheduler_lock(
-                                    impl_->flush_scheduler_mutex);
-                                impl_->runnable_flush_shards.push_back(
-                                    shard_index);
-                                impl_->flush_scheduler_cv.notify_one();
-                            }
+                            shard.queued_for_flusher = false;
+                        }
+                        else
+                        {
+                            std::lock_guard<std::mutex> scheduler_lock(
+                                impl_->flush_scheduler_mutex);
+                            impl_->runnable_flush_shards.push_back(shard_index);
+                            impl_->flush_scheduler_cv.notify_one();
                         }
                     }
+                }
             });
     }
     return true;
@@ -1874,10 +1831,9 @@ bool KVCacheManager::ContainsKey(const std::string &key,
         this, shard_index, key, partition_id, out_exists, error_message);
 }
 
-bool KVCacheManager::ContainsKeys(
-    const std::vector<std::string> &keys,
-    std::vector<bool> *out_exists,
-    std::string *error_message)
+bool KVCacheManager::ContainsKeys(const std::vector<std::string> &keys,
+                                  std::vector<bool> *out_exists,
+                                  std::string *error_message)
 {
     if (out_exists == nullptr)
     {
@@ -1928,18 +1884,17 @@ bool KVCacheManager::ContainsKeys(
     {
         partition_ids[i] =
             runtime_internal::PartitionIdForKey(options_, keys[i]);
-        shard_indices[i] = static_cast<size_t>(
-            partition_ids[i] % shards_.size());
+        shard_indices[i] =
+            static_cast<size_t>(partition_ids[i] % shards_.size());
     }
     return KVCacheRuntimeManagerOps::ContainsKeys(
         this, shard_indices, keys, partition_ids, out_exists, error_message);
 }
 
-bool KVCacheManager::BeginLoads(
-    const std::vector<std::string> &keys,
-    const std::vector<uint32_t> &payload_bytes_list,
-    std::vector<uint64_t> *out_request_ids,
-    std::string *error_message)
+bool KVCacheManager::BeginLoads(const std::vector<std::string> &keys,
+                                const std::vector<uint32_t> &payload_bytes_list,
+                                std::vector<uint64_t> *out_request_ids,
+                                std::string *error_message)
 {
     if (out_request_ids == nullptr)
     {
@@ -1954,7 +1909,8 @@ bool KVCacheManager::BeginLoads(
     {
         if (error_message != nullptr)
         {
-            *error_message = "begin-loads keys and payload_bytes_list size mismatch";
+            *error_message =
+                "begin-loads keys and payload_bytes_list size mismatch";
         }
         return false;
     }
@@ -2002,17 +1958,16 @@ bool KVCacheManager::BeginLoads(
     {
         partition_ids[i] =
             runtime_internal::PartitionIdForKey(options_, keys[i]);
-        shard_indices[i] = static_cast<size_t>(
-            partition_ids[i] % shards_.size());
+        shard_indices[i] =
+            static_cast<size_t>(partition_ids[i] % shards_.size());
     }
-    return KVCacheRuntimeManagerOps::BeginLoads(
-        this,
-        shard_indices,
-        keys,
-        partition_ids,
-        payload_bytes_list,
-        out_request_ids,
-        error_message);
+    return KVCacheRuntimeManagerOps::BeginLoads(this,
+                                                shard_indices,
+                                                keys,
+                                                partition_ids,
+                                                payload_bytes_list,
+                                                out_request_ids,
+                                                error_message);
 }
 
 bool KVCacheManager::GetMetrics(KVCacheRuntimeMetrics *out_metrics,

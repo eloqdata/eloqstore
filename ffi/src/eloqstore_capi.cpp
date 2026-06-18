@@ -813,11 +813,10 @@ extern "C"
         return ok;
     }
 
-    bool CEloqStore_KVCacheManager_ContainsKeys(
-        CKVCacheManagerHandle runtime,
-        size_t num_keys,
-        const char *const *keys,
-        bool *out_exists)
+    bool CEloqStore_KVCacheManager_ContainsKeys(CKVCacheManagerHandle runtime,
+                                                size_t num_keys,
+                                                const char *const *keys,
+                                                bool *out_exists)
     {
         clear_last_error();
         if (runtime == nullptr || keys == nullptr || out_exists == nullptr)
@@ -879,9 +878,8 @@ extern "C"
         }
         std::vector<uint64_t> cpp_req_ids;
         std::string error_message;
-        const bool ok =
-            reinterpret_cast<KVCacheManager *>(runtime)->BeginLoads(
-                cpp_keys, cpp_payloads, &cpp_req_ids, &error_message);
+        const bool ok = reinterpret_cast<KVCacheManager *>(runtime)->BeginLoads(
+            cpp_keys, cpp_payloads, &cpp_req_ids, &error_message);
         if (!ok)
         {
             set_last_error(error_message);

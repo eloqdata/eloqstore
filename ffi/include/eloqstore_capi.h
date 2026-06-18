@@ -354,16 +354,15 @@ extern "C"
         CKVCacheManagerHandle runtime,
         uint64_t request_id,
         CKVCacheBufferHandle *out_buffer);
-// Probe whether one key exists through the manager runtime.
+    // Probe whether one key exists through the manager runtime.
     bool CEloqStore_KVCacheManager_ContainsKey(CKVCacheManagerHandle runtime,
-                                                const char *key,
-                                                bool *out_exists);
+                                               const char *key,
+                                               bool *out_exists);
     // Probe whether multiple keys exist through the manager runtime.
-    bool CEloqStore_KVCacheManager_ContainsKeys(
-        CKVCacheManagerHandle runtime,
-        size_t num_keys,
-        const char *const *keys,
-        bool *out_exists);
+    bool CEloqStore_KVCacheManager_ContainsKeys(CKVCacheManagerHandle runtime,
+                                                size_t num_keys,
+                                                const char *const *keys,
+                                                bool *out_exists);
     // Begin batched asynchronous loads and return their request ids.
     bool CEloqStore_KVCacheManager_BeginLoads(
         CKVCacheManagerHandle runtime,
