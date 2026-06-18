@@ -134,10 +134,23 @@ void SeedActiveBranchGuardFromInMemory(const TableIdent &tbl_id,
     // No yields between Find() and the field reads below, so the
     // entry cannot be evicted out from under us; no Handle pin needed.
     const RootMeta &meta = entry->meta_;
+    // Derive the in-flight boundary from the live allocators rather than the
+    // RootMeta::first_unflushed_*_fp_id_ snapshot fields. Those fields are only
+    // refreshed by a flush whose CoW meta carries the matching mapper, so a
+    // data-only flush leaves first_unflushed_seg_fp_id_ stale (0) even while
+    // segment files exist -- which makes the seeded guard 0 and keeps every
+    // segment file "in-flight", so GC never reclaims dead segments. The live
+    // mapper's allocator MaxFilePageId() is the current high-water and matches
+    // the disk manifest's max_*_file_id_ that ProcessOneManifest would fold in.
     guard.least_unflushed_file_id_ =
-        meta.first_unflushed_fp_id_ >> pages_per_file_shift;
+        meta.mapper_ ? (meta.mapper_->FilePgAllocator()->MaxFilePageId() >>
+                        pages_per_file_shift)
+                     : 0;
     guard.least_unflushed_seg_file_id_ =
-        meta.first_unflushed_seg_fp_id_ >> segments_per_file_shift;
+        meta.segment_mapper_
+            ? (meta.segment_mapper_->FilePgAllocator()->MaxFilePageId() >>
+               segments_per_file_shift)
+            : 0;
 
     branch_guards.emplace(std::string(active_branch), guard);
 }
