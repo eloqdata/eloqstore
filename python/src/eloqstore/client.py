@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.util
-from ctypes import POINTER, byref, c_bool, c_char_p, c_double, c_size_t, c_uint8, c_uint64, cast, c_void_p
+from ctypes import POINTER, byref, c_bool, c_char_p, c_double, c_size_t, c_uint32, c_uint8, c_uint64, cast, c_void_p
 from dataclasses import dataclass, field
 import mmap
 import os
@@ -546,7 +546,50 @@ class KVCacheManager:
         return bool(out_exists.value)
 
     def contains_keys(self, keys: Sequence[str]) -> list[bool]:
-        return [self.contains_key(key) for key in keys]
+        """Probe whether multiple keys exist through the native manager runtime."""
+        n = len(keys)
+        if n == 0:
+            return []
+        enc = [_encode(k) for k in keys]
+        c_keys = (c_char_p * n)(*[c_char_p(e) for e in enc])
+        out = (c_bool * n)()
+        _ok(lib().CEloqStore_KVCacheManager_ContainsKeys(
+            self._handle,
+            c_size_t(n),
+            c_keys,
+            out,
+        ))
+        return [bool(out[i]) for i in range(n)]
+
+    def begin_loads(
+        self, keys: Sequence[str], lengths: Sequence[int]
+    ) -> list[int]:
+        """Begin batched loads and return their request ids."""
+        n = len(keys)
+        if n == 0:
+            return []
+        enc = [_encode(k) for k in keys]
+        c_keys = (c_char_p * n)(*[c_char_p(e) for e in enc])
+        c_lens = (c_uint32 * n)(*[c_uint32(l) for l in lengths])
+        c_req_ids = (c_uint64 * n)()
+        _ok(lib().CEloqStore_KVCacheManager_BeginLoads(
+            self._handle,
+            c_size_t(n),
+            c_keys,
+            c_lens,
+            c_req_ids,
+        ))
+        result = []
+        for i in range(n):
+            rid = c_req_ids[i]
+            tracked = _TrackedKVRequest(
+                request_id=rid,
+                offset=0,
+                length=lengths[i],
+            )
+            self._tracked_requests[rid] = tracked
+            result.append(rid)
+        return result
 
     def wait_requests(
         self, request_ids: Sequence[int], timeout_s: float = 30.0

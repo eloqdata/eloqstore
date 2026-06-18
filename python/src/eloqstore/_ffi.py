@@ -147,6 +147,10 @@ def _configure_library(lib) -> None:
     lib.CEloqStore_KVCacheManager_GetReadyBuffer.restype = c_bool
     lib.CEloqStore_KVCacheManager_ContainsKey.argtypes = [c_void_p, c_char_p, POINTER(c_bool)]
     lib.CEloqStore_KVCacheManager_ContainsKey.restype = c_bool
+    lib.CEloqStore_KVCacheManager_ContainsKeys.argtypes = [c_void_p, c_size_t, POINTER(c_char_p), POINTER(c_bool)]
+    lib.CEloqStore_KVCacheManager_ContainsKeys.restype = c_bool
+    lib.CEloqStore_KVCacheManager_BeginLoads.argtypes = [c_void_p, c_size_t, POINTER(c_char_p), POINTER(c_uint32), POINTER(c_uint64)]
+    lib.CEloqStore_KVCacheManager_BeginLoads.restype = c_bool
 
     lib.CEloqStore_KVCacheWorker_Create.argtypes = [c_void_p]
     lib.CEloqStore_KVCacheWorker_Create.restype = c_void_p

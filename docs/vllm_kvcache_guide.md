@@ -198,67 +198,178 @@ Check the server:
 
 ## Benchmark
 
-The built-in benchmark used during validation is:
+The built-in benchmark is
+`vllm/benchmarks/multi_turn/benchmark_serving_multi_turn.py`.
 
-```text
-vllm/benchmarks/multi_turn/benchmark_serving_multi_turn.py
+Pre-built conversation files for repeatable testing ship with the
+`eloqstore` package in `eloqstore/bench_configs/`:
+
+| File | Conversations | First-turn tokens | Total KV cache | vs 5 GB |
+|------|--------------|-------------------|----------------|---------|
+| `fit_5g_conversations.json` | 3 | ~9000 | ~3.4 GB | Within budget |
+| `overflow_5g_conversations.json` | 7 | ~9000 | ~7.9 GB | Exceeds budget |
+
+Each conversation: long first-turn analysis, short assistant reply, short
+second-turn follow-up question.
+
+Per-token KV cache size (Qwen3-4B, half):
+```
+2 × 36 layers × 8 kv_heads × 128 dim × 2 bytes = 147,456 bytes ≈ 144 KB
 ```
 
-Example command:
+### Prerequisites
 
 ```bash
-/path/to/venv/bin/python \
-  /path/to/vllm/benchmarks/multi_turn/benchmark_serving_multi_turn.py \
+uv pip install -r /path/to/vllm/benchmarks/multi_turn/requirements.txt
+```
+
+### Running a Benchmark
+
+Start the server (EloqStore or CPU offloading, see [Startup](#startup) above).
+
+```bash
+# Cold run (empty store / empty CPU buffer)
+VENV=/path/to/venv/bin
+VLLM_BENCH=/path/to/vllm/benchmarks/multi_turn/benchmark_serving_multi_turn.py
+CONFIGS=/path/to/eloqstore/python/src/eloqstore/bench_configs
+
+$VENV/python $VLLM_BENCH \
   --model Qwen/Qwen3-4B \
   --served-model-name qwen3-4b-eloq \
   --url http://127.0.0.1:8015 \
-  --input-file /path/to/high_hit_over5g_conversations.json \
+  --input-file $CONFIGS/overflow_5g_conversations.json \
   --num-clients 1 \
-  --max-active-conversations 64 \
-  --max-num-requests 128 \
+  --max-active-conversations 7 \
   --max-turns 4 \
+  --no-early-stop \
   --request-timeout-sec 300 \
-  --stats-json-output /path/to/high_hit_stats_eloq.json
+  --stats-json-output /path/to/eloq_overflow_cold.json
+
+# Warm run (data now in store / CPU buffer)
+$VENV/python $VLLM_BENCH \
+  --model Qwen/Qwen3-4B \
+  --served-model-name qwen3-4b-eloq \
+  --url http://127.0.0.1:8015 \
+  --input-file $CONFIGS/overflow_5g_conversations.json \
+  --num-clients 1 \
+  --max-active-conversations 7 \
+  --max-turns 4 \
+  --no-early-stop \
+  --request-timeout-sec 300 \
+  --stats-json-output /path/to/eloq_overflow_warm.json
 ```
 
-The benchmark input can either be:
+`--max-active-conversations` must equal the number of conversations in the
+input file.  `--no-early-stop` forces all turns to complete.
 
-- a synthetic generation config (`filetype: generate_conversations`)
-- or a literal list of OpenAI-format conversations
+Repeat with the CPU offloading connector
+(`--kv-transfer-config '{"kv_connector":"OffloadingConnector",...}'`) on a
+different port for comparison.
 
-For cache-hit testing, the literal conversation list is more useful because it
-lets you guarantee repeated multi-turn reuse.
+### Generating Reports
+
+The `eloqstore.bench_report` module (also available as the
+`eloqstore-bench-report` CLI) reads the `--stats-json-output` files and prints
+comparison tables.
+
+```bash
+# Full 4-way comparison (cold + warm for both systems)
+eloqstore-bench-report \
+  --eloq-cold   eloq_cold.json \
+  --eloq-warm   eloq_warm.json \
+  --offload-cold offload_cold.json \
+  --offload-warm offload_warm.json
+```
+
+Or from Python:
+
+```python
+from eloqstore.bench_report import load_stats, print_report
+
+print_report(
+    eloq_cold=load_stats("eloq_cold.json"),
+    eloq_warm=load_stats("eloq_warm.json"),
+    offload_cold=load_stats("offload_cold.json"),
+    offload_warm=load_stats("offload_warm.json"),
+)
+```
 
 ## Current Measured Results
 
-Using an explicit high-hit workload with:
+Test setup:
 
-- `64` conversations
-- total first-turn hotset above `5 GiB`
-- second-turn short questions that strongly reuse the first-turn history
+- Model: Qwen3-4B, dtype half, enforce eager
+- GPU: RTX 5080 (16 GB), gpu-memory-utilization 0.60
+- KV cache budget: 5 GB (EloqStore shared buffer / CPU RAM)
+- vLLM base: v0.22.0 with EloqStore batch API
+- Per-token KV cache: ~144 KB (36 layers × 8 kv_heads × 128 dim × 2 bytes)
 
-Current best validated EloqStore result:
+### Workload A — Fit (KV cache fits within 5 GB)
 
-```text
-requests_per_sec = 6.879
-ttft_ms mean     = 128.95
-latency_ms mean  = 143.21
+3 conversations, each ~9000-token first turn.  Total KV cache ~3.4 GB < 5 GB.
+
+| System | Cold TTFT | Warm TTFT | Speedup |
+|--------|-----------|-----------|---------|
+| CPU Offloading | 505ms | 62ms | **8.10×** |
+| EloqStore | 937ms | 222ms | **4.22×** |
+
+All blocks fit in the CPU ring buffer.  CPU offloading loads from RAM
+(~100ns latency).  EloqStore loads from NVMe via io_uring (~10µs latency).
+Both show significant speedup; CPU is faster due to storage medium.
+
+### Workload B — Overflow (KV cache exceeds 5 GB)
+
+7 conversations, each ~9000-token first turn.  Total KV cache ~7.9 GB >> 5 GB.
+
+| System | Cold TTFT | Warm TTFT | Speedup |
+|--------|-----------|-----------|---------|
+| CPU Offloading | 634ms | 568ms | **1.12×** |
+| EloqStore | 1013ms | 331ms | **3.06×** |
+
+The hotset exceeds the 5 GB CPU buffer.  CPU ring buffer evicts ~2.9 GB
+(37%) of blocks.  Evicted blocks must be recomputed on GPU — negates nearly
+all cache benefit.  EloqStore persists to NVMe SSD — no eviction — 3.06×
+speedup.
+
+### Workload C — High Cache Hit (small requests, large hotset)
+
+64 conversations, ~1000-token first turns, second-turn short questions.
+Total KV cache ~8.95 GB >> 5 GB.
+
+| System | Cold TTFT | Warm TTFT | Speedup |
+|--------|-----------|-----------|---------|
+| CPU Offloading | 92ms | 91ms | **1.02×** |
+| EloqStore | 166ms | 75ms | **2.22×** |
+
+On this workload, EloqStore warm-cache **outperforms** CPU offloading
+(75ms vs 91ms).  The batch `ContainsKeys` and `BeginLoads` APIs eliminate
+per-key synchronization overhead on the warm path.
+
+### Summary
+
+```
+                    FIT (3.4 GB)          OVERFLOW (7.9 GB)      HIGH HIT (8.95 GB)
+                    cold    warm  speedup  cold    warm  speedup  cold    warm  speedup
+CPU Offloading      505ms   62ms  8.10x   634ms  568ms  1.12x    92ms    91ms  1.02x
+EloqStore           937ms  222ms  4.22x  1013ms  331ms  3.06x   166ms    75ms  2.22x
 ```
 
-Reference CPU memory offloading result on the same workload:
+1. **When KV cache fits in RAM**: CPU offloading wins (8.10× vs 4.22×).
+   RAM is ~100× faster than NVMe SSD for random reads.
 
-```text
-requests_per_sec = 8.665
-ttft_ms mean     = 92.78
-latency_ms mean  = 113.26
-```
+2. **When KV cache exceeds RAM**: CPU offloading loses nearly all benefit
+   (1.12×) due to ring-buffer eviction.  EloqStore maintains substantial
+   speedup (3.06×) because SSDs have orders of magnitude more capacity.
 
-So the current EloqStore implementation is still slower than CPU offloading,
-but the gap has been reduced substantially by:
+3. **EloqStore can outperform CPU offloading**: On the high-hit workload,
+   EloqStore warm-cache (75ms) beats CPU offloading (91ms).  Batch APIs and
+   persistent storage together make EloqStore competitive even against
+   RAM-backed caches when the working set is large.
 
-- block-mapped shared memory
-- memory-only prefix matching
-- lighter save/load data path handling
+4. **Capacity is the differentiator**: CPU offloading provides fast access
+   for hot caches that fit within available RAM.  EloqStore provides
+   predictable cache reuse regardless of working-set size, bounded only by
+   available NVMe storage.
 
 ## Failure Modes
 

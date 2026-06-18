@@ -157,6 +157,7 @@ class ReqMeta:
     block_ids: torch.Tensor
     block_hashes: list[bytes]
     is_store: bool
+    req_id: str = ""
 
     @staticmethod
     def make_meta(
@@ -167,13 +168,12 @@ class ReqMeta:
         start_token: int = 0,
         token_limit: int = 0,
     ) -> "ReqMeta":
-        valid_num_tokens = align_to_block_size(token_limit, block_size)
+        valid_num_tokens = align_to_block_size(max(token_limit - start_token, 0), block_size)
         block_ids_tensor = torch.as_tensor(block_ids, dtype=torch.long)
-        start_block = start_token // block_size
-        num_request_blocks = max(valid_num_tokens // block_size - start_block, 0)
+        num_request_blocks = valid_num_tokens // block_size
         return ReqMeta(
-            block_ids=block_ids_tensor[start_block : start_block + num_request_blocks],
-            block_hashes=block_hashes[start_block : start_block + num_request_blocks],
+            block_ids=block_ids_tensor[:num_request_blocks],
+            block_hashes=block_hashes[:num_request_blocks],
             is_store=is_store,
         )
 
@@ -190,6 +190,7 @@ class _PendingLoadRequest:
 class _PendingLoadBlock:
     # Worker-side runtime state after `start_load_kv()` has submitted a load.
     # Unlike `_PreparedBlockPlan`, this already has a runtime request id.
+    req_id: str
     block_key: str
     block_id: int
     payload_bytes: int
@@ -200,6 +201,7 @@ class _PendingLoadBlock:
 class _PreparedBlockPlan:
     # Lightweight plan produced from connector metadata. This says which block
     # should be loaded or saved, but it does not allocate buffers or submit I/O.
+    req_id: str
     block_key: str
     block_id: int
 
@@ -228,6 +230,7 @@ class EloqStoreConnectorMetadata(KVConnectorMetadata):
 
     def add_request(
         self,
+        req_id: str,
         block_ids: list[int],
         block_hashes: list[bytes],
         block_size: int,
@@ -235,16 +238,16 @@ class EloqStoreConnectorMetadata(KVConnectorMetadata):
         start_token: int = 0,
         token_limit: int = 0,
     ) -> None:
-        self.requests.append(
-            ReqMeta.make_meta(
-                block_ids,
-                block_hashes,
-                block_size,
-                is_store,
-                start_token,
-                token_limit,
-            )
+        req = ReqMeta.make_meta(
+            block_ids,
+            block_hashes,
+            block_size,
+            is_store,
+            start_token,
+            token_limit,
         )
+        req.req_id = req_id
+        self.requests.append(req)
 
 
 class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
@@ -438,36 +441,73 @@ class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
         # `_prepared_load_blocks` already exists at this point because it was
         # derived from scheduler metadata during `bind_connector_metadata()`. The
         # transition here is from "planned" to "submitted".
-        for block_plan in self._prepared_load_blocks:
-            # The scheduler has already filtered loadable blocks. The worker
-            # only submits reads and waits later when one layer actually needs
-            # the loaded bytes.
-            payload = self._build_block_runtime_payload(
-                block_plan.block_key,
-                block_plan.block_id,
-            )
+        if self._role == KVConnectorRole.SCHEDULER and self._kv_cache_manager is not None:
+            # Batch path: submit all loads in one native call to reduce per-key
+            # lock acquisition and FFI overhead.
+            keys = []
+            lengths = []
+            for block_plan in self._prepared_load_blocks:
+                payload = self._build_block_runtime_payload(
+                    block_plan.block_key,
+                    block_plan.block_id,
+                )
+                keys.append(payload.block_key)
+                lengths.append(payload.payload_bytes)
             try:
-                request_id = self._begin_load(
-                    payload.block_key,
-                    payload.payload_bytes,
-                )
+                request_ids = self._kv_cache_manager.begin_loads(keys, lengths)
             except Exception as exc:
-                logger.warning(
-                    "EloqStore load submit failed for key=%s block=%s: %s",
-                    payload.block_key,
-                    payload.block_id,
-                    exc,
+                logger.warning("EloqStore batch load submit failed: %s", exc)
+                request_ids = []
+            for idx, block_plan in enumerate(self._prepared_load_blocks):
+                if idx < len(request_ids):
+                    payload = self._build_block_runtime_payload(
+                        block_plan.block_key,
+                        block_plan.block_id,
+                    )
+                    self._pending_load_blocks.append(
+                        _PendingLoadBlock(
+                            req_id=block_plan.req_id,
+                            block_key=payload.block_key,
+                            block_id=payload.block_id,
+                            payload_bytes=payload.payload_bytes,
+                            request_id=request_ids[idx],
+                        )
+                    )
+                else:
+                    payload = self._build_block_runtime_payload(
+                        block_plan.block_key,
+                        block_plan.block_id,
+                    )
+                    self._load_error_block_ids.add(payload.block_id)
+        else:
+            for block_plan in self._prepared_load_blocks:
+                payload = self._build_block_runtime_payload(
+                    block_plan.block_key,
+                    block_plan.block_id,
                 )
-                self._load_error_block_ids.add(payload.block_id)
-                continue
-            self._pending_load_blocks.append(
-                _PendingLoadBlock(
-                    block_key=payload.block_key,
-                    block_id=payload.block_id,
-                    payload_bytes=payload.payload_bytes,
-                    request_id=request_id,
+                try:
+                    request_id = self._begin_load(
+                        payload.block_key,
+                        payload.payload_bytes,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "EloqStore load submit failed for key=%s block=%s: %s",
+                        payload.block_key,
+                        payload.block_id,
+                        exc,
+                    )
+                    self._load_error_block_ids.add(payload.block_id)
+                    continue
+                self._pending_load_blocks.append(
+                    _PendingLoadBlock(
+                        req_id=block_plan.req_id,
+                        block_key=payload.block_key,
+                        block_id=payload.block_id,
+                        payload_bytes=payload.payload_bytes,
+                        request_id=request_id,
+                    )
                 )
-            )
 
     def wait_for_layer_load(self, layer_name: str) -> None:
         if self._role != KVConnectorRole.WORKER:
@@ -574,6 +614,7 @@ class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
                 block_key = self._block_key(block_hash)
                 target.append(
                     _PreparedBlockPlan(
+                        req_id=request.req_id,
                         block_key=block_key,
                         block_id=block_id,
                     )
@@ -888,17 +929,17 @@ class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
         # New requests either load an externally matched prefix or, if there is
         # no reusable prefix, store any newly completed full blocks.
         for new_req in scheduler_output.scheduled_new_reqs:
-            token_ids = new_req.prompt_token_ids or []
-            mm_hashes = [f.identifier for f in new_req.mm_features]
             num_new_tokens = scheduler_output.num_scheduled_tokens[new_req.req_id]
             pending_load = self._requests_need_load.get(new_req.req_id)
-            token_limit = min(new_req.num_computed_tokens + num_new_tokens, len(token_ids))
+            prompt_tokens = len(new_req.prompt_token_ids or [])
+            token_limit = min(new_req.num_computed_tokens + num_new_tokens, prompt_tokens)
             if pending_load is not None:
                 request = pending_load.request
                 # The worker will load only the externally reusable prefix,
                 # capped by the number of tokens actually scheduled this step.
                 token_limit = min(token_limit, pending_load.num_external_tokens)
                 meta.add_request(
+                    req_id=new_req.req_id,
                     block_ids=new_req.block_ids[0],
                     block_hashes=list(request.block_hashes),
                     block_size=self._block_size,
@@ -910,11 +951,14 @@ class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
                 request = self._requests_need_store.get(new_req.req_id)
                 if request is None:
                     continue
+                start_block = new_req.num_computed_tokens // self._block_size
+                end_block = align_to_block_size(token_limit, self._block_size) // self._block_size
                 # No external load for this request, so publish any full blocks
                 # that became complete during this scheduling step.
                 meta.add_request(
-                    block_ids=new_req.block_ids[0],
-                    block_hashes=list(request.block_hashes),
+                    req_id=new_req.req_id,
+                    block_ids=new_req.block_ids[0][start_block:end_block],
+                    block_hashes=list(request.block_hashes[start_block:end_block]),
                     block_size=self._block_size,
                     is_store=True,
                     start_token=new_req.num_computed_tokens,
@@ -937,6 +981,7 @@ class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
                 # new full block. Emit an empty store request so the next step can
                 # continue from the updated start token without persisting bytes.
                 meta.add_request(
+                    req_id=req_id,
                     block_ids=[],
                     block_hashes=[],
                     block_size=self._block_size,
@@ -949,9 +994,12 @@ class EloqStoreConnector(KVConnectorBase_V1, SupportsHMA):
                 num_computed_tokens + num_new_tokens,
                 request.num_prompt_tokens,
             )
+            start_block = num_computed_tokens // self._block_size
+            end_block = align_to_block_size(total_tokens, self._block_size) // self._block_size
             meta.add_request(
+                req_id=req_id,
                 block_ids=new_block_ids[0],
-                block_hashes=list(request.block_hashes),
+                block_hashes=list(request.block_hashes[start_block:end_block]),
                 block_size=self._block_size,
                 is_store=True,
                 start_token=num_computed_tokens,

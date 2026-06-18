@@ -140,11 +140,17 @@ public:
     bool ContainsKey(const std::string &key,
                      bool *out_exists,
                      std::string *error_message);
-    // Check whether one key already exists, first in memory then in EloqStore.
     bool ContainsKey(const std::string &key,
                      uint32_t partition_id,
                      bool *out_exists,
                      std::string *error_message);
+    bool ContainsKeys(const std::vector<std::string> &keys,
+                      std::vector<bool> *out_exists,
+                      std::string *error_message);
+    bool BeginLoads(const std::vector<std::string> &keys,
+                    const std::vector<uint32_t> &payload_bytes_list,
+                    std::vector<uint64_t> *out_request_ids,
+                    std::string *error_message);
     bool GetMetrics(KVCacheRuntimeMetrics *out_metrics,
                     std::string *error_message);
     const std::vector<ShardLayout> &shards() const

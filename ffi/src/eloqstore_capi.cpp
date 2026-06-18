@@ -813,6 +813,86 @@ extern "C"
         return ok;
     }
 
+    bool CEloqStore_KVCacheManager_ContainsKeys(
+        CKVCacheManagerHandle runtime,
+        size_t num_keys,
+        const char *const *keys,
+        bool *out_exists)
+    {
+        clear_last_error();
+        if (runtime == nullptr || keys == nullptr || out_exists == nullptr)
+        {
+            set_last_error("invalid manager contains-keys arguments");
+            return false;
+        }
+        std::vector<std::string> cpp_keys(num_keys);
+        for (size_t i = 0; i < num_keys; ++i)
+        {
+            if (keys[i] == nullptr)
+            {
+                set_last_error("contains-keys key is null");
+                return false;
+            }
+            cpp_keys[i] = keys[i];
+        }
+        std::vector<bool> cpp_exists;
+        std::string error_message;
+        const bool ok =
+            reinterpret_cast<KVCacheManager *>(runtime)->ContainsKeys(
+                cpp_keys, &cpp_exists, &error_message);
+        if (!ok)
+        {
+            set_last_error(error_message);
+        }
+        for (size_t i = 0; i < num_keys; ++i)
+        {
+            out_exists[i] = cpp_exists[i];
+        }
+        return ok;
+    }
+
+    bool CEloqStore_KVCacheManager_BeginLoads(
+        CKVCacheManagerHandle runtime,
+        size_t num_keys,
+        const char *const *keys,
+        const uint32_t *payload_bytes_list,
+        uint64_t *out_request_ids)
+    {
+        clear_last_error();
+        if (runtime == nullptr || keys == nullptr ||
+            payload_bytes_list == nullptr || out_request_ids == nullptr)
+        {
+            set_last_error("invalid manager begin-loads arguments");
+            return false;
+        }
+        std::vector<std::string> cpp_keys(num_keys);
+        std::vector<uint32_t> cpp_payloads(num_keys);
+        for (size_t i = 0; i < num_keys; ++i)
+        {
+            if (keys[i] == nullptr)
+            {
+                set_last_error("begin-loads key is null");
+                return false;
+            }
+            cpp_keys[i] = keys[i];
+            cpp_payloads[i] = payload_bytes_list[i];
+        }
+        std::vector<uint64_t> cpp_req_ids;
+        std::string error_message;
+        const bool ok =
+            reinterpret_cast<KVCacheManager *>(runtime)->BeginLoads(
+                cpp_keys, cpp_payloads, &cpp_req_ids, &error_message);
+        if (!ok)
+        {
+            set_last_error(error_message);
+        }
+        for (size_t i = 0; i < cpp_req_ids.size(); ++i)
+        {
+            out_request_ids[i] = cpp_req_ids[i];
+        }
+        return ok;
+    }
+
     CKVCacheWorkerHandle CEloqStore_KVCacheWorker_Create(
         CKVCacheOptionsHandle opts)
     {
