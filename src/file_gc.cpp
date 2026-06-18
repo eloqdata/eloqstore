@@ -106,18 +106,14 @@ namespace
 // every iteration -- there the clock read is already negligible.
 constexpr uint64_t kYieldPollStride = 256;
 
-// For the local active branch, derive the in-flight boundary from the
-// in-memory RootMeta. The boundary is RootMeta::first_unflushed_*_fp_id_,
-// which is the FilePageAllocator's MaxFilePageId() at the moment of the
-// last successful manifest flush -- i.e., the smallest file page id whose
-// allocation was not yet captured by any disk manifest. Converting from
-// page-id space to file-id space yields
-// BranchGuard::least_unflushed_*_file_id_.
-//
-// The on-disk manifest pass that runs after this composes via std::max,
-// so if a non-active branch's disk manifest reaches further, it still
-// wins. retained_files is left entirely to the disk-manifest pass; the
-// in-flight guard alone covers everything past the flushed boundary.
+// Seed the active branch's in-flight write guard from the in-memory RootMeta
+// (no disk read). For a live partition the boundary is the data/segment
+// allocator's current MaxFilePageId() in file-id space; a stub RootMeta (no
+// mapper) seeds no guard at all (see the body). The on-disk manifest pass that
+// runs after this composes via std::max, so a non-active branch whose disk
+// manifest reaches further still wins. retained_files is left entirely to the
+// disk-manifest pass; the in-flight guard alone covers everything past the
+// boundary.
 void SeedActiveBranchGuardFromInMemory(const TableIdent &tbl_id,
                                        std::string_view active_branch,
                                        uint64_t process_term,
@@ -134,6 +130,19 @@ void SeedActiveBranchGuardFromInMemory(const TableIdent &tbl_id,
     // No yields between Find() and the field reads below, so the
     // entry cannot be evicted out from under us; no Handle pin needed.
     const RootMeta &meta = entry->meta_;
+    // A stub RootMeta (no data mapper) is a placeholder with no live mapping
+    // and no in-flight writes -- e.g. a partition mid-reopen/drop on a standby.
+    // Seed NO guard for it: its allocators are zero-valued, so a guard would be
+    // least_unflushed=0 and mark every local file "in-flight", protecting
+    // orphaned files from reclamation forever. With no active-branch guard,
+    // DeleteUnreferenced* treats the branch as having a dropped manifest and
+    // reclaims the unretained files (see the missing-guard handling there). A
+    // valid on-disk manifest, if any, still seeds the guard via
+    // ProcessOneManifest.
+    if (meta.mapper_ == nullptr)
+    {
+        return;
+    }
     // Derive the in-flight boundary from the live allocators rather than the
     // RootMeta::first_unflushed_*_fp_id_ snapshot fields. Those fields are only
     // refreshed by a flush whose CoW meta carries the matching mapper, so a
@@ -143,9 +152,8 @@ void SeedActiveBranchGuardFromInMemory(const TableIdent &tbl_id,
     // mapper's allocator MaxFilePageId() is the current high-water and matches
     // the disk manifest's max_*_file_id_ that ProcessOneManifest would fold in.
     guard.least_unflushed_file_id_ =
-        meta.mapper_ ? (meta.mapper_->FilePgAllocator()->MaxFilePageId() >>
-                        pages_per_file_shift)
-                     : 0;
+        meta.mapper_->FilePgAllocator()->MaxFilePageId() >>
+        pages_per_file_shift;
     guard.least_unflushed_seg_file_id_ =
         meta.segment_mapper_
             ? (meta.segment_mapper_->FilePgAllocator()->MaxFilePageId() >>
