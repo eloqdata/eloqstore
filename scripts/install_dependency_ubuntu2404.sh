@@ -49,7 +49,7 @@ DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
     build-essential cmake pkg-config \
     libcurl4-openssl-dev libssl-dev libgflags-dev libzstd-dev \
     libboost-context-dev libc-ares-dev libprotobuf-dev libprotoc-dev protobuf-compiler \
-    libjsoncpp-dev libleveldb-dev libsnappy-dev zlib1g-dev lcov
+    libjsoncpp-dev libleveldb-dev libsnappy-dev libzmq3-dev zlib1g-dev lcov
 
 # Install glog
 git clone https://github.com/eloqdata/glog.git glog

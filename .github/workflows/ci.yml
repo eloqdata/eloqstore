@@ -40,6 +40,11 @@ jobs:
 
       # ── C++ core engine ──────────────────────────────────────────
 
+      - name: Install CI-only system dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends libzmq3-dev
+
       - name: Configure CMake
         run: |
           cmake -B build -S . \
@@ -146,7 +151,7 @@ jobs:
         run: ccache --show-stats || true
 
       - name: Remove ci-approved label after run
-        if: ${{ always() }}
+        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         uses: actions-ecosystem/action-remove-labels@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
