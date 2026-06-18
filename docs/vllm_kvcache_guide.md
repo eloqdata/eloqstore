@@ -306,7 +306,7 @@ Test setup:
 
 ### Workload A — Fit (KV cache fits within 5 GB)
 
-3 conversations, each ~9000-token first turn.  Total KV cache ~3.4 GB < 5 GB.
+3 conversations, each ~9,000-token first turn (≈ 6,500 measured input tokens).
 
 | System | Cold TTFT | Warm TTFT | Speedup |
 |--------|-----------|-----------|---------|
@@ -319,7 +319,7 @@ Both show significant speedup; CPU is faster due to storage medium.
 
 ### Workload B — Overflow (KV cache exceeds 5 GB)
 
-7 conversations, each ~9000-token first turn.  Total KV cache ~7.9 GB >> 5 GB.
+7 conversations, each ~9,000-token first turn (≈ 6,500 measured input tokens).
 
 | System | Cold TTFT | Warm TTFT | Speedup |
 |--------|-----------|-----------|---------|
@@ -333,8 +333,8 @@ speedup.
 
 ### Workload C — High Cache Hit (small requests, large hotset)
 
-64 conversations, ~1000-token first turns, second-turn short questions.
-Total KV cache ~8.95 GB >> 5 GB.
+64 conversations, ~1,000-token first turns (≈ 1,000 measured input tokens),
+second-turn short questions.  Total KV cache ~8.95 GB >> 5 GB.
 
 | System | Cold TTFT | Warm TTFT | Speedup |
 |--------|-----------|-----------|---------|
@@ -347,11 +347,16 @@ per-key synchronization overhead on the warm path.
 
 ### Summary
 
+TTFT absolute values differ across workloads because GPU prefill time scales
+with input tokens (~9,000 tokens ≈ 600–900ms prefill; ~1,000 tokens ≈
+100–150ms).  The speedup column isolates the cache benefit independent of
+prompt length.
+
 ```
-                    FIT (3.4 GB)          OVERFLOW (7.9 GB)      HIGH HIT (8.95 GB)
-                    cold    warm  speedup  cold    warm  speedup  cold    warm  speedup
-CPU Offloading      505ms   62ms  8.10x   634ms  568ms  1.12x    92ms    91ms  1.02x
-EloqStore           937ms  222ms  4.22x  1013ms  331ms  3.06x   166ms    75ms  2.22x
+                    FIT (9K tok, 3.4 GB)  OVERFLOW (9K tok, 7.9 GB)  HIGH HIT (1K tok, 8.95 GB)
+                    cold    warm  speedup  cold    warm  speedup      cold    warm  speedup
+CPU Offloading      505ms   62ms  8.10x   634ms  568ms  1.12x        92ms    91ms  1.02x
+EloqStore           937ms  222ms  4.22x  1013ms  331ms  3.06x       166ms    75ms  2.22x
 ```
 
 1. **When KV cache fits in RAM**: CPU offloading wins (8.10× vs 4.22×).
