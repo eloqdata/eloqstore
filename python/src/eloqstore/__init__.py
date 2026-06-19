@@ -11,10 +11,13 @@ from .client import (
     KVCacheWorkerOptions,
 )
 
+Options = ClientOptions
+
 __all__ = [
     "Client",
     "ClientOptions",
     "EloqStoreError",
+    "Options",
     "KVCacheBufferHandle",
     "KVCacheManager",
     "KVCacheManagerOptions",
