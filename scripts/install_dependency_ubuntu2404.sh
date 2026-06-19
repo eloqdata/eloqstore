@@ -42,7 +42,7 @@ if $needs_tz_config; then
   sudo ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime
 fi
 
-# Install system packages
+# Install system packages required by EloqStore.
 DEBIAN_FRONTEND=noninteractive sudo apt-get update
 DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
     sudo curl ca-certificates gdb ccache rsync git \
