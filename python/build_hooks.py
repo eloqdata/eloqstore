@@ -67,9 +67,10 @@ class CustomBuildHook(BuildHookInterface):
 
         self._copy_private_shared_libs(built_lib, native_libs_dir)
 
-        if package_libs_dir.exists():
-            shutil.rmtree(package_libs_dir)
-        shutil.copytree(native_libs_dir, package_libs_dir)
+        if self.target_name == "editable":
+            if package_libs_dir.exists():
+                shutil.rmtree(package_libs_dir)
+            shutil.copytree(native_libs_dir, package_libs_dir)
 
         build_data["pure_python"] = False
         if self.target_name == "wheel":
