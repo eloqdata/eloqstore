@@ -320,9 +320,8 @@ private:
 
     struct PendingReopenState
     {
-        bool inflight{false};
-        std::vector<KvRequest *> waiters;
-        std::unique_ptr<ReopenRequest> request;
+        std::vector<KvRequest *> waiters_;
+        ReopenRequest request_;
     };
     std::unordered_map<TableIdent, PendingReopenState> pending_reopens_;
 

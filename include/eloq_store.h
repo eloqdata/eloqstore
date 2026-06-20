@@ -497,6 +497,7 @@ public:
     }
 
 private:
+    // Archive tag to reopen; empty means reopen the latest available snapshot.
     std::string tag_;
     bool clean_{false};
     uint64_t pending_time_us_{0};
@@ -705,6 +706,7 @@ public:
     }
 
 private:
+    // Archive tag to reopen across all tables; empty means latest snapshot.
     std::string tag_;
     std::vector<std::unique_ptr<ReopenRequest>> reopen_reqs_;
     std::atomic<uint32_t> pending_{0};

@@ -275,22 +275,18 @@ bool Shard::AddKvRequest(KvRequest *req)
 
 void Shard::EnqueueForAutoReopen(KvRequest *req)
 {
-    const TableIdent tbl_id = req->TableId();
-    auto &state = pending_reopens_[tbl_id];
-    state.waiters.push_back(req);
-    if (state.inflight)
+    const TableIdent &tbl_id = req->TableId();
+    auto [it, inserted] = pending_reopens_.try_emplace(tbl_id);
+    auto &state = it->second;
+    state.waiters_.push_back(req);
+    if (!inserted)
     {
         return;
     }
-    state.inflight = true;
 
-    auto [it_q, inserted] = pending_queues_.try_emplace(tbl_id);
+    auto it_q = pending_queues_.try_emplace(tbl_id).first;
     PendingWriteQueue &pending_q = it_q->second;
-    if (state.request == nullptr)
-    {
-        state.request = std::make_unique<ReopenRequest>();
-    }
-    ReopenRequest *reopen_req = state.request.get();
+    ReopenRequest *reopen_req = &state.request_;
     reopen_req->SetArgs(tbl_id);
     reopen_req->SetTag("");
     reopen_req->SetClean(false);
@@ -300,13 +296,10 @@ void Shard::EnqueueForAutoReopen(KvRequest *req)
         KvError reopen_err = done_req->Error();
         EloqStore *store = store_;
         std::vector<KvRequest *> waiters;
-        std::unique_ptr<ReopenRequest> owned_req;
         auto it = pending_reopens_.find(tbl_id);
         if (it != pending_reopens_.end())
         {
-            waiters = std::move(it->second.waiters);
-            owned_req = std::move(it->second.request);
-            pending_reopens_.erase(it);
+            waiters = std::move(it->second.waiters_);
         }
         for (KvRequest *pending_req : waiters)
         {
@@ -996,6 +989,13 @@ void Shard::OnTaskFinished(KvTask *task)
     else
     {
         task_mgr_.FreeTask(task);
+    }
+
+    if (req->Type() == RequestType::Reopen)
+    {
+        TableIdent tbl_id = req->TableId();
+        pending_reopens_.erase(tbl_id);
+        return;
     }
 
     if (oom_retry)
