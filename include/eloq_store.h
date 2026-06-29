@@ -471,8 +471,8 @@ public:
     {
         return tag_;
     }
-    // `clean=true` means reopen should accept a missing remote snapshot and
-    // replace any existing local partition state with an empty snapshot.
+    // `clean=true` means reopen should clear local partition state
+    // instead of fetching/installing a remote snapshot.
     void SetClean(bool clean)
     {
         clean_ = clean;
