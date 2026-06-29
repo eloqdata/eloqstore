@@ -126,8 +126,7 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
         const KvOptions *opts = Options();
         if (opts->data_append_mode)
         {
-            CompactIfNeeded(cow_meta_.mapper_.get(),
-                            opts->file_amplify_factor);
+            CompactIfNeeded(cow_meta_.mapper_.get(), opts->file_amplify_factor);
         }
         if (cow_meta_.segment_mapper_ != nullptr)
         {
