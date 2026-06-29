@@ -60,9 +60,9 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
     }
 
     KvError err = KvError::NoError;
-    const bool clear_local_state = request->Clean() ||
-                                   sync_err == KvError::NotFound ||
-                                   sync_err == KvError::ResourceMissing;
+    bool clear_local_state = request->Clean() ||
+                             sync_err == KvError::NotFound ||
+                             sync_err == KvError::ResourceMissing;
     if (clear_local_state)
     {
         // Remote partition no longer exists: delete local manifest and
@@ -95,8 +95,13 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
     }
     else
     {
+        bool install_cleared_local_state = false;
         err = shard->IndexManager()->InstallExternalSnapshot(
-            tbl_id, cow_meta_, request->Tag());
+            tbl_id, cow_meta_, request->Tag(), install_cleared_local_state);
+        if (err == KvError::NoError && install_cleared_local_state)
+        {
+            clear_local_state = true;
+        }
     }
     if (err != KvError::NoError)
     {
@@ -114,25 +119,9 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
         prewarm_service->Prewarm(tbl_id);
     }
 
-    if (clear_local_state)
+    if (clear_local_state && !shard->HasPendingLocalGc(tbl_id))
     {
-        if (!shard->HasPendingLocalGc(tbl_id))
-        {
-            shard->AddPendingLocalGc(tbl_id);
-        }
-    }
-    else
-    {
-        const KvOptions *opts = Options();
-        if (opts->data_append_mode)
-        {
-            CompactIfNeeded(cow_meta_.mapper_.get(), opts->file_amplify_factor);
-        }
-        if (cow_meta_.segment_mapper_ != nullptr)
-        {
-            CompactIfNeeded(cow_meta_.segment_mapper_.get(),
-                            opts->segment_file_amplify_factor);
-        }
+        shard->AddPendingLocalGc(tbl_id);
     }
     return err;
 }

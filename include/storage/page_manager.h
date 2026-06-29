@@ -62,10 +62,11 @@ public:
                                                        PageId page_id);
     // Install an externally built snapshot (e.g. pulled from remote manifest)
     // into the RootMeta version chain without performing local COW writes.
-    // A missing external manifest falls back to installing an empty snapshot.
+    // Reports when a missing external manifest clears local partition state.
     KvError InstallExternalSnapshot(const TableIdent &tbl_ident,
                                     CowRootMeta &cow_meta,
-                                    std::string_view reopen_tag = {});
+                                    std::string_view reopen_tag,
+                                    bool &cleared_local_state);
     KvError InstallEmptySnapshot(const TableIdent &tbl_ident,
                                  CowRootMeta &cow_meta);
 
