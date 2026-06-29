@@ -285,7 +285,7 @@ void Shard::EnqueueForAutoReopen(KvRequest *req)
         return;
     }
 
-    auto it_q = pending_queues_.try_emplace(tbl_id).first;
+    auto [it_q, queue_inserted] = pending_queues_.try_emplace(tbl_id);
     PendingWriteQueue &pending_q = it_q->second;
     ReopenRequest *reopen_req = &state.request_;
     reopen_req->SetArgs(tbl_id);
@@ -311,7 +311,12 @@ void Shard::EnqueueForAutoReopen(KvRequest *req)
         }
     };
     pending_q.PushFront(reopen_req);
-    TryStartPendingWrite(tbl_id);
+    // Existing queues are either running a write or waiting for a write
+    // slot; normal completion dispatch will pick up the reopen.
+    if (queue_inserted)
+    {
+        TryStartPendingWrite(tbl_id);
+    }
 }
 
 void Shard::EnqueueDelayedReopenRequest(ReopenRequest *req)
