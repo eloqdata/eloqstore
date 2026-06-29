@@ -183,7 +183,7 @@ void Shard::WorkLoop()
         io_mgr_->Submit();
 
         io_mgr_->PollComplete();
-        ProcessDelayedRequests();
+        PromoteReadyDelayedReopenRequests();
         ExecuteReadyTasks();
 
         int nreqs = dequeue_requests();
@@ -294,20 +294,16 @@ void Shard::EnqueueForAutoReopen(KvRequest *req)
     reopen_req->callback_ = [this, tbl_id](KvRequest *done_req)
     {
         KvError reopen_err = done_req->Error();
-        EloqStore *store = store_;
-        std::vector<KvRequest *> waiters;
         auto it = pending_reopens_.find(tbl_id);
-        if (it != pending_reopens_.end())
-        {
-            waiters = std::move(it->second.waiters_);
-        }
+        CHECK(it != pending_reopens_.end());
+        auto &waiters = it->second.waiters_;
         for (KvRequest *pending_req : waiters)
         {
             if (reopen_err != KvError::NoError)
             {
                 pending_req->SetDone(reopen_err);
             }
-            else if (!store->SendRequest(pending_req))
+            else if (!store_->SendRequest(pending_req))
             {
                 pending_req->SetDone(KvError::NotRunning);
             }
@@ -317,7 +313,7 @@ void Shard::EnqueueForAutoReopen(KvRequest *req)
     TryStartPendingWrite(tbl_id);
 }
 
-void Shard::EnqueueDelayedRequest(KvRequest *req)
+void Shard::EnqueueDelayedReopenRequest(ReopenRequest *req)
 {
     uint64_t delay_us = req->PendingTime();
     if (delay_us == 0)
@@ -333,7 +329,7 @@ void Shard::EnqueueDelayedRequest(KvRequest *req)
                    std::greater<DelayedEntry>());
 }
 
-void Shard::ProcessDelayedRequests()
+void Shard::PromoteReadyDelayedReopenRequests()
 {
     const uint64_t now_us = ReadTimeMicroseconds();
     while (!delayed_requests_.empty() &&
@@ -345,9 +341,12 @@ void Shard::ProcessDelayedRequests()
         DelayedEntry entry = std::move(delayed_requests_.back());
         delayed_requests_.pop_back();
 
-        // Clear pending time so ProcessReq won't re-enqueue.
+        // Clear pending time so the normal request path won't re-enqueue.
         entry.request->SetPendingTime(0);
-        ProcessReq(entry.request);
+        if (!AddKvRequest(entry.request))
+        {
+            entry.request->SetDone(KvError::NotRunning);
+        }
     }
 }
 
@@ -730,9 +729,10 @@ bool Shard::ProcessReq(KvRequest *req)
     }
     case RequestType::Reopen:
     {
-        if (req->PendingTime() > 0)
+        auto *reopen_req = static_cast<ReopenRequest *>(req);
+        if (reopen_req->PendingTime() > 0)
         {
-            EnqueueDelayedRequest(req);
+            EnqueueDelayedReopenRequest(reopen_req);
             return true;
         }
         ReopenTask *task = task_mgr_.GetReopenTask(req->TableId());
@@ -1091,7 +1091,7 @@ void Shard::WorkOneRound()
     io_mgr_->Submit();
 
     io_mgr_->PollComplete();
-    ProcessDelayedRequests();
+    PromoteReadyDelayedReopenRequests();
     if (DurationMicroseconds(ts_) < FLAGS_max_processing_time_microseconds)
     {
         ExecuteReadyTasks();

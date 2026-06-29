@@ -101,8 +101,8 @@ private:
     void OnReceivedReq(KvRequest *req);
     bool ProcessReq(KvRequest *req);
     void EnqueueForAutoReopen(KvRequest *req);
-    void EnqueueDelayedRequest(KvRequest *req);
-    void ProcessDelayedRequests();
+    void EnqueueDelayedReopenRequest(ReopenRequest *req);
+    void PromoteReadyDelayedReopenRequests();
     bool HasPendingDelayedRequests() const
     {
         return !delayed_requests_.empty();
@@ -327,7 +327,7 @@ private:
 
     struct DelayedEntry
     {
-        KvRequest *request;
+        ReopenRequest *request;
         uint64_t execute_at_us;
 
         bool operator>(const DelayedEntry &other) const
