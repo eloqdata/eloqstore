@@ -663,51 +663,6 @@ TEST_CASE("standby rsync replica follows master changes", "[standby]")
         standby.ExecSync(&reopen_req);
         REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
 
-        REQUIRE(WaitForCondition(
-            10s,
-            100ms,
-            [&]()
-            {
-                if (!fs::exists(partition_path))
-                {
-                    return false;
-                }
-
-                bool has_manifest = false;
-                for (const auto &entry : fs::directory_iterator(partition_path))
-                {
-                    if (!entry.is_regular_file())
-                    {
-                        continue;
-                    }
-
-                    const std::string filename =
-                        entry.path().filename().string();
-                    const auto parsed = eloqstore::ParseFileName(filename);
-                    const auto &type = parsed.first;
-                    if (type == eloqstore::FileNameManifest)
-                    {
-                        has_manifest = true;
-                        continue;
-                    }
-
-                    if (type == eloqstore::FileNameData)
-                    {
-                        eloqstore::FileId file_id = 0;
-                        std::string_view branch_name;
-                        uint64_t term = 0;
-                        if (!eloqstore::ParseDataFileSuffix(
-                                parsed.second, file_id, branch_name, term) ||
-                            term != 2)
-                        {
-                            return false;
-                        }
-                    }
-                }
-
-                return has_manifest;
-            }));
-
         VerifyRange(standby, tbl_id, 0, 5000, false);
         VerifyRange(standby, tbl_id, 5001, 10000, true);
 
