@@ -275,6 +275,7 @@ bool Shard::AddKvRequest(KvRequest *req)
 
 void Shard::EnqueueForAutoReopen(KvRequest *req)
 {
+    CHECK(req->Type() != RequestType::Reopen);
     const TableIdent &tbl_id = req->TableId();
     auto [it, inserted] = pending_reopens_.try_emplace(tbl_id);
     auto &state = it->second;
@@ -967,6 +968,7 @@ void Shard::OnTaskFinished(KvTask *task)
     KvRequest *req = task->req_;
     const bool auto_reopen = task->needs_auto_reopen_;
     const bool oom_retry = task->needs_oom_retry_;
+    const TaskType task_type = task->Type();
     task->req_ = nullptr;
     task->needs_auto_reopen_ = false;
     task->needs_oom_retry_ = false;
@@ -977,6 +979,10 @@ void Shard::OnTaskFinished(KvTask *task)
         auto it = pending_queues_.find(wtask->TableId());
         assert(it != pending_queues_.end());
         PendingWriteQueue &pending_q = it->second;
+        if (__builtin_expect(task_type == TaskType::Reopen && !oom_retry, 0))
+        {
+            pending_reopens_.erase(wtask->TableId());
+        }
         pending_q.running_ = false;
         task_mgr_.FreeTask(task);
         if (pending_q.Empty())
@@ -989,13 +995,6 @@ void Shard::OnTaskFinished(KvTask *task)
     else
     {
         task_mgr_.FreeTask(task);
-    }
-
-    if (req->Type() == RequestType::Reopen)
-    {
-        TableIdent tbl_id = req->TableId();
-        pending_reopens_.erase(tbl_id);
-        return;
     }
 
     if (oom_retry)
