@@ -285,8 +285,6 @@ void Shard::EnqueueForAutoReopen(KvRequest *req)
         return;
     }
 
-    auto [it_q, queue_inserted] = pending_queues_.try_emplace(tbl_id);
-    PendingWriteQueue &pending_q = it_q->second;
     ReopenRequest *reopen_req = &state.request_;
     reopen_req->SetArgs(tbl_id);
     reopen_req->SetTag("");
@@ -310,13 +308,7 @@ void Shard::EnqueueForAutoReopen(KvRequest *req)
             }
         }
     };
-    pending_q.PushFront(reopen_req);
-    // Existing queues are either running a write or waiting for a write
-    // slot; normal completion dispatch will pick up the reopen.
-    if (queue_inserted)
-    {
-        TryStartPendingWrite(tbl_id);
-    }
+    EnqueueDelayedReopenRequest(reopen_req);
 }
 
 void Shard::EnqueueDelayedReopenRequest(ReopenRequest *req)
@@ -324,7 +316,9 @@ void Shard::EnqueueDelayedReopenRequest(ReopenRequest *req)
     uint64_t delay_us = req->PendingTime();
     if (delay_us == 0)
     {
-        ProcessReq(req);
+        auto [it_q, _] = pending_queues_.try_emplace(req->TableId());
+        it_q->second.PushFront(req);
+        TryStartPendingWrite(req->TableId());
         return;
     }
 
@@ -349,10 +343,12 @@ void Shard::PromoteReadyDelayedReopenRequests()
 
         // Clear pending time so the normal request path won't re-enqueue.
         entry.request->SetPendingTime(0);
-        if (!AddKvRequest(entry.request))
-        {
-            entry.request->SetDone(KvError::NotRunning);
-        }
+        auto [it_q, _] = pending_queues_.try_emplace(entry.request->TableId());
+        it_q->second.PushFront(entry.request);
+        // The delayed heap no longer keeps the shard active after this pop, so
+        // try to start the ready reopen immediately instead of leaving it only
+        // in the per-table pending queue.
+        TryStartPendingWrite(entry.request->TableId());
     }
 }
 
@@ -489,10 +485,17 @@ GlobalRegisteredMemory *Shard::GlobalRegMem()
 
 void Shard::OnReceivedReq(KvRequest *req)
 {
+    if (req->Reopen())
+    {
+        req->SetReopen(false);
+        EnqueueForAutoReopen(req);
+        return;
+    }
+
     if (!req->ReadOnly())
     {
         auto *wreq = reinterpret_cast<WriteRequest *>(req);
-        auto [it, inserted] = pending_queues_.try_emplace(req->tbl_id_);
+        auto [it, _] = pending_queues_.try_emplace(req->tbl_id_);
         it->second.PushBack(wreq);
         TryStartPendingWrite(req->tbl_id_);
         return;
@@ -549,14 +552,6 @@ bool Shard::ProcessReq(KvRequest *req)
     {
     case RequestType::Read:
     {
-        auto *read_req = static_cast<ReadRequest *>(req);
-        if (read_req->Reopen())
-        {
-            read_req->SetReopen(false);
-            EnqueueForAutoReopen(req);
-            return true;
-        }
-
         ReadTask *task = task_mgr_.GetReadTask();
         auto lbd = [task, req]() -> KvError
         {
@@ -736,11 +731,7 @@ bool Shard::ProcessReq(KvRequest *req)
     case RequestType::Reopen:
     {
         auto *reopen_req = static_cast<ReopenRequest *>(req);
-        if (reopen_req->PendingTime() > 0)
-        {
-            EnqueueDelayedReopenRequest(reopen_req);
-            return true;
-        }
+        CHECK_EQ(reopen_req->PendingTime(), 0);
         ReopenTask *task = task_mgr_.GetReopenTask(req->TableId());
         auto lbd = [task, req]() -> KvError
         { return task->Reopen(req->TableId()); };
