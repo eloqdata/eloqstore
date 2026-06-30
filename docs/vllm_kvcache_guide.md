@@ -201,13 +201,20 @@ Check the server:
 The built-in benchmark is
 `vllm/benchmarks/multi_turn/benchmark_serving_multi_turn.py`.
 
-Pre-built conversation files for repeatable testing ship with the
-`eloqstore` package in `eloqstore/bench_configs/`:
+EloqStore ships a small generator for repeatable synthetic conversation files.
+Generate the inputs locally instead of committing generated JSON into the
+repository:
+
+```bash
+CONFIGS=/tmp/eloqstore-kvcache-bench-configs
+eloqstore-generate-kvcache-bench --output-dir "$CONFIGS"
+```
 
 | File | Conversations | First-turn tokens | Total KV cache | vs 5 GB |
 |------|--------------|-------------------|----------------|---------|
 | `fit_5g_conversations.json` | 3 | ~9000 | ~3.4 GB | Within budget |
 | `overflow_5g_conversations.json` | 7 | ~9000 | ~7.9 GB | Exceeds budget |
+| `high_hit_conversations.json` | 64 | ~1000 | ~8.95 GB | Exceeds budget |
 
 Each conversation: long first-turn analysis, short assistant reply, short
 second-turn follow-up question.
@@ -231,13 +238,14 @@ Start the server (EloqStore or CPU offloading, see [Startup](#startup) above).
 # Cold run (empty store / empty CPU buffer)
 VENV=/path/to/venv/bin
 VLLM_BENCH=/path/to/vllm/benchmarks/multi_turn/benchmark_serving_multi_turn.py
-CONFIGS=/path/to/eloqstore/python/src/eloqstore/bench_configs
+CONFIGS=/tmp/eloqstore-kvcache-bench-configs
+eloqstore-generate-kvcache-bench --preset overflow-5g --output-dir "$CONFIGS"
 
 $VENV/python $VLLM_BENCH \
   --model Qwen/Qwen3-4B \
   --served-model-name qwen3-4b-eloq \
   --url http://127.0.0.1:8015 \
-  --input-file $CONFIGS/overflow_5g_conversations.json \
+  --input-file "$CONFIGS/overflow_5g_conversations.json" \
   --num-clients 1 \
   --max-active-conversations 7 \
   --max-turns 4 \
@@ -250,7 +258,7 @@ $VENV/python $VLLM_BENCH \
   --model Qwen/Qwen3-4B \
   --served-model-name qwen3-4b-eloq \
   --url http://127.0.0.1:8015 \
-  --input-file $CONFIGS/overflow_5g_conversations.json \
+  --input-file "$CONFIGS/overflow_5g_conversations.json" \
   --num-clients 1 \
   --max-active-conversations 7 \
   --max-turns 4 \
