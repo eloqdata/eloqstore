@@ -20,6 +20,29 @@ fn add_usr_local_link_search_paths_if_needed() {
     }
 }
 
+fn repeat_abseil_static_dependencies() {
+    // GNU ld resolves static archives left-to-right. The Abseil archives are
+    // discovered from the filesystem, so repeat this dependency tail after the
+    // discovered libraries to keep static linking stable across platforms.
+    for lib in [
+        "absl_hashtablez_sampler",
+        "absl_exponential_biased",
+        "absl_synchronization",
+        "absl_graphcycles_internal",
+        "absl_kernel_timeout_internal",
+        "absl_time",
+        "absl_civil_time",
+        "absl_time_zone",
+        "absl_raw_logging_internal",
+        "absl_log_severity",
+        "absl_base",
+        "absl_spinlock_wait",
+        "absl_malloc_internal",
+    ] {
+        println!("cargo:rustc-link-lib={}", lib);
+    }
+}
+
 fn has_ccache() -> bool {
     if std::env::var_os("CCACHE_DIR").is_none() {
         return false;
@@ -221,6 +244,7 @@ fn main() {
                             }
                         }
                     }
+                    repeat_abseil_static_dependencies();
                 }
             } else {
                 // Fallback to dynamic if static not available
@@ -307,6 +331,7 @@ fn main() {
                     }
                 }
             }
+            repeat_abseil_static_dependencies();
         }
 
         // System libraries that need to be linked (fallback mode)
