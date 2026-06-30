@@ -7,9 +7,12 @@ from dataclasses import dataclass, field
 import mmap
 import os
 import time
-from typing import Sequence
+from typing import Any, Sequence
 
-import torch
+try:
+    import torch
+except ImportError:
+    torch = None
 
 from ._errors import EloqStoreError
 from ._ffi import (
@@ -53,6 +56,22 @@ def _shared_memory_path(shared_memory_name: str) -> str:
         if shared_memory_name.startswith("/dev/shm/")
         else f"/dev/shm{shared_memory_name if shared_memory_name.startswith('/') else '/' + shared_memory_name}"
     )
+
+
+def _validate_uint(
+    name: str,
+    value: int,
+    bits: int,
+    *,
+    min_value: int = 0,
+    max_value: int | None = None,
+) -> int:
+    if not isinstance(value, int):
+        raise TypeError(f"{name} must be an int")
+    limit = (1 << bits) - 1 if max_value is None else max_value
+    if value < min_value or value > limit:
+        raise ValueError(f"{name} must be between {min_value} and {limit}")
+    return value
 
 
 def _derive_runtime_shape(
@@ -107,7 +126,7 @@ class KVCacheSharedBuffer:
     partition_count: int
     fd: int | None = None
     mmap_obj: mmap.mmap | None = None
-    tensor: torch.Tensor | None = None
+    tensor: Any | None = None
     cuda_registered: bool = False
     cuda_base_ptr: int = 0
 
@@ -144,7 +163,10 @@ class KVCacheSharedBuffer:
             raise
         self.fd = fd
         self.mmap_obj = mm
-        self.tensor = torch.frombuffer(memoryview(mm), dtype=torch.uint8, count=self.mapped_bytes)
+        torch_module = _require_torch()
+        self.tensor = torch_module.frombuffer(
+            memoryview(mm), dtype=torch_module.uint8, count=self.mapped_bytes
+        )
 
     def register_cuda(self) -> None:
         if self.cuda_registered:
@@ -174,7 +196,7 @@ class KVCacheSharedBuffer:
             raise RuntimeError("shared buffer is not attached")
         return memoryview(self.mmap_obj)[offset : offset + length].cast("B")
 
-    def slice_tensor(self, offset: int, length: int) -> torch.Tensor:
+    def slice_tensor(self, offset: int, length: int) -> Any:
         if self.tensor is None:
             self.attach()
         if self.tensor is None:
@@ -209,15 +231,51 @@ def _load_cudart():
     return cudart
 
 
+def _require_torch() -> Any:
+    if torch is None:
+        raise RuntimeError(
+            "PyTorch is required for KV cache shared-buffer operations. "
+            "Install `torch` to use this functionality."
+        )
+    return torch
+
+
 @dataclass(slots=True)
 class ClientOptions:
     store_paths: Sequence[str] = field(default_factory=list)
+    options_path: str = ""
     table_name: str = "default"
     partition_id: int = 0
     branch: str = "main"
     term: int = 0
     partition_group_id: int = 0
+    data_page_size: int = 4 * 1024
+    pages_per_file_shift: int = 18
+    overflow_pointers: int = 16
+    manifest_limit: int = 8 * 1024 * 1024
+    fd_limit: int = 10000
+    buffer_pool_size: int = 128 * 1024 * 1024
     num_threads: int = 1
+
+    def __post_init__(self) -> None:
+        self.partition_id = _validate_uint("partition_id", self.partition_id, 32)
+        self.term = _validate_uint("term", self.term, 64)
+        self.partition_group_id = _validate_uint(
+            "partition_group_id", self.partition_group_id, 32
+        )
+        self.data_page_size = _validate_uint("data_page_size", self.data_page_size, 16)
+        self.pages_per_file_shift = _validate_uint(
+            "pages_per_file_shift", self.pages_per_file_shift, 8
+        )
+        self.overflow_pointers = _validate_uint(
+            "overflow_pointers", self.overflow_pointers, 8, min_value=1, max_value=128
+        )
+        self.manifest_limit = _validate_uint("manifest_limit", self.manifest_limit, 32)
+        self.fd_limit = _validate_uint("fd_limit", self.fd_limit, 32)
+        self.buffer_pool_size = _validate_uint(
+            "buffer_pool_size", self.buffer_pool_size, 64
+        )
+        self.num_threads = _validate_uint("num_threads", self.num_threads, 16)
 
 
 @dataclass(slots=True)
@@ -790,7 +848,23 @@ class Client:
         try:
             for path in options.store_paths:
                 lib().CEloqStore_Options_AddStorePath(opts, _encode(path))
+            if options.options_path:
+                _ok(
+                    lib().CEloqStore_Options_LoadFromIni(
+                        opts, _encode(options.options_path)
+                    )
+                )
             lib().CEloqStore_Options_SetNumThreads(opts, options.num_threads)
+            lib().CEloqStore_Options_SetBufferPoolSize(opts, options.buffer_pool_size)
+            lib().CEloqStore_Options_SetDataPageSize(opts, options.data_page_size)
+            lib().CEloqStore_Options_SetManifestLimit(opts, options.manifest_limit)
+            lib().CEloqStore_Options_SetFdLimit(opts, options.fd_limit)
+            lib().CEloqStore_Options_SetPagesPerFileShift(
+                opts, options.pages_per_file_shift
+            )
+            lib().CEloqStore_Options_SetOverflowPointers(
+                opts, options.overflow_pointers
+            )
             if not lib().CEloqStore_Options_Validate(opts):
                 raise EloqStoreError(1, last_error() or "invalid client options")
             self._handle = lib().CEloqStore_Create(opts)
@@ -871,6 +945,37 @@ class Client:
         )
         _ok_status(status)
         return bool(out_exists.value)
+
+    def get_into(self, key: str | bytes, out: bytearray | memoryview) -> int | None:
+        """Read one value into a caller-provided mutable buffer."""
+        value = self.get(key)
+        if value is None:
+            return None
+        view = memoryview(out)
+        if len(view) < len(value):
+            raise ValueError("output buffer is too small")
+        view[: len(value)] = value
+        return len(value)
+
+    def batch_put(
+        self,
+        items: dict[str | bytes, bytes | bytearray | memoryview]
+        | Sequence[tuple[str | bytes, bytes | bytearray | memoryview]],
+        timestamp: int = 0,
+    ) -> None:
+        """Write multiple key/value pairs through repeated ordinary CRUD calls."""
+        pairs = items.items() if isinstance(items, dict) else items
+        for key, value in pairs:
+            self.put(key, bytes(value), timestamp=timestamp)
+
+    def batch_get(self, keys: Sequence[str | bytes]) -> list[bytes | None]:
+        """Read multiple keys through repeated ordinary CRUD calls."""
+        return [self.get(key) for key in keys]
+
+    def batch_delete(self, keys: Sequence[str | bytes], timestamp: int = 0) -> None:
+        """Delete multiple keys through repeated ordinary CRUD calls."""
+        for key in keys:
+            self.delete(key, timestamp=timestamp)
 
     def close(self) -> None:
         """Stop and destroy the native CRUD client session."""

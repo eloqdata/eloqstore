@@ -86,6 +86,14 @@ def _configure_library(lib) -> None:
     lib.CEloqStore_Options_Destroy.argtypes = [c_void_p]
     lib.CEloqStore_Options_AddStorePath.argtypes = [c_void_p, c_char_p]
     lib.CEloqStore_Options_SetNumThreads.argtypes = [c_void_p, c_uint16]
+    lib.CEloqStore_Options_SetBufferPoolSize.argtypes = [c_void_p, c_uint64]
+    lib.CEloqStore_Options_SetDataPageSize.argtypes = [c_void_p, c_uint16]
+    lib.CEloqStore_Options_SetManifestLimit.argtypes = [c_void_p, c_uint32]
+    lib.CEloqStore_Options_SetFdLimit.argtypes = [c_void_p, c_uint32]
+    lib.CEloqStore_Options_SetPagesPerFileShift.argtypes = [c_void_p, c_uint8]
+    lib.CEloqStore_Options_SetOverflowPointers.argtypes = [c_void_p, c_uint8]
+    lib.CEloqStore_Options_LoadFromIni.argtypes = [c_void_p, c_char_p]
+    lib.CEloqStore_Options_LoadFromIni.restype = c_bool
     lib.CEloqStore_Options_Validate.argtypes = [c_void_p]
     lib.CEloqStore_Options_Validate.restype = c_bool
     lib.CEloqStore_Create.argtypes = [c_void_p]
