@@ -109,5 +109,6 @@ cmake --build . -j4
 sudo cmake --install .
 cd ../../ && rm -rf Catch2
 
+sudo ldconfig
 
 echo "All dependencies have been installed successfully!" 
