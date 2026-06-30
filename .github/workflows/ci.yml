@@ -5,8 +5,6 @@ on:
     types:
       - opened
       - synchronize
-      - labeled
-      - unlabeled
       - ready_for_review
     branches:
       - main
@@ -14,7 +12,7 @@ on:
 
 jobs:
   test:
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'ci-approved')) }}
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
     name: test (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     strategy:
@@ -27,7 +25,6 @@ jobs:
             runner: ubuntu-24.04-arm
     permissions:
       contents: read
-      pull-requests: write
     env:
       CCACHE_DIR: /home/runner/.cache/ccache
       CCACHE_MAXSIZE: 1G
@@ -156,10 +153,3 @@ jobs:
       - name: Show ccache stats
         if: always()
         run: ccache --show-stats || true
-
-      - name: Remove ci-approved label after run
-        if: ${{ always() && matrix.arch == 'amd64' }}
-        uses: actions-ecosystem/action-remove-labels@v1
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          labels: ci-approved
