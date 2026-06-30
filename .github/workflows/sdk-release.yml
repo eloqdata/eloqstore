@@ -11,15 +11,21 @@ on:
 jobs:
   # ── build + test ─────────────────────────────────────────────────
   build-and-test:
-    runs-on: ubuntu-latest
+    name: build-and-test (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     permissions:
       contents: write
     env:
-      CCACHE_DIR: /github/home/.cache/ccache
+      CCACHE_DIR: /home/runner/.cache/ccache
       CCACHE_MAXSIZE: 1G
-    container:
-      image: eloqdata/eloq-dev-ci-ubuntu2404:latest
-      options: --user root --security-opt seccomp=unconfined
 
     outputs:
       version: ${{ steps.read_version.outputs.version }}
@@ -30,11 +36,10 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Fix permissions
-        run: chmod -R a+rwx "$GITHUB_WORKSPACE" || true
-
-      - name: Configure Git safe directory
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Install dependencies
+        run: |
+          cd "$RUNNER_TEMP"
+          bash "$GITHUB_WORKSPACE/scripts/install_dependency_ubuntu2404.sh"
 
       - name: Read version
         id: read_version
@@ -49,7 +54,7 @@ jobs:
           echo "Version: $VER"
 
       - name: Sync version files and push
-        if: github.event_name == 'push'
+        if: github.event_name == 'push' && matrix.arch == 'amd64'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -61,9 +66,9 @@ jobs:
           git push origin HEAD:main
 
       - name: Sync version (manual, no push)
-        if: github.event_name == 'workflow_dispatch'
+        if: github.event_name == 'workflow_dispatch' || matrix.arch == 'arm64'
         run: |
-          if [ "${GITHUB_REF}" != "refs/heads/main" ]; then
+          if [ "${GITHUB_REF}" != "refs/heads/main" ] && [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "workflow_dispatch is only allowed from the main branch (current: ${GITHUB_REF})" >&2
             exit 1
           fi
@@ -88,10 +93,10 @@ jobs:
       - name: Cache pip downloads
         uses: actions/cache@v4
         with:
-          path: /github/home/.cache/pip
-          key: ${{ runner.os }}-sdk-pip-v2-${{ hashFiles('python/pyproject.toml') }}
+          path: /home/runner/.cache/pip
+          key: ${{ runner.os }}-${{ matrix.arch }}-sdk-pip-v2-${{ hashFiles('python/pyproject.toml') }}
           restore-keys: |
-            ${{ runner.os }}-sdk-pip-v2-
+            ${{ runner.os }}-${{ matrix.arch }}-sdk-pip-v2-
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -105,10 +110,10 @@ jobs:
       - name: Cache ccache
         uses: actions/cache@v4
         with:
-          path: /github/home/.cache/ccache
-          key: ${{ runner.os }}-sdk-ccache-v3-${{ hashFiles('CMakeLists.txt', 'ffi/**', 'include/**', 'src/**', 'rust/eloqstore-sys/**', 'python/build_hooks.py') }}
+          path: /home/runner/.cache/ccache
+          key: ${{ runner.os }}-${{ matrix.arch }}-sdk-ccache-v3-${{ hashFiles('CMakeLists.txt', 'ffi/**', 'include/**', 'src/**', 'rust/eloqstore-sys/**', 'python/build_hooks.py') }}
           restore-keys: |
-            ${{ runner.os }}-sdk-ccache-v3-
+            ${{ runner.os }}-${{ matrix.arch }}-sdk-ccache-v3-
 
       - name: Reset ccache stats
         run: ccache --zero-stats || true
@@ -143,6 +148,7 @@ jobs:
         working-directory: ${{ github.workspace }}/rust
 
       - name: Upload Python wheel artifact
+        if: matrix.arch == 'amd64'
         uses: actions/upload-artifact@v4
         with:
           name: python-wheel

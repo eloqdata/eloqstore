@@ -15,16 +15,22 @@ on:
 jobs:
   test:
     if: ${{ github.event_name == 'workflow_dispatch' || (github.event.pull_request.draft == false && contains(github.event.pull_request.labels.*.name, 'ci-approved')) }}
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
     permissions:
       contents: read
       pull-requests: write
     env:
-      CCACHE_DIR: /github/home/.cache/ccache
+      CCACHE_DIR: /home/runner/.cache/ccache
       CCACHE_MAXSIZE: 1G
-    container:
-      image: eloqdata/eloq-dev-ci-ubuntu2404:latest
-      options: --user root --security-opt seccomp=unconfined --ulimit memlock=-1:-1
 
     steps:
       - uses: actions/checkout@v4
@@ -32,11 +38,10 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Fix permissions
-        run: chmod -R a+rwx "$GITHUB_WORKSPACE" || true
-
-      - name: Configure Git safe directory
-        run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - name: Install dependencies
+        run: |
+          cd "$RUNNER_TEMP"
+          bash "$GITHUB_WORKSPACE/scripts/install_dependency_ubuntu2404.sh"
 
       # ── C++ core engine ──────────────────────────────────────────
 
@@ -51,7 +56,12 @@ jobs:
 
       - name: Install and start MinIO
         run: |
-          wget -q https://dl.min.io/server/minio/release/linux-amd64/minio
+          case "$(uname -m)" in
+            x86_64) MINIO_ARCH=amd64 ;;
+            aarch64|arm64) MINIO_ARCH=arm64 ;;
+            *) echo "Unsupported architecture: $(uname -m)" >&2; exit 1 ;;
+          esac
+          wget -q "https://dl.min.io/server/minio/release/linux-${MINIO_ARCH}/minio"
           chmod +x minio
           mkdir -p /tmp/minio-data
           ./minio server /tmp/minio-data --address :9900 --console-address ":9001" &
@@ -65,7 +75,9 @@ jobs:
           echo "MINIO_PID=$MINIO_PID" >> "$GITHUB_ENV"
 
       - name: Run C++ unit tests
-        run: ctest --test-dir build/tests/ --output-on-failure -V
+        run: |
+          sudo prlimit --pid $$ --memlock=unlimited:unlimited || true
+          ctest --test-dir build/tests/ --output-on-failure -V
 
       # ── Python SDK ────────────────────────────────────────────────
 
@@ -77,18 +89,18 @@ jobs:
       - name: Cache pip downloads
         uses: actions/cache@v4
         with:
-          path: /github/home/.cache/pip
-          key: ${{ runner.os }}-ci-pip-${{ hashFiles('python/pyproject.toml') }}
+          path: /home/runner/.cache/pip
+          key: ${{ runner.os }}-${{ matrix.arch }}-ci-pip-${{ hashFiles('python/pyproject.toml') }}
           restore-keys: |
-            ${{ runner.os }}-ci-pip-
+            ${{ runner.os }}-${{ matrix.arch }}-ci-pip-
 
       - name: Cache ccache
         uses: actions/cache@v4
         with:
-          path: /github/home/.cache/ccache
-          key: ${{ runner.os }}-ci-ccache-${{ hashFiles('CMakeLists.txt', 'ffi/**', 'include/**', 'src/**', 'rust/eloqstore-sys/**', 'python/build_hooks.py') }}
+          path: /home/runner/.cache/ccache
+          key: ${{ runner.os }}-${{ matrix.arch }}-ci-ccache-${{ hashFiles('CMakeLists.txt', 'ffi/**', 'include/**', 'src/**', 'rust/eloqstore-sys/**', 'python/build_hooks.py') }}
           restore-keys: |
-            ${{ runner.os }}-ci-ccache-
+            ${{ runner.os }}-${{ matrix.arch }}-ci-ccache-
 
       - name: Reset ccache stats
         run: ccache --zero-stats || true
@@ -146,7 +158,7 @@ jobs:
         run: ccache --show-stats || true
 
       - name: Remove ci-approved label after run
-        if: ${{ always() }}
+        if: ${{ always() && matrix.arch == 'amd64' }}
         uses: actions-ecosystem/action-remove-labels@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
