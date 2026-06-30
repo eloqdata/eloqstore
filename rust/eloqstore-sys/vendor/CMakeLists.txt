@@ -139,11 +139,25 @@ if (STATIC_ALL_DEPS)
         find_package(jsoncpp REQUIRED)
     endif()
     
-    find_library(CURL_LIBRARY 
-        NAMES libcurl.a curl
-        PATHS /usr/lib /usr/local/lib
-        NO_DEFAULT_PATH
-    )
+    if (BUILD_FOR_RUST AND STATIC_ALL_DEPS)
+        set(CMAKE_FIND_LIBRARY_SUFFIXES_BACKUP ${CMAKE_FIND_LIBRARY_SUFFIXES})
+        set(CMAKE_FIND_LIBRARY_SUFFIXES ".so" ".so.4")
+        find_library(CURL_LIBRARY
+            NAMES curl libcurl
+            PATHS /usr/lib/aarch64-linux-gnu /usr/lib/x86_64-linux-gnu /usr/lib /usr/local/lib
+            NO_DEFAULT_PATH
+        )
+        if (NOT CURL_LIBRARY)
+            find_library(CURL_LIBRARY curl)
+        endif()
+        set(CMAKE_FIND_LIBRARY_SUFFIXES ${CMAKE_FIND_LIBRARY_SUFFIXES_BACKUP})
+    else()
+        find_library(CURL_LIBRARY
+            NAMES libcurl.a curl
+            PATHS /usr/lib /usr/local/lib
+            NO_DEFAULT_PATH
+        )
+    endif()
     if (CURL_LIBRARY)
         set(CURL_FOUND TRUE)
         get_filename_component(CURL_LIB_DIR ${CURL_LIBRARY} DIRECTORY)
