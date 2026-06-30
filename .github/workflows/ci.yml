@@ -74,7 +74,7 @@ jobs:
       - name: Run C++ unit tests
         run: |
           sudo prlimit --pid $$ --memlock=unlimited:unlimited || true
-          ctest --test-dir build/tests/ --output-on-failure -V
+          ctest --test-dir build/tests/ --output-on-failure
 
       # ── Python SDK ────────────────────────────────────────────────
 
