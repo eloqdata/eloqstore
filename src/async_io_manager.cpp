@@ -2737,13 +2737,12 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
     const std::string_view record_view{
         log.data(), ManifestBuilder::header_bytes + payload_len};
     const uint64_t checksum = DecodeFixed64(log.data());
-    DLOG(INFO) << "AppendManifest tbl=" << tbl_id << " manifest="
-               << BranchManifestFileName(manifest_br, manifest_term)
-               << " offset=" << offset << " bytes=" << log.size()
-               << " payload=" << payload_len << " root=" << root
-               << " ttl_root=" << ttl_root << " checksum=" << checksum
-               << " record size="
-               << ManifestBuilder::header_bytes + payload_len;
+    VLOG(1) << "AppendManifest tbl=" << tbl_id << " manifest="
+            << BranchManifestFileName(manifest_br, manifest_term)
+            << " offset=" << offset << " bytes=" << log.size()
+            << " payload=" << payload_len << " root=" << root
+            << " ttl_root=" << ttl_root << " checksum=" << checksum
+            << " record size=" << ManifestBuilder::header_bytes + payload_len;
     const bool checksum_ok = ManifestBuilder::ValidateChecksum(record_view);
     assert(checksum_ok);
 #endif

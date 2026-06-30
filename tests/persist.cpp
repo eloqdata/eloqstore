@@ -448,6 +448,8 @@ TEST_CASE("write an overflow page without a write buffer pool (cloud)",
     // returns NoError and validates the readback.
     constexpr uint64_t kKey = 1;
     verify.Upsert(kKey);
+
+    store->Stop();
 }
 
 // A write task that aborts after advancing the BranchFileMapping file-id
