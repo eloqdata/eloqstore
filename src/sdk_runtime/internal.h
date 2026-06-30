@@ -85,7 +85,6 @@ struct KVCacheManager::Impl
     std::deque<ShardState> shards;
     std::thread flush_thread;
     std::atomic<bool> stopping{false};
-    std::mutex store_mutex;
     std::unique_ptr<EloqStore> store;
     std::atomic<uint64_t> flush_batches_submitted{0};
     std::atomic<uint64_t> flush_batches_completed{0};
@@ -169,6 +168,19 @@ struct KVCacheRuntimeManagerOps
                             uint32_t partition_id,
                             bool *out_exists,
                             std::string *error_message);
+    static bool ContainsKeys(KVCacheManager *manager,
+                             const std::vector<size_t> &shard_indices,
+                             const std::vector<std::string> &keys,
+                             const std::vector<uint32_t> &partition_ids,
+                             std::vector<bool> *out_exists,
+                             std::string *error_message);
+    static bool BeginLoads(KVCacheManager *manager,
+                           const std::vector<size_t> &shard_indices,
+                           const std::vector<std::string> &keys,
+                           const std::vector<uint32_t> &partition_ids,
+                           const std::vector<uint32_t> &payload_bytes_list,
+                           std::vector<uint64_t> *out_request_ids,
+                           std::string *error_message);
 };
 
 namespace runtime_internal

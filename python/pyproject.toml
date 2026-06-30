@@ -14,6 +14,10 @@ authors = [
 ]
 dependencies = []
 
+[project.scripts]
+eloqstore-bench-report = "eloqstore.bench_report:main"
+eloqstore-generate-kvcache-bench = "eloqstore.bench_config_gen:main"
+
 [tool.hatch.build]
 artifacts = [
   "build/native/libeloqstore_capi.so",

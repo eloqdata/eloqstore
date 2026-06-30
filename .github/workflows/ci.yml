@@ -40,6 +40,16 @@ jobs:
 
       # ── C++ core engine ──────────────────────────────────────────
 
+      - name: Install required OS packages
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            sudo curl ca-certificates gdb ccache rsync git \
+            build-essential cmake pkg-config \
+            libcurl4-openssl-dev libssl-dev libgflags-dev libzstd-dev \
+            libboost-context-dev libc-ares-dev libprotobuf-dev libprotoc-dev protobuf-compiler \
+            libjsoncpp-dev libleveldb-dev libsnappy-dev libzmq3-dev cppzmq-dev zlib1g-dev lcov
+
       - name: Configure CMake
         run: |
           cmake -B build -S . \
@@ -146,7 +156,7 @@ jobs:
         run: ccache --show-stats || true
 
       - name: Remove ci-approved label after run
-        if: ${{ always() }}
+        if: ${{ always() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         uses: actions-ecosystem/action-remove-labels@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}

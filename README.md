@@ -94,7 +94,7 @@ bash scripts/install_dependency_ubuntu2404.sh
 
 This script installs all necessary dependencies including:
 - Build tools (CMake, GCC, Ninja)
-- System libraries (Boost, glog, jsoncpp, liburing, zstd, etc.)
+- System libraries (Boost, glog, jsoncpp, liburing, ZeroMQ/cppzmq, zstd, etc.)
 - AWS SDK C++ (S3)
 - Testing framework (Catch2)
 - Additional libraries (Abseil, gRPC, etc.)

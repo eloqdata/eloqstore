@@ -750,17 +750,17 @@ bool KVCacheRuntimeHelpers::AllocateEntryForRequest(
             *out_entry_id = *entry_id;
             return true;
         }
-        if (!shard->last_flush_error.empty())
+        if (!queue_pressure_flush())
         {
-            if (error_message != nullptr)
+            // No free entries, no clean victims, and no dirty entries can be
+            // flushed. If there is a lingering flush error, surface it so the
+            // caller knows storage is unhealthy, but only after attempting a
+            // pressure flush first.
+            if (error_message != nullptr && !shard->last_flush_error.empty())
             {
                 *error_message = shard->last_flush_error;
             }
-            return false;
-        }
-        if (!queue_pressure_flush())
-        {
-            if (error_message != nullptr)
+            else if (error_message != nullptr)
             {
                 *error_message =
                     "no block slot available and no dirty resident slot can be "

@@ -67,9 +67,10 @@ class CustomBuildHook(BuildHookInterface):
 
         self._copy_private_shared_libs(built_lib, native_libs_dir)
 
-        if package_libs_dir.exists():
-            shutil.rmtree(package_libs_dir)
-        shutil.copytree(native_libs_dir, package_libs_dir)
+        if self.target_name == "editable":
+            if package_libs_dir.exists():
+                shutil.rmtree(package_libs_dir)
+            shutil.copytree(native_libs_dir, package_libs_dir)
 
         build_data["pure_python"] = False
         if self.target_name == "wheel":
@@ -96,9 +97,15 @@ class CustomBuildHook(BuildHookInterface):
                 continue
             resolved_path = Path(resolved).resolve()
             resolved_str = str(resolved_path)
-            # Bundle non-system shared libraries so the wheel does not depend
-            # on a separately installed local AWS SDK tree at runtime.
-            if resolved_str.startswith("/lib") or resolved_str.startswith("/usr/lib"):
+            # Treat distro-managed library directories as system dependencies.
+            # Bundling /usr/local copies such as glog can cause duplicate loads
+            # when transitive dependencies also resolve the same SONAME via the
+            # dynamic linker.
+            if (
+                resolved_str.startswith("/lib")
+                or resolved_str.startswith("/usr/lib")
+                or resolved_str.startswith("/usr/local/lib")
+            ):
                 continue
             copied_path = output_dir / resolved_path.name
             shutil.copy2(resolved_path, copied_path)

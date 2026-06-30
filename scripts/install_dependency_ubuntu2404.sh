@@ -42,14 +42,14 @@ if $needs_tz_config; then
   sudo ln -sf /usr/share/zoneinfo/Etc/UTC /etc/localtime
 fi
 
-# Install system packages
+# Install system packages required by EloqStore.
 DEBIAN_FRONTEND=noninteractive sudo apt-get update
 DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
     sudo curl ca-certificates gdb ccache rsync git \
     build-essential cmake pkg-config \
     libcurl4-openssl-dev libssl-dev libgflags-dev libzstd-dev \
     libboost-context-dev libc-ares-dev libprotobuf-dev libprotoc-dev protobuf-compiler \
-    libjsoncpp-dev libleveldb-dev libsnappy-dev zlib1g-dev lcov
+    libjsoncpp-dev libleveldb-dev libsnappy-dev libzmq3-dev cppzmq-dev zlib1g-dev lcov
 
 # Install glog
 git clone https://github.com/eloqdata/glog.git glog

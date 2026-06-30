@@ -358,6 +358,18 @@ extern "C"
     bool CEloqStore_KVCacheManager_ContainsKey(CKVCacheManagerHandle runtime,
                                                const char *key,
                                                bool *out_exists);
+    // Probe whether multiple keys exist through the manager runtime.
+    bool CEloqStore_KVCacheManager_ContainsKeys(CKVCacheManagerHandle runtime,
+                                                size_t num_keys,
+                                                const char *const *keys,
+                                                bool *out_exists);
+    // Begin batched asynchronous loads and return their request ids.
+    bool CEloqStore_KVCacheManager_BeginLoads(
+        CKVCacheManagerHandle runtime,
+        size_t num_keys,
+        const char *const *keys,
+        const uint32_t *payload_bytes_list,
+        uint64_t *out_request_ids);
 
     // Create one worker-side KV cache control-plane stub from native options.
     CKVCacheWorkerHandle CEloqStore_KVCacheWorker_Create(
