@@ -16,6 +16,7 @@
 
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/strings/string_view.h"
 #include "async_io_manager.h"
 #include "common.h"
 #include "eloq_store.h"
@@ -985,7 +986,8 @@ KvError DeleteUnreferencedCloudFiles(
         // its manifest was dropped/reopened and the unretained file can be
         // deleted. For other branches, missing guard means we do not have a
         // flushed boundary, so preserve the file conservatively.
-        auto it = branch_guards.find(branch_name);
+        absl::string_view absl_branch(branch_name.data(), branch_name.size());
+        auto it = branch_guards.find(absl_branch);
         if (it == branch_guards.end())
         {
             if (branch_name != active_branch)
@@ -1189,7 +1191,8 @@ KvError DeleteUnreferencedLocalFiles(
         // its manifest was dropped/reopened and the unretained file can be
         // deleted. For other branches, missing guard means we do not have a
         // flushed boundary, so preserve the file conservatively.
-        auto it = branch_guards.find(branch_name);
+        absl::string_view absl_branch(branch_name.data(), branch_name.size());
+        auto it = branch_guards.find(absl_branch);
         if (it == branch_guards.end())
         {
             if (branch_name != io_mgr->GetActiveBranch())
@@ -1312,7 +1315,8 @@ KvError DeleteUnreferencedLocalSegmentFiles(
         // In-flight write guard. Missing guard keeps non-active branches
         // conservative, but does not protect the active branch after its
         // manifest was dropped/reopened.
-        auto it = branch_guards.find(branch_name);
+        absl::string_view absl_branch(branch_name.data(), branch_name.size());
+        auto it = branch_guards.find(absl_branch);
         if (it == branch_guards.end())
         {
             if (branch_name != io_mgr->GetActiveBranch())
@@ -1432,7 +1436,8 @@ KvError DeleteUnreferencedCloudSegmentFiles(
         // In-flight write guard. Mirrors the data-file path's missing-guard
         // handling: active branch can be collected, non-active branches are
         // preserved conservatively.
-        auto it = branch_guards.find(branch_name);
+        absl::string_view absl_branch(branch_name.data(), branch_name.size());
+        auto it = branch_guards.find(absl_branch);
         if (it == branch_guards.end())
         {
             if (branch_name != cloud_mgr->GetActiveBranch())
