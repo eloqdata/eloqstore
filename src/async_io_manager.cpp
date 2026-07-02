@@ -4460,6 +4460,10 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     do
     {
         ObjectStore::ListTask list_task(remote_path, false);
+        // Manifest keys are flat under the prefix; list without a delimiter
+        // so the response cannot carry directory-style CommonPrefixes
+        // entries (see the parse-failure skip below).
+        list_task.SetRecursive(true);
         list_task.SetContinuationToken(continuation_token);
         list_task.SetKvTask(current_task);
         AcquireCloudSlot(current_task);
@@ -4720,6 +4724,9 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
             do
             {
                 ObjectStore::ListTask list_task(remote_path, false);
+                // Flat manifest keys; no delimiter so the response cannot
+                // carry CommonPrefixes entries (see GetManifest).
+                list_task.SetRecursive(true);
                 list_task.SetContinuationToken(continuation_token);
                 list_task.SetKvTask(current_task);
                 AcquireCloudSlot(current_task);
