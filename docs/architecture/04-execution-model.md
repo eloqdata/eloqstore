@@ -59,6 +59,18 @@ Scheduling primitives:
 - `WaitingZone` / `WaitingSeat` / `Mutex` — intra-shard wait lists (no real
   locks; they park/wake coroutines). Used for FD open/close exclusion, pool
   exhaustion waits, upload completion, etc.
+- IO-budget waits (`IoBudget::Acquire`, `async_io_manager.h`) — tasks park on
+  a budget's `WaitingZone` when admitting their page IO would exceed the
+  shard's in-flight read/write cap (`max_inflight_read` /
+  `max_inflight_write`); `PollComplete` releases per CQE and wakes waiters,
+  so release never depends on the blocked task being scheduled. Background
+  tasks (`KvTask::IsBackground()`: BatchWrite, BackgroundWrite, EvictFile,
+  Prewarm) are additionally confined to a read sub-budget (`bg_read_ratio`)
+  and wait on a separate FIFO zone. While background waiters queue, their
+  unused sub-budget is reserved from new foreground admissions (neither
+  class can starve the other); release wakes background first and forwards
+  unused wake credits to foreground. See `docs/design/io_qos.md` (M1/M2);
+  the acquire order is FD/mutex → pools/buffers → budget → SQE.
 
 `TaskManager` keeps one free-list pool per task type (`BatchWriteTask`,
 `BackgroundWrite`, `ReadTask`, `ScanTask`, `ListObjectTask`,

@@ -34,6 +34,7 @@ namespace eloqstore
 {
 class Shard;
 class EloqStore;
+struct IoQosStats;
 
 enum class RequestType : uint8_t
 {
@@ -978,6 +979,15 @@ public:
      * or invalid shard IDs. See `IouringMgr::AcquireTailScratch`.
      */
     size_t TailScratchAcquireCount(size_t shard_id) const;
+
+    /**
+     * @brief Per-shard IO QoS statistics (in-flight page-IO budgets,
+     * fdatasync accounting; see docs/design/io_qos.md). Counters are
+     * mutated by the shard thread and read here without synchronization —
+     * exact once the shard is quiesced, diagnostic-quality otherwise.
+     * Returns zeros for invalid shard IDs or managers without budgets.
+     */
+    IoQosStats GetIoQosStats(size_t shard_id) const;
 
     bool ExecAsyn(KvRequest *req);
     void ExecSync(KvRequest *req);

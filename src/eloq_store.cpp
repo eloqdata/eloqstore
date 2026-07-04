@@ -2451,6 +2451,16 @@ size_t EloqStore::TailScratchAcquireCount(size_t shard_id) const
     return io_mgr == nullptr ? 0 : io_mgr->TailScratchAcquireCount();
 }
 
+IoQosStats EloqStore::GetIoQosStats(size_t shard_id) const
+{
+    if (shard_id >= shards_.size() || shards_[shard_id] == nullptr)
+    {
+        return {};
+    }
+    AsyncIoManager *io_mgr = shards_[shard_id]->IoManager();
+    return io_mgr == nullptr ? IoQosStats{} : io_mgr->GetIoQosStats();
+}
+
 bool EloqStore::IsStopped() const
 {
     return status_.load(std::memory_order_acquire) == Status::Stopped;

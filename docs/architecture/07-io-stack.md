@@ -37,6 +37,31 @@ Responsibilities:
 - **Page I/O** — `ReadPage`/`ReadPages` (batched, into pool buffers, fixed
   reads when the buffer is registered), `WritePage`. `ConvFilePageId` splits a
   `FilePageId` into `(file_id, offset)` by `pages_per_file_shift`.
+- **In-flight page-IO budgets** (`IoBudget`, see `docs/design/io_qos.md`
+  M1/M2) — two per-shard counters in 4KB-page units with independent caps:
+  `read_budget_` (`max_inflight_read`; `ReadPage`/`ReadPages`, per-page
+  acquisition so a batch larger than the cap cannot deadlock) and
+  `write_budget_` (`max_inflight_write`; `WritePage` cost 1,
+  `SubmitMergedWrite` cost `bytes / data_page_size`). Budget is acquired
+  immediately before SQE prep and released per CQE in `PollComplete`, which
+  distinguishes budgeted page reads from metadata ops via the
+  `KvTaskPageRead`/`BaseReqPageRead` user-data types. A cap of 0 disables a
+  budget; a single request costlier than the cap is admitted alone once the
+  budget drains. Metadata, manifest, and segment IO are exempt.
+  The read budget carries a **background sub-budget** (`bg_read_ratio`
+  percent of `max_inflight_read`): page reads from tasks where
+  `KvTask::IsBackground()` (BatchWrite, BackgroundWrite, EvictFile, Prewarm)
+  are additionally bounded by it, so compaction/GC/batch-write read bursts
+  cannot crowd foreground point reads out of the device queue. Foreground
+  may use the entire read budget while background has no queued demand;
+  once background waiters exist their unused sub-budget is reserved from
+  new foreground admissions, so neither class can starve the other. Each
+  class waits on its own FIFO zone; release wakes background first and
+  forwards unused wake credits to foreground. The write budget has no
+  split — all page writes come from write tasks, i.e. background.
+  `GetIoQosStats()` (also surfaced as `EloqStore::GetIoQosStats(shard_id)`)
+  exposes in-flight/high-watermark/blocked counters (read, bg-read slice,
+  write) plus write-path fdatasync count and latency.
 - **FD cache** — `LruFD` per (partition, `TypedFileId`), doubly-linked LRU
   bounded by the shard's fd budget; `EvictFD` closes idle descriptors.
   Open/close exclusion per FD via a coroutine `Mutex`. Data files open with
