@@ -109,8 +109,7 @@ TEST_CASE("io budgets: merged append writes and oversized admission",
     REQUIRE(stats.write_.high_watermark_ <= merged_cost_bound);
 }
 
-TEST_CASE("io budgets: cap 512 admits two concurrent merged writes",
-          "[io_qos]")
+TEST_CASE("io budgets: cap 512 admits two concurrent merged writes", "[io_qos]")
 {
     // Counterpart of the oversized-admission test: with the cap at twice
     // the merged-write cost (512 vs 256 pages), merged writes from
@@ -200,9 +199,7 @@ TEST_CASE("io budgets: failed write drains the budget", "[io_qos]")
     eloqstore::BatchWriteRequest fail_req;
     fail_req.SetArgs(tbl_id, std::move(entries));
     store->ExecSync(&fail_req);
-    fs::permissions(part_dir,
-                    fs::perms::owner_all,
-                    fs::perm_options::replace);
+    fs::permissions(part_dir, fs::perms::owner_all, fs::perm_options::replace);
     REQUIRE(fail_req.Error() != eloqstore::KvError::NoError);
 
     eloqstore::IoQosStats stats = ShardStats(store);
@@ -358,8 +355,7 @@ TEST_CASE("bg sub-budget: foreground reads use the full budget", "[io_qos]")
     REQUIRE(stats.bg_read_.blocked_count_ == 0);
 }
 
-TEST_CASE("bg sub-budget: batch-write leaf loads are background",
-          "[io_qos]")
+TEST_CASE("bg sub-budget: batch-write leaf loads are background", "[io_qos]")
 {
     // Overwriting existing keys forces the BatchWrite task to load leaf data
     // pages from disk (single-page KvTaskPageRead path). BatchWrite is
