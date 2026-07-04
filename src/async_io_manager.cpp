@@ -166,6 +166,99 @@ bool AsyncIoManager::IsIdle()
     return true;
 }
 
+void IoBudget::Acquire(uint32_t cost, bool background)
+{
+    if (cap_ == 0)
+    {
+        return;
+    }
+    const bool use_bg = background && bg_cap_ != 0;
+    // Admission conditions. `inflight != 0` implements the oversized-request
+    // escape per class: a request with cost > (sub-)cap is admitted alone
+    // once the relevant count drains, guaranteeing progress (see IoBudget
+    // doc comment). Background is additionally bounded by its sub-budget.
+    // Foreground must not take units reserved for *queued* background
+    // demand (bg_cap_ - bg_inflight_ while bg_waiting_ is non-empty):
+    // without that reservation, sustained foreground saturation would
+    // starve background forever — every freed unit would be re-acquired by
+    // a foreground waiter and compaction could never bootstrap its share.
+    // While background has no queued demand, foreground may use the entire
+    // budget.
+    auto must_wait = [this, cost, use_bg]()
+    {
+        if (use_bg)
+        {
+            if (inflight_ + cost > cap_ && inflight_ != 0)
+            {
+                return true;
+            }
+            return bg_inflight_ + cost > bg_cap_ && bg_inflight_ != 0;
+        }
+        const uint32_t reserved =
+            (bg_cap_ != 0 && !bg_waiting_.Empty()) ? bg_cap_ - bg_inflight_ : 0;
+        return inflight_ + cost > cap_ - reserved && inflight_ != 0;
+    };
+    // Each class queues behind its own existing waiters (approximate FIFO
+    // across arrivals within the class).
+    WaitingZone &zone = use_bg ? bg_waiting_ : waiting_;
+    if (!zone.Empty() || must_wait())
+    {
+        // TSC-based clock (see Shard::ReadTimeMicroseconds): Acquire always
+        // runs on the shard thread, after Shard::Init calibrated the TSC.
+        const uint64_t start_us = shard->ReadTimeMicroseconds();
+        (use_bg ? bg_blocked_count_ : blocked_count_)++;
+        do
+        {
+            zone.Wait(ThdTask());
+        } while (must_wait());
+        const uint64_t waited_us = shard->DurationMicroseconds(start_us);
+        (use_bg ? bg_blocked_us_ : blocked_us_) += waited_us;
+    }
+    inflight_ += cost;
+    admitted_pages_ += cost;
+    if (inflight_ > high_watermark_)
+    {
+        high_watermark_ = inflight_;
+    }
+    if (use_bg)
+    {
+        bg_inflight_ += cost;
+        bg_admitted_pages_ += cost;
+        if (bg_inflight_ > bg_high_watermark_)
+        {
+            bg_high_watermark_ = bg_inflight_;
+        }
+    }
+}
+
+void IoBudget::Release(uint32_t cost, bool background)
+{
+    if (cap_ == 0)
+    {
+        return;
+    }
+    assert(inflight_ >= cost);
+    inflight_ -= cost;
+    if (background && bg_cap_ != 0)
+    {
+        assert(bg_inflight_ >= cost);
+        bg_inflight_ -= cost;
+    }
+    // Each freed page-unit can admit at most one waiter; over-waking is safe
+    // because woken tasks re-check the admission condition and re-wait.
+    // Background waiters are woken first: while background has queued
+    // demand and sub-budget room, freed units are reserved for it (see the
+    // admission rule in Acquire), so waking foreground for those units
+    // would be futile. Unused wake credits are forwarded to foreground —
+    // when background is saturated or idle, all credits go to foreground.
+    size_t woken = 0;
+    if (bg_cap_ != 0 && bg_inflight_ < bg_cap_)
+    {
+        woken = bg_waiting_.WakeN(cost);
+    }
+    waiting_.WakeN(cost - woken);
+}
+
 IouringMgr::IouringMgr(const KvOptions *opts, uint32_t fd_limit)
     : AsyncIoManager(opts), fd_limit_(fd_limit)
 {
@@ -176,6 +269,24 @@ IouringMgr::IouringMgr(const KvOptions *opts, uint32_t fd_limit)
     uint32_t pool_size = options_->max_inflight_write;
     write_req_pool_ = std::make_unique<WriteReqPool>(pool_size);
     merged_write_req_pool_ = std::make_unique<MergedWriteReqPool>(pool_size);
+
+    // In-flight page-IO budgets (docs/design/io_qos.md M1/M2). The write cap
+    // shares max_inflight_write with the request-pool sizing above, so the
+    // pool bound and the QoS bound coincide by construction. The read budget
+    // carries the background sub-budget; the write budget has none — all
+    // page writes come from write tasks, which are background by definition.
+    read_budget_.SetCap(options_->max_inflight_read);
+    write_budget_.SetCap(options_->max_inflight_write);
+    if (options_->max_inflight_read != 0)
+    {
+        const uint32_t ratio =
+            std::clamp<uint32_t>(options_->bg_read_ratio, 1, 100);
+        const uint32_t bg_cap = std::max<uint32_t>(
+            1,
+            static_cast<uint32_t>(uint64_t{options_->max_inflight_read} *
+                                  ratio / 100));
+        read_budget_.SetBgCap(bg_cap);
+    }
 }
 
 IouringMgr::~IouringMgr()
@@ -739,7 +850,12 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
         int res;
         do
         {
-            io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
+            // Read-budget admission (io_qos.md M1/M2): acquired last, right
+            // before SQE prep; released per CQE in PollComplete, so each
+            // retry iteration re-acquires. Background tasks are additionally
+            // bounded by the BG sub-budget.
+            read_budget_.Acquire(1, ThdTask()->IsBackground());
+            io_uring_sqe *sqe = GetSQE(UserDataType::KvTaskPageRead, ThdTask());
             if (fd.second)
             {
                 sqe->flags |= IOSQE_FIXED_FILE;
@@ -838,8 +954,12 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
 
     auto send_req = [this](ReadReq *req)
     {
+        // Read-budget admission (io_qos.md M1/M2) is per page, not per batch:
+        // the task may block mid-batch while already-submitted pages
+        // complete, so a batch larger than the (sub-)budget cannot deadlock.
+        read_budget_.Acquire(1, req->task_->IsBackground());
         auto [fd, registered] = req->fd_ref_.FdPair();
-        io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, req);
+        io_uring_sqe *sqe = GetSQE(UserDataType::BaseReqPageRead, req);
         if (registered)
         {
             sqe->flags |= IOSQE_FIXED_FILE;
@@ -983,6 +1103,9 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
 
     auto [fd, registered] = fd_ref.FdPair();
     WriteReq *req = write_req_pool_->Alloc(std::move(fd_ref), std::move(page));
+    // Write-budget admission (io_qos.md M1): after every other blocking
+    // acquisition (FD, req pool), immediately before SQE prep.
+    write_budget_.Acquire(1);
     io_uring_sqe *sqe = GetSQE(UserDataType::WriteReq, req);
     if (registered)
     {
@@ -1288,6 +1411,10 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
             static_cast<uint32_t>(req->pages_.size() - 1);
     }
 
+    // Write-budget admission (io_qos.md M1): cost in 4KB-page units so the
+    // cap means the same thing in append and non-append mode. Must mirror
+    // the release cost computed from bytes_ in PollComplete.
+    write_budget_.Acquire(MergedWriteCost(bytes));
     io_uring_sqe *sqe = GetSQE(UserDataType::MergedWriteReq, req);
     auto [fd, registered] = req->fd_ref_.FdPair();
     if (registered)
@@ -2019,14 +2146,24 @@ void IouringMgr::PollComplete()
         KvTask *task = nullptr;
         switch (type)
         {
+        case UserDataType::KvTaskPageRead:
         case UserDataType::KvTask:
             task = static_cast<KvTask *>(ptr);
+            if (type == UserDataType::KvTaskPageRead)
+            {
+                read_budget_.Release(1, task->IsBackground());
+            }
             task->io_res_ = cqe->res;
             task->io_flags_ = cqe->flags;
             break;
+        case UserDataType::BaseReqPageRead:
         case UserDataType::BaseReq:
         {
             BaseReq *req = static_cast<BaseReq *>(ptr);
+            if (type == UserDataType::BaseReqPageRead)
+            {
+                read_budget_.Release(1, req->task_->IsBackground());
+            }
             req->res_ = cqe->res;
             req->flags_ = cqe->flags;
             task = req->task_;
@@ -2052,6 +2189,12 @@ void IouringMgr::PollComplete()
             req->task_->WritePageCallback(std::move(req->page_), err);
             task = req->task_;
             write_req_pool_->Free(req);
+            // No class argument: the write budget has no background
+            // sub-budget (all page writes come from write tasks, i.e.
+            // background — see io_qos.md M2), so acquire and release both
+            // use the default. Must stay symmetric with WritePage's
+            // Acquire.
+            write_budget_.Release(1);
             break;
         }
         case UserDataType::MergedWriteReq:
@@ -2085,6 +2228,10 @@ void IouringMgr::PollComplete()
                                        req->release_indices_[i]);
                 }
             }
+            // No class argument (see the WriteReq case): the write budget
+            // has no background sub-budget. Cost must mirror
+            // SubmitMergedWrite's Acquire exactly.
+            write_budget_.Release(MergedWriteCost(req->bytes_));
             merged_write_req_pool_->Free(req);
             continue;
         }
@@ -2276,6 +2423,9 @@ KvError IouringMgr::FdatasyncFiles(const TableIdent &tbl_id,
     // Fsync all dirty files/directory.
     std::vector<FsyncReq> reqs;
     reqs.reserve(fds.size());
+    // Instrumented for IO QoS evaluation (io_qos.md): fsync stalls are a
+    // distinct interference channel from page-IO queueing.
+    const uint64_t fsync_start_us = shard->ReadTimeMicroseconds();
     for (LruFD::Ref &fd_ref : fds)
     {
         // FsyncReq elements have pointer stability, because we have reserved
@@ -2290,6 +2440,8 @@ KvError IouringMgr::FdatasyncFiles(const TableIdent &tbl_id,
         io_uring_prep_fsync(sqe, fd, IORING_FSYNC_DATASYNC);
     }
     ThdTask()->WaitIo();
+    fdatasync_count_ += reqs.size();
+    fdatasync_us_ += shard->DurationMicroseconds(fsync_start_us);
 
     // Check results.
     KvError err = KvError::NoError;

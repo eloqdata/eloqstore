@@ -154,10 +154,23 @@ int KvOptions::LoadFromIni(const char *path)
         max_inflight_write =
             reader.GetUnsigned(sec_run, "max_inflight_write", 4096);
     }
+    if (reader.HasValue(sec_run, "max_inflight_read"))
+    {
+        max_inflight_read =
+            reader.GetUnsigned(sec_run, "max_inflight_read", 32);
+    }
+    if (reader.HasValue(sec_run, "bg_read_ratio"))
+    {
+        bg_read_ratio = reader.GetUnsigned(sec_run, "bg_read_ratio", 25);
+    }
     if (reader.HasValue(sec_run, "max_write_batch_pages"))
     {
         max_write_batch_pages =
             reader.GetUnsigned(sec_run, "max_write_batch_pages", 64);
+        LOG(WARNING)
+            << "Option max_write_batch_pages is deprecated and has no "
+               "effect; in-flight write IO is bounded by max_inflight_write "
+               "(see docs/design/io_qos.md)";
     }
     if (reader.HasValue(sec_run, "coroutine_stack_size"))
     {
@@ -398,6 +411,8 @@ bool KvOptions::operator==(const KvOptions &other) const
            manifest_limit == other.manifest_limit &&
            fd_limit == other.fd_limit && io_queue_size == other.io_queue_size &&
            max_inflight_write == other.max_inflight_write &&
+           max_inflight_read == other.max_inflight_read &&
+           bg_read_ratio == other.bg_read_ratio &&
            max_write_batch_pages == other.max_write_batch_pages &&
            coroutine_stack_size == other.coroutine_stack_size &&
            num_retained_archives == other.num_retained_archives &&

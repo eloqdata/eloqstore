@@ -8,13 +8,23 @@
 
 #include "utils.h"
 
-eloqstore::EloqStore *InitStore(const eloqstore::KvOptions &opts)
+eloqstore::EloqStore *InitStore(const eloqstore::KvOptions &opts, bool cleanup)
 {
     static std::unique_ptr<eloqstore::EloqStore> eloq_store = nullptr;
 
     // Tear down any prior store before constructing the new one, so the old
     // destructor's worker-thread joins and LRU-cached fd releases finish
     // before we count the new store's fd budget below.
+    //
+    // Every test-created store must go through InitStore — never construct
+    // an EloqStore directly in a test while another may be running. The
+    // process-global `eloq_store` pointer (Options()/Comp() plumbing)
+    // assumes at most one started store per process; a second concurrent
+    // instance leaves one store's teardown reading a nulled/foreign global
+    // (observed as a flaky SIGSEGV in Prewarmer::Shutdown). Tests that need
+    // to preserve on-disk/cloud state across store generations (warm
+    // restart, cache-trim) pass cleanup = false instead of bypassing
+    // InitStore.
     if (eloq_store)
     {
         if (!eloq_store->IsStopped())
@@ -23,11 +33,14 @@ eloqstore::EloqStore *InitStore(const eloqstore::KvOptions &opts)
         }
         eloq_store.reset();
     }
-    if (!opts.cloud_store_path.empty())
+    if (cleanup)
     {
-        S3TestClient s3_client(opts);
+        if (!opts.cloud_store_path.empty())
+        {
+            S3TestClient s3_client(opts);
+        }
+        CleanupStore(opts);
     }
-    CleanupStore(opts);
 
     // EloqStore::Start() counts the *process-wide* `/proc/self/fd` and
     // subtracts it from `fd_limit`. When multiple test cases run in the

@@ -54,6 +54,112 @@ public:
     virtual KvError SkipPadding(size_t n) = 0;
 };
 
+/**
+ * @brief Per-shard IO QoS statistics (see docs/design/io_qos.md).
+ *
+ * Snapshot semantics follow TailScratchAcquireCount: counters are mutated
+ * only by the owning shard thread and read without synchronization by
+ * tests/diagnostics; values are exact once the shard is quiesced.
+ */
+struct IoQosStats
+{
+    struct Budget
+    {
+        uint32_t inflight_{0};        // pages currently admitted
+        uint32_t high_watermark_{0};  // max pages ever admitted
+        uint64_t blocked_count_{0};   // acquisitions that had to wait
+        uint64_t blocked_us_{0};      // cumulative wait time
+        // Cumulative pages ever admitted. For the write budget this is the
+        // store-issued device write volume in pages (user data pages,
+        // compaction relocations, index pages — everything metered by the
+        // budget), i.e. the store-side counterpart of device write MB/s for
+        // comparing against the fio calibration curve. Excludes manifest
+        // appends, fdatasync, and segment IO (unbudgeted).
+        uint64_t admitted_pages_{0};
+    };
+    Budget read_;
+    // Background slice of read_ (M2): pages admitted by background tasks,
+    // bounded by the bg sub-budget. Always <= read_ component-wise.
+    Budget bg_read_;
+    Budget write_;
+    uint64_t fdatasync_count_{0};  // write-path fdatasync ops (FdatasyncFiles)
+    uint64_t fdatasync_us_{0};     // cumulative batch wall time
+};
+
+/**
+ * @brief Per-shard in-flight page-IO budget (M1/M2 in docs/design/io_qos.md).
+ *
+ * Counts admitted, not-yet-completed page IO in 4KB-page units. Tasks block
+ * in Acquire when admission would exceed the cap; IouringMgr::PollComplete
+ * releases per CQE and wakes waiters, so release never depends on the
+ * blocked task being scheduled.
+ *
+ * Optional background sub-budget (M2): when `bg_cap_` is non-zero,
+ * acquisitions with `background = true` are additionally bounded by
+ * `bg_inflight_ <= bg_cap_`. Background never exceeds its slice. Foreground
+ * may consume the entire budget while background has no queued demand; once
+ * background waiters exist, their unused entitlement (bg_cap_ -
+ * bg_inflight_) is reserved and new foreground admissions leave it alone,
+ * so background always ramps to its share — sustained foreground
+ * saturation cannot starve it. Each class waits on its own FIFO zone;
+ * release wakes background waiters first (freed units are reserved for
+ * them while they queue) and forwards unused wake credits to foreground.
+ *
+ * A cap of 0 disables the budget (Acquire/Release are no-ops). A request
+ * whose cost exceeds the (sub-)cap (e.g. a merged write larger than a small
+ * configured cap) is admitted alone once the relevant count drains to zero,
+ * so in-flight IO is bounded by max(cap, single-request cost) and progress
+ * is guaranteed.
+ */
+class IoBudget
+{
+public:
+    void SetCap(uint32_t cap)
+    {
+        cap_ = cap;
+    }
+    void SetBgCap(uint32_t bg_cap)
+    {
+        bg_cap_ = bg_cap;
+    }
+    void Acquire(uint32_t cost, bool background = false);
+    void Release(uint32_t cost, bool background = false);
+    IoQosStats::Budget Stats() const
+    {
+        return {inflight_,
+                high_watermark_,
+                blocked_count_,
+                blocked_us_,
+                admitted_pages_};
+    }
+    IoQosStats::Budget BgStats() const
+    {
+        return {bg_inflight_,
+                bg_high_watermark_,
+                bg_blocked_count_,
+                bg_blocked_us_,
+                bg_admitted_pages_};
+    }
+
+private:
+    uint32_t cap_{0};
+    uint32_t inflight_{0};
+    uint32_t bg_cap_{0};  // 0 = no background sub-budget
+    uint32_t bg_inflight_{0};
+    // The remaining fields are observability only (tests, tuning, metrics);
+    // admission decisions read nothing but the caps and inflight counters.
+    uint32_t high_watermark_{0};
+    uint64_t blocked_count_{0};
+    uint64_t blocked_us_{0};
+    uint64_t admitted_pages_{0};
+    uint32_t bg_high_watermark_{0};
+    uint64_t bg_blocked_count_{0};
+    uint64_t bg_blocked_us_{0};
+    uint64_t bg_admitted_pages_{0};
+    WaitingZone waiting_;     // foreground waiters
+    WaitingZone bg_waiting_;  // background waiters
+};
+
 using ManifestFilePtr = std::unique_ptr<ManifestFile>;
 
 // TODO(zhanghao): consider using inheritance instead of variant
@@ -194,6 +300,16 @@ public:
     virtual size_t TailScratchAcquireCount() const
     {
         return 0;
+    }
+
+    /**
+     * @brief Per-shard IO QoS statistics (in-flight page-IO budgets and
+     * fdatasync accounting). Default zeros for managers without budgets
+     * (MemStoreMgr). See docs/design/io_qos.md.
+     */
+    virtual IoQosStats GetIoQosStats() const
+    {
+        return {};
     }
 
     /**
@@ -768,7 +884,15 @@ public:
         KvTask,
         BaseReq,
         WriteReq,
-        MergedWriteReq
+        MergedWriteReq,
+        // Data-page reads charged against the read IO budget (see
+        // docs/design/io_qos.md). Named <payload type> + PageRead: the
+        // payload and completion handling are identical to the plain
+        // KvTask / BaseReq types, plus a read-budget release. The distinct
+        // types exist so PollComplete can tell budgeted data-page reads
+        // apart from metadata ops that share the plain payload types.
+        KvTaskPageRead,  // ReadPage (single page), payload = KvTask*
+        BaseReqPageRead  // ReadPages (one page of a batch), payload = BaseReq*
     };
 
     struct BaseReq
@@ -1032,6 +1156,15 @@ public:
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};
 
+    // Per-shard in-flight page-IO budgets (M1, docs/design/io_qos.md).
+    // Reads and writes are separate device resources with independent caps
+    // (max_inflight_read / max_inflight_write).
+    IoBudget read_budget_;
+    IoBudget write_budget_;
+    // Write-path fdatasync instrumentation (FdatasyncFiles batches).
+    uint64_t fdatasync_count_{0};
+    uint64_t fdatasync_us_{0};
+
     // Counter for consecutive Submit() calls that skipped the kernel
     // entry (no prepared SQEs and IORING_SQ_TASKRUN not set). When the
     // ring is configured with IORING_SETUP_DEFER_TASKRUN, the kernel
@@ -1133,6 +1266,28 @@ public:
     size_t TailScratchAcquireCount() const override
     {
         return tail_scratch_acquire_count_;
+    }
+
+    IoQosStats GetIoQosStats() const override
+    {
+        IoQosStats stats;
+        stats.read_ = read_budget_.Stats();
+        stats.bg_read_ = read_budget_.BgStats();
+        stats.write_ = write_budget_.Stats();
+        stats.fdatasync_count_ = fdatasync_count_;
+        stats.fdatasync_us_ = fdatasync_us_;
+        return stats;
+    }
+
+    /**
+     * @brief Write-budget cost of a merged write in 4KB-page units.
+     * Acquire (SubmitMergedWrite) and release (PollComplete) must use this
+     * same formula so the budget balances exactly.
+     */
+    uint32_t MergedWriteCost(size_t bytes) const
+    {
+        const uint32_t page_size = options_->data_page_size;
+        return static_cast<uint32_t>((bytes + page_size - 1) / page_size);
     }
 
     /**

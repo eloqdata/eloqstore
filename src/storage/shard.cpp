@@ -1357,6 +1357,15 @@ void Shard::WorkOneRound()
             size_t local_space_used = io_mgr_->GetLocalSpaceUsed();
             meter->Collect(metrics::NAME_ELOQSTORE_LOCAL_SPACE_USED,
                            static_cast<double>(local_space_used));
+
+            // Collect in-flight page-IO budget usage (io_qos.md M1)
+            IoQosStats qos = io_mgr_->GetIoQosStats();
+            meter->Collect(metrics::NAME_ELOQSTORE_INFLIGHT_READ_PAGES,
+                           static_cast<double>(qos.read_.inflight_));
+            meter->Collect(metrics::NAME_ELOQSTORE_INFLIGHT_BG_READ_PAGES,
+                           static_cast<double>(qos.bg_read_.inflight_));
+            meter->Collect(metrics::NAME_ELOQSTORE_INFLIGHT_WRITE_PAGES,
+                           static_cast<double>(qos.write_.inflight_));
         }
     }
 #endif

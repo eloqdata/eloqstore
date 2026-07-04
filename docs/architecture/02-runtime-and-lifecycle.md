@@ -105,9 +105,16 @@ state:
 - **Topology**: `num_threads` (shards), `fd_limit`, `io_queue_size`,
   `buffer_pool_size` (index-page cache per shard; data pages share it only if
   `enable_data_page_cache`), `root_meta_cache_size` (global RootMeta LRU).
-- **Write shaping**: `max_write_batch_pages`, `max_write_concurrency`,
+- **Write shaping**: `max_write_concurrency`,
   `write_buffer_size`/`write_buffer_ratio` (append-mode aggregation),
   `manifest_limit` (snapshot-rotation threshold).
+  (`max_write_batch_pages` is deprecated and ignored — superseded by the
+  `max_inflight_write` IO budget, doc 07.)
+- **IO QoS** (doc 07, `docs/design/io_qos.md`): `max_inflight_read`
+  (device-calibrated read queue-depth cap), `bg_read_ratio` (background
+  read sub-budget, the tail-predictability policy knob),
+  `max_inflight_write` (write queue-depth cap; also sizes the write
+  request pools).
 - **Cloud**: `cloud_provider/endpoint/region/keys`, `local_space_limit` +
   `reserve_space_ratio` (cache budget), `max_cloud_concurrency`,
   `cloud_request_threads`, `allow_reuse_local_caches`, `prewarm_cloud_cache`.

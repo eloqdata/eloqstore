@@ -302,16 +302,15 @@ KvError WriteTask::WritePage(VarPage page, FilePageId file_page_id)
 
     KvError err = IoMgr()->WritePage(tbl_ident_, std::move(page), file_page_id);
     CHECK_KV_ERR(err);
-    if (inflight_io_ >= opts->max_write_batch_pages)
-    {
-        // Avoid long running WriteTask block ReadTask/ScanTask
-        err = WaitWrite();
-        CHECK_KV_ERR(err);
-    }
-    else
-    {
-        YieldToLowPQ();
-    }
+    // In-flight write IO is bounded by the shard's write budget
+    // (max_inflight_write, enforced inside IoMgr()->WritePage; see
+    // docs/design/io_qos.md M1), which replaced the per-task
+    // max_write_batch_pages drain-to-zero throttle here: budget admission
+    // keeps a steady in-flight level instead of a sawtooth, and unlike the
+    // per-task cap it also counts compaction and concurrent write tasks.
+    // Completion errors are collected by the terminal WaitWrite() before
+    // UpdateMeta/SyncData. The yield below is CPU-side cooperation only.
+    YieldToLowPQ();
     return KvError::NoError;
 }
 

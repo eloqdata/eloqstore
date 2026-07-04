@@ -78,7 +78,16 @@ const eloqstore::KvOptions cloud_archive_opts = {
     .pages_per_file_shift = 8,
     .data_append_mode = true,
 };
-eloqstore::EloqStore *InitStore(const eloqstore::KvOptions &opts);
+/**
+ * Create (or replace) the per-binary test store. Stops and destroys any
+ * previously created store first, so at most one EloqStore instance is ever
+ * started in the process — required by the process-global Options() pointer.
+ * All test store creation must go through here; do not construct EloqStore
+ * directly in tests. Pass cleanup = false to keep existing local/cloud state
+ * (warm-restart and cache-reuse tests).
+ */
+eloqstore::EloqStore *InitStore(const eloqstore::KvOptions &opts,
+                                bool cleanup = true);
 
 bool ValidateFileSizes(const eloqstore::KvOptions &opts);
 

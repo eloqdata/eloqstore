@@ -73,12 +73,49 @@ struct KvOptions
      */
     uint32_t io_queue_size = 4096;
     /**
-     * @brief Max amount of inflight write IO per shard.
-     * Only take effect in non-append write mode.
+     * @brief Per-shard cap on in-flight page-write IO, in 4KB-page units
+     * (docs/design/io_qos.md M1). A merged append-mode write of N bytes
+     * counts as N / data_page_size pages, so the cap means the same thing
+     * in append and non-append mode. Also sizes the write request pools.
+     * Cannot be zero.
+     *
+     * NOTE: before the IO QoS work this option only sized the non-append
+     * write request pool and defaulted to 32768 (effectively unbounded);
+     * deployments that set it explicitly should re-derive their value as a
+     * queue-depth cap.
      */
-    uint32_t max_inflight_write = 32 << 10;
+    uint32_t max_inflight_write = 512;
     /**
-     * @brief The maximum number of pages per batch for the write task.
+     * @brief Per-shard cap on in-flight page-read IO, in 4KB-page units
+     * (docs/design/io_qos.md M1). Applies to data-page reads
+     * (ReadPage/ReadPages); metadata and segment IO are exempt.
+     * 0 disables the read budget.
+     *
+     * This is the device-calibration knob of the QoS sizing contract (see
+     * "Sizing contract" in docs/design/io_qos.md): size it near the
+     * device's bandwidth-delay product, c * max_random_read_IOPS *
+     * unloaded_read_latency / num_threads with c ~ 2-4. Foreground
+     * `read_blocked` staying ~0 under representative load validates the
+     * value; nonzero means undersized.
+     */
+    uint32_t max_inflight_read = 32;
+    /**
+     * @brief Background share of max_inflight_read, in percent (clamped to
+     * 1..100; docs/design/io_qos.md M2). Page reads issued by background
+     * tasks (batch write, compaction, GC, prewarm) are bounded by this
+     * sub-budget so they cannot crowd out foreground point reads.
+     * Foreground reads may use the entire read budget. No effect when the
+     * read budget is disabled (max_inflight_read = 0).
+     */
+    uint32_t bg_read_ratio = 25;
+    /**
+     * @brief DEPRECATED — no effect. Formerly the per-write-task in-flight
+     * page cap (the task drained to zero via WaitWrite once it had this
+     * many writes outstanding). Superseded by the shard-wide write budget
+     * `max_inflight_write` (docs/design/io_qos.md, plan commit 4), which
+     * bounds in-flight write pages across all tasks without the
+     * drain-to-zero sawtooth. Parsed and validated for compatibility;
+     * scheduled for removal one release after deprecation.
      */
     uint32_t max_write_batch_pages = 32;
     /**

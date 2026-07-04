@@ -194,6 +194,26 @@ public:
     {
         return Type() < TaskType::BatchWrite;
     }
+    /**
+     * @brief Background tasks' page reads are charged against the background
+     * sub-budget of the read IO budget (docs/design/io_qos.md M2), so they
+     * cannot crowd out foreground point reads at the device. Deliberately
+     * not derived from ReadOnly(): EvictFile and Prewarm are read-only but
+     * background.
+     */
+    bool IsBackground() const
+    {
+        switch (Type())
+        {
+        case TaskType::BatchWrite:
+        case TaskType::BackgroundWrite:
+        case TaskType::EvictFile:
+        case TaskType::Prewarm:
+            return true;
+        default:
+            return false;
+        }
+    }
     void Yield();
     void YieldToLowPQ();
     /**
@@ -224,7 +244,13 @@ public:
     WaitingZone() = default;
     void Wait(KvTask *task);
     void WakeOne();
-    void WakeN(size_t n);
+    /**
+     * @brief Wake up to n waiters in FIFO order.
+     * @return The number actually woken (< n when the zone drains), so the
+     * caller can forward unused wake credits to another zone (see
+     * IoBudget::Release).
+     */
+    size_t WakeN(size_t n);
     void WakeAll();
     bool Empty() const;
 
