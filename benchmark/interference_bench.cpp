@@ -419,26 +419,24 @@ void ReportQosDelta(const char *name,
                         : 0.0;
     };
     LOG(INFO) << "RESULT qos phase=" << name << " shard=" << shard
-              << " read_hwm=" << end.read_.high_watermark_
-              << " read_blocked=" << d(begin.read_.blocked_count_,
-                                       end.read_.blocked_count_)
-              << " read_blocked_us=" << d(begin.read_.blocked_us_,
-                                          end.read_.blocked_us_)
+              << " read_hwm=" << end.read_.high_watermark_ << " read_blocked="
+              << d(begin.read_.blocked_count_, end.read_.blocked_count_)
+              << " read_blocked_us="
+              << d(begin.read_.blocked_us_, end.read_.blocked_us_)
               << " read_page_mbps=" << mbps(begin.read_, end.read_)
               << " bg_read_hwm=" << end.bg_read_.high_watermark_
-              << " bg_read_blocked=" << d(begin.bg_read_.blocked_count_,
-                                          end.bg_read_.blocked_count_)
-              << " bg_read_blocked_us=" << d(begin.bg_read_.blocked_us_,
-                                             end.bg_read_.blocked_us_)
+              << " bg_read_blocked="
+              << d(begin.bg_read_.blocked_count_, end.bg_read_.blocked_count_)
+              << " bg_read_blocked_us="
+              << d(begin.bg_read_.blocked_us_, end.bg_read_.blocked_us_)
               << " bg_read_page_mbps=" << mbps(begin.bg_read_, end.bg_read_)
               << " write_hwm=" << end.write_.high_watermark_
-              << " write_blocked=" << d(begin.write_.blocked_count_,
-                                        end.write_.blocked_count_)
+              << " write_blocked="
+              << d(begin.write_.blocked_count_, end.write_.blocked_count_)
               << " write_page_mbps=" << mbps(begin.write_, end.write_)
-              << " fdatasync=" << d(begin.fdatasync_count_,
-                                    end.fdatasync_count_)
-              << " fdatasync_us=" << d(begin.fdatasync_us_,
-                                       end.fdatasync_us_);
+              << " fdatasync="
+              << d(begin.fdatasync_count_, end.fdatasync_count_)
+              << " fdatasync_us=" << d(begin.fdatasync_us_, end.fdatasync_us_);
 }
 
 }  // namespace
