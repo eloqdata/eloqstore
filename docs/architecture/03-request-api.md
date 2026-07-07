@@ -80,11 +80,21 @@ Two retry loops live *inside* the engine (`Shard::StartTask` epilogue +
 
 - **Auto-reopen retry** — if a task fails with `KvError::ResourceMissing` in
   Cloud/StandbyReplica mode and the request type opts in
-  (`AutoReopenRetry()`: Read/Floor/Scan), the shard enqueues an internal
-  `ReopenRequest` for the partition and re-runs the original request after the
-  reopen completes, up to `auto_reopen_retry_times`. This is how readers
-  transparently follow a primary that has advanced the partition's term.
-  Only then is `SetDone` deferred; otherwise the error surfaces directly.
+  (`AutoReopenRetry()`: Read/Floor/Scan), the shard parks the request in a
+  per-table `PendingReopenState` and arms an internal `ReopenRequest` that
+  executes after `auto_reopen_pending_time_us` (a delayed heap absorbs
+  request storms into one reopen); parked requests are re-run after the
+  reopen completes, up to `auto_reopen_retry_times` each. This is how
+  readers transparently follow a primary that has advanced the partition's
+  term. Only then is `SetDone` deferred; otherwise the error surfaces
+  directly. The internal request's pending time is shard-private
+  (`ReopenRequest::SetPendingTime` is not public API), and only the
+  auto-reopen's own completion tears the state down — a user or
+  `GlobalReopen` reopen for the same table finishing first must not. If
+  that user reopen *succeeds* while the auto-reopen is still queued, the
+  shard adopts the state instead: the delayed auto-reopen is cancelled and
+  the parked requests are re-driven immediately, so a tag or clean reopen
+  cannot later be overridden by the stale empty-tag auto-reopen.
 - **OOM retry** — a task aborted by `KvError::OutOfMem` (e.g. buffer pool
   exhaustion from pinned pages) is re-enqueued at the back of the shard queue
   up to `auto_oom_retry_times`, giving other tasks a chance to release pins.

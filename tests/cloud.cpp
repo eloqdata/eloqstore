@@ -2222,3 +2222,68 @@ TEST_CASE("archive triggers with cloud-only partitions", "[cloud][archive]")
     store->Stop();
     CleanupStore(options);
 }
+
+TEST_CASE("successful user reopen adopts pending auto-reopen state",
+          "[cloud][auto_reopen]")
+{
+    eloqstore::KvOptions opts = cloud_options;
+    // A wide pending window that the adoption path must beat.
+    opts.auto_reopen_pending_time_us = 8'000'000;
+
+    eloqstore::EloqStore *store = InitStore(opts);
+
+    // Seed data so the partition has a cloud manifest and the reopen below
+    // performs a genuine snapshot install.
+    MapVerifier tester(test_tbl_id, store, false);
+    tester.Upsert(0, 10);
+
+    // Park a waiter behind an auto-reopen — the state a ResourceMissing
+    // failure leaves behind. Heap-allocated with a shared done flag so an
+    // assertion failure while it is still parked leaks it instead of
+    // letting a late SetDone write into unwound stack memory.
+    auto waiter_done = std::make_shared<std::atomic<bool>>(false);
+    auto *waiter = new eloqstore::ReadRequest();
+    waiter->SetArgs(test_tbl_id, test_util::Key(1, 7));
+    waiter->SetReopen(true);
+    REQUIRE(store->ExecAsyn(waiter,
+                            0,
+                            [waiter_done](eloqstore::KvRequest *)
+                            { waiter_done->store(true); }));
+
+    // A user reopen for the same table succeeds while the auto-reopen is
+    // still parked. Adoption must cancel the delayed auto-reopen and
+    // re-drive the parked waiter immediately instead of letting it wait
+    // out the pending window.
+    eloqstore::ReopenRequest user_reopen;
+    user_reopen.SetArgs(test_tbl_id);
+    store->ExecSync(&user_reopen);
+    const eloqstore::KvError user_err = user_reopen.Error();
+
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    while (!waiter_done->load() && std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    const bool done = waiter_done->load();
+    const eloqstore::KvError waiter_err =
+        done ? waiter->Error() : eloqstore::KvError::NoError;
+    const std::string waiter_value = done ? waiter->value_ : "";
+    if (done)
+    {
+        delete waiter;
+    }
+    // else: leak the waiter deliberately — the store still references it.
+
+    REQUIRE(user_err == eloqstore::KvError::NoError);
+    // Completed within 4s of the reopen, far inside the 8s pending window:
+    // the waiter was re-driven by the user reopen's adoption, not by the
+    // delayed auto-reopen firing.
+    REQUIRE(done);
+    REQUIRE(waiter_err == eloqstore::KvError::NoError);
+    REQUIRE_FALSE(waiter_value.empty());
+
+    tester.SetAutoClean(false);
+    store->Stop();
+    CleanupStore(opts);
+}

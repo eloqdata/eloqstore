@@ -14,6 +14,13 @@ public:
     }
     KvError Reopen(const TableIdent &tbl_id);
 
+    void Reset(const TableIdent &tbl_id) override
+    {
+        WriteTask::Reset(tbl_id);
+        auto_reopen_req_ = false;
+        result_err_ = KvError::NoError;
+    }
+
     // Latched by Shard::ProcessReq before the task runs. By the time
     // OnTaskFinished inspects a finished reopen, SetDone has already handed
     // a user-issued request back to its owner, so the request must not be

@@ -104,6 +104,10 @@ private:
     void EnqueueDelayedReopenRequest(ReopenRequest *req);
     void PromoteReadyDelayedReopenRequests();
     void AdoptPendingReopenAfterUserReopen(const TableIdent &tbl_id);
+    // On reopen success re-sends the parked waiters (failed re-sends
+    // complete with NotRunning); on failure completes them with that error.
+    void CompleteReopenWaiters(std::vector<KvRequest *> waiters,
+                               KvError reopen_err);
     bool HasPendingDelayedRequests() const
     {
         return !delayed_requests_.empty();
@@ -313,6 +317,8 @@ private:
         void PushFront(WriteRequest *req);
         WriteRequest *Front();
         WriteRequest *PopFront();
+        // Unlinks @p req if queued; returns whether it was found.
+        bool Remove(WriteRequest *req);
         bool Empty() const;
 
         // Requests from internal
