@@ -388,6 +388,44 @@ void Shard::PromoteReadyDelayedReopenRequests()
     }
 }
 
+void Shard::AdoptPendingReopenAfterUserReopen(const TableIdent &tbl_id)
+{
+    auto it = pending_reopens_.find(tbl_id);
+    if (it == pending_reopens_.end())
+    {
+        return;
+    }
+    // Only adopt while the embedded auto-reopen is still parked in the
+    // delayed heap. Once promoted it is queued or running, and its own
+    // completion resolves the waiters and erases the state.
+    ReopenRequest *embedded = &it->second.request_;
+    auto pos = std::find_if(delayed_requests_.begin(),
+                            delayed_requests_.end(),
+                            [embedded](const DelayedEntry &entry)
+                            { return entry.request == embedded; });
+    if (pos == delayed_requests_.end())
+    {
+        return;
+    }
+    delayed_requests_.erase(pos);
+    std::make_heap(delayed_requests_.begin(),
+                   delayed_requests_.end(),
+                   std::greater<DelayedEntry>());
+    // The table was just reopened successfully: re-drive the parked waiters
+    // now rather than have them wait out the pending window — and drop the
+    // empty-tag auto-reopen so it cannot later override what the user
+    // reopen (possibly to a specific tag, or clean) just installed.
+    std::vector<KvRequest *> waiters = std::move(it->second.waiters_);
+    pending_reopens_.erase(it);
+    for (KvRequest *pending_req : waiters)
+    {
+        if (!store_->SendRequest(pending_req))
+        {
+            pending_req->SetDone(KvError::NotRunning);
+        }
+    }
+}
+
 void Shard::AddPendingCompact(const TableIdent &tbl_id)
 {
     // Send CompactRequest from internal.
@@ -778,8 +816,14 @@ bool Shard::ProcessReq(KvRequest *req)
         auto *reopen_req = static_cast<ReopenRequest *>(req);
         CHECK_EQ(reopen_req->PendingTime(), 0);
         ReopenTask *task = task_mgr_.GetReopenTask(req->TableId());
+        task->auto_reopen_req_ = reopen_req->auto_reopen_;
+        task->result_err_ = KvError::NoError;
         auto lbd = [task, req]() -> KvError
-        { return task->Reopen(req->TableId()); };
+        {
+            KvError reopen_err = task->Reopen(req->TableId());
+            task->result_err_ = reopen_err;
+            return reopen_err;
+        };
         StartTask(task, req, lbd);
         break;
     }
@@ -1017,15 +1061,25 @@ void Shard::OnTaskFinished(KvTask *task)
         auto it = pending_queues_.find(wtask->TableId());
         assert(it != pending_queues_.end());
         PendingWriteQueue &pending_q = it->second;
-        if (__builtin_expect(task_type == TaskType::Reopen && !oom_retry, 0) &&
-            static_cast<ReopenRequest *>(req)->auto_reopen_)
+        if (__builtin_expect(task_type == TaskType::Reopen && !oom_retry, 0))
         {
-            // Only the embedded auto-reopen request may erase its own
-            // PendingReopenState. A user- or GlobalReopen-issued reopen
-            // finishing here must not: the state's embedded request may
-            // still be queued in delayed_requests_, and erasing would
-            // dangle that pointer and drop the waiters without SetDone.
-            pending_reopens_.erase(wtask->TableId());
+            // `req` was handed back to its owner at SetDone (StartTask
+            // epilogue) and must not be dereferenced here; read the fields
+            // latched on the shard-owned task instead.
+            auto *rtask = static_cast<ReopenTask *>(task);
+            if (rtask->auto_reopen_req_)
+            {
+                // Only the embedded auto-reopen request may erase its own
+                // PendingReopenState. A user- or GlobalReopen-issued reopen
+                // finishing here must not: the state's embedded request may
+                // still be queued in delayed_requests_, and erasing would
+                // dangle that pointer and drop the waiters without SetDone.
+                pending_reopens_.erase(wtask->TableId());
+            }
+            else if (rtask->result_err_ == KvError::NoError)
+            {
+                AdoptPendingReopenAfterUserReopen(wtask->TableId());
+            }
         }
         pending_q.running_ = false;
         task_mgr_.FreeTask(task);

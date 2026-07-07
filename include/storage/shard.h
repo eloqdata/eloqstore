@@ -103,6 +103,7 @@ private:
     void EnqueueForAutoReopen(KvRequest *req);
     void EnqueueDelayedReopenRequest(ReopenRequest *req);
     void PromoteReadyDelayedReopenRequests();
+    void AdoptPendingReopenAfterUserReopen(const TableIdent &tbl_id);
     bool HasPendingDelayedRequests() const
     {
         return !delayed_requests_.empty();

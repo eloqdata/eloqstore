@@ -3,6 +3,7 @@
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -158,35 +159,35 @@ TEST_CASE("user reopen must not destroy pending auto-reopen state",
     // A request carrying the reopen_ flag is parked in
     // PendingReopenState::waiters_ while the shard-owned auto-reopen request
     // enters the delayed heap — the state a ResourceMissing failure leaves
-    // behind.
-    eloqstore::ReadRequest waiter;
-    waiter.SetArgs(test_tbl_id, "k0");
-    waiter.SetReopen(true);
-    std::atomic<bool> waiter_done{false};
-    REQUIRE(store->ExecAsyn(&waiter,
+    // behind. The waiter lives on the heap and its done flag is shared with
+    // the callback, so if an assertion below fails while the waiter is still
+    // parked in the (static, still-running) store, unwinding leaks it
+    // instead of letting a late SetDone write into freed stack memory.
+    auto waiter_done = std::make_shared<std::atomic<bool>>(false);
+    auto *waiter = new eloqstore::ReadRequest();
+    waiter->SetArgs(test_tbl_id, "k0");
+    waiter->SetReopen(true);
+    REQUIRE(store->ExecAsyn(waiter,
                             0,
-                            [&waiter_done](eloqstore::KvRequest *)
-                            { waiter_done.store(true); }));
+                            [waiter_done](eloqstore::KvRequest *)
+                            { waiter_done->store(true); }));
 
     // A user reopen for the same table finishes while the auto-reopen is
     // still waiting in the delayed heap. It must leave the pending state
     // alone: erasing it frees the delayed request out from under the heap
-    // and drops the waiter without SetDone.
+    // and drops the waiter without SetDone. ExecSync blocks until done, so
+    // user_reopen itself never outlives the store's use of it.
     eloqstore::ReopenRequest user_reopen;
     user_reopen.SetArgs(test_tbl_id);
     store->ExecSync(&user_reopen);
-    // Local mode rejects reopen with InvalidArgs; the reopen task still ran
-    // to completion, which is all this regression needs.
-    REQUIRE(user_reopen.Error() == eloqstore::KvError::InvalidArgs);
-    // Sanity-check the scenario (auto-reopen still pending when the user
-    // reopen finished), but only when this thread wasn't stalled long enough
-    // for the 2s timer to legitimately fire — the timer arms after t0, so
-    // under 1s elapsed it cannot have promoted yet. Avoids spurious failures
-    // on slow or sanitizer-instrumented CI runners.
-    if (std::chrono::steady_clock::now() - t0 < std::chrono::seconds(1))
-    {
-        REQUIRE_FALSE(waiter_done.load());
-    }
+    const eloqstore::KvError user_err = user_reopen.Error();
+    // Scenario sanity probe: the auto-reopen should still be pending when
+    // the user reopen finished. Only meaningful when this thread wasn't
+    // stalled past the 2s timer window (slow or sanitizer-instrumented CI):
+    // the timer arms after t0, so under 1s elapsed it cannot have fired.
+    const bool premature_fire =
+        waiter_done->load() &&
+        std::chrono::steady_clock::now() - t0 < std::chrono::seconds(1);
 
     // Once the pending time elapses the auto-reopen executes and completes
     // the parked waiter. Before the fix the waiter never completed and the
@@ -194,9 +195,25 @@ TEST_CASE("user reopen must not destroy pending auto-reopen state",
     // CHECK-abort in the completion callback).
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(10);
-    while (!waiter_done.load() && std::chrono::steady_clock::now() < deadline)
+    while (!waiter_done->load() && std::chrono::steady_clock::now() < deadline)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    REQUIRE(waiter_done.load());
+    const bool done = waiter_done->load();
+    const eloqstore::KvError waiter_err =
+        done ? waiter->Error() : eloqstore::KvError::NoError;
+    if (done)
+    {
+        delete waiter;
+    }
+    // else: leak the waiter deliberately — the store still references it.
+
+    // Local mode rejects reopen with InvalidArgs; the reopen task still ran
+    // to completion, which is all this regression needs.
+    REQUIRE(user_err == eloqstore::KvError::InvalidArgs);
+    REQUIRE_FALSE(premature_fire);
+    REQUIRE(done);
+    // The auto-reopen's outcome must be propagated to the parked waiter via
+    // SetDone (local mode: InvalidArgs), not swallowed or rewritten.
+    REQUIRE(waiter_err == eloqstore::KvError::InvalidArgs);
 }
