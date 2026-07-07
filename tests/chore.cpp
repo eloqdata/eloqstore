@@ -153,6 +153,8 @@ TEST_CASE("user reopen must not destroy pending auto-reopen state",
 
     EloqStore *store = InitStore(opts);
 
+    const auto t0 = std::chrono::steady_clock::now();
+
     // A request carrying the reopen_ flag is parked in
     // PendingReopenState::waiters_ while the shard-owned auto-reopen request
     // enters the delayed heap — the state a ResourceMissing failure leaves
@@ -176,7 +178,15 @@ TEST_CASE("user reopen must not destroy pending auto-reopen state",
     // Local mode rejects reopen with InvalidArgs; the reopen task still ran
     // to completion, which is all this regression needs.
     REQUIRE(user_reopen.Error() == eloqstore::KvError::InvalidArgs);
-    REQUIRE_FALSE(waiter_done.load());
+    // Sanity-check the scenario (auto-reopen still pending when the user
+    // reopen finished), but only when this thread wasn't stalled long enough
+    // for the 2s timer to legitimately fire — the timer arms after t0, so
+    // under 1s elapsed it cannot have promoted yet. Avoids spurious failures
+    // on slow or sanitizer-instrumented CI runners.
+    if (std::chrono::steady_clock::now() - t0 < std::chrono::seconds(1))
+    {
+        REQUIRE_FALSE(waiter_done.load());
+    }
 
     // Once the pending time elapses the auto-reopen executes and completes
     // the parked waiter. Before the fix the waiter never completed and the
