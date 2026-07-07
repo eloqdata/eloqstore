@@ -481,6 +481,7 @@ public:
     {
         return clean_;
     }
+
 private:
     // Internal to the shard's delayed auto-reopen path: a non-zero pending
     // time is only honored by Shard::EnqueueDelayedReopenRequest, which
