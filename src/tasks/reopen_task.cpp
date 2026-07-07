@@ -119,6 +119,12 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
         prewarm_service->Prewarm(tbl_id);
     }
 
+    // TODO(standby): on a standby replica nothing else removes local data
+    // files the master has GC'd — StandbyStoreMgr has no LRU/space-limit
+    // eviction and the rsync pull runs without --delete — so gating local GC
+    // on clear_local_state lets orphaned data_* files accumulate across
+    // reopens. Restore unconditional local GC for StoreMode::StandbyReplica,
+    // or add a periodic cleanup of files outside the retained set.
     if (clear_local_state && !shard->HasPendingLocalGc(tbl_id))
     {
         shard->AddPendingLocalGc(tbl_id);
