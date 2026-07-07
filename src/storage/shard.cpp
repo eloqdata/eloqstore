@@ -324,6 +324,7 @@ void Shard::EnqueueForAutoReopen(KvRequest *req)
     reopen_req->SetArgs(tbl_id);
     reopen_req->SetTag("");
     reopen_req->SetClean(false);
+    reopen_req->auto_reopen_ = true;
     reopen_req->SetPendingTime(store_->Options().auto_reopen_pending_time_us);
     reopen_req->callback_ = [this, tbl_id](KvRequest *done_req)
     {
@@ -1016,8 +1017,14 @@ void Shard::OnTaskFinished(KvTask *task)
         auto it = pending_queues_.find(wtask->TableId());
         assert(it != pending_queues_.end());
         PendingWriteQueue &pending_q = it->second;
-        if (__builtin_expect(task_type == TaskType::Reopen && !oom_retry, 0))
+        if (__builtin_expect(task_type == TaskType::Reopen && !oom_retry, 0) &&
+            static_cast<ReopenRequest *>(req)->auto_reopen_)
         {
+            // Only the embedded auto-reopen request may erase its own
+            // PendingReopenState. A user- or GlobalReopen-issued reopen
+            // finishing here must not: the state's embedded request may
+            // still be queued in delayed_requests_, and erasing would
+            // dangle that pointer and drop the waiters without SetDone.
             pending_reopens_.erase(wtask->TableId());
         }
         pending_q.running_ = false;

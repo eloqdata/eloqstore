@@ -495,9 +495,15 @@ private:
     std::string tag_;
     bool clean_{false};
     uint64_t pending_time_us_{0};
+    // Set only on the shard-owned request embedded in PendingReopenState.
+    // Shard::OnTaskFinished erases that state when the auto-reopen itself
+    // finishes; a user-issued reopen for the same table must leave it alone,
+    // since the embedded request may still sit in the shard's delayed heap.
+    bool auto_reopen_{false};
 
     friend class EloqStore;
     friend class ReopenTask;
+    friend class Shard;
 };
 
 /**

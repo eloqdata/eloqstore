@@ -1,7 +1,10 @@
 #include <glog/logging.h>
 
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "common.h"
@@ -138,4 +141,52 @@ TEST_CASE("file size tests - mixed page and file size combinations",
         // Validate
         REQUIRE(ValidateFileSizes(opts));
     }
+}
+
+TEST_CASE("user reopen must not destroy pending auto-reopen state",
+          "[chore][auto_reopen]")
+{
+    KvOptions opts = default_opts;
+    // Park the auto-reopen in the shard's delayed heap long enough for a
+    // user-issued reopen on the same table to complete first.
+    opts.auto_reopen_pending_time_us = 2'000'000;
+
+    EloqStore *store = InitStore(opts);
+
+    // A request carrying the reopen_ flag is parked in
+    // PendingReopenState::waiters_ while the shard-owned auto-reopen request
+    // enters the delayed heap — the state a ResourceMissing failure leaves
+    // behind.
+    eloqstore::ReadRequest waiter;
+    waiter.SetArgs(test_tbl_id, "k0");
+    waiter.SetReopen(true);
+    std::atomic<bool> waiter_done{false};
+    REQUIRE(store->ExecAsyn(&waiter,
+                            0,
+                            [&waiter_done](eloqstore::KvRequest *)
+                            { waiter_done.store(true); }));
+
+    // A user reopen for the same table finishes while the auto-reopen is
+    // still waiting in the delayed heap. It must leave the pending state
+    // alone: erasing it frees the delayed request out from under the heap
+    // and drops the waiter without SetDone.
+    eloqstore::ReopenRequest user_reopen;
+    user_reopen.SetArgs(test_tbl_id);
+    store->ExecSync(&user_reopen);
+    // Local mode rejects reopen with InvalidArgs; the reopen task still ran
+    // to completion, which is all this regression needs.
+    REQUIRE(user_reopen.Error() == eloqstore::KvError::InvalidArgs);
+    REQUIRE_FALSE(waiter_done.load());
+
+    // Once the pending time elapses the auto-reopen executes and completes
+    // the parked waiter. Before the fix the waiter never completed and the
+    // shard dereferenced the freed delayed request (use-after-free /
+    // CHECK-abort in the completion callback).
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while (!waiter_done.load() && std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    REQUIRE(waiter_done.load());
 }
