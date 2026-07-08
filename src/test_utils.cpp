@@ -875,9 +875,8 @@ void ConcurrencyTester::Run(uint16_t n_readers,
     while (running_readers > 0 || HasWriting())
     {
         uint64_t user_data;
-        bool dequeued =
-            finished_reqs_.wait_dequeue_timed(user_data,
-                                              std::chrono::seconds(5));
+        bool dequeued = finished_reqs_.wait_dequeue_timed(
+            user_data, std::chrono::seconds(5));
         auto now = std::chrono::steady_clock::now();
         if (now - last_report >= std::chrono::seconds(15))
         {
