@@ -3,6 +3,7 @@
 #include <sys/types.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <string>
@@ -792,6 +793,11 @@ void ConcurrencyTester::Init()
     for (Partition &partition : partitions_)
     {
         eloqstore::TableIdent tbl_id(tbl_name_, partition.id_);
+        // Progress marker: seeding large partitions dominates the test's
+        // wall time and is otherwise silent — a stall here would be
+        // indistinguishable from a hang in CI logs.
+        LOG(INFO) << "concurrency init: seeding partition " << partition.id_
+                  << "/" << partitions_.size() << " kvs=" << kvs_num;
 
         // Try to load partition KVs from EloqStore
         eloqstore::ScanRequest scan_req;
@@ -859,10 +865,34 @@ void ConcurrencyTester::Run(uint16_t n_readers,
         ExecRead(&reader);
     }
 
+    // Periodic progress heartbeat: the tester is otherwise silent between
+    // startup and shutdown, so a CI timeout log cannot distinguish a slow
+    // environment (counters keep advancing between heartbeats) from a
+    // genuine hang (identical heartbeats repeating, completed_reqs frozen).
+    uint64_t completed_reqs = 0;
+    auto last_report = std::chrono::steady_clock::now();
+
     while (running_readers > 0 || HasWriting())
     {
         uint64_t user_data;
-        finished_reqs_.wait_dequeue(user_data);
+        bool dequeued =
+            finished_reqs_.wait_dequeue_timed(user_data,
+                                              std::chrono::seconds(5));
+        auto now = std::chrono::steady_clock::now();
+        if (now - last_report >= std::chrono::seconds(15))
+        {
+            LOG(INFO) << "concurrency progress: completed_reqs="
+                      << completed_reqs << " readers=" << running_readers
+                      << " verify_kv=" << verify_kv_
+                      << " verify_sum=" << verify_sum_
+                      << " has_writing=" << HasWriting();
+            last_report = now;
+        }
+        if (!dequeued)
+        {
+            continue;
+        }
+        completed_reqs++;
         bool is_write = (user_data & (uint64_t(1) << 63));
         uint32_t id = (user_data & ((uint64_t(1) << 63) - 1));
 
