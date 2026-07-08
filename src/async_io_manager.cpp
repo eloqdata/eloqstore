@@ -4613,18 +4613,37 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
             return {nullptr, ToKvError(res)};
         }
 
-        // 2) Upload manifest_<branch>_<process_term> to cloud.
-        // (No need to delete the manifest file if failed to upload. The content
-        // of this manifest is same to the one on cloud and can be used on this
-        // read operation (without changing manifest content). The manifest with
-        // process_term will be uploaded on next write operation.)
-        KvError up_err = UploadFile(tbl_id, promoted_name, nullptr);
+        // 2) Upload manifest_<branch>_<process_term> to cloud. The promoted
+        // manifest must be durable in cloud before this term serves the
+        // partition: cloud GC prunes older-term manifests by name, so
+        // tolerating a failed upload leaves a window where the only cloud
+        // manifest can be deleted and the partition's metadata exists on
+        // local disk alone. Retry transient failures, then surface the
+        // error — the failing access is visible to the caller, and the next
+        // access re-enters the promote path (the re-download and rename are
+        // idempotent: the local promoted copy is byte-identical to the
+        // still-present cloud manifest) and retries the upload.
+        KvError up_err = KvError::NoError;
+        for (int attempt = 0; attempt < 3; ++attempt)
+        {
+            up_err = UploadFile(tbl_id, promoted_name, nullptr);
+            if (up_err == KvError::NoError ||
+                up_err == KvError::OssInsufficientStorage)
+            {
+                break;
+            }
+            LOG(WARNING) << "CloudStoreMgr::GetManifest: upload of promoted "
+                         << "manifest file " << promoted_name << " for table "
+                         << tbl_id << " failed: " << ErrorString(up_err)
+                         << ", retrying";
+        }
         if (up_err != KvError::NoError)
         {
             LOG(ERROR) << "CloudStoreMgr::GetManifest: failed to upload "
                        << "promoted manifest file " << promoted_name
                        << " for table " << tbl_id << " : "
                        << ErrorString(up_err);
+            return {nullptr, up_err};
         }
         // Update manifest_branch_term_ to the promoted term/branch.
     }
