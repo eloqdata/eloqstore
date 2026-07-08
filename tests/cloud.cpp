@@ -2216,3 +2216,68 @@ TEST_CASE("archive triggers with cloud-only partitions", "[cloud][archive]")
     store->Stop();
     CleanupStore(options);
 }
+
+TEST_CASE("reopen to archive tag survives term bump across restart",
+          "[cloud][reopen][archive]")
+{
+    eloqstore::KvOptions options = cloud_archive_opts;
+    options.store_path = {"/tmp/test-data-archive-term"};
+    options.cloud_store_path.push_back('/');
+    options.cloud_store_path += "archive-term";
+
+    CleanupStore(options);
+
+    const eloqstore::TableIdent tbl_id{"arch_term", 0};
+    const std::string tag = "restore-point";
+    std::map<std::string, eloqstore::KvEntry> v1_dataset;
+
+    // First life (term 1): write v1, archive it under `tag`, add v2 on top.
+    {
+        auto store = std::make_unique<eloqstore::EloqStore>(options);
+        REQUIRE(store->Start(eloqstore::MainBranchName, /*term=*/1) ==
+                eloqstore::KvError::NoError);
+        MapVerifier verifier(tbl_id, store.get(), false);
+        verifier.Upsert(0, 50);
+        v1_dataset = verifier.DataSet();
+        REQUIRE_FALSE(v1_dataset.empty());
+
+        eloqstore::ArchiveRequest archive_req;
+        archive_req.SetTableId(tbl_id);
+        archive_req.SetTag(tag);
+        REQUIRE(store->ExecAsyn(&archive_req));
+        archive_req.Wait();
+        REQUIRE(archive_req.Error() == eloqstore::KvError::NoError);
+
+        verifier.Upsert(100, 120);
+        verifier.SetAutoClean(false);
+        store->Stop();
+    }
+
+    // Second life at a bumped term (the embedder supplies a higher term on
+    // failover), while the archive object keeps the term of the process
+    // that created it. The tagged reopen must fall back to listing and
+    // find the older-term archive — before the fix it resolved to NotFound
+    // and wiped the partition instead of restoring it. Wipe the local
+    // cache first (a failed-over node starts with an empty disk); cloud
+    // state is preserved.
+    CleanupLocalStore(options);
+    {
+        auto store = std::make_unique<eloqstore::EloqStore>(options);
+        REQUIRE(store->Start(eloqstore::MainBranchName, /*term=*/2) ==
+                eloqstore::KvError::NoError);
+
+        eloqstore::ReopenRequest reopen_req;
+        reopen_req.SetArgs(tbl_id);
+        reopen_req.SetTag(tag);
+        store->ExecSync(&reopen_req);
+        REQUIRE(reopen_req.Error() == eloqstore::KvError::NoError);
+
+        MapVerifier verifier(tbl_id, store.get(), false);
+        verifier.SwitchDataSet(v1_dataset);
+        verifier.Validate();
+
+        verifier.SetAutoClean(false);
+        store->Stop();
+    }
+    CleanupStore(options);
+}
