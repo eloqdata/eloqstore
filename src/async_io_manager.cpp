@@ -5183,7 +5183,7 @@ KvError IouringMgr::DropManifest(const TableIdent &tbl_id)
     return KvError::NoError;
 }
 
-KvError CloudStoreMgr::DropManifest(const TableIdent &tbl_id)
+KvError CloudStoreMgr::DropLocalManifest(const TableIdent &tbl_id)
 {
     // 1. Delete local manifest file.
     KvError err = IouringMgr::DropManifest(tbl_id);
@@ -5192,10 +5192,9 @@ KvError CloudStoreMgr::DropManifest(const TableIdent &tbl_id)
         return err;
     }
 
+    // 2. Remove from FileCleaner's closed-file tracking.
     const std::string manifest_name =
         BranchManifestFileName(GetActiveBranch(), ProcessTerm());
-
-    // 2. Remove from FileCleaner's closed-file tracking.
     if (DequeClosedFile(FileKey(tbl_id, manifest_name)))
     {
         const size_t manifest_size = options_->manifest_limit;
@@ -5204,7 +5203,23 @@ KvError CloudStoreMgr::DropManifest(const TableIdent &tbl_id)
                                 : 0;
     }
 
-    // 3. Delete the manifest from cloud object storage.
+    return KvError::NoError;
+}
+
+KvError CloudStoreMgr::DropManifest(const TableIdent &tbl_id)
+{
+    KvError err = DropLocalManifest(tbl_id);
+    if (err != KvError::NoError)
+    {
+        return err;
+    }
+
+    // Delete the manifest from cloud object storage. Only the partition
+    // owner's Drop path may reach this; reopen / snapshot-install paths go
+    // through DropLocalManifest and must never delete the cloud object they
+    // are adopting state from.
+    const std::string manifest_name =
+        BranchManifestFileName(GetActiveBranch(), ProcessTerm());
     std::string remote_path = tbl_id.ToString() + "/" + manifest_name;
     KvTask *current_task = ThdTask();
     ObjectStore::DeleteTask delete_task(remote_path);
