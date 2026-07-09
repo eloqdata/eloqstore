@@ -376,3 +376,82 @@ TEST_CASE(
     store->Stop();
     CleanupStore(opts);
 }
+
+// ---------------------------------------------------------------------------
+// A BatchWrite that slips between a Drop and its queued LocalGc (they share
+// the partition's FIFO write queue) re-creates the partition; the LocalGc
+// must then retain the re-created partition's live sealed segment files.
+// If the g2 write loses the enqueue race the test passes vacuously — it can
+// never fail spuriously.
+// ---------------------------------------------------------------------------
+TEST_CASE("drop-and-recreate keeps the new partition's segment files",
+          "[large-value-gc][pinned]")
+{
+    PinnedHarness h;
+    eloqstore::KvOptions opts = MakePinnedOpts(h);
+    eloqstore::EloqStore *store = InitStore(opts);
+
+    eloqstore::TableIdent tbl{"lvgc_drop_recreate", 0};
+    const size_t seg = h.SegmentSize();
+
+    // Generation 1: sealed segment files for the Drop to collect.
+    {
+        std::vector<PinnedBatchEntry> entries;
+        entries.push_back(
+            {"g1_a", h.AllocateSegmentAligned(seg * 2), 0x2010, "m1a"});
+        entries.push_back(
+            {"g1_b", h.AllocateSegmentAligned(seg * 2), 0x2020, "m1b"});
+        WritePinnedBatch(store, tbl, std::move(entries), /*ts=*/1);
+    }
+
+    // Generation 2 spans more than segments_per_file (8) segments so one of
+    // its files is sealed (past the in-flight tail guard) when LocalGc runs.
+    // Prepare everything before submitting the Drop: the g2 enqueue must
+    // land while the Drop is still executing.
+    auto g2_a = h.AllocateSegmentAligned(seg * 4);
+    auto g2_b = h.AllocateSegmentAligned(seg * 5);
+    FillDeterministic(g2_a.first, g2_a.second, 0x3010);
+    FillDeterministic(g2_b.first, g2_b.second, 0x3020);
+    eloqstore::BatchWriteRequest g2_req;
+    {
+        std::vector<eloqstore::WriteDataEntry> entries;
+        entries.emplace_back(
+            std::string("g2_a"),
+            std::string("m2a"),
+            std::make_pair(static_cast<const char *>(g2_a.first), g2_a.second),
+            /*ts=*/2,
+            eloqstore::WriteOp::Upsert);
+        entries.emplace_back(
+            std::string("g2_b"),
+            std::string("m2b"),
+            std::make_pair(static_cast<const char *>(g2_b.first), g2_b.second),
+            /*ts=*/2,
+            eloqstore::WriteOp::Upsert);
+        std::sort(entries.begin(), entries.end());
+        g2_req.SetArgs(tbl, std::move(entries));
+    }
+
+    // Drop the partition asynchronously and enqueue generation 2 right
+    // behind it: the per-partition FIFO becomes [Drop, BatchWrite(g2),
+    // LocalGc].
+    eloqstore::DropRequest drop_req;
+    drop_req.SetArgs(tbl);
+    REQUIRE(store->ExecAsyn(&drop_req));
+    store->ExecSync(&g2_req);
+    REQUIRE(g2_req.Error() == eloqstore::KvError::NoError);
+
+    drop_req.Wait();
+    REQUIRE(drop_req.Error() == eloqstore::KvError::NoError);
+
+    // Let the queued LocalGc run against the re-created partition.
+    WaitForGc();
+
+    // The re-created partition's values and their segment files survive.
+    SegmentFileInfo after = InspectSegmentFiles(opts, tbl);
+    REQUIRE(after.any);
+    ReadAndVerifyPinned(store, h, tbl, "g2_a", seg * 4, 0x3010, "m2a");
+    ReadAndVerifyPinned(store, h, tbl, "g2_b", seg * 5, 0x3020, "m2b");
+
+    store->Stop();
+    CleanupStore(opts);
+}

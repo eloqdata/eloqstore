@@ -1021,10 +1021,16 @@ KvError WriteTask::TriggerLocalFileGC() const
         tbl_ident_, retained_files, snapshot_array, /*is_segment=*/false);
     CHECK_KV_ERR(build_err);
 
-    // Local GC only runs against data files in this path; segment-file GC is
-    // handled by TriggerFileGC. Pass an empty retained-segment set so the
-    // local GC pass treats segment files as out-of-scope.
+    // Build retained_segment_files from the live segment snapshots, same as
+    // TriggerFileGC: ExecuteLocalGC deletes unreferenced segment files too.
     RetainedFiles retained_segment_files;
+    std::vector<MappingSnapshot::Ref> seg_snapshot_array;
+    build_err = BuildRetainedFiles(tbl_ident_,
+                                   retained_segment_files,
+                                   seg_snapshot_array,
+                                   /*is_segment=*/true);
+    CHECK_KV_ERR(build_err);
+
     IouringMgr *io_mgr = static_cast<IouringMgr *>(shard->IoManager());
     KvError gc_err = FileGarbageCollector::ExecuteLocalGC(
         tbl_ident_, retained_files, retained_segment_files, io_mgr);
