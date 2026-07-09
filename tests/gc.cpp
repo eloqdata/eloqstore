@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "common.h"
+#include "fail_point.h"
 #include "kv_options.h"
 #include "test_utils.h"
 #include "utils.h"
@@ -488,6 +489,53 @@ TEST_CASE("local GC honors in-memory least_unflushed boundary",
     REQUIRE(drop_req.Error() == eloqstore::KvError::NoError);
     REQUIRE(WaitForCondition(
         5s, 50ms, [&]() { return !CheckLocalPartitionExists(opts, tbl_id); }));
+
+    store->Stop();
+    CleanupStore(opts);
+}
+
+// Regression test for the file-GC use-after-free: TriggerFileGC builds
+// snapshot_array (MappingSnapshot::Refs whose tbl_ident_ points into the
+// partition's RootMeta entry), then yields across ExecuteLocalGC. If the
+// RootMeta entry is evicted from the cache during that window (its Handle was
+// already released, so ref_cnt_==0 and it is an LRU victim), the entry is
+// freed while the snapshots still reference it. When snapshot_array is
+// destroyed at TriggerFileGC exit, FreeMappingSnapshot dereferences the
+// dangling tbl_ident_.
+//
+// The eviction/GC interleaving is a narrow race, so we drive it deterministic-
+// ally: the "GcForceEvictRoot" fault point (armed here, fired once inside
+// TriggerFileGC after both snapshot arrays are built) performs exactly the
+// eviction the LRU would do under cache pressure. Under ASAN this aborts with
+// heap-use-after-free in FreeMappingSnapshot on unfixed code.
+TEST_CASE("gc snapshot refs survive root meta eviction", "[gc][local][uaf]")
+{
+    eloqstore::KvOptions opts = local_gc_opts;
+    opts.store_path = {"/tmp/test-gc-uaf"};
+    opts.num_threads = 1;
+    CleanupStore(opts);
+
+    eloqstore::EloqStore *store = InitStore(opts);
+    eloqstore::TableIdent tbl{"gc_uaf_partition", 0};
+
+    // Populate the partition so its live mapping is non-empty: TriggerFileGC
+    // then builds a non-empty snapshot_array, and Compact() does not take its
+    // "nothing to compact" short-circuit.
+    {
+        MapVerifier v(tbl, store, false);
+        v.SetValueSize(400);
+        v.Upsert(0, 200);
+        v.Upsert(0, 200);  // overwrite -> dead pages -> real compaction work
+    }
+
+    // Arm the fault point, then force a compaction whose TriggerFileGC evicts
+    // this partition's root meta while its GC snapshots are still live.
+    eloqstore::FailPoint::GetInstance().ArmOnce("GcForceEvictRoot");
+    eloqstore::CompactRequest compact;
+    compact.SetTableId(tbl);
+    store->ExecSync(&compact);
+    eloqstore::FailPoint::GetInstance().Disarm();
+    REQUIRE(compact.Error() == eloqstore::KvError::NoError);
 
     store->Stop();
     CleanupStore(opts);

@@ -13,6 +13,7 @@
 #include "absl/container/flat_hash_set.h"
 #include "async_io_manager.h"
 #include "error.h"
+#include "fail_point.h"
 #include "file_gc.h"
 #include "storage/data_page.h"
 #include "storage/mem_cached_page.h"
@@ -948,6 +949,27 @@ void WriteTask::TriggerFileGC() const
 {
     assert(Options()->data_append_mode);
 
+    // Pin the RootMeta entry for the entire GC. BuildRetainedFiles captures
+    // MappingSnapshot::Refs whose tbl_ident_ points into this entry, and
+    // ExecuteLocalGC yields; without a held Handle another task could evict the
+    // entry from the RootMeta cache (BuildRetainedFiles' own per-call Handle is
+    // already released) and free it while the snapshots still reference it,
+    // producing a use-after-free when snapshot_array is destroyed below and
+    // FreeMappingSnapshot dereferences the dangling tbl_ident_. Declared before
+    // the snapshot arrays so it outlives their destruction at function exit.
+    //
+    // When the entry is absent (NotFound, e.g. after a Drop cleared it) there
+    // are no snapshots to dangle, so the handle is a no-op; GC must still run
+    // with empty retained sets to purge orphaned files / the partition dir.
+    auto [root_handle, find_err] = shard->IndexManager()->FindRoot(tbl_ident_);
+    if (find_err != KvError::NoError && find_err != KvError::NotFound)
+    {
+        LOG(ERROR) << "TriggerFileGC: FindRoot failed for table "
+                   << tbl_ident_.ToString()
+                   << " err=" << static_cast<int>(find_err);
+        return;
+    }
+
     RetainedFiles retained_files;
     std::vector<MappingSnapshot::Ref> snapshot_array;
     KvError build_err = BuildRetainedFiles(
@@ -976,6 +998,18 @@ void WriteTask::TriggerFileGC() const
                    << " err=" << static_cast<int>(build_err);
         return;
     }
+
+    // Test-only fault injection for the GC-holds-snapshot-across-eviction UAF:
+    // with snapshot_array / seg_snapshot_array still holding refs, force-evict
+    // this partition's RootMeta entry so tbl_ident_ inside those snapshots
+    // dangles into the freed entry. FreeMappingSnapshot then reads it when the
+    // snapshot arrays are destroyed at function exit. Compiled out in release.
+#ifndef NDEBUG
+    if (FailPoint::GetInstance().ShouldFail("GcForceEvictRoot"))
+    {
+        shard->IndexManager()->RootMetaManager()->ForceEvictForTest(tbl_ident_);
+    }
+#endif
 
     // Check if we're in cloud mode or local mode
     if (eloq_store->Mode() == StoreMode::Cloud)
@@ -1015,6 +1049,18 @@ void WriteTask::TriggerFileGC() const
 KvError WriteTask::TriggerLocalFileGC() const
 {
     assert(Options()->data_append_mode);
+
+    // Pin the RootMeta entry across the whole GC so it cannot be evicted (and
+    // freed) while snapshot_array holds MappingSnapshot::Refs into it; see the
+    // rationale in TriggerFileGC. Declared before snapshot_array so it outlives
+    // that array's destruction. A NotFound entry has no snapshots, so the
+    // handle is a no-op and GC still runs with empty retained sets.
+    auto [root_handle, find_err] = shard->IndexManager()->FindRoot(tbl_ident_);
+    if (find_err != KvError::NoError && find_err != KvError::NotFound)
+    {
+        return find_err;
+    }
+
     RetainedFiles retained_files;
     std::vector<MappingSnapshot::Ref> snapshot_array;
     KvError build_err = BuildRetainedFiles(
