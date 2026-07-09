@@ -424,49 +424,34 @@ void PageManager::UpdateRoot(const TableIdent &tbl_ident, CowRootMeta new_meta)
     root_meta_mgr_.EvictIfNeeded();
 }
 
-KvError PageManager::InstallEmptySnapshot(const TableIdent &tbl_ident,
-                                          CowRootMeta &cow_meta)
+void PageManager::InstallEmptyRoot(const TableIdent &tbl_ident,
+                                   CowRootMeta &cow_meta)
 {
+    // Reset the partition to an empty root through the COW UpdateRoot path so
+    // it is safe against concurrent readers: a fresh empty mapper replaces the
+    // old one (old snapshot chained + ref-counted, so an in-flight read keeps
+    // a valid mapping and compression until it releases), rather than nulling
+    // RootMeta fields in place. The caller has already removed the manifest,
+    // so no manifest is written (partition absent, not empty-but-present).
     auto [entry, inserted] = RootMetaManager()->GetOrCreate(tbl_ident);
     static_cast<void>(inserted);
     RootMeta &meta = entry->meta_;
-    auto mapper = std::make_unique<PageMapper>(this, &entry->tbl_id_);
 
     cow_meta = CowRootMeta();
     cow_meta.root_id_ = MaxPageId;
     cow_meta.ttl_root_id_ = MaxPageId;
-    cow_meta.mapper_ = std::move(mapper);
+    cow_meta.mapper_ = std::make_unique<PageMapper>(this, &entry->tbl_id_);
     cow_meta.next_expire_ts_ = 0;
     cow_meta.compression_ = std::make_shared<compression::DictCompression>();
+    cow_meta.manifest_size_ = 0;
+    cow_meta.first_unflushed_fp_id_ =
+        cow_meta.mapper_->FilePgAllocator()->MaxFilePageId();
 
-    BranchManifestMetadata branch_metadata;
-    branch_metadata.branch_name = IoMgr()->GetActiveBranch();
-    branch_metadata.term = IoMgr()->ProcessTerm();
-    branch_metadata.file_ranges = {};
-
-    ManifestBuilder manifest_builder;
-    FilePageId max_fp_id = cow_meta.mapper_->FilePgAllocator()->MaxFilePageId();
-    std::string_view snapshot =
-        manifest_builder.Snapshot(cow_meta.root_id_,
-                                  cow_meta.ttl_root_id_,
-                                  cow_meta.mapper_->GetMapping(),
-                                  max_fp_id,
-                                  {},
-                                  branch_metadata);
-    // Use the base local manifest rewrite path here. The cloud override also
-    // uploads the manifest, but an empty snapshot should only replace local
-    // state for reopen/cleanup.
-    auto *io_mgr = static_cast<IouringMgr *>(IoMgr());
-    KvError err = io_mgr->IouringMgr::SwitchManifest(tbl_ident, snapshot);
-    CHECK_KV_ERR(err);
     auto it = meta.mapping_snapshots_.insert(cow_meta.mapper_->GetMapping());
     CHECK(it.second);
-    cow_meta.manifest_size_ = snapshot.size();
-    cow_meta.first_unflushed_fp_id_ = max_fp_id;
 
     UpdateRoot(tbl_ident, std::move(cow_meta));
     IoMgr()->SetBranchFileMapping(entry->tbl_id_, {});
-    return KvError::NoError;
 }
 
 KvError PageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,

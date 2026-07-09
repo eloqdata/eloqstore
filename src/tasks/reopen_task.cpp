@@ -65,8 +65,14 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
                              sync_err == KvError::ResourceMissing;
     if (clear_local_state)
     {
-        // Remote partition no longer exists: delete local manifest and
-        // clear in-memory state instead of writing an empty snapshot.
+        // Remote partition no longer exists: delete the local manifest and
+        // reset in-memory state to an empty root. Reopen is NOT serialized
+        // against reads, so the reset goes through the COW UpdateRoot path
+        // (InstallEmptyRoot) rather than mutating RootMeta in place — an
+        // in-place reset would null mapper_/compression_ that a concurrent
+        // read still dereferences after an IO yield. write_manifest is false
+        // because DropManifest already removed it (partition absent, not
+        // empty-but-present).
         err = shard->IoManager()->DropManifest(tbl_id);
         if (err != KvError::NoError)
         {
@@ -75,23 +81,7 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
                        << static_cast<uint32_t>(err);
             return err;
         }
-        RootMetaMgr *root_meta_mgr = shard->IndexManager()->RootMetaManager();
-        auto *entry = root_meta_mgr->Find(tbl_id);
-        if (entry != nullptr)
-        {
-            RootMeta &meta = entry->meta_;
-            meta.root_id_ = MaxPageId;
-            meta.ttl_root_id_ = MaxPageId;
-            meta.manifest_size_ = 0;
-            meta.next_expire_ts_ = 0;
-            meta.mapper_.reset();
-            meta.mapping_snapshots_.clear();
-            meta.compression_.reset();
-            root_meta_mgr->UpdateBytes(entry, 0);
-        }
-        cow_meta_ = CowRootMeta();
-        cow_meta_.root_id_ = MaxPageId;
-        cow_meta_.ttl_root_id_ = MaxPageId;
+        shard->IndexManager()->InstallEmptyRoot(tbl_id, cow_meta_);
     }
     else
     {

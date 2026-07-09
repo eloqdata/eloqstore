@@ -67,8 +67,10 @@ public:
                                     CowRootMeta &cow_meta,
                                     std::string_view reopen_tag,
                                     bool &cleared_local_state);
-    KvError InstallEmptySnapshot(const TableIdent &tbl_ident,
-                                 CowRootMeta &cow_meta);
+    // Reset the partition to an empty root through the COW UpdateRoot path
+    // (safe against concurrent readers). The caller must have already removed
+    // the manifest; no manifest is written.
+    void InstallEmptyRoot(const TableIdent &tbl_ident, CowRootMeta &cow_meta);
 
     void FreeMappingSnapshot(MappingSnapshot *mapping);
 
