@@ -2727,14 +2727,17 @@ void KvRequest::SetDone(KvError err)
         callback(this);
     }
 #else
-    done_.store(true, std::memory_order_release);
+    // Publishing done_ lets a sync Wait()er return and free this request, so
+    // read callback_ before the store, not after.
     if (callback_)
     {
         auto callback = std::move(callback_);
+        done_.store(true, std::memory_order_release);
         callback(this);
     }
     else
     {
+        done_.store(true, std::memory_order_release);
         done_.notify_one();
     }
 #endif
