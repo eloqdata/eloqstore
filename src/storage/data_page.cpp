@@ -249,9 +249,11 @@ bool DataPageIter::SeekFloor(std::string_view search_key)
     std::string key;
     std::string_view value = {};
     bool overflow = false;
+    bool large_value = false;
     compression::CompressionType compression_kind =
         compression::CompressionType::None;
     uint64_t timestamp = 0;
+    uint64_t expire_ts = 0;
 
     assert(ceil_point <= restart_num_);
     uint16_t limit =
@@ -269,14 +271,21 @@ bool DataPageIter::SeekFloor(std::string_view search_key)
         key = Key();
         value = Value();
         overflow = IsOverflow();
+        large_value = IsLargeValue();
         timestamp = Timestamp();
+        expire_ts = ExpireTs();
         compression_kind = compression_type_;
     }
+    // Restore every field to the floor entry: the loop's last ParseNextKey
+    // parsed the overshoot entry, so any field not snapshotted here would
+    // wrongly carry the overshoot's value.
     curr_offset_ = last_offset;
     key_ = std::move(key);
     value_ = value;
     overflow_ = overflow;
+    large_value_ = large_value;
     timestamp_ = timestamp;
+    expire_ts_ = expire_ts;
     compression_type_ = compression_kind;
     return true;
 }
