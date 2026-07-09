@@ -149,6 +149,42 @@ TEST_CASE("EloqStore ValidateOptions validates all parameters", "[eloq_store]")
     CleanupTestDir(test_dir);
 }
 
+// Audit finding rank 15: in-file byte offsets are computed as uint32
+// (ConvFilePageId / ConvFileSegmentId), so a data/segment file may span at
+// most 4 GiB. ValidateOptions must reject configs whose file size exceeds that,
+// otherwise offsets wrap onto earlier pages and silently corrupt data.
+TEST_CASE("EloqStore ValidateOptions rejects >4GiB data/segment files",
+          "[eloq_store]")
+{
+    auto test_dir = CreateTestDir("_validate_file_size");
+    auto options = CreateValidOptions(test_dir);
+
+    // Boundary: data_page_size << pages_per_file_shift == 4 GiB is allowed
+    // (the largest in-file offset is 4 GiB - data_page_size, which fits
+    // uint32).
+    options.data_page_size = 4 * 1024;  // 2^12
+    options.pages_per_file_shift = 20;  // 2^12 << 20 == 2^32 == 4 GiB
+    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == true);
+
+    // Just over 4 GiB -> reject.
+    options.pages_per_file_shift = 21;  // 8 GiB
+    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
+    options = CreateValidOptions(test_dir);
+
+    // Same limit reached via a larger page size.
+    options.data_page_size = 32 * 1024;  // 2^15
+    options.pages_per_file_shift = 18;   // 2^15 << 18 == 2^33 == 8 GiB
+    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
+    options = CreateValidOptions(test_dir);
+
+    // Segment file over 4 GiB -> reject.
+    options.segment_size = 256 * 1024;     // 2^18
+    options.segments_per_file_shift = 15;  // 2^18 << 15 == 2^33 == 8 GiB
+    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
+
+    CleanupTestDir(test_dir);
+}
+
 TEST_CASE(
     "EloqStore ValidateOptions rejects bad pinned-memory / GC-pool configs",
     "[eloq_store]")
