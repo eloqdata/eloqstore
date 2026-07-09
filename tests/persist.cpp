@@ -557,3 +557,49 @@ TEST_CASE("append mode survives compression toggles across restarts",
     store.reset();
     CleanupStore(base_opts);
 }
+
+// Audit finding rank 13: a failed index-page (MemCachedPage) write must not
+// CHECK-abort the process. WritePage() takes a temporary IO pin on top of the
+// submitting task's handle, and the completion runs from the shard loop while
+// the WriteTask coroutine is suspended in WaitWrite holding that handle (via
+// FlushIndexPage). The error branch of WritePageCallback used to
+// CHECK(!IsPinned()) on the caller's legitimate pin -> SIGABRT. It must instead
+// surface the error to the client and leave the store usable.
+TEST_CASE("failed index-page write surfaces error without aborting",
+          "[persist][writepage_fail]")
+{
+    eloqstore::KvOptions opts = default_opts;
+    // Force WaitWrite() after every submitted page so the failed completion is
+    // driven while the caller still holds its pin.
+    opts.max_write_batch_pages = 1;
+    eloqstore::EloqStore *store = InitStore(opts);
+    eloqstore::TableIdent tbl_id = {"writepage-fail", 0};
+
+    // Enough keys to split into several leaves => at least one internal index
+    // page flushed through FinishIndexPage/FlushIndexPage.
+    std::vector<eloqstore::WriteDataEntry> entries;
+    entries.reserve(4000);
+    for (uint64_t i = 0; i < 4000; ++i)
+    {
+        entries.emplace_back(
+            Key(i), std::string(24, 'v'), 1, eloqstore::WriteOp::Upsert);
+    }
+    eloqstore::BatchWriteRequest req;
+    req.SetArgs(tbl_id, std::move(entries));
+
+    eloqstore::FailPoint::GetInstance().ArmOnce("IndexPageWriteFail");
+    store->ExecSync(&req);  // must not SIGABRT
+    REQUIRE(req.Error() != eloqstore::KvError::NoError);
+
+    // The store is still usable after the injected disk error.
+    {
+        std::vector<eloqstore::WriteDataEntry> ok_entries;
+        ok_entries.emplace_back(
+            Key(0), std::string("ok"), 2, eloqstore::WriteOp::Upsert);
+        eloqstore::BatchWriteRequest ok_req;
+        ok_req.SetArgs(eloqstore::TableIdent{"writepage-fail", 1},
+                       std::move(ok_entries));
+        store->ExecSync(&ok_req);
+        REQUIRE(ok_req.Error() == eloqstore::KvError::NoError);
+    }
+}
