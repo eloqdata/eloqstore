@@ -727,7 +727,14 @@ std::pair<MemCachedPage::Handle, KvError> PageManager::FindPage(
 void PageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
 {
     const TableIdent &tbl = *mapping->tbl_ident_;
-    auto *entry = root_meta_mgr_.Find(tbl);
+    // FindNoErase, not Find: ~MappingSnapshot (and hence this call) can run
+    // from inside RootMetaMgr::Erase() -> ~RootMeta -> ~PageMapper when a
+    // dropped table's entry is being destroyed (e.g. a large-value table whose
+    // segment PageMapper holds the sole ref to its segment mapping snapshot).
+    // Find() would run ProcessPendingErase() re-entrantly, which clears the
+    // pending_erase_ vector the outer ProcessPendingErase() is still iterating
+    // -> use-after-free. A plain lookup avoids re-entering the erase logic.
+    auto *entry = root_meta_mgr_.FindNoErase(tbl);
     if (entry == nullptr)
     {
         return;
