@@ -254,8 +254,8 @@ KvError BatchWriteTask::Apply()
     // directly go to low priority queue and wait for scheduling
     YieldToLowPQ();
     KvError err = MakeCowRoot();
-    cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     CHECK_KV_ERR(err);
+    cow_meta_.compression_->SampleAndBuildDictionaryIfNeeded(data_batch_);
     err = ApplyBatch(cow_meta_.root_id_, true);
     if (err != KvError::NoError)
     {
