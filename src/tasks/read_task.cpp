@@ -43,6 +43,13 @@ KvError LocateAndProcess(const TableIdent &tbl_id,
         return KvError::NotFound;
     }
     auto mapping = meta->mapper_->GetMappingSnapshot();
+    // Capture the compression dictionary alongside the mapping snapshot, as a
+    // shared_ptr the read owns for its whole duration. A concurrent reopen
+    // (clear or install-new-snapshot) replaces meta->compression_ with a
+    // different object during our IO yields; without holding our own
+    // reference the read would decode this snapshot's data with the wrong
+    // (or freed) dictionary.
+    auto compression = meta->compression_;
     MappingSnapshot::Ref seg_mapping_ref{nullptr};
     if (meta->segment_mapper_ != nullptr)
     {
@@ -64,7 +71,7 @@ KvError LocateAndProcess(const TableIdent &tbl_id,
     }
 
     KvError fetch_err =
-        handler(meta, mapping.Get(), seg_mapping_ref.Get(), iter);
+        handler(compression.get(), mapping.Get(), seg_mapping_ref.Get(), iter);
     if (fetch_err != KvError::NoError)
     {
         return fetch_err;
@@ -88,17 +95,13 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
         search_key,
         timestamp,
         expire_ts,
-        [&](RootMeta *meta,
+        [&](compression::DictCompression *compression,
             MappingSnapshot *mapping,
             MappingSnapshot *seg_mapping,
             DataPageIter &iter) -> KvError
         {
-            KvError err = ResolveValueOrMetadata(tbl_id,
-                                                 mapping,
-                                                 iter,
-                                                 value,
-                                                 meta->compression_.get(),
-                                                 extract_metadata);
+            KvError err = ResolveValueOrMetadata(
+                tbl_id, mapping, iter, value, compression, extract_metadata);
             if (err != KvError::NoError)
             {
                 return err;
@@ -131,13 +134,13 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
         search_key,
         timestamp,
         expire_ts,
-        [&](RootMeta *meta,
+        [&](compression::DictCompression *compression,
             MappingSnapshot *mapping,
             MappingSnapshot *seg_mapping,
             DataPageIter &iter) -> KvError
         {
             KvError err = ResolveValueOrMetadata(
-                tbl_id, mapping, iter, value, meta->compression_.get());
+                tbl_id, mapping, iter, value, compression);
             if (err != KvError::NoError)
             {
                 return err;
@@ -167,7 +170,7 @@ KvError ReadTask::Read(const TableIdent &tbl_id,
         search_key,
         timestamp,
         expire_ts,
-        [&](RootMeta * /*meta*/,
+        [&](compression::DictCompression * /*compression*/,
             MappingSnapshot * /*mapping*/,
             MappingSnapshot *seg_mapping,
             DataPageIter &iter) -> KvError
@@ -203,6 +206,10 @@ KvError ReadTask::Floor(const TableIdent &tbl_id,
         return KvError::NotFound;
     }
     auto mapping = meta->mapper_->GetMappingSnapshot();
+    // See Get: own a reference to the compression dictionary for the whole
+    // read so a concurrent reopen replacing meta->compression_ cannot make us
+    // decode with the wrong dictionary.
+    auto compression = meta->compression_;
     MappingSnapshot::Ref seg_mapping_ref{nullptr};
     if (meta->segment_mapper_ != nullptr)
     {
@@ -233,7 +240,7 @@ KvError ReadTask::Floor(const TableIdent &tbl_id,
     }
     floor_key = iter.Key();
     KvError fetch_err = ResolveValueOrMetadata(
-        tbl_id, mapping.Get(), iter, value, meta->compression_.get());
+        tbl_id, mapping.Get(), iter, value, compression.get());
     CHECK_KV_ERR(fetch_err);
     if (iter.IsLargeValue() && large_value != nullptr)
     {
