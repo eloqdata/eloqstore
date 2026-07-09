@@ -23,7 +23,7 @@ public:
     void Reset(const TableIdent &tbl_id) override;
     void Abort() override;
 
-    bool SetBatch(std::span<WriteDataEntry> entries);
+    void SetBatch(std::span<WriteDataEntry> entries);
     KvError Apply();
 
     KvError Truncate(std::string_view trunc_pos);

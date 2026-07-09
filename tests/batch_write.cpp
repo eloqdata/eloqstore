@@ -414,3 +414,36 @@ TEST_CASE("batch write task pool cleaned after abort", "[batch_write]")
 
     REQUIRE(saw_abort);
 }
+
+// An empty BatchWriteRequest is a no-op. It must complete (not hang) and must
+// not wedge the partition's write queue: dispatching an empty batch used to
+// skip StartTask while leaving the per-table queue running_, so the request
+// never completed and every later write to the same partition stalled behind
+// it forever.
+TEST_CASE("empty batch write completes and leaves the partition writable",
+          "[batch_write]")
+{
+    eloqstore::EloqStore *store = InitStore(default_opts);
+    eloqstore::TableIdent tbl_id("empty_batch", 0);
+
+    // The empty batch itself must return (before the fix ExecSync hung here).
+    eloqstore::BatchWriteRequest empty_req;
+    empty_req.SetArgs(tbl_id, std::vector<eloqstore::WriteDataEntry>{});
+    store->ExecSync(&empty_req);
+    REQUIRE(empty_req.Error() == eloqstore::KvError::NoError);
+
+    // A subsequent write to the same partition must still complete (the queue
+    // was not left wedged) and be readable back.
+    eloqstore::BatchWriteRequest next_req;
+    std::vector<eloqstore::WriteDataEntry> entries;
+    entries.emplace_back("k", "v", 1, eloqstore::WriteOp::Upsert);
+    next_req.SetArgs(tbl_id, std::move(entries));
+    store->ExecSync(&next_req);
+    REQUIRE(next_req.Error() == eloqstore::KvError::NoError);
+
+    eloqstore::ReadRequest read;
+    read.SetArgs(tbl_id, "k");
+    store->ExecSync(&read);
+    REQUIRE(read.Error() == eloqstore::KvError::NoError);
+    REQUIRE(read.value_ == "v");
+}

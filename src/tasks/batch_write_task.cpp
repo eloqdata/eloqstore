@@ -198,7 +198,7 @@ void BatchWriteTask::Reset(const TableIdent &tbl_id)
     }
 }
 
-bool BatchWriteTask::SetBatch(std::span<WriteDataEntry> entries)
+void BatchWriteTask::SetBatch(std::span<WriteDataEntry> entries)
 {
 #ifndef NDEBUG
     const Comparator *cmp = Comp();
@@ -226,7 +226,6 @@ bool BatchWriteTask::SetBatch(std::span<WriteDataEntry> entries)
 #endif
 
     data_batch_ = entries;
-    return true;
 }
 
 void BatchWriteTask::Abort()

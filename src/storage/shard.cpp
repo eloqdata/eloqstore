@@ -747,14 +747,11 @@ bool Shard::ProcessReq(KvRequest *req)
         }
         auto write_req = static_cast<BatchWriteRequest *>(req);
         task->Reset(req->TableId());
-        if (!write_req->batch_.empty())
-        {
-            if (!task->SetBatch(write_req->batch_))
-            {
-                return false;
-            }
-            StartTask(task, req, [task]() { return task->Apply(); });
-        }
+        task->SetBatch(write_req->batch_);
+        // An empty batch runs as a no-op Apply and completes normally.
+        // Skipping StartTask here instead would leave running_ set and the
+        // request never completed, wedging the partition's write queue.
+        StartTask(task, req, [task]() { return task->Apply(); });
         return true;
     }
     case RequestType::Truncate:
