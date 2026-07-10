@@ -61,8 +61,23 @@ pkg_check_modules(LIBZMQ REQUIRED libzmq)
 find_package(jsoncpp REQUIRED)
 find_package(CURL REQUIRED)
 find_library(ZSTD_LIBRARY zstd)
-find_package(AWSSDK REQUIRED COMPONENTS s3)
 find_package(OpenSSL REQUIRED)
+
+include(FetchContent)
+
+# aws-sdk-cpp core (SigV4 signing, credentials, presigned URLs), built in-tree
+# as static libs instead of a system-wide install. Only the core component is
+# needed; the SDK's own tests are skipped.
+set(BUILD_ONLY "core" CACHE STRING "aws-sdk-cpp components to build")
+set(ENABLE_TESTING OFF CACHE BOOL "aws-sdk-cpp tests")
+set(FORCE_SHARED_CRT OFF CACHE BOOL "aws-sdk-cpp shared CRT")
+# FORCE: aws-sdk-cpp overwrites a plain variable with its own ON cache default.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "build static libs" FORCE)
+FetchContent_Declare(awssdk
+        GIT_REPOSITORY https://github.com/aws/aws-sdk-cpp.git
+        GIT_TAG 1.11.446
+        GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(awssdk)
 
 find_path(URING_INCLUDE_PATH NAMES liburing.h)
 find_library(URING_LIB NAMES uring)
@@ -148,7 +163,7 @@ set_target_properties(eloqstore PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(eloqstore PUBLIC ${ELOQ_STORE_INCLUDE})
 target_include_directories(eloqstore PRIVATE ${LIBZMQ_INCLUDE_DIRS})
-target_link_libraries(eloqstore PRIVATE ${URING_LIB} glog::glog absl::flat_hash_map ${BOOST_CONTEXT_TARGET} ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} ${AWSSDK_LINK_LIBRARIES} OpenSSL::Crypto ${LIBZMQ_LIBRARIES})
+target_link_libraries(eloqstore PRIVATE ${URING_LIB} glog::glog absl::flat_hash_map ${BOOST_CONTEXT_TARGET} ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} aws-cpp-sdk-core OpenSSL::Crypto ${LIBZMQ_LIBRARIES})
 
 set(ELOQ_STORE_CAPI_INCLUDE
         ${ELOQ_STORE_INCLUDE}
@@ -190,6 +205,12 @@ endif ()
 
 option(WITH_UNIT_TESTS "build with unit tests" ON)
 if (WITH_UNIT_TESTS)
+    FetchContent_Declare(Catch2
+            GIT_REPOSITORY https://github.com/catchorg/Catch2.git
+            GIT_TAG v3.3.2
+            GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(Catch2)
+    list(APPEND CMAKE_MODULE_PATH ${catch2_SOURCE_DIR}/extras)
     add_subdirectory(tests)
 endif ()
 

@@ -8,7 +8,6 @@
 #include <aws/core/http/Scheme.h>
 #include <aws/core/http/standard/StandardHttpRequest.h>
 #include <aws/core/utils/memory/stl/AWSStringStream.h>
-#include <aws/s3/S3Client.h>
 #include <curl/curl.h>
 #include <glog/logging.h>
 #include <jsoncpp/json/json.h>
@@ -975,11 +974,6 @@ public:
     {
         credentials_provider_ = AwsCloudBackend::BuildCredentialsProvider();
         const auto &client_config = GetClientConfig();
-        s3_client_ = std::make_unique<Aws::S3::S3Client>(
-            credentials_provider_,
-            client_config,
-            Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-            AwsCloudBackend::UseVirtualAddressing());
         signer_ = std::make_unique<Aws::Client::AWSAuthV4Signer>(
             credentials_provider_,
             "s3",
@@ -1004,9 +998,28 @@ public:
         request->url.clear();
         request->headers.clear();
         request->body.clear();
-        Aws::Http::HttpMethod aws_method = ToAwsMethod(method);
-        Aws::String url = s3_client_->GeneratePresignedUrl(
-            cloud_path_.bucket, key, aws_method, 3600);
+        if (!signer_)
+        {
+            return false;
+        }
+        std::string target_url = ComposeObjectUrl(key);
+        if (target_url.empty())
+        {
+            return false;
+        }
+        Aws::Http::URI uri(target_url.c_str());
+        auto object_request =
+            Aws::MakeShared<Aws::Http::Standard::StandardHttpRequest>(
+                "eloqstore", uri, ToAwsMethod(method));
+        if (!object_request)
+        {
+            return false;
+        }
+        if (!signer_->PresignRequest(*object_request, 3600))
+        {
+            return false;
+        }
+        Aws::String url = object_request->GetUri().GetURIString();
         request->url.assign(url.c_str(), url.size());
         return !request->url.empty();
     }
@@ -1318,7 +1331,6 @@ protected:
     const KvOptions *options_;
     CloudPathInfo cloud_path_;
     std::shared_ptr<Aws::Auth::AWSCredentialsProvider> credentials_provider_;
-    std::unique_ptr<Aws::S3::S3Client> s3_client_;
     std::unique_ptr<Aws::Client::AWSAuthV4Signer> signer_;
     std::string bucket_url_;
 

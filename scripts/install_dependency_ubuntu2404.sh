@@ -80,34 +80,9 @@ sudo cp -r ./output/include/* /usr/include/
 sudo cp ./output/lib/* /usr/lib/
 cd ../../ && rm -rf brpc
 
-# Install AWSSDK
-git clone --recurse-submodules https://github.com/aws/aws-sdk-cpp.git aws
-cd aws
-git checkout tags/1.11.446
-mkdir bld && cd bld
-cmake .. \
-    -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-    -DCMAKE_INSTALL_PREFIX=./output/ \
-    -DENABLE_TESTING=OFF \
-    -DBUILD_SHARED_LIBS=ON \
-    -DFORCE_SHARED_CRT=OFF \
-    -DBUILD_ONLY="s3"
-cmake --build . --config RelWithDebInfo -j$(nproc)
-cmake --install . --config RelWithDebInfo
-sudo cp -r ./output/include/* /usr/include/
-sudo cp -r ./output/lib/* /usr/lib/
-cd ../../ && rm -rf aws
-
-# Install Catch2
-git clone -b v3.3.2 https://github.com/catchorg/Catch2.git
-cd Catch2 && mkdir bld && cd bld
-cmake .. \
-    -DCMAKE_INSTALL_PREFIX=/usr/ \
-    -DCATCH_BUILD_EXAMPLES=OFF \
-    -DBUILD_TESTING=OFF
-cmake --build . -j4
-sudo cmake --install .
-cd ../../ && rm -rf Catch2
+# aws-sdk-cpp (core) and Catch2 are no longer installed system-wide: the main
+# CMakeLists.txt fetches and builds them in-tree via FetchContent at configure
+# time.
 
 sudo ldconfig
 

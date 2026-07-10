@@ -1,7 +1,5 @@
 project(CatchUnitTests)
 
-find_package(Catch2 REQUIRED)
-
 set(UTEST_DIR ${CMAKE_SOURCE_DIR}/tests)
 set(UTEST_INCLUDE
     ${CMAKE_SOURCE_DIR}/include
@@ -64,7 +62,7 @@ include(Catch)
 foreach( name ${STANDARD_TARGETS} )
    add_executable( ${name} ${UTEST_DIR}/${name}.cpp common.cpp)
    target_include_directories(${name} PUBLIC ${UTEST_INCLUDE} ${INCLUDE_DIR})
-   target_link_libraries( ${name} PRIVATE Catch2::Catch2WithMain test_util)
+   target_link_libraries( ${name} PRIVATE Catch2::Catch2WithMain test_util aws-cpp-sdk-core)
    catch_discover_tests(${name} PROPERTIES TIMEOUT 600)
 endforeach()
 
@@ -73,7 +71,7 @@ foreach( name ${LARGE_VALUE_TARGETS} )
                             ${UTEST_DIR}/large_value_main.cpp
                             common.cpp)
    target_include_directories(${name} PUBLIC ${UTEST_INCLUDE} ${INCLUDE_DIR})
-   target_link_libraries( ${name} PRIVATE Catch2::Catch2 test_util)
+   target_link_libraries( ${name} PRIVATE Catch2::Catch2 test_util aws-cpp-sdk-core)
    if( name STREQUAL "large_value_benchmark" )
       catch_discover_tests(${name} PROPERTIES TIMEOUT 3600)
    else()

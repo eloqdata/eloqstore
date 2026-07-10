@@ -80,6 +80,22 @@ endif ()
 
 find_package(Threads REQUIRED)
 
+include(FetchContent)
+
+# aws-sdk-cpp core (SigV4 signing, credentials, presigned URLs), built in-tree
+# as static libs instead of a system-wide install. Only the core component is
+# needed; the SDK's own tests are skipped.
+set(BUILD_ONLY "core" CACHE STRING "aws-sdk-cpp components to build")
+set(ENABLE_TESTING OFF CACHE BOOL "aws-sdk-cpp tests")
+set(FORCE_SHARED_CRT OFF CACHE BOOL "aws-sdk-cpp shared CRT")
+# FORCE: aws-sdk-cpp overwrites a plain variable with its own ON cache default.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "build static libs" FORCE)
+FetchContent_Declare(awssdk
+        GIT_REPOSITORY https://github.com/aws/aws-sdk-cpp.git
+        GIT_TAG 1.11.446
+        GIT_SHALLOW TRUE)
+FetchContent_MakeAvailable(awssdk)
+
 # Handle dependencies based on static linking option
 if (STATIC_ALL_DEPS)
     # Try to find static libraries first
@@ -298,46 +314,6 @@ if (STATIC_ALL_DEPS)
         message(FATAL_ERROR "Fail to find liburing")
     endif()
     
-    # For AWS SDK, we'll need to handle it specially
-    # Try to find static libraries
-    find_library(AWSSDK_S3_LIB 
-        NAMES libaws-cpp-sdk-s3.a aws-cpp-sdk-s3
-        PATHS /usr/lib /usr/local/lib
-        NO_DEFAULT_PATH
-    )
-    find_library(AWSSDK_CORE_LIB 
-        NAMES libaws-cpp-sdk-core.a aws-cpp-sdk-core
-        PATHS /usr/lib /usr/local/lib
-        NO_DEFAULT_PATH
-    )
-    if (AWSSDK_S3_LIB AND AWSSDK_CORE_LIB)
-        set(AWSSDK_FOUND TRUE)
-        set(AWSSDK_LINK_LIBRARIES ${AWSSDK_S3_LIB} ${AWSSDK_CORE_LIB})
-        # Add other AWS SDK dependencies
-        find_library(AWS_C_EVENT_STREAM_LIB aws-c-event-stream PATHS /usr/lib /usr/local/lib NO_DEFAULT_PATH)
-        find_library(AWS_CHECKSUMS_LIB aws-checksums PATHS /usr/lib /usr/local/lib NO_DEFAULT_PATH)
-        find_library(AWS_C_AUTH_LIB aws-c-auth PATHS /usr/lib /usr/local/lib NO_DEFAULT_PATH)
-        find_library(AWS_C_CAL_LIB aws-c-cal PATHS /usr/lib /usr/local/lib NO_DEFAULT_PATH)
-        find_library(AWS_C_COMMON_LIB aws-c-common PATHS /usr/lib /usr/local/lib NO_DEFAULT_PATH)
-        if (AWS_C_EVENT_STREAM_LIB)
-            list(APPEND AWSSDK_LINK_LIBRARIES ${AWS_C_EVENT_STREAM_LIB})
-        endif()
-        if (AWS_CHECKSUMS_LIB)
-            list(APPEND AWSSDK_LINK_LIBRARIES ${AWS_CHECKSUMS_LIB})
-        endif()
-        if (AWS_C_AUTH_LIB)
-            list(APPEND AWSSDK_LINK_LIBRARIES ${AWS_C_AUTH_LIB})
-        endif()
-        if (AWS_C_CAL_LIB)
-            list(APPEND AWSSDK_LINK_LIBRARIES ${AWS_C_CAL_LIB})
-        endif()
-        if (AWS_C_COMMON_LIB)
-            list(APPEND AWSSDK_LINK_LIBRARIES ${AWS_C_COMMON_LIB})
-        endif()
-    else()
-        find_package(AWSSDK REQUIRED COMPONENTS s3)
-    endif()
-    
     # Boost context
     find_library(BOOST_CONTEXT_LIBRARY 
         NAMES libboost_context.a boost_context
@@ -355,8 +331,7 @@ else()
     find_package(jsoncpp REQUIRED)
     find_package(CURL REQUIRED)
     find_library(ZSTD_LIBRARY zstd)
-    find_package(AWSSDK REQUIRED COMPONENTS s3)
-    
+
     find_path(URING_INCLUDE_PATH NAMES liburing.h)
     find_library(URING_LIB NAMES uring)
     if ((NOT URING_INCLUDE_PATH) OR (NOT URING_LIB))
@@ -540,7 +515,7 @@ if (BUILD_FOR_RUST AND STATIC_ALL_DEPS)
         ${URING_LIB}
         absl::flat_hash_map
         ${BOOST_CONTEXT_TARGET}
-        ${AWSSDK_LINK_LIBRARIES}
+        aws-cpp-sdk-core
         Threads::Threads
     )
     
@@ -588,7 +563,7 @@ if (BUILD_FOR_RUST AND STATIC_ALL_DEPS)
         ${CURL_LIBRARIES}
         ${JSONCPP_TARGET}
         ${ZSTD_LIBRARY}
-        ${AWSSDK_LINK_LIBRARIES}
+        aws-cpp-sdk-core
     )
 else()
     add_library(eloqstore STATIC ${ELOQ_STORE_SOURCES} ${INI_SOURCES})
@@ -601,7 +576,7 @@ else()
         ${CURL_LIBRARIES}
         jsoncpp_lib
         ${ZSTD_LIBRARY}
-        ${AWSSDK_LINK_LIBRARIES}
+        aws-cpp-sdk-core
     )
 endif()
 

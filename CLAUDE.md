@@ -23,7 +23,7 @@ cmake --build build -j$(nproc)
 
 Useful CMake options: `WITH_ASAN=ON` (needs `libboost_context-asan`), `WITH_COVERAGE=ON`, `ELOQ_MODULE_ENABLED=ON` (embedding/module mode), `WITH_UNIT_TESTS`/`WITH_EXAMPLE`/`WITH_DB_STRESS`/`WITH_BENCHMARK` (all default ON). Compile commands are exported to `build/` and `.clangd` points there.
 
-CMake configure runs `git submodule update --init --recursive` automatically (submodules live in `external/`).
+CMake configure runs `git submodule update --init --recursive` automatically (submodules live in `external/`). It also downloads and builds aws-sdk-cpp (core component only, static) and Catch2 in-tree via FetchContent — the first configure needs network access and takes a while; later configures reuse `build/_deps`.
 
 ## Tests
 

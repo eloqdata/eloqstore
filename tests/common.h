@@ -1,15 +1,16 @@
 #pragma once
 
 #include <aws/core/Aws.h>
-#include <aws/core/auth/AWSCredentials.h>
+#include <aws/core/auth/AWSCredentialsProvider.h>
 #include <aws/core/auth/AWSCredentialsProviderChain.h>
+#include <aws/core/auth/signer/AWSAuthV4Signer.h>
 #include <aws/core/client/ClientConfiguration.h>
-#include <aws/core/http/Scheme.h>
-#include <aws/s3/S3Client.h>
-#include <aws/s3/model/CopyObjectRequest.h>
-#include <aws/s3/model/CreateBucketRequest.h>
-#include <aws/s3/model/DeleteObjectRequest.h>
-#include <aws/s3/model/ListObjectsV2Request.h>
+#include <aws/core/http/HttpClient.h>
+#include <aws/core/http/HttpClientFactory.h>
+#include <aws/core/http/HttpResponse.h>
+#include <aws/core/http/URI.h>
+#include <aws/core/utils/stream/ResponseStream.h>
+#include <aws/core/utils/xml/XmlSerializer.h>
 #include <glog/logging.h>
 
 #include <algorithm>
@@ -22,8 +23,10 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "../include/common.h"
@@ -201,6 +204,7 @@ inline std::string AppendRemoteComponent(std::string base,
     return base;
 }
 
+// Minimal S3 REST client over signed plain HTTP; only needs aws-cpp-sdk-core.
 class S3TestClient
 {
 public:
@@ -221,19 +225,107 @@ public:
             LOG(FATAL) << "S3TestClient is process-global and was already "
                           "initialized with different settings";
         }
-        EnsureBucketCreated(ParseCloudPathSpec(opts.cloud_store_path).bucket,
-                            *shared_client);
         client_ = shared_client;
+        EnsureBucketCreated(ParseCloudPathSpec(opts.cloud_store_path).bucket);
     }
 
     ~S3TestClient() = default;
 
-    Aws::S3::S3Client &Client()
+    // Appends one page of keys to `keys` and object bytes to `total_size`;
+    // updates `continuation` (empty when the listing is exhausted).
+    bool ListObjectsPage(const std::string &bucket,
+                         const std::string &prefix,
+                         std::string &continuation,
+                         std::vector<std::string> &keys,
+                         uint64_t &total_size)
     {
-        return *client_;
+        Aws::Http::URI uri = MakeUri(bucket, "");
+        uri.AddQueryStringParameter("list-type", "2");
+        if (!prefix.empty())
+        {
+            uri.AddQueryStringParameter("prefix", prefix.c_str());
+        }
+        if (!continuation.empty())
+        {
+            uri.AddQueryStringParameter("continuation-token",
+                                        continuation.c_str());
+        }
+        auto response = Execute(Aws::Http::HttpMethod::HTTP_GET, uri);
+        if (!IsCode(response, {Aws::Http::HttpResponseCode::OK}))
+        {
+            LOG(ERROR) << "ListObjectsV2 failed: " << Describe(response);
+            return false;
+        }
+        auto doc = Aws::Utils::Xml::XmlDocument::CreateFromXmlStream(
+            response->GetResponseBody());
+        if (!doc.WasParseSuccessful())
+        {
+            LOG(ERROR) << "ListObjectsV2 returned unparsable XML: "
+                       << doc.GetErrorMessage();
+            return false;
+        }
+        Aws::Utils::Xml::XmlNode root = doc.GetRootElement();
+        for (Aws::Utils::Xml::XmlNode node = root.FirstChild("Contents");
+             !node.IsNull();
+             node = node.NextNode("Contents"))
+        {
+            Aws::Utils::Xml::XmlNode key_node = node.FirstChild("Key");
+            if (key_node.IsNull())
+            {
+                continue;
+            }
+            keys.emplace_back(key_node.GetText().c_str());
+            Aws::Utils::Xml::XmlNode size_node = node.FirstChild("Size");
+            if (!size_node.IsNull())
+            {
+                total_size +=
+                    std::strtoull(size_node.GetText().c_str(), nullptr, 10);
+            }
+        }
+        Aws::Utils::Xml::XmlNode next =
+            root.FirstChild("NextContinuationToken");
+        continuation = next.IsNull() ? "" : next.GetText().c_str();
+        return true;
+    }
+
+    bool DeleteObject(const std::string &bucket, const std::string &key)
+    {
+        auto response =
+            Execute(Aws::Http::HttpMethod::HTTP_DELETE, MakeUri(bucket, key));
+        if (!IsCode(response,
+                    {Aws::Http::HttpResponseCode::NO_CONTENT,
+                     Aws::Http::HttpResponseCode::OK}))
+        {
+            LOG(ERROR) << "DeleteObject failed for " << key << ": "
+                       << Describe(response);
+            return false;
+        }
+        return true;
+    }
+
+    bool CopyObject(const std::string &bucket,
+                    const std::string &src_key,
+                    const std::string &dst_key)
+    {
+        std::string copy_source = bucket + "/" + src_key;
+        auto response = Execute(Aws::Http::HttpMethod::HTTP_PUT,
+                                MakeUri(bucket, dst_key),
+                                copy_source.c_str());
+        if (!IsCode(response, {Aws::Http::HttpResponseCode::OK}))
+        {
+            LOG(ERROR) << "CopyObject failed: " << Describe(response);
+            return false;
+        }
+        return true;
     }
 
 private:
+    struct HttpContext
+    {
+        std::shared_ptr<Aws::Http::HttpClient> http_client;
+        std::shared_ptr<Aws::Client::AWSAuthV4Signer> signer;
+        std::string endpoint;
+    };
     struct ClientSettings
     {
         std::string endpoint;
@@ -266,51 +358,104 @@ private:
         return settings;
     }
 
-    static std::shared_ptr<Aws::S3::S3Client> BuildClient(
+    static std::shared_ptr<HttpContext> BuildClient(
         const ClientSettings &settings)
     {
         Aws::Client::ClientConfiguration config;
-        const std::string &endpoint = settings.endpoint;
-        if (!endpoint.empty())
-        {
-            config.endpointOverride = endpoint.c_str();
-            if (endpoint.rfind("https://", 0) == 0)
-            {
-                config.scheme = Aws::Http::Scheme::HTTPS;
-            }
-            else
-            {
-                config.scheme = Aws::Http::Scheme::HTTP;
-            }
-        }
         config.region = settings.region.c_str();
         config.verifySSL = settings.verify_ssl;
+        std::shared_ptr<Aws::Auth::AWSCredentialsProvider> provider;
         if (settings.auto_credentials)
         {
-            auto credentials_provider =
+            provider =
                 Aws::MakeShared<Aws::Auth::DefaultAWSCredentialsProviderChain>(
                     "eloqstore");
-            return std::make_shared<Aws::S3::S3Client>(
-                credentials_provider,
-                config,
-                Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
-                false);
         }
-        if (settings.requested_auto_credentials && !settings.secret_key.empty())
+        else
         {
-            LOG(INFO) << "cloud_secret_key is set; disabling auto credentials";
+            if (settings.requested_auto_credentials &&
+                !settings.secret_key.empty())
+            {
+                LOG(INFO)
+                    << "cloud_secret_key is set; disabling auto credentials";
+            }
+            provider = Aws::MakeShared<Aws::Auth::SimpleAWSCredentialsProvider>(
+                "eloqstore",
+                Aws::String(settings.access_key.c_str()),
+                Aws::String(settings.secret_key.c_str()));
         }
-        Aws::Auth::AWSCredentials credentials(settings.access_key,
-                                              settings.secret_key);
-        return std::make_shared<Aws::S3::S3Client>(
-            credentials,
-            config,
+        auto ctx = std::make_shared<HttpContext>();
+        ctx->http_client = Aws::Http::CreateHttpClient(config);
+        ctx->signer = std::make_shared<Aws::Client::AWSAuthV4Signer>(
+            provider,
+            "s3",
+            config.region,
             Aws::Client::AWSAuthV4Signer::PayloadSigningPolicy::Never,
             false);
+        ctx->endpoint = settings.endpoint;
+        return ctx;
     }
 
-    static void EnsureBucketCreated(const std::string &bucket,
-                                    Aws::S3::S3Client &client)
+    Aws::Http::URI MakeUri(const std::string &bucket,
+                           const std::string &key) const
+    {
+        Aws::Http::URI uri(client_->endpoint.c_str());
+        uri.AddPathSegment(bucket);
+        if (!key.empty())
+        {
+            uri.AddPathSegments(key);
+        }
+        return uri;
+    }
+
+    std::shared_ptr<Aws::Http::HttpResponse> Execute(
+        Aws::Http::HttpMethod method,
+        const Aws::Http::URI &uri,
+        const char *copy_source = nullptr)
+    {
+        auto request = Aws::Http::CreateHttpRequest(
+            uri,
+            method,
+            Aws::Utils::Stream::DefaultResponseStreamFactoryMethod);
+        if (copy_source != nullptr)
+        {
+            request->SetHeaderValue("x-amz-copy-source", copy_source);
+        }
+        if (!client_->signer->SignRequest(*request))
+        {
+            return nullptr;
+        }
+        return client_->http_client->MakeRequest(request);
+    }
+
+    static bool IsCode(
+        const std::shared_ptr<Aws::Http::HttpResponse> &response,
+        std::initializer_list<Aws::Http::HttpResponseCode> accepted)
+    {
+        if (!response)
+        {
+            return false;
+        }
+        Aws::Http::HttpResponseCode code = response->GetResponseCode();
+        return std::find(accepted.begin(), accepted.end(), code) !=
+               accepted.end();
+    }
+
+    static std::string Describe(
+        const std::shared_ptr<Aws::Http::HttpResponse> &response)
+    {
+        if (!response)
+        {
+            return "request could not be signed or sent";
+        }
+        std::ostringstream oss;
+        oss << "http status " << static_cast<int>(response->GetResponseCode())
+            << ": ";
+        oss << response->GetResponseBody().rdbuf();
+        return oss.str();
+    }
+
+    void EnsureBucketCreated(const std::string &bucket)
     {
         if (bucket.empty())
         {
@@ -328,17 +473,16 @@ private:
             return;
         }
 
-        Aws::S3::Model::CreateBucketRequest request;
-        request.SetBucket(bucket.c_str());
-        auto outcome = client.CreateBucket(request);
-        if (!outcome.IsSuccess())
+        auto response =
+            Execute(Aws::Http::HttpMethod::HTTP_PUT, MakeUri(bucket, ""));
+        if (!IsCode(response, {Aws::Http::HttpResponseCode::OK}))
         {
-            auto type = outcome.GetError().GetErrorType();
-            if (type != Aws::S3::S3Errors::BUCKET_ALREADY_EXISTS &&
-                type != Aws::S3::S3Errors::BUCKET_ALREADY_OWNED_BY_YOU)
+            std::string detail = Describe(response);
+            if (detail.find("BucketAlreadyOwnedByYou") == std::string::npos &&
+                detail.find("BucketAlreadyExists") == std::string::npos)
             {
                 LOG(FATAL) << "CreateBucket failed for " << bucket << ": "
-                           << outcome.GetError().GetMessage();
+                           << detail;
             }
         }
         created = true;
@@ -351,9 +495,9 @@ private:
         return mutex;
     }
 
-    static std::shared_ptr<Aws::S3::S3Client> &SharedClient()
+    static std::shared_ptr<HttpContext> &SharedClient()
     {
-        static std::shared_ptr<Aws::S3::S3Client> client;
+        static std::shared_ptr<HttpContext> client;
         return client;
     }
 
@@ -375,7 +519,7 @@ private:
         return bucket;
     }
 
-    std::shared_ptr<Aws::S3::S3Client> client_;
+    std::shared_ptr<HttpContext> client_;
 };
 
 struct ObjectListResult
@@ -393,37 +537,26 @@ inline bool ListObjects(S3TestClient &client,
     {
         return false;
     }
-    Aws::S3::Model::ListObjectsV2Request request;
-    request.SetBucket(path.bucket.c_str());
     std::string request_prefix = path.prefix;
     if (!request_prefix.empty() && request_prefix.back() != '/')
     {
         request_prefix.push_back('/');
     }
-    if (!request_prefix.empty())
-    {
-        request.SetPrefix(request_prefix.c_str());
-    }
 
-    Aws::String continuation;
+    std::string continuation;
     do
     {
-        if (!continuation.empty())
+        std::vector<std::string> page_keys;
+        if (!client.ListObjectsPage(path.bucket,
+                                    request_prefix,
+                                    continuation,
+                                    page_keys,
+                                    out.total_size))
         {
-            request.SetContinuationToken(continuation);
-        }
-        auto outcome = client.Client().ListObjectsV2(request);
-        if (!outcome.IsSuccess())
-        {
-            LOG(ERROR) << "ListObjectsV2 failed: "
-                       << outcome.GetError().GetMessage();
             return false;
         }
-        const auto &result = outcome.GetResult();
-        for (const auto &object : result.GetContents())
+        for (std::string &key : page_keys)
         {
-            out.total_size += static_cast<uint64_t>(object.GetSize());
-            std::string key = object.GetKey().c_str();
             if (!raw_keys && !request_prefix.empty() &&
                 key.rfind(request_prefix, 0) == 0)
             {
@@ -431,7 +564,6 @@ inline bool ListObjects(S3TestClient &client,
             }
             out.keys.push_back(std::move(key));
         }
-        continuation = result.GetNextContinuationToken();
     } while (!continuation.empty());
 
     return true;
@@ -459,14 +591,8 @@ inline bool DeleteObjects(S3TestClient &client, const ParsedCloudPath &path)
     }
     for (const auto &key : objects.keys)
     {
-        Aws::S3::Model::DeleteObjectRequest request;
-        request.SetBucket(path.bucket.c_str());
-        request.SetKey(key.c_str());
-        auto outcome = client.Client().DeleteObject(request);
-        if (!outcome.IsSuccess())
+        if (!client.DeleteObject(path.bucket, key))
         {
-            LOG(ERROR) << "DeleteObject failed for " << key << ": "
-                       << outcome.GetError().GetMessage();
             return false;
         }
     }
@@ -537,30 +663,11 @@ inline bool MoveCloudFile(const eloqstore::KvOptions &opts,
     std::string src_key = ComposeObjectKey(path, src_file);
     std::string dst_key = ComposeObjectKey(path, dst_file);
 
-    Aws::S3::Model::CopyObjectRequest copy_request;
-    copy_request.SetBucket(path.bucket.c_str());
-    copy_request.SetKey(dst_key.c_str());
-    copy_request.SetCopySource((path.bucket + "/" + src_key).c_str());
-
-    auto copy_outcome = client.Client().CopyObject(copy_request);
-    if (!copy_outcome.IsSuccess())
+    if (!client.CopyObject(path.bucket, src_key, dst_key))
     {
-        LOG(ERROR) << "CopyObject failed: "
-                   << copy_outcome.GetError().GetMessage();
         return false;
     }
-
-    Aws::S3::Model::DeleteObjectRequest delete_request;
-    delete_request.SetBucket(path.bucket.c_str());
-    delete_request.SetKey(src_key.c_str());
-    auto delete_outcome = client.Client().DeleteObject(delete_request);
-    if (!delete_outcome.IsSuccess())
-    {
-        LOG(ERROR) << "DeleteObject failed: "
-                   << delete_outcome.GetError().GetMessage();
-        return false;
-    }
-    return true;
+    return client.DeleteObject(path.bucket, src_key);
 }
 
 inline std::vector<std::string> ListCloudFiles(

@@ -95,9 +95,11 @@ bash scripts/install_dependency_ubuntu2404.sh
 This script installs all necessary dependencies including:
 - Build tools (CMake, GCC, Ninja)
 - System libraries (Boost, glog, jsoncpp, liburing, zstd, etc.)
-- AWS SDK C++ (S3)
-- Testing framework (Catch2)
 - Additional libraries (Abseil, gRPC, etc.)
+
+AWS SDK C++ (core) and the Catch2 testing framework are not installed
+system-wide; CMake downloads and builds them in-tree (FetchContent) on the
+first configure, which needs network access.
 
 **Note**: This script requires sudo privileges and may take several minutes to complete.
 
