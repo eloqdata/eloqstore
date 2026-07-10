@@ -80,54 +80,19 @@ endif ()
 
 find_package(Threads REQUIRED)
 
-include(FetchContent)
-
-# aws-sdk-cpp core (SigV4 signing, credentials, presigned URLs), built in-tree
-# as static libs instead of a system-wide install. Only the core component is
-# needed; the SDK's own tests are skipped.
-set(BUILD_ONLY "core" CACHE STRING "aws-sdk-cpp components to build")
-set(ENABLE_TESTING OFF CACHE BOOL "aws-sdk-cpp tests")
-set(FORCE_SHARED_CRT OFF CACHE BOOL "aws-sdk-cpp shared CRT")
-# FORCE: aws-sdk-cpp overwrites a plain variable with its own ON cache default.
-set(BUILD_SHARED_LIBS OFF CACHE BOOL "build static libs" FORCE)
-FetchContent_Declare(awssdk
-        GIT_REPOSITORY https://github.com/aws/aws-sdk-cpp.git
-        GIT_TAG 1.11.446
-        GIT_SHALLOW TRUE)
+# Pinned dependencies built in-tree instead of system-wide installs.
+# vendor/cmake is soft-linked to the repository-root cmake/ (like
+# vendor/{src,include,external}), so the pin file stays single-source.
+include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies.cmake)
 FetchContent_MakeAvailable(awssdk)
+FetchContent_MakeAvailable(glog)
+eloqstore_provide_liburing()
+# liburing has no CMake install of its own; build.rs links it from lib/.
+install(FILES ${URING_LIB} DESTINATION lib)
 
 # Handle dependencies based on static linking option
 if (STATIC_ALL_DEPS)
-    # Try to find static libraries first
-    find_library(GLOG_LIBRARY 
-        NAMES libglog.a glog
-        PATHS /usr/lib /usr/local/lib
-        NO_DEFAULT_PATH
-    )
-    if (GLOG_LIBRARY)
-        set(glog_FOUND TRUE)
-        get_filename_component(GLOG_LIB_DIR ${GLOG_LIBRARY} DIRECTORY)
-        find_path(GLOG_INCLUDE_DIR 
-            NAMES glog/logging.h
-            PATHS /usr/include /usr/local/include
-            NO_DEFAULT_PATH
-        )
-        if (NOT GLOG_INCLUDE_DIR)
-            find_path(GLOG_INCLUDE_DIR NAMES glog/logging.h)
-        endif()
-        # Create imported target if not found via find_package
-        if (NOT TARGET glog::glog)
-            add_library(glog::glog STATIC IMPORTED)
-            set_target_properties(glog::glog PROPERTIES
-                IMPORTED_LOCATION ${GLOG_LIBRARY}
-                INTERFACE_INCLUDE_DIRECTORIES ${GLOG_INCLUDE_DIR}
-            )
-        endif()
-    else()
-        find_package(glog REQUIRED)
-    endif()
-    
-    find_library(JSONCPP_LIBRARY 
+    find_library(JSONCPP_LIBRARY
         NAMES libjsoncpp.a jsoncpp
         PATHS /usr/lib /usr/local/lib
         NO_DEFAULT_PATH
@@ -297,23 +262,6 @@ if (STATIC_ALL_DEPS)
         endif()
     endif()
     
-    find_path(URING_INCLUDE_PATH NAMES liburing.h
-        PATHS /usr/include /usr/local/include
-        NO_DEFAULT_PATH
-    )
-    find_library(URING_LIB 
-        NAMES liburing.a uring
-        PATHS /usr/lib /usr/local/lib
-        NO_DEFAULT_PATH
-    )
-    if ((NOT URING_INCLUDE_PATH) OR (NOT URING_LIB))
-        find_path(URING_INCLUDE_PATH NAMES liburing.h)
-        find_library(URING_LIB NAMES uring)
-    endif()
-    if ((NOT URING_INCLUDE_PATH) OR (NOT URING_LIB))
-        message(FATAL_ERROR "Fail to find liburing")
-    endif()
-    
     # Boost context
     find_library(BOOST_CONTEXT_LIBRARY 
         NAMES libboost_context.a boost_context
@@ -327,16 +275,9 @@ if (STATIC_ALL_DEPS)
         set(BOOST_CONTEXT_TARGET ${BOOST_CONTEXT_LIBRARY})
     endif()
 else()
-    find_package(glog REQUIRED)
     find_package(jsoncpp REQUIRED)
     find_package(CURL REQUIRED)
     find_library(ZSTD_LIBRARY zstd)
-
-    find_path(URING_INCLUDE_PATH NAMES liburing.h)
-    find_library(URING_LIB NAMES uring)
-    if ((NOT URING_INCLUDE_PATH) OR (NOT URING_LIB))
-        message(FATAL_ERROR "Fail to find liburing")
-    endif()
 endif()
 
 # Prefer the crate-local ffi/ copy so cargo package/publish works from the

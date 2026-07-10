@@ -27,13 +27,30 @@ jobs:
       contents: read
     env:
       CCACHE_DIR: /home/runner/.cache/ccache
-      CCACHE_MAXSIZE: 1G
+      CCACHE_MAXSIZE: 2G
+      # Shared FetchContent pool: the C++ build, the Python wheel build and the
+      # Rust vendor build all resolve pinned deps from here instead of each
+      # downloading and compiling their own copy.
+      FETCHCONTENT_BASE_DIR: /home/runner/.cache/eloq-fetchcontent
+      # Route every CMake compile (engine, wheel, rust vendor, fetched deps)
+      # through the one ccache, so trees that rebuild the same sources with the
+      # same flags share object caching too.
+      CMAKE_C_COMPILER_LAUNCHER: ccache
+      CMAKE_CXX_COMPILER_LAUNCHER: ccache
 
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
+
+      # Keyed on the pin file: the cache only rotates when a dependency pin
+      # (version/SHA) actually changes.
+      - name: Cache FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: /home/runner/.cache/eloq-fetchcontent
+          key: ${{ runner.os }}-${{ matrix.arch }}-fetchcontent-${{ hashFiles('cmake/dependencies.cmake') }}
 
       - name: Install dependencies
         run: |

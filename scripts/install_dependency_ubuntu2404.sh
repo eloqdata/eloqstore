@@ -51,38 +51,9 @@ DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
     libboost-context-dev libc-ares-dev libprotobuf-dev libprotoc-dev protobuf-compiler \
     libjsoncpp-dev libleveldb-dev libsnappy-dev zlib1g-dev libzmq3-dev cppzmq-dev lcov
 
-# Install glog
-git clone https://github.com/eloqdata/glog.git glog
-cd glog
-cmake -S . -B build -G "Unix Makefiles"
-cmake --build build -j$(nproc)
-sudo cmake --build build --target install
-cd ../ && rm -rf glog
-
-# Install liburing
-git clone https://github.com/axboe/liburing.git liburing
-cd liburing
-git checkout tags/liburing-2.6
-./configure --cc=gcc --cxx=g++
-make -j$(nproc) && sudo make install
-cd .. && rm -rf liburing
-
-# Install brpc
-git clone https://github.com/eloqdata/brpc.git brpc
-cd brpc
-mkdir build && cd build
-cmake .. \
-    -DWITH_GLOG=ON \
-    -DIO_URING_ENABLED=ON \
-    -DBUILD_SHARED_LIBS=ON
-cmake --build . -j$(nproc)
-sudo cp -r ./output/include/* /usr/include/
-sudo cp ./output/lib/* /usr/lib/
-cd ../../ && rm -rf brpc
-
-# aws-sdk-cpp (core) and Catch2 are no longer installed system-wide: the main
-# CMakeLists.txt fetches and builds them in-tree via FetchContent at configure
-# time.
+# aws-sdk-cpp (core), glog, brpc, liburing and Catch2 are no longer installed
+# system-wide: CMake fetches and builds them in-tree at configure time
+# (pinned in cmake/dependencies.cmake).
 
 sudo ldconfig
 

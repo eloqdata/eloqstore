@@ -3,6 +3,25 @@ use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
 
+// Static aws-sdk-cpp core and its CRT stack (built in-tree by the vendor
+// CMake build), ordered consumers-before-providers for the linker.
+const AWS_STATIC_LIBS: &[&str] = &[
+    "aws-cpp-sdk-core",
+    "aws-crt-cpp",
+    "aws-c-s3",
+    "aws-c-auth",
+    "aws-c-mqtt",
+    "aws-c-event-stream",
+    "aws-c-http",
+    "aws-c-compression",
+    "aws-c-io",
+    "s2n",
+    "aws-c-cal",
+    "aws-c-sdkutils",
+    "aws-checksums",
+    "aws-c-common",
+];
+
 fn add_usr_local_link_search_paths_if_needed() {
     // Some CI/container images install libraries (e.g. glog) under /usr/local/lib.
     // The linker does not always search /usr/local/lib by default, so we add it
@@ -271,13 +290,12 @@ fn main() {
             println!("cargo:rustc-link-lib=uring");
             println!("cargo:rustc-link-lib=jsoncpp");
             println!("cargo:rustc-link-lib=boost_context");
-            println!("cargo:rustc-link-lib=aws-cpp-sdk-s3");
-            println!("cargo:rustc-link-lib=aws-cpp-sdk-core");
-            println!("cargo:rustc-link-lib=aws-c-event-stream");
-            println!("cargo:rustc-link-lib=aws-checksums");
-            println!("cargo:rustc-link-lib=aws-c-auth");
-            println!("cargo:rustc-link-lib=aws-c-cal");
-            println!("cargo:rustc-link-lib=aws-c-common");
+            // Static aws-sdk-cpp core and its CRT stack, in dependency order
+            // (consumers before providers; libcrypto/libssl are shared, so
+            // their position does not matter).
+            for aws_lib in AWS_STATIC_LIBS {
+                println!("cargo:rustc-link-lib={}", aws_lib);
+            }
         }
 
         // System libraries that are always needed (pthread, dl, stdc++)
@@ -347,13 +365,9 @@ fn main() {
         println!("cargo:rustc-link-lib=pthread");
         println!("cargo:rustc-link-lib=dl");
         println!("cargo:rustc-link-lib=boost_context");
-        println!("cargo:rustc-link-lib=aws-cpp-sdk-s3");
-        println!("cargo:rustc-link-lib=aws-cpp-sdk-core");
-        println!("cargo:rustc-link-lib=aws-c-event-stream");
-        println!("cargo:rustc-link-lib=aws-checksums");
-        println!("cargo:rustc-link-lib=aws-c-auth");
-        println!("cargo:rustc-link-lib=aws-c-cal");
-        println!("cargo:rustc-link-lib=aws-c-common");
+        for aws_lib in AWS_STATIC_LIBS {
+            println!("cargo:rustc-link-lib={}", aws_lib);
+        }
         println!("cargo:rustc-link-lib=stdc++");
     }
 

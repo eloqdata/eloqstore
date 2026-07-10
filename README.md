@@ -94,12 +94,15 @@ bash scripts/install_dependency_ubuntu2404.sh
 
 This script installs all necessary dependencies including:
 - Build tools (CMake, GCC, Ninja)
-- System libraries (Boost, glog, jsoncpp, liburing, zstd, etc.)
+- System libraries (Boost, jsoncpp, zstd, etc.)
 - Additional libraries (Abseil, gRPC, etc.)
 
-AWS SDK C++ (core) and the Catch2 testing framework are not installed
-system-wide; CMake downloads and builds them in-tree (FetchContent) on the
-first configure, which needs network access.
+Version-pinned dependencies — AWS SDK C++ (core), glog, brpc, liburing and
+Catch2 — are not installed system-wide; CMake downloads and builds them
+in-tree (FetchContent, pinned in `cmake/dependencies.cmake`) on the first
+configure, which needs network access. Set the `FETCHCONTENT_BASE_DIR`
+environment variable (e.g. `~/.cache/eloq-fetchcontent`) to share the
+download/build pool across build trees.
 
 **Note**: This script requires sudo privileges and may take several minutes to complete.
 
