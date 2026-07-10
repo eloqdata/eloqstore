@@ -155,7 +155,7 @@ TEST_CASE("EloqStore ValidateOptions validates all parameters", "[eloq_store]")
     CleanupTestDir(test_dir);
 }
 
-// Audit finding rank 15: in-file byte offsets are computed as uint32
+// In-file byte offsets are computed as uint32
 // (ConvFilePageId / ConvFileSegmentId), so a data/segment file may span at
 // most 4 GiB. ValidateOptions must reject configs whose file size exceeds that,
 // otherwise offsets wrap onto earlier pages and silently corrupt data.
@@ -191,7 +191,7 @@ TEST_CASE("EloqStore ValidateOptions rejects >4GiB data/segment files",
     CleanupTestDir(test_dir);
 }
 
-// Audit finding rank 23: data_page_size is a uint16 field, but LoadFromIni
+// data_page_size is a uint16 field, but LoadFromIni
 // parsed it into a uint64 and assigned with only a >0 guard on the
 // pre-truncation value -- 64KB wrapped to 0 (SIGFPE at startup), 68KB silently
 // became 4KB. LoadFromIni must reject out-of-range values instead.
