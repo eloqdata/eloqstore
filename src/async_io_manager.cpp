@@ -47,8 +47,6 @@
 #include <bthread/eloq_module.h>
 #endif
 
-#include <butil/time.h>
-
 #include "absl/strings/string_view.h"
 #include "cloud_storage_service.h"
 #include "coding.h"

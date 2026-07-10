@@ -1,6 +1,5 @@
 #include "storage/page_mapper.h"
 
-#include <butil/time.h>
 #include <glog/logging.h>
 
 #include <algorithm>
