@@ -77,4 +77,4 @@ Full subsystem documentation lives in `docs/architecture/` (see above). The load
 
 ## CI notes
 
-PRs need the `ci-approved` label for CI to run (`.github/workflows/ci.yml`). CI builds Debug with `SKIP_CREATE_BUCKET=ON`, runs C++ tests against MinIO, then builds/tests the Python wheel and Rust SDK.
+CI (`.github/workflows/ci.yml`) builds Debug with `SKIP_CREATE_BUCKET=ON`, runs C++ tests against MinIO, then builds/tests the Python wheel and Rust SDK.
