@@ -665,6 +665,15 @@ bool Shard::ProcessReq(KvRequest *req)
         ListObjectTask *task = task_mgr_.GetListObjectTask();
         auto lbd = [req, task]() -> KvError
         {
+            // ListObject needs the cloud object store; the CloudStoreMgr cast
+            // below is only valid in cloud mode. In Local/Standby/in-memory
+            // modes io_mgr_ is not a CloudStoreMgr, so reject with InvalidArgs
+            // instead of performing an out-of-bounds downcast (mirrors the
+            // ListStandbyPartition guard).
+            if (shard->store_->Mode() != StoreMode::Cloud)
+            {
+                return KvError::InvalidArgs;
+            }
             KvTask *current_task = ThdTask();
             auto list_object_req = static_cast<ListObjectRequest *>(req);
             ObjectStore::ListTask list_task(list_object_req->RemotePath());

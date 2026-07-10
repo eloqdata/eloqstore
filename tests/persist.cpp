@@ -323,9 +323,29 @@ TEST_CASE("concurrency with overflow kv", "[overflow_kv]")
         .store_path = {test_path},
     };
     eloqstore::EloqStore *store = InitStore(options);
-    ConcurrencyTester tester(store, "t0", 10, 1000, 4, 50000);
+    // Each partition is seeded with seg_size*seg_count = 4000 x 50KB overflow
+    // values (~200MB), written independently, and InitStore wipes the store so
+    // the seed is rewritten every run. Seeding dominated wall time and blew the
+    // ctest timeout, so keep the partition count small -- the overflow
+    // read/write concurrency coverage is preserved with fewer partitions.
+    ConcurrencyTester tester(store, "t0", 3, 1000, 4, 50000);
     tester.Init();
     tester.Run(100, 100, 100);
+}
+
+// Audit finding rank 31: ProcessReq's ListObject case downcasts io_mgr_ to
+// CloudStoreMgr with no mode check. In a non-cloud store io_mgr_ is not a
+// CloudStoreMgr, so the cast + AcquireCloudSlot/GetObjectStore reads past the
+// object -> out-of-bounds / UB. It must return InvalidArgs instead (like the
+// sibling ListStandbyPartition request).
+TEST_CASE("ListObject on a non-cloud store returns InvalidArgs", "[persist]")
+{
+    eloqstore::EloqStore *store = InitStore(default_opts);
+    std::vector<std::string> objects;
+    eloqstore::ListObjectRequest req(&objects);
+    req.SetRemotePath("any/prefix");
+    store->ExecSync(&req);
+    REQUIRE(req.Error() == eloqstore::KvError::InvalidArgs);
 }
 
 TEST_CASE("easy append only mode", "[persist][append]")
