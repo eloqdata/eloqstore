@@ -2,6 +2,7 @@
 
 #include <aws/core/Aws.h>
 #include <glog/logging.h>
+#include <strings.h>
 
 #include <algorithm>
 #include <chrono>
@@ -905,6 +906,55 @@ size_t AsyncHttpManager::WriteCallback(void *contents,
     return total;
 }
 
+std::optional<std::string> AsyncHttpManager::ParseETagHeader(
+    std::string_view header_line)
+{
+    // Match the header name case-insensitively. HTTP header names are
+    // case-insensitive and HTTP/2 delivers them lowercased ("etag:"); a
+    // byte-exact "ETag:" compare misses them on HTTP/2 endpoints (e.g. GCS),
+    // leaving etag_ empty and degrading the term-file CAS to an unconditional
+    // PUT (silent loss of split-brain fencing).
+    constexpr std::string_view etag_prefix = "ETag:";
+    if (header_line.size() < etag_prefix.size() ||
+        strncasecmp(
+            header_line.data(), etag_prefix.data(), etag_prefix.size()) != 0)
+    {
+        return std::nullopt;
+    }
+
+    // Skip whitespace after the colon.
+    size_t value_start = etag_prefix.size();
+    while (
+        value_start < header_line.size() &&
+        (header_line[value_start] == ' ' || header_line[value_start] == '\t'))
+    {
+        ++value_start;
+    }
+
+    // Value runs to end of line.
+    size_t value_end = value_start;
+    while (value_end < header_line.size() && header_line[value_end] != '\r' &&
+           header_line[value_end] != '\n')
+    {
+        ++value_end;
+    }
+
+    if (value_end <= value_start)
+    {
+        return std::nullopt;
+    }
+
+    std::string_view etag_value =
+        header_line.substr(value_start, value_end - value_start);
+    // Strip surrounding quotes if present.
+    if (etag_value.size() >= 2 && etag_value.front() == '"' &&
+        etag_value.back() == '"')
+    {
+        etag_value = etag_value.substr(1, etag_value.size() - 2);
+    }
+    return std::string(etag_value);
+}
+
 size_t AsyncHttpManager::HeaderCallback(char *buffer,
                                         size_t size,
                                         size_t nitems,
@@ -916,41 +966,10 @@ size_t AsyncHttpManager::HeaderCallback(char *buffer,
         return size * nitems;
     }
 
-    // Extract ETag header: "ETag: "value"\r\n"
     std::string_view header_line(buffer, size * nitems);
-    constexpr std::string_view etag_prefix = "ETag:";
-    if (header_line.size() >= etag_prefix.size() &&
-        header_line.substr(0, etag_prefix.size()) == etag_prefix)
+    if (std::optional<std::string> etag = ParseETagHeader(header_line))
     {
-        // Find the value after "ETag: "
-        size_t value_start = etag_prefix.size();
-        while (value_start < header_line.size() &&
-               (header_line[value_start] == ' ' ||
-                header_line[value_start] == '\t'))
-        {
-            ++value_start;
-        }
-
-        // Extract value (may be quoted)
-        size_t value_end = value_start;
-        while (value_end < header_line.size() &&
-               header_line[value_end] != '\r' && header_line[value_end] != '\n')
-        {
-            ++value_end;
-        }
-
-        if (value_end > value_start)
-        {
-            std::string_view etag_value =
-                header_line.substr(value_start, value_end - value_start);
-            // Remove quotes if present
-            if (etag_value.size() >= 2 && etag_value.front() == '"' &&
-                etag_value.back() == '"')
-            {
-                etag_value = etag_value.substr(1, etag_value.size() - 2);
-            }
-            task->etag_ = std::string(etag_value);
-        }
+        task->etag_ = std::move(*etag);
     }
 
     return size * nitems;

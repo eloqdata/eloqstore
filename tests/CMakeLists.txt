@@ -47,6 +47,7 @@ set(UTEST_SOURCES
     iouring_tail_scratch.cpp
     segment_allocator.cpp
     data_page_cache.cpp
+    object_store_etag.cpp
 )
 
 string( REPLACE ".cpp" "" BASENAMES_UTEST "${UTEST_SOURCES}" )
