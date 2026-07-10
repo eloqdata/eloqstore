@@ -979,7 +979,7 @@ TEST_CASE(
     CleanupStore(opts);
 }
 
-// Audit finding rank 22: a large value whose length exceeds
+// A large value whose length exceeds
 // kLargeValueLengthMask (2 GiB - 1) cannot be represented in the 31-bit
 // on-disk length field (bit 31 is the has-metadata flag). WriteLargeValue must
 // reject it up front instead of casting the length to uint32 -- which would
