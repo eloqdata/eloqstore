@@ -333,7 +333,7 @@ TEST_CASE("concurrency with overflow kv", "[overflow_kv]")
     tester.Run(100, 100, 100);
 }
 
-// Audit finding rank 31: ProcessReq's ListObject case downcasts io_mgr_ to
+// ProcessReq's ListObject case downcasts io_mgr_ to
 // CloudStoreMgr with no mode check. In a non-cloud store io_mgr_ is not a
 // CloudStoreMgr, so the cast + AcquireCloudSlot/GetObjectStore reads past the
 // object -> out-of-bounds / UB. It must return InvalidArgs instead (like the
