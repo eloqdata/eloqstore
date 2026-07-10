@@ -6070,6 +6070,9 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
 
     std::string tmp_filename = filename + ".tmp";
 
+    // True once the existing file has been moved aside to tmp_filename (as
+    // opposed to not existing yet), so a failed write can restore it.
+    bool moved_existing = false;
     if (download_to_exist)
     {
         // Rename the existing file away before overwriting, so readers see
@@ -6082,13 +6085,25 @@ KvError CloudStoreMgr::DownloadFile(const TableIdent &tbl_id,
             ReleaseCloudBuffer(std::move(download_task.response_data_));
             return ToKvError(res);
         }
+        moved_existing = (res == 0);
     }
 
     uint64_t flags = O_WRONLY | O_CREAT | O_DIRECT | O_NOATIME;
     KvError err = WriteFile(
         tbl_id, tmp_filename, download_task.response_data_, flags, offset);
     ReleaseCloudBuffer(std::move(download_task.response_data_));
-    CHECK_KV_ERR(err);
+    if (err != KvError::NoError)
+    {
+        // WriteFile only touches bytes >= offset (the not-yet-installed tail no
+        // live snapshot maps); the reader-visible prefix is untouched. Restore
+        // the file we moved aside so committed reads keep working -- a later
+        // reopen re-syncs the tail -- instead of stranding it as .tmp.
+        if (moved_existing)
+        {
+            Rename(dir_fd.FdPair(), tmp_filename.c_str(), filename.c_str());
+        }
+        return err;
+    }
 
     int res = Rename(dir_fd.FdPair(), tmp_filename.c_str(), filename.c_str());
     if (res < 0)
@@ -7237,6 +7252,10 @@ KvError CloudStoreMgr::WriteFile(const TableIdent &tbl_id,
                                  uint64_t flags,
                                  uint64_t offset)
 {
+    // Test seam: fail the local write so a test can drive DownloadFile's
+    // restore-on-failure path (e.g. cache-disk ENOSPC during a tail sync).
+    TEST_FAIL_POINT_RETURN("CloudWriteFile", KvError::OutOfSpace);
+
     auto [dir_fd, dir_err] =
         OpenOrCreateFD(tbl_id, LruFD::kDirectory, false, true, "", 0);
     if (dir_err != KvError::NoError)

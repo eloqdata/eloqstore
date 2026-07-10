@@ -13,6 +13,7 @@
 
 #include "async_io_manager.h"
 #include "common.h"
+#include "fail_point.h"
 #include "kv_options.h"
 #include "storage/shard.h"
 #include "test_utils.h"
@@ -1414,6 +1415,55 @@ TEST_CASE("cloud reopen refreshes manifest via archive swap", "[cloud][reopen]")
     verifier.Validate();
 
     verifier.SetAutoClean(false);
+    store->Stop();
+    CleanupStore(options);
+}
+
+// A reopen syncs the tail data file via DownloadFile(download_to_exist=true),
+// which renames the existing file aside before rewriting it. If the local
+// write then fails (e.g. cache-disk ENOSPC), the committed pages in that file
+// must not be lost: DownloadFile restores the file it moved aside. Without the
+// restore the file is stranded as .tmp and its committed pages become
+// unreadable.
+TEST_CASE("cloud reopen tail-sync restores the data file on write failure",
+          "[cloud][reopen]")
+{
+    eloqstore::KvOptions options = cloud_options;
+    options.store_path = {"/tmp/test-data-tailsync"};
+    options.cloud_store_path += "/tailsync-restore";
+    CleanupStore(options);
+
+    eloqstore::TableIdent tbl_id{"tailsync", 0};
+    eloqstore::EloqStore *store = InitStore(options);
+    MapVerifier verifier(tbl_id, store, false);
+    verifier.Upsert(0, 50);
+    verifier.Validate();  // baseline: committed data is readable
+
+    // Fail the tail-sync's local write so DownloadFile hits its restore path
+    // (the tail file has already been moved aside to .tmp at that point).
+    eloqstore::FailPoint::GetInstance().ArmOnce("CloudWriteFile");
+    eloqstore::ReopenRequest reopen_req;
+    reopen_req.SetArgs(tbl_id);
+    store->ExecSync(&reopen_req);
+    eloqstore::FailPoint::GetInstance().Disarm();
+    REQUIRE(reopen_req.Error() != eloqstore::KvError::NoError);
+
+    // The data file the tail sync moved aside must be restored, not left
+    // stranded as .tmp. (Reads alone don't show the bug: the pages are still
+    // in the buffer-pool cache, and a disk fault would auto-reopen and heal.)
+    namespace fs = std::filesystem;
+    const std::string partition_dir =
+        std::string(options.store_path[0]) + "/" + tbl_id.ToString();
+    size_t stranded_tmp = 0;
+    for (const auto &entry : fs::recursive_directory_iterator(partition_dir))
+    {
+        if (entry.is_regular_file() && entry.path().extension() == ".tmp")
+        {
+            ++stranded_tmp;
+        }
+    }
+    REQUIRE(stranded_tmp == 0);
+
     store->Stop();
     CleanupStore(options);
 }
