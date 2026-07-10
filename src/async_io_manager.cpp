@@ -6903,16 +6903,17 @@ void CloudStoreMgr::FileCleaner::Run()
                 it = io_mgr_->pending_gc_cleanup_.erase(it);
                 made_progress = true;
 
+                // Collect only: do NOT call GetSQE here. GetSQE can suspend
+                // (SQ ring full), and while suspended another same-shard
+                // coroutine can insert into pending_gc_cleanup_ (rehash) or
+                // erase from it, invalidating `it` -> use-after-free on the
+                // next iteration. The SQEs are submitted in a single pass below
+                // once no set iterator is held. StartEvictingKey (above) keeps
+                // req.file_ alive across that later suspension.
                 UnlinkReq &req = unlink_reqs[req_count++];
                 req.file_ = file;
                 req.path_ = file->key_->tbl_id_.ToString();
                 req.path_ /= file->key_->filename_;
-
-                io_uring_sqe *sqe =
-                    io_mgr_->GetSQE(UserDataType::BaseReq, &req);
-                int root_fd = io_mgr_->GetRootFD(file->key_->tbl_id_).first;
-                DLOG(INFO) << "FileCleaner GC:" << req.path_;
-                io_uring_prep_unlinkat(sqe, root_fd, req.path_.c_str(), 0);
             }
         }
 
@@ -6940,18 +6941,30 @@ void CloudStoreMgr::FileCleaner::Run()
                     continue;
                 }
 
+                // Collect only, same as the pending-GC loop above: GetSQE must
+                // not run while the intrusive lru_file_ list pointer `file` is
+                // held, since a suspension there could let another coroutine
+                // evict/free the node -> dangling `file`/`file->prev_`.
                 UnlinkReq &req = unlink_reqs[req_count++];
                 req.file_ = file;
                 req.path_ = file->key_->tbl_id_.ToString();
                 req.path_ /= file->key_->filename_;
-
-                io_uring_sqe *sqe =
-                    io_mgr_->GetSQE(UserDataType::BaseReq, &req);
-                int root_fd =
-                    io_mgr_->GetRootFD(req.file_->key_->tbl_id_).first;
-                DLOG(INFO) << "FileCleaner eviction:" << req.path_;
-                io_uring_prep_unlinkat(sqe, root_fd, req.path_.c_str(), 0);
             }
+        }
+
+        // Submit pass: no pending_gc_cleanup_ iterator or lru_file_ list
+        // pointer is held here, so GetSQE()/GetRootFD() may safely suspend when
+        // the SQ ring is full. Each req.file_ was pinned via StartEvictingKey
+        // during collection, so it stays valid (unordered_map element pointers
+        // survive rehash; an evicting key is not erased until the completion
+        // pass below).
+        for (uint16_t i = 0; i < req_count; i++)
+        {
+            UnlinkReq &req = unlink_reqs[i];
+            io_uring_sqe *sqe = io_mgr_->GetSQE(UserDataType::BaseReq, &req);
+            int root_fd = io_mgr_->GetRootFD(req.file_->key_->tbl_id_).first;
+            DLOG(INFO) << "FileCleaner unlink:" << req.path_;
+            io_uring_prep_unlinkat(sqe, root_fd, req.path_.c_str(), 0);
         }
 
         if (req_count == 0)
