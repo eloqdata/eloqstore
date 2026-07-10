@@ -589,6 +589,8 @@ TEST_CASE("failed index-page write surfaces error without aborting",
 
     eloqstore::FailPoint::GetInstance().ArmOnce("IndexPageWriteFail");
     store->ExecSync(&req);  // must not SIGABRT
+    // Disarm before REQUIRE so an unfired point can't leak into later tests.
+    eloqstore::FailPoint::GetInstance().Disarm();
     REQUIRE(req.Error() != eloqstore::KvError::NoError);
 
     // The store is still usable after the injected disk error.
