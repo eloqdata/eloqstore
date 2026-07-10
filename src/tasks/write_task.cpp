@@ -299,8 +299,15 @@ KvError WriteTask::WritePage(VarPage page, FilePageId file_page_id)
         return AppendWritePage(std::move(page), file_page_id);
     }
 
-    KvError err = IoMgr()->WritePage(tbl_ident_, std::move(page), file_page_id);
-    CHECK_KV_ERR(err);
+    // WritePage consumes `page` only on success; on error it leaves it with us
+    // so a synchronous failure (e.g. OpenOrCreateFD) does not orphan the cache
+    // page this handle holds.
+    KvError err = IoMgr()->WritePage(tbl_ident_, page, file_page_id);
+    if (err != KvError::NoError)
+    {
+        ReleaseHeldPage(std::move(page));
+        return err;
+    }
     if (inflight_io_ >= opts->max_write_batch_pages)
     {
         // Avoid long running WriteTask block ReadTask/ScanTask
@@ -345,6 +352,7 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
         FlushAppendWrites();
         if (write_err_ != KvError::NoError)
         {
+            ReleaseHeldPage(std::move(page));
             return write_err_;
         }
         // In cloud append mode, trigger immediate upload of sealed file
@@ -353,12 +361,17 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
         {
             KvError err = IoMgr()->OnDataFileSealed(
                 tbl_ident_, DataFileKey(sealed_file_id));
-            CHECK_KV_ERR(err);
+            if (err != KvError::NoError)
+            {
+                ReleaseHeldPage(std::move(page));
+                return err;
+            }
         }
         uint16_t buf_index = 0;
         char *buf = IoMgr()->AcquireWriteBuffer(buf_index);
         if (buf == nullptr)
         {
+            ReleaseHeldPage(std::move(page));
             return KvError::OutOfMem;
         }
         bool use_fixed = IoMgr()->WriteBufferUseFixed();
@@ -369,6 +382,7 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
     char *dst = append_aggregator_.TryReserve(file_id, offset, page_size);
     if (dst == nullptr)
     {
+        ReleaseHeldPage(std::move(page));
         return KvError::OutOfMem;
     }
     std::memcpy(dst, page_ptr, page_size);
@@ -383,6 +397,35 @@ KvError WriteTask::AppendWritePage(VarPage page, FilePageId file_page_id)
 
     YieldToLowPQ();
     return KvError::NoError;
+}
+
+void WriteTask::ReleaseHeldPage(VarPage page)
+{
+    if (VarPageType(page.index()) != VarPageType::MemCachedPage)
+    {
+        // Data/overflow pages carry their own buffer; destroying the VarPage
+        // releases it. Only promoted cache pages need explicit accounting.
+        return;
+    }
+    MemCachedPage::Handle &handle = std::get<MemCachedPage::Handle>(page);
+    MemCachedPage *cache_page = handle.Get();
+    if (cache_page == nullptr)
+    {
+        // Empty handle: nothing to release. This happens on an OutOfMem return
+        // where the allocation that would have populated the handle is exactly
+        // what failed (BatchWriteTask::Pop's index build via FinishIndexPage);
+        // the caller asserts the OutOfMem precondition.
+        return;
+    }
+    handle.Reset();  // drop this task's pin
+    // Free only when this handle was the sole owner (the promoted data-page
+    // case). A page still pinned by the caller -- index-page writes pass a
+    // second, temporary pin -- is the caller's to release, and a page already
+    // linked into the active/free list must not be freed here.
+    if (cache_page->IsDetached() && !cache_page->IsPinned())
+    {
+        shard->IndexManager()->FreePage(cache_page);
+    }
 }
 
 void WriteTask::FlushAppendWrites()

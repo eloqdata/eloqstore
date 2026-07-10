@@ -158,6 +158,13 @@ protected:
     KvError WritePage(MemCachedPage::Handle &page, FilePageId file_page_id);
     KvError WritePage(VarPage page, FilePageId file_page_id);
     KvError AppendWritePage(VarPage page, FilePageId file_page_id);
+    // Release a cache page still held when a write path bails out on error
+    // (AppendWritePage's early returns, BatchWriteTask::Pop's index build). A
+    // freshly promoted/allocated page is detached and pinned only by this
+    // handle, so it must be freed back to the buffer pool or its slot leaks;
+    // data/overflow variants and cache pages the caller still pins (index
+    // writes keep a second IO pin) own their storage and are left alone.
+    void ReleaseHeldPage(VarPage page);
     void FlushAppendWrites();
     // Build this task's CoW root and snapshot the branch-file-mapping tail in
     // one step: forwards to PageManager::MakeCowRoot, and on success captures
