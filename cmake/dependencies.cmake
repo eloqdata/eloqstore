@@ -1,6 +1,5 @@
-# Pinned in-tree dependencies, fetched and built via FetchContent instead of
-# system-wide installs. CI hashes this file to key its dependency cache, so
-# every version pin must live here.
+# Pinned dependencies, fetched and built in-tree via FetchContent. CI hashes
+# this file to key its dependency cache, so every version pin must live here.
 #
 # Consumers call FetchContent_MakeAvailable(<dep>) (or
 # eloqstore_provide_liburing()) for the dependencies they actually use.
@@ -24,9 +23,8 @@ set(BUILD_TESTING OFF CACHE BOOL "dependency self-tests")
 set(BUILD_ONLY "core" CACHE STRING "aws-sdk-cpp components to build")
 set(ENABLE_TESTING OFF CACHE BOOL "aws-sdk-cpp tests")
 set(FORCE_SHARED_CRT OFF CACHE BOOL "aws-sdk-cpp shared CRT")
-# Unused by the engine, and it drags ZLIB::ZLIB into every consumer — under
-# the rust vendor's static-first library resolution that picks the non-PIC
-# system libz.a and breaks the combined shared-library link.
+# Unused; keeps ZLIB::ZLIB out of the SDK link interface (the rust vendor's
+# static-first search would resolve it to the non-PIC system libz.a).
 set(ENABLE_ZLIB_REQUEST_COMPRESSION OFF CACHE BOOL "aws-sdk-cpp request compression")
 FetchContent_Declare(awssdk
         GIT_REPOSITORY https://github.com/aws/aws-sdk-cpp.git

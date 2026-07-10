@@ -62,11 +62,25 @@ find_package(CURL REQUIRED)
 find_library(ZSTD_LIBRARY zstd)
 find_package(OpenSSL REQUIRED)
 
-# Pinned dependencies built in-tree instead of system-wide installs.
 include(cmake/dependencies.cmake)
 FetchContent_MakeAvailable(awssdk)
 FetchContent_MakeAvailable(glog)
 eloqstore_provide_liburing()
+
+# brpc: benchmark tools link it, and module mode compiles against its bthread
+# headers (the embedding runtime links brpc there). Its plain
+# find_path/find_library discovery of glog and liburing is pre-seeded with the
+# in-tree builds above.
+set(WITH_GLOG ON CACHE BOOL "brpc: log through glog")
+set(IO_URING_ENABLED ON CACHE BOOL "brpc: io_uring based network")
+set(BUILD_BRPC_TOOLS OFF CACHE BOOL "brpc: bundled tools")
+set(GLOG_INCLUDE_PATH "${glog_SOURCE_DIR}/src;${glog_BINARY_DIR}"
+    CACHE STRING "in-tree glog headers")
+set(GLOG_LIB glog::glog CACHE STRING "in-tree glog target")
+set(URING_INCLUDE_PATH ${URING_INCLUDE_PATH} CACHE PATH "in-tree liburing headers")
+set(URING_LIB ${URING_LIB} CACHE FILEPATH "in-tree liburing archive")
+FetchContent_MakeAvailable(brpc)
+set(BRPC_INCLUDE_PATH ${brpc_SOURCE_DIR}/src ${brpc_BINARY_DIR}/output/include)
 
 find_package(Git QUIET)
 if (GIT_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
@@ -96,6 +110,9 @@ SET(ELOQ_STORE_INCLUDE
         ${PROJECT_SOURCE_DIR}/external/abseil
         ${PROJECT_SOURCE_DIR}/include
         ${PROJECT_SOURCE_DIR})
+if (ELOQ_MODULE_ENABLED)
+    list(APPEND ELOQ_STORE_INCLUDE ${BRPC_INCLUDE_PATH})
+endif ()
 
 set(ELOQ_STORE_SOURCES
         external/random.cc
@@ -146,8 +163,8 @@ set_target_properties(eloqstore PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 target_include_directories(eloqstore PUBLIC ${ELOQ_STORE_INCLUDE})
 target_include_directories(eloqstore PRIVATE ${LIBZMQ_INCLUDE_DIRS})
-# glog is PUBLIC: engine public headers (async_io_manager.h, kill_point.h)
-# include glog/logging.h, and glog is no longer in the system include path.
+# PUBLIC: engine public headers (async_io_manager.h, kill_point.h) include
+# glog/logging.h.
 target_link_libraries(eloqstore PUBLIC glog::glog)
 target_link_libraries(eloqstore PRIVATE ${URING_LIB} absl::flat_hash_map ${BOOST_CONTEXT_TARGET} ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} aws-cpp-sdk-core OpenSSL::Crypto ${LIBZMQ_LIBRARIES})
 

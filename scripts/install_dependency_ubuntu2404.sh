@@ -51,10 +51,6 @@ DEBIAN_FRONTEND=noninteractive sudo apt-get install -y --no-install-recommends \
     libboost-context-dev libc-ares-dev libprotobuf-dev libprotoc-dev protobuf-compiler \
     libjsoncpp-dev libleveldb-dev libsnappy-dev zlib1g-dev libzmq3-dev cppzmq-dev lcov
 
-# aws-sdk-cpp (core), glog, brpc, liburing and Catch2 are no longer installed
-# system-wide: CMake fetches and builds them in-tree at configure time
-# (pinned in cmake/dependencies.cmake).
-
 sudo ldconfig
 
 echo "All dependencies have been installed successfully!" 

@@ -80,7 +80,6 @@ endif ()
 
 find_package(Threads REQUIRED)
 
-# Pinned dependencies built in-tree instead of system-wide installs.
 # vendor/cmake is soft-linked to the repository-root cmake/ (like
 # vendor/{src,include,external}), so the pin file stays single-source.
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/dependencies.cmake)
