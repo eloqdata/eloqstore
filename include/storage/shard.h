@@ -128,6 +128,14 @@ private:
 
     void InitializeTscFrequency();
 
+    // Complete every request still queued on this shard with NotRunning when
+    // the shard's loop exits during shutdown. SendRequest's Running gate is
+    // advisory (a submitter can enqueue after the shard decides to exit), so
+    // without this drain those requests would never complete and their callers
+    // would block in Wait() forever. Runs on the shard thread (WorkLoop) or the
+    // module worker (WorkOneRound), the sole consumer of requests_.
+    void DrainPendingRequests();
+
     uint64_t ReadTimeMicroseconds();
 
     uint64_t DurationMicroseconds(uint64_t start_us);

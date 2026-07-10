@@ -550,6 +550,11 @@ EloqStore::~EloqStore()
     {
         Stop();
     }
+    // Stop() retains shards_ (see CleanupRuntime). Destroy them here, while
+    // cloud_service_/standby_service_ are still alive, since a shard's io
+    // manager may reference those services during teardown and standby_service_
+    // is declared after shards_ (so it would otherwise be destroyed first).
+    shards_.clear();
 }
 
 void EloqStore::CleanupRuntime(size_t started_shards)
@@ -615,8 +620,13 @@ void EloqStore::CleanupRuntime(size_t started_shards)
         }
     }
 
-    shards_.clear();
-
+    // NB: shards_ is intentionally NOT cleared here. SendRequest indexes
+    // shards_ (shards_[TableId().ShardIndex(shards_.size())]) after only an
+    // advisory status check, so destroying the vector concurrently would race
+    // that access -> shards_.size()==0 gives partition_id_ % 0 (SIGFPE) or a
+    // dangling shard deref. The stopped shards stay valid (their AddKvRequest
+    // returns NotRunning); the vector is torn down instead at the next Start()
+    // or in ~EloqStore, where no request submission can be in flight.
     for (int fd : root_fds_)
     {
         [[maybe_unused]] int res = close(fd);
@@ -811,6 +821,11 @@ KvError EloqStore::Start(std::string_view branch,
               << ", num_threads=" << options_.num_threads
               << ", shard_fd_limit=" << shard_fd_limit;
 
+    // A prior Stop() retained its shards_ (see CleanupRuntime); drop them now,
+    // before rebuilding. This runs during Start (status is Starting, so no
+    // request submission proceeds past SendRequest's gate), so it cannot race a
+    // shards_ access.
+    shards_.clear();
     shards_.resize(options_.num_threads);
     for (size_t i = 0; i < options_.num_threads; i++)
     {
@@ -1184,9 +1199,7 @@ KvError EloqStore::CollectTablePartitions(
             list_object_request.GetNextContinuationToken()->clear();
             objects.clear();
 
-            shards_[utils::RandomInt(static_cast<int>(shards_.size()))]
-                ->AddKvRequest(&list_object_request);
-            list_object_request.Wait();
+            ExecSyncOnAnyShard(&list_object_request);
 
             KvError list_err = list_object_request.Error();
             if (list_err != KvError::NoError)
@@ -1439,9 +1452,7 @@ void EloqStore::HandleGlobalArchiveRequest(GlobalArchiveRequest *req)
             list_request.err_ = KvError::NoError;
             list_request.GetNextContinuationToken()->clear();
             objects.clear();
-            shards_[utils::RandomInt(static_cast<int>(shards_.size()))]
-                ->AddKvRequest(&list_request);
-            list_request.Wait();
+            ExecSyncOnAnyShard(&list_request);
 
             if (list_request.Error() != KvError::NoError)
             {
@@ -1626,9 +1637,7 @@ void EloqStore::HandleGlobalReopenRequest(GlobalReopenRequest *req)
         list_request.done_.store(false, std::memory_order_relaxed);
 #endif
         list_request.err_ = KvError::NoError;
-        shards_[utils::RandomInt(static_cast<int>(shards_.size()))]
-            ->AddKvRequest(&list_request);
-        list_request.Wait();
+        ExecSyncOnAnyShard(&list_request);
         if (list_request.Error() != KvError::NoError)
         {
             req->SetDone(list_request.Error());
@@ -2204,6 +2213,22 @@ bool EloqStore::SendRequest(KvRequest *req)
 
     Shard *shard = shards_[req->TableId().ShardIndex(shards_.size())].get();
     return shard->AddKvRequest(req);
+}
+
+void EloqStore::ExecSyncOnAnyShard(KvRequest *req) const
+{
+    if (shards_[utils::RandomInt(static_cast<int>(shards_.size()))]
+            ->AddKvRequest(req))
+    {
+        req->Wait();
+    }
+    else
+    {
+        // AddKvRequest refuses new work once the store is stopping; complete
+        // the request with NotRunning instead of waiting on one that was never
+        // enqueued. Anything already enqueued is caught by the shard's drain.
+        req->SetDone(KvError::NotRunning);
+    }
 }
 
 void EloqStore::Stop()

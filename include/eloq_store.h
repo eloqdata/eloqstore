@@ -996,6 +996,12 @@ public:
 
 private:
     bool SendRequest(KvRequest *req);
+    // Submit @p req to an arbitrary shard and block until it completes. Used by
+    // the global cloud-listing handlers, which are not tied to a partition, so
+    // any shard can serve them. If the store is stopping the shard refuses the
+    // request; it is then completed with NotRunning instead of hanging. const
+    // so the const CollectTablePartitions helper can share it.
+    void ExecSyncOnAnyShard(KvRequest *req) const;
     void HandleDropTableRequest(DropTableRequest *req);
     void HandleGlobalArchiveRequest(GlobalArchiveRequest *req);
     void HandleGlobalReopenRequest(GlobalReopenRequest *req);

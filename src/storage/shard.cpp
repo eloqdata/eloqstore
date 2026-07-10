@@ -209,6 +209,9 @@ void Shard::WorkLoop()
 #endif
     }
 
+    // Complete any requests that raced Stop() into the queue before tearing
+    // down, so their callers don't hang forever.
+    DrainPendingRequests();
     task_mgr_.Shutdown();
     // Unfinished tasks may still own MemCachedPage::Handle instances.
     // Release task state before tearing down the index-page pool they
@@ -259,8 +262,40 @@ void Shard::Stop()
 #endif
 }
 
+void Shard::DrainPendingRequests()
+{
+    KvRequest *req = nullptr;
+    [[maybe_unused]] size_t drained = 0;
+    while (requests_.try_dequeue(req))
+    {
+        req->SetDone(KvError::NotRunning);
+        ++drained;
+    }
+    for (DelayedEntry &entry : delayed_requests_)
+    {
+        entry.request->SetDone(KvError::NotRunning);
+    }
+    delayed_requests_.clear();
+#ifdef ELOQ_MODULE_ENABLED
+    if (drained > 0)
+    {
+        req_queue_size_.fetch_sub(drained, std::memory_order_relaxed);
+    }
+#endif
+}
+
 bool Shard::AddKvRequest(KvRequest *req)
 {
+    // The store is stopping: refuse new work instead of enqueuing into a queue
+    // whose consumer is exiting. Returning false (without completing the
+    // request) matches SendRequest's contract -- ExecSync completes it with
+    // NotRunning, ExecAsyn returns false to the caller, and the internal
+    // OOM-retry re-enqueue site completes it explicitly. Anything already
+    // enqueued before this flag was observed is caught by DrainPendingRequests.
+    if (io_mgr_->IsStoreStopping())
+    {
+        return false;
+    }
     bool ret = requests_.enqueue(req);
 #ifdef ELOQ_MODULE_ENABLED
     if (ret)
@@ -1004,7 +1039,12 @@ void Shard::OnTaskFinished(KvTask *task)
 #else
         req->done_.store(false, std::memory_order_relaxed);
 #endif
-        AddKvRequest(req);
+        // AddKvRequest refuses new work once the store is stopping; complete
+        // the retried request with NotRunning instead of dropping it.
+        if (!AddKvRequest(req))
+        {
+            req->SetDone(KvError::NotRunning);
+        }
         return;
     }
 
@@ -1045,6 +1085,7 @@ void Shard::WorkOneRound()
     {
         if (stop_requested)
         {
+            DrainPendingRequests();
             task_mgr_.Shutdown();
             index_mgr_.Shutdown();
             io_mgr_->Stop();

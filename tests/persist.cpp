@@ -537,3 +537,67 @@ TEST_CASE("append mode survives compression toggles across restarts",
     store.reset();
     CleanupStore(base_opts);
 }
+
+// Requests submitted concurrently with Stop() must all complete: none may be
+// stranded in a shard queue whose consumer exited, and Stop() must not crash on
+// the shards_ vector. Before the fix, a submitter racing Stop() could index a
+// torn-down shards_ (partition_id_ % 0 -> SIGFPE) or enqueue into a queue that
+// was never drained, hanging its caller forever. Each iteration submits from a
+// separate thread while the main thread stops; then Start() again (exercises
+// shards_ retention + rebuild). ExecAsyn is non-blocking, so a regression shows
+// up as a crash or an accepted-but-not-done request, never as a test hang.
+TEST_CASE("requests racing Stop all complete", "[persist][shutdown]")
+{
+    eloqstore::EloqStore *store = InitStore(default_opts);
+
+    constexpr int kIters = 8;
+    constexpr int kReqs = 400;
+    for (int iter = 0; iter < kIters; ++iter)
+    {
+        if (iter > 0)
+        {
+            REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
+                    eloqstore::KvError::NoError);
+        }
+
+        std::vector<eloqstore::BatchWriteRequest> reqs(kReqs);
+        std::vector<char> accepted(kReqs, 0);
+        std::atomic<int> submitted{0};
+
+        std::thread submitter(
+            [&]
+            {
+                for (int i = 0; i < kReqs; ++i)
+                {
+                    std::vector<eloqstore::WriteDataEntry> batch;
+                    batch.emplace_back(Key(i),
+                                       std::to_string(i),
+                                       1,
+                                       eloqstore::WriteOp::Upsert);
+                    reqs[i].SetArgs(
+                        eloqstore::TableIdent{"race", static_cast<uint32_t>(i)},
+                        std::move(batch));
+                    accepted[i] = store->ExecAsyn(&reqs[i]) ? 1 : 0;
+                    submitted.fetch_add(1, std::memory_order_relaxed);
+                }
+            });
+
+        // Let the submitter get underway so Stop() genuinely races in-flight
+        // submissions rather than completing before the thread ramps up.
+        while (submitted.load(std::memory_order_relaxed) < kReqs / 4)
+        {
+            std::this_thread::yield();
+        }
+        store->Stop();
+        submitter.join();
+
+        // Every accepted request completed (processed or drained NotRunning).
+        for (int i = 0; i < kReqs; ++i)
+        {
+            if (accepted[i])
+            {
+                REQUIRE(reqs[i].IsDone());
+            }
+        }
+    }
+}
