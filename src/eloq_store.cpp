@@ -142,9 +142,13 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
         LOG(ERROR) << "Option max_global_request_batch cannot be zero";
         return false;
     }
-    if ((opts.data_page_size & (page_align - 1)) != 0)
+    if (opts.data_page_size == 0 ||
+        (opts.data_page_size & (page_align - 1)) != 0)
     {
-        LOG(ERROR) << "Option data_page_size is not page aligned";
+        // data_page_size == 0 divides by zero in the PageManager constructor;
+        // it also satisfies the alignment mask, so guard it explicitly.
+        LOG(ERROR) << "Option data_page_size (" << opts.data_page_size
+                   << ") must be non-zero and page aligned";
         return false;
     }
     // segment_size: must be page-aligned. Enforced here so release builds

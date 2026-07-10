@@ -54,6 +54,12 @@ TEST_CASE("EloqStore ValidateOptions validates all parameters", "[eloq_store]")
     REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
     options = CreateValidOptions(test_dir);  // restore valid value
 
+    // Test data_page_size == 0 (satisfies the alignment mask but divides by
+    // zero in the PageManager constructor).
+    options.data_page_size = 0;
+    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
+    options = CreateValidOptions(test_dir);  // restore valid value
+
     // Test coroutine_stack_size that is not page-aligned
     options.coroutine_stack_size = 8193;  // not page-aligned
     REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
@@ -181,6 +187,44 @@ TEST_CASE("EloqStore ValidateOptions rejects >4GiB data/segment files",
     options.segment_size = 256 * 1024;     // 2^18
     options.segments_per_file_shift = 15;  // 2^18 << 15 == 2^33 == 8 GiB
     REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
+
+    CleanupTestDir(test_dir);
+}
+
+// Audit finding rank 23: data_page_size is a uint16 field, but LoadFromIni
+// parsed it into a uint64 and assigned with only a >0 guard on the
+// pre-truncation value -- 64KB wrapped to 0 (SIGFPE at startup), 68KB silently
+// became 4KB. LoadFromIni must reject out-of-range values instead.
+TEST_CASE("KvOptions LoadFromIni rejects out-of-range data_page_size",
+          "[eloq_store]")
+{
+    auto test_dir = CreateTestDir("_ini_data_page_size");
+    auto write_ini = [&](const std::string &name, const std::string &page_size)
+    {
+        fs::path p = test_dir / name;
+        std::ofstream f(p);
+        f << "[run]\nnum_threads = 2\n[permanent]\ndata_page_size=" << page_size
+          << "\n";
+        f.close();
+        return p;
+    };
+
+    // 64KB overflows the uint16 field to 0 -> reject, don't truncate to 0.
+    {
+        eloqstore::KvOptions opts;
+        REQUIRE(opts.LoadFromIni(write_ini("bad64k.ini", "64KB").c_str()) < 0);
+    }
+    // 68KB would silently truncate to 4KB -> reject.
+    {
+        eloqstore::KvOptions opts;
+        REQUIRE(opts.LoadFromIni(write_ini("bad68k.ini", "68KB").c_str()) < 0);
+    }
+    // A valid in-range page size loads correctly.
+    {
+        eloqstore::KvOptions opts;
+        REQUIRE(opts.LoadFromIni(write_ini("ok8k.ini", "8KB").c_str()) == 0);
+        REQUIRE(opts.data_page_size == 8192);
+    }
 
     CleanupTestDir(test_dir);
 }
