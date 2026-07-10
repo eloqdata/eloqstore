@@ -250,6 +250,23 @@ void WaitForGc(int ms = 800)
     std::this_thread::sleep_for(chrono::milliseconds(ms));
 }
 
+template <typename Pred>
+bool WaitForCondition(chrono::milliseconds timeout,
+                      chrono::milliseconds step,
+                      Pred &&pred)
+{
+    auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (pred())
+        {
+            return true;
+        }
+        std::this_thread::sleep_for(step);
+    }
+    return pred();
+}
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -308,6 +325,53 @@ TEST_CASE(
 
     SegmentFileInfo after = InspectSegmentFiles(opts, tbl);
     REQUIRE_FALSE(after.any);
+
+    store->Stop();
+    CleanupStore(opts);
+}
+
+// Full-partition Truncate must also retire the large-value segment files. Its
+// fast path used to free only the data mapper, leaving the segment mapping
+// populated so GC kept every segment file forever.
+TEST_CASE("full truncate of a large-value partition retires every segment file",
+          "[large-value-gc][pinned]")
+{
+    PinnedHarness h;
+    eloqstore::KvOptions opts =
+        MakePinnedOpts(h, /*file_amp=*/2, /*seg_amp=*/2);
+    eloqstore::EloqStore *store = InitStore(opts);
+
+    eloqstore::TableIdent tbl{"lvgc_truncate_all", 0};
+    const size_t seg = h.SegmentSize();
+
+    {
+        std::vector<PinnedBatchEntry> entries;
+        entries.push_back(
+            {"k_a", h.AllocateSegmentAligned(seg * 2), 0x2010, "meta-a"});
+        entries.push_back(
+            {"k_b", h.AllocateSegmentAligned(seg * 3), 0x2020, "meta-b"});
+        entries.push_back(
+            {"k_c", h.AllocateSegmentAligned(seg * 1), 0x2030, "meta-c"});
+        WritePinnedBatch(store, tbl, std::move(entries), /*ts=*/1);
+    }
+
+    SegmentFileInfo before = InspectSegmentFiles(opts, tbl);
+    REQUIRE(before.any);
+
+    {
+        eloqstore::TruncateRequest req;
+        req.SetArgs(tbl, std::string{});  // empty position -> full truncate
+        store->ExecSync(&req);
+        REQUIRE(req.Error() == eloqstore::KvError::NoError);
+    }
+
+    // Nudge so UpdateMeta/GC runs on the now-empty segment mapping, then poll
+    // until GC has retired the segment files.
+    WriteSmall(store, tbl, "nudge", "x", /*ts=*/2);
+    REQUIRE(WaitForCondition(chrono::seconds(10),
+                             chrono::milliseconds(20),
+                             [&]
+                             { return !InspectSegmentFiles(opts, tbl).any; }));
 
     store->Stop();
     CleanupStore(opts);

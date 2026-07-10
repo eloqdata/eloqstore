@@ -1859,6 +1859,27 @@ KvError BatchWriteTask::Truncate(std::string_view trunc_pos)
             FreePage(page_id);
         }
 
+        // Also free the large-value segment pages. Without this the segment
+        // mapping stays populated and is serialized into the empty snapshot, so
+        // GC keeps the segment files forever (only DropTable would reclaim
+        // them). The partial-truncate path frees these via DelLargeValue.
+        if (cow_meta_.segment_mapper_ != nullptr)
+        {
+            PageMapper *seg_mapper = cow_meta_.segment_mapper_.get();
+            const auto &seg_tbl = seg_mapper->GetMapping()->mapping_tbl_;
+            for (PageId seg_id = 0; seg_id < seg_tbl.size(); ++seg_id)
+            {
+                auto val_type =
+                    MappingSnapshot::GetValType(seg_tbl.Get(seg_id));
+                if (val_type == MappingSnapshot::ValType::Invalid ||
+                    val_type == MappingSnapshot::ValType::PageId)
+                {
+                    continue;
+                }
+                seg_mapper->FreePage(seg_id);
+            }
+        }
+
         cow_meta_.root_id_ = MaxPageId;
         cow_meta_.ttl_root_id_ = MaxPageId;
         cow_meta_.next_expire_ts_ = 0;
