@@ -558,7 +558,7 @@ TEST_CASE("append mode survives compression toggles across restarts",
     CleanupStore(base_opts);
 }
 
-// Audit finding rank 13: a failed index-page (MemCachedPage) write must not
+// A failed index-page (MemCachedPage) write must not
 // CHECK-abort the process. WritePage() takes a temporary IO pin on top of the
 // submitting task's handle, and the completion runs from the shard loop while
 // the WriteTask coroutine is suspended in WaitWrite holding that handle (via
