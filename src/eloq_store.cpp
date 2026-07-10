@@ -2012,8 +2012,18 @@ void EloqStore::HandleGlobalCreateBranchRequest(GlobalCreateBranchRequest *req)
         list_request.SetRecursive(false);
         do
         {
+            // ExecSyncOnAnyShard bypasses SendRequest, so it does not reset
+            // done_; reset it before each reuse or Wait() would return early.
+#ifdef ELOQ_MODULE_ENABLED
+            {
+                std::lock_guard<bthread::Mutex> lk(list_request.mutex_);
+                list_request.done_ = false;
+            }
+#else
+            list_request.done_.store(false, std::memory_order_relaxed);
+#endif
             objects.clear();
-            ExecSync(&list_request);
+            ExecSyncOnAnyShard(&list_request);
 
             if (list_request.Error() != KvError::NoError)
             {
