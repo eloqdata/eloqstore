@@ -4,19 +4,21 @@
 # Consumers call FetchContent_MakeAvailable(<dep>) (or
 # eloqstore_provide_liburing()) for the dependencies they actually use.
 
+# Share one download/build pool across build trees (main build, python wheel,
+# rust vendor) via the FETCHCONTENT_BASE_DIR env var. This must run BEFORE
+# include(FetchContent), which pins the cache variable to <build>/_deps; FORCE
+# so it wins over that default (and over a stale value on reconfigure).
+if (DEFINED ENV{FETCHCONTENT_BASE_DIR})
+    set(FETCHCONTENT_BASE_DIR "$ENV{FETCHCONTENT_BASE_DIR}" CACHE PATH
+        "Shared FetchContent download/build directory" FORCE)
+endif ()
+
 include(FetchContent)
 
 # Surface clone/build progress at configure time. FETCHCONTENT_QUIET is ON by
 # default and swallows populate output, so GIT_PROGRESS below would be hidden
 # without this.
 set(FETCHCONTENT_QUIET OFF)
-
-# Allow sharing one download/build pool across build trees (main build, python
-# wheel, rust vendor) by exporting FETCHCONTENT_BASE_DIR in the environment.
-if (DEFINED ENV{FETCHCONTENT_BASE_DIR} AND NOT DEFINED CACHE{FETCHCONTENT_BASE_DIR})
-    set(FETCHCONTENT_BASE_DIR "$ENV{FETCHCONTENT_BASE_DIR}" CACHE PATH
-        "Shared FetchContent download/build directory")
-endif ()
 
 # Dependencies are linked statically into the build products.
 # FORCE: aws-sdk-cpp overwrites a plain variable with its own ON cache default.
