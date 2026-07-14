@@ -6,6 +6,11 @@
 
 include(FetchContent)
 
+# Surface clone/build progress at configure time. FETCHCONTENT_QUIET is ON by
+# default and swallows populate output, so GIT_PROGRESS below would be hidden
+# without this.
+set(FETCHCONTENT_QUIET OFF)
+
 # Allow sharing one download/build pool across build trees (main build, python
 # wheel, rust vendor) by exporting FETCHCONTENT_BASE_DIR in the environment.
 if (DEFINED ENV{FETCHCONTENT_BASE_DIR} AND NOT DEFINED CACHE{FETCHCONTENT_BASE_DIR})
@@ -29,32 +34,37 @@ set(ENABLE_ZLIB_REQUEST_COMPRESSION OFF CACHE BOOL "aws-sdk-cpp request compress
 FetchContent_Declare(awssdk
         GIT_REPOSITORY https://github.com/aws/aws-sdk-cpp.git
         GIT_TAG 1.11.446
-        GIT_SHALLOW TRUE)
+        GIT_SHALLOW TRUE
+        GIT_PROGRESS TRUE)
 
 # glog (eloqdata fork)
 set(WITH_GTEST OFF CACHE BOOL "glog tests")
 FetchContent_Declare(glog
         GIT_REPOSITORY https://github.com/eloqdata/glog.git
-        GIT_TAG 0316d0c5a6e8098dc661c30b6c6795cc538e92de)
+        GIT_TAG 0316d0c5a6e8098dc661c30b6c6795cc538e92de
+        GIT_PROGRESS TRUE)
 
 # brpc (eloqdata fork with io_uring support); used by benchmark/ only, which
 # seeds its glog/liburing discovery variables before making it available.
 FetchContent_Declare(brpc
         GIT_REPOSITORY https://github.com/eloqdata/brpc.git
-        GIT_TAG 02c3f2de6a79b3d4828a3f75b04096f06be929c5)
+        GIT_TAG 02c3f2de6a79b3d4828a3f75b04096f06be929c5
+        GIT_PROGRESS TRUE)
 
 # Catch2 (tests only)
 FetchContent_Declare(Catch2
         GIT_REPOSITORY https://github.com/catchorg/Catch2.git
         GIT_TAG v3.3.2
-        GIT_SHALLOW TRUE)
+        GIT_SHALLOW TRUE
+        GIT_PROGRESS TRUE)
 
 # liburing: newer than the Ubuntu 24.04 package and not a CMake project, so it
 # is built once at configure time. Sets URING_INCLUDE_PATH / URING_LIB in the
 # caller's scope.
 FetchContent_Declare(liburing
         GIT_REPOSITORY https://github.com/axboe/liburing.git
-        GIT_TAG liburing-2.6)
+        GIT_TAG liburing-2.6
+        GIT_PROGRESS TRUE)
 macro (eloqstore_provide_liburing)
     FetchContent_MakeAvailable(liburing)
     if (NOT EXISTS "${liburing_SOURCE_DIR}/src/liburing.a")
