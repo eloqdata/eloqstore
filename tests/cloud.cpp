@@ -305,6 +305,7 @@ TEST_CASE("cloud reopen waits on evicting cached file", "[cloud][gc]")
     reader.join();
 
     writer.Validate();
+    store->Stop();
 }
 
 TEST_CASE("cloud gc removes local cached files after remote truncate",
@@ -711,6 +712,8 @@ TEST_CASE("cloud prewarm honors partition filter", "[cloud][prewarm]")
             REQUIRE_FALSE(fs::exists(partition_path));
         }
     }
+
+    store->Stop();
 }
 
 TEST_CASE("cloud prewarm handles pagination with 2000+ files",
@@ -1301,6 +1304,8 @@ TEST_CASE("cloud global archive shares timestamp and filters partitions",
         auto tags = collect_archive_tags(tbl_id);
         REQUIRE(tags.empty());
     }
+
+    store->Stop();
 }
 
 TEST_CASE("cloud store with restart", "[cloud]")
@@ -1902,6 +1907,7 @@ TEST_CASE("concurrent test with cloud", "[cloud]")
     tester.Init();
     tester.Run(1000, 100, 10);
     tester.Clear();
+    store->Stop();
 }
 
 TEST_CASE("easy cloud rollback to archive", "[cloud][archive]")
