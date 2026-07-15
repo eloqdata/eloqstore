@@ -1076,8 +1076,8 @@ TEST_CASE("standby replica follows cloud-mode master", "[standby][cloud]")
 }
 
 TEST_CASE(
-    "standby cloud scan succeeds via ResourceMissing reopen after stale local "
-    "manifest and cloud gc",
+    "standby cloud scan succeeds via auto reopen after stale local manifest "
+    "and cloud gc",
     "[standby][cloud][gc]")
 {
     constexpr uint64_t kPhase2Rounds = 3;
