@@ -330,12 +330,12 @@ void Shard::EnqueueReopenWaiter(KvRequest *req)
     // normally seeded; without this initialization an OutOfMem while reopening
     // for waiters would fail every parked waiter instead of retrying.
     reopen_req->oom_retry_remaining_ = store_->Options().auto_oom_retry_times;
-    EnqueueDelayedReopenRequest(tbl_id, reopen_req);
+    EnqueueDelayedReopenRequest(reopen_req);
 }
 
-void Shard::EnqueueDelayedReopenRequest(const TableIdent &tbl_id,
-                                        ReopenRequest *req)
+void Shard::EnqueueDelayedReopenRequest(ReopenRequest *req)
 {
+    const TableIdent tbl_id = req->TableId();
     uint64_t delay_us = req->PendingTime();
     if (delay_us == 0)
     {
@@ -346,6 +346,9 @@ void Shard::EnqueueDelayedReopenRequest(const TableIdent &tbl_id,
     }
 
     const uint64_t execute_at = ReadTimeMicroseconds() + delay_us;
+    // Keep tbl_id independent of the request pointer: an external
+    // ReopenRequest may replace and destroy this internal driver before the
+    // delayed entry is promoted.
     delayed_requests_.push_back({tbl_id, req, execute_at});
     std::push_heap(delayed_requests_.begin(),
                    delayed_requests_.end(),
@@ -366,7 +369,7 @@ void Shard::PromoteReadyDelayedReopenRequests()
 
         auto it = pending_reopens_.find(entry.tbl_id);
         if (it == pending_reopens_.end() ||
-            !it->second.IsInternalDriver(entry.request))
+            !it->second.IsCurrentInternalDriver(entry.request))
         {
             continue;
         }
@@ -796,20 +799,16 @@ bool Shard::ProcessReq(KvRequest *req)
         auto *reopen_req = static_cast<ReopenRequest *>(req);
         CHECK_EQ(reopen_req->PendingTime(), 0);
         ReopenTask *task = task_mgr_.GetReopenTask(req->TableId());
-        auto it = pending_reopens_.find(req->TableId());
-        if (it != pending_reopens_.end())
+        auto [it, inserted] = pending_reopens_.try_emplace(req->TableId());
+        if (inserted || !it->second.IsCurrentInternalDriver(reopen_req))
         {
-            // For a table with pending reopen waiters, the running
-            // ReopenRequest is either the state's embedded internal driver or
-            // an external request that just reached the table's write slot.
-            // The state cannot already hold another external driver because
-            // same-table writes are serialized. It also cannot hold a
-            // different internal driver for this request: internal drivers are
-            // created only when pending_reopens_ has no entry for the table.
-            if (!it->second.IsInternalDriver(reopen_req))
-            {
-                it->second.SetExternalDriver(reopen_req);
-            }
+            // An external ReopenRequest becomes the pending-reopen driver even
+            // when there are no waiters yet. Waiters that hit ResourceMissing
+            // while this task yields will then attach to this running reopen
+            // instead of creating a delayed internal driver. If this request is
+            // the embedded internal driver, the state already exists and the
+            // pointer comparison above prevents replacing it.
+            it->second.SetExternalDriver(reopen_req);
         }
         task->result_err_ = KvError::NoError;
         auto lbd = [task, req]() -> KvError
@@ -1042,11 +1041,11 @@ finish:
 void Shard::OnTaskFinished(KvTask *task)
 {
     KvRequest *req = task->req_;
-    const bool resource_missing_reopen = task->needs_resource_missing_reopen_;
+    const bool auto_reopen = task->needs_auto_reopen_;
     const bool oom_retry = task->needs_oom_retry_;
     const TaskType task_type = task->Type();
     task->req_ = nullptr;
-    task->needs_resource_missing_reopen_ = false;
+    task->needs_auto_reopen_ = false;
     task->needs_oom_retry_ = false;
     auto retry_oom = [this, req]()
     {
@@ -1115,7 +1114,7 @@ void Shard::OnTaskFinished(KvTask *task)
         }
     }
 
-    if (__builtin_expect(!resource_missing_reopen, 1))
+    if (__builtin_expect(!auto_reopen, 1))
     {
         return;
     }
