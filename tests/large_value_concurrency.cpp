@@ -978,3 +978,33 @@ TEST_CASE(
     store->Stop();
     CleanupStore(opts);
 }
+
+// A large value whose length exceeds
+// kLargeValueLengthMask (2 GiB - 1) cannot be represented in the 31-bit
+// on-disk length field (bit 31 is the has-metadata flag). WriteLargeValue must
+// reject it up front instead of casting the length to uint32 -- which would
+// truncate it and/or collide with the metadata flag, corrupting the blob so
+// every later read fails. The guard runs before any memory is dereferenced, so
+// a huge declared length over a small real pinned chunk exercises it without
+// allocating gigabytes.
+TEST_CASE("pinned large value over the 2 GiB length cap is rejected",
+          "[large-value-concurrency][pinned]")
+{
+    PinnedMultiShardHarness h(kSegmentSize, /*num_shards=*/1);
+    eloqstore::KvOptions opts =
+        MakePinnedOpts(h, /*pinned_tail_scratch_slots=*/2);
+    eloqstore::EloqStore *store = InitStore(opts);
+
+    eloqstore::TableIdent tbl{"lv-cap", 0};
+    // 2 GiB == kLargeValueHasMetadataBit: one byte past the 31-bit length cap.
+    const size_t too_large = size_t{1} << 31;
+    std::pair<char *, size_t> dst{h.Base(0), too_large};
+
+    eloqstore::BatchWriteRequest req;
+    AsyncPinnedWrite(store, req, tbl, "big", dst, /*metadata=*/"", /*ts=*/1);
+    req.Wait();
+    REQUIRE(req.Error() == eloqstore::KvError::InvalidArgs);
+
+    store->Stop();
+    CleanupStore(opts);
+}

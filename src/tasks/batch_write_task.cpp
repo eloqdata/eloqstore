@@ -1482,6 +1482,16 @@ KvError BatchWriteTask::WriteLargeValue(const WriteDataEntry &entry)
             std::get_if<IoStringBuffer>(&entry.large_val_);
         iosb != nullptr)
     {
+        // The on-disk large-value header encodes the length in 31 bits (bit 31
+        // is the has-metadata flag), so a value longer than
+        // kLargeValueLengthMask (2 GiB - 1) cannot be represented: casting to
+        // uint32 would truncate it and/or collide with the metadata flag,
+        // corrupting the blob so every later read fails. EloqStore does not
+        // support values this large; reject.
+        if (iosb->Size() > kLargeValueLengthMask)
+        {
+            return KvError::InvalidArgs;
+        }
         const auto &fragments = iosb->Fragments();
         const uint32_t num_segments = fragments.size();
         std::vector<const char *> ptrs(num_segments);
@@ -1504,6 +1514,12 @@ KvError BatchWriteTask::WriteLargeValue(const WriteDataEntry &entry)
         const size_t size = pinned->second;
         assert(base != nullptr);
         assert(size > 0);
+        // See the IoStringBuffer path above: values longer than
+        // kLargeValueLengthMask (2 GiB - 1) cannot be encoded on disk.
+        if (size > kLargeValueLengthMask)
+        {
+            return KvError::InvalidArgs;
+        }
         const uint32_t num_segments =
             static_cast<uint32_t>((size + seg_size - 1) / seg_size);
 
