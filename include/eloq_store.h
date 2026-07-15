@@ -483,9 +483,9 @@ public:
     }
 
 private:
-    // Internal to the shard's delayed auto-reopen path: a non-zero pending
+    // Internal to the shard's delayed reopen-waiter path: a non-zero pending
     // time is only honored by Shard::EnqueueDelayedReopenRequest, which
-    // externally submitted requests never reach — they go straight to
+    // externally submitted requests never reach - they go straight to
     // ProcessReq, whose PendingTime()==0 invariant would abort. Keep these
     // unreachable from user code.
     void SetPendingTime(uint64_t us)
@@ -501,11 +501,6 @@ private:
     std::string tag_;
     bool clean_{false};
     uint64_t pending_time_us_{0};
-    // Set only on the shard-owned request embedded in PendingReopenState.
-    // Shard::OnTaskFinished erases that state when the auto-reopen itself
-    // finishes; a user-issued reopen for the same table must leave it alone,
-    // since the embedded request may still sit in the shard's delayed heap.
-    bool auto_reopen_{false};
 
     friend class EloqStore;
     friend class ReopenTask;

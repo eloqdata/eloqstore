@@ -7,6 +7,7 @@
 #include <memory>
 #include <unordered_map>
 #include <utility>  // NOLINT(build/include_order)
+#include <variant>
 #include <vector>
 
 #include "circular_queue.h"
@@ -100,10 +101,14 @@ private:
     void OnTaskFinished(KvTask *task);
     void OnReceivedReq(KvRequest *req);
     bool ProcessReq(KvRequest *req);
-    void EnqueueForAutoReopen(KvRequest *req);
-    void EnqueueDelayedReopenRequest(ReopenRequest *req);
+    void EnqueueReopenWaiter(KvRequest *req);
+    void EnqueueDelayedReopenRequest(
+        // Copied into DelayedEntry so an external ReopenRequest can replace
+        // the internal driver without leaving delayed promotion dependent on
+        // dereferencing the old internal request pointer.
+        const TableIdent &tbl_id,
+        ReopenRequest *req);
     void PromoteReadyDelayedReopenRequests();
-    void AdoptPendingReopenAfterUserReopen(const TableIdent &tbl_id);
     // On reopen success re-sends the parked waiters (failed re-sends
     // complete with NotRunning); on failure completes them with that error.
     void CompleteReopenWaiters(std::vector<KvRequest *> waiters,
@@ -150,7 +155,7 @@ private:
     {
         task->req_ = req;
         task->status_ = TaskStatus::Ongoing;
-        task->needs_auto_reopen_ = false;
+        task->needs_resource_missing_reopen_ = false;
         task->needs_oom_retry_ = false;
         running_ = task;
         // Mark the resume start so a cooperative background loop measures this
@@ -223,9 +228,10 @@ private:
                     {
                         CHECK(req->TableId().IsValid());
                         --req->reopen_retry_remaining_;
-                        task->needs_auto_reopen_ = true;
+                        task->needs_resource_missing_reopen_ = true;
                     }
-                    request_completed = !task->needs_auto_reopen_;
+                    request_completed =
+                        !task->needs_resource_missing_reopen_;
                     if (request_completed)
                     {
                         req->SetDone(err);
@@ -335,13 +341,36 @@ private:
 
     struct PendingReopenState
     {
+        using Driver = std::variant<ReopenRequest, ReopenRequest *>;
+
+        ReopenRequest *DriverRequest()
+        {
+            if (auto *internal = std::get_if<ReopenRequest>(&driver_))
+            {
+                return internal;
+            }
+            return std::get<ReopenRequest *>(driver_);
+        }
+
+        bool IsInternalDriver(ReopenRequest *req) const
+        {
+            const auto *internal = std::get_if<ReopenRequest>(&driver_);
+            return internal != nullptr && internal == req;
+        }
+
+        void SetExternalDriver(ReopenRequest *req)
+        {
+            driver_ = req;
+        }
+
         std::vector<KvRequest *> waiters_;
-        ReopenRequest request_;
+        Driver driver_;
     };
     std::unordered_map<TableIdent, PendingReopenState> pending_reopens_;
 
     struct DelayedEntry
     {
+        TableIdent tbl_id;
         ReopenRequest *request;
         uint64_t execute_at_us;
 

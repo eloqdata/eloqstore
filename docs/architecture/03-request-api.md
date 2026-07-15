@@ -89,12 +89,11 @@ Two retry loops live *inside* the engine (`Shard::StartTask` epilogue +
   term. Only then is `SetDone` deferred; otherwise the error surfaces
   directly. The internal request's pending time is shard-private
   (`ReopenRequest::SetPendingTime` is not public API), and only the
-  auto-reopen's own completion tears the state down — a user or
-  `GlobalReopen` reopen for the same table finishing first must not. If
-  that user reopen *succeeds* while the auto-reopen is still queued, the
-  shard adopts the state instead: the delayed auto-reopen is cancelled and
-  the parked requests are re-driven immediately, so a tag or clean reopen
-  cannot later be overridden by the stale empty-tag auto-reopen.
+  internal reopen request's own completion tears the state down unless an
+  external `ReopenRequest` for the same table reaches the write slot first. In
+  that case the external reopen replaces the internal driver in
+  `PendingReopenState`; the stale delayed entry is skipped later, and the
+  parked requests are completed from the external reopen result.
 - **OOM retry** — a task aborted by `KvError::OutOfMem` (e.g. buffer pool
   exhaustion from pinned pages) is re-enqueued at the back of the shard queue
   up to `auto_oom_retry_times`, giving other tasks a chance to release pins.

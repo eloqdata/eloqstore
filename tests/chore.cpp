@@ -144,25 +144,16 @@ TEST_CASE("file size tests - mixed page and file size combinations",
     }
 }
 
-TEST_CASE("user reopen must not destroy pending auto-reopen state",
-          "[chore][auto_reopen]")
+TEST_CASE("failed external reopen completes pending reopen waiters",
+          "[chore][reopen_waiter]")
 {
     KvOptions opts = default_opts;
-    // Park the auto-reopen in the shard's delayed heap long enough for a
-    // user-issued reopen on the same table to complete first.
+    // Keep the auto reopen delayed so the external reopen runs first.
     opts.auto_reopen_pending_time_us = 2'000'000;
 
     EloqStore *store = InitStore(opts);
 
-    const auto t0 = std::chrono::steady_clock::now();
-
-    // A request carrying the reopen_ flag is parked in
-    // PendingReopenState::waiters_ while the shard-owned auto-reopen request
-    // enters the delayed heap — the state a ResourceMissing failure leaves
-    // behind. The waiter lives on the heap and its done flag is shared with
-    // the callback, so if an assertion below fails while the waiter is still
-    // parked in the (static, still-running) store, unwinding leaks it
-    // instead of letting a late SetDone write into freed stack memory.
+    // Heap-allocate the parked waiter; on failure the shard may still own it.
     auto waiter_done = std::make_shared<std::atomic<bool>>(false);
     auto *waiter = new eloqstore::ReadRequest();
     waiter->SetArgs(test_tbl_id, "k0");
@@ -172,29 +163,15 @@ TEST_CASE("user reopen must not destroy pending auto-reopen state",
                             [waiter_done](eloqstore::KvRequest *)
                             { waiter_done->store(true); }));
 
-    // A user reopen for the same table finishes while the auto-reopen is
-    // still waiting in the delayed heap. It must leave the pending state
-    // alone: erasing it frees the delayed request out from under the heap
-    // and drops the waiter without SetDone. ExecSync blocks until done, so
-    // user_reopen itself never outlives the store's use of it.
-    eloqstore::ReopenRequest user_reopen;
-    user_reopen.SetArgs(test_tbl_id);
-    store->ExecSync(&user_reopen);
-    const eloqstore::KvError user_err = user_reopen.Error();
-    // Scenario sanity probe: the auto-reopen should still be pending when
-    // the user reopen finished. Only meaningful when this thread wasn't
-    // stalled past the 2s timer window (slow or sanitizer-instrumented CI):
-    // the timer arms after t0, so under 1s elapsed it cannot have fired.
-    const bool premature_fire =
-        waiter_done->load() &&
-        std::chrono::steady_clock::now() - t0 < std::chrono::seconds(1);
+    // In local mode, the external reopen becomes the driver and fails waiters
+    // with its own InvalidArgs result.
+    eloqstore::ReopenRequest external_reopen;
+    external_reopen.SetArgs(test_tbl_id);
+    store->ExecSync(&external_reopen);
+    const eloqstore::KvError external_err = external_reopen.Error();
 
-    // Once the pending time elapses the auto-reopen executes and completes
-    // the parked waiter. Before the fix the waiter never completed and the
-    // shard dereferenced the freed delayed request (use-after-free /
-    // CHECK-abort in the completion callback).
     const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        std::chrono::steady_clock::now() + std::chrono::seconds(4);
     while (!waiter_done->load() && std::chrono::steady_clock::now() < deadline)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -206,14 +183,9 @@ TEST_CASE("user reopen must not destroy pending auto-reopen state",
     {
         delete waiter;
     }
-    // else: leak the waiter deliberately — the store still references it.
+    // else: leak; the store may still reference it.
 
-    // Local mode rejects reopen with InvalidArgs; the reopen task still ran
-    // to completion, which is all this regression needs.
-    REQUIRE(user_err == eloqstore::KvError::InvalidArgs);
-    REQUIRE_FALSE(premature_fire);
+    REQUIRE(external_err == eloqstore::KvError::InvalidArgs);
     REQUIRE(done);
-    // The auto-reopen's outcome must be propagated to the parked waiter via
-    // SetDone (local mode: InvalidArgs), not swallowed or rewritten.
     REQUIRE(waiter_err == eloqstore::KvError::InvalidArgs);
 }

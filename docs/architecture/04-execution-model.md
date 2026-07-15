@@ -89,7 +89,7 @@ partition is queued exactly like a user write and therefore serializes with
 user writes (see `AddPendingCompact` / `AddPendingTTL` / `AddPendingLocalGc`).
 
 `StartTask`'s epilogue (in `include/storage/shard.h`) centralizes task
-completion: abort handling, OOM retry, auto-reopen retry, `SetDone`, and
+completion: abort handling, OOM retry, ResourceMissing reopen retry, `SetDone`, and
 metrics. `OnTaskFinished` releases the partition's write slot, frees the task
 to its pool, and re-dispatches pending writes.
 

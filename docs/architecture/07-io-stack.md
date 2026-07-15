@@ -74,7 +74,7 @@ Local disk = bounded LRU cache of cloud objects; object store = durable copy.
 - **Download path**: a read missing its local file (`OpenFile` local miss)
   triggers `DownloadFile` into the cache and retries; `GetManifest` can fetch
   the manifest object; `RefreshManifest(tag)` pulls a newer/archived manifest
-  before replay (used by reopen and auto-reopen, doc 03).
+  before replay (used by reopen and ResourceMissing reopen retry, doc 03).
 - **Cache management**: every cached file is tracked (`closed_files_` LRU,
   `used_local_space_` vs per-shard slice of `local_space_limit`).
   `ReserveCacheSpace` evicts closed files (the background `FileCleaner` task)
