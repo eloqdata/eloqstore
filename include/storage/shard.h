@@ -319,8 +319,6 @@ private:
         void PushFront(WriteRequest *req);
         WriteRequest *Front();
         WriteRequest *PopFront();
-        // Unlinks @p req if queued; returns whether it was found.
-        bool Remove(WriteRequest *req);
         bool Empty() const;
 
         // Requests from internal

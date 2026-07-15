@@ -1274,33 +1274,6 @@ WriteRequest *Shard::PendingWriteQueue::Front()
     return head_;
 }
 
-bool Shard::PendingWriteQueue::Remove(WriteRequest *req)
-{
-    WriteRequest *prev = nullptr;
-    for (WriteRequest *cur = head_; cur != nullptr; cur = cur->next_)
-    {
-        if (cur == req)
-        {
-            if (prev == nullptr)
-            {
-                head_ = cur->next_;
-            }
-            else
-            {
-                prev->next_ = cur->next_;
-            }
-            if (tail_ == cur)
-            {
-                tail_ = prev;
-            }
-            cur->next_ = nullptr;
-            return true;
-        }
-        prev = cur;
-    }
-    return false;
-}
-
 WriteRequest *Shard::PendingWriteQueue::PopFront()
 {
     WriteRequest *req = head_;
