@@ -230,8 +230,7 @@ private:
                         --req->reopen_retry_remaining_;
                         task->needs_resource_missing_reopen_ = true;
                     }
-                    request_completed =
-                        !task->needs_resource_missing_reopen_;
+                    request_completed = !task->needs_resource_missing_reopen_;
                     if (request_completed)
                     {
                         req->SetDone(err);

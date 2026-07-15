@@ -1042,8 +1042,7 @@ finish:
 void Shard::OnTaskFinished(KvTask *task)
 {
     KvRequest *req = task->req_;
-    const bool resource_missing_reopen =
-        task->needs_resource_missing_reopen_;
+    const bool resource_missing_reopen = task->needs_resource_missing_reopen_;
     const bool oom_retry = task->needs_oom_retry_;
     const TaskType task_type = task->Type();
     task->req_ = nullptr;
@@ -1085,9 +1084,11 @@ void Shard::OnTaskFinished(KvTask *task)
             {
                 std::vector<KvRequest *> waiters =
                     std::move(reopen_it->second.waiters_);
+                // Drop the completed reopen state before re-enqueueing
+                // waiters; a waiter may immediately re-enter this shard and
+                // must not attach to the old state.
                 pending_reopens_.erase(reopen_it);
-                CompleteReopenWaiters(std::move(waiters),
-                                      rtask->result_err_);
+                CompleteReopenWaiters(std::move(waiters), rtask->result_err_);
             }
         }
         pending_q.running_ = false;
