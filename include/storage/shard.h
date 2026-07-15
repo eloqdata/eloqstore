@@ -104,8 +104,10 @@ private:
     void EnqueueReopenWaiter(KvRequest *req);
     void EnqueueDelayedReopenRequest(ReopenRequest *req);
     void PromoteReadyDelayedReopenRequests();
-    // On reopen success re-sends the parked waiters (failed re-sends
-    // complete with NotRunning); on failure completes them with that error.
+    // Called when the reopen driver for parked waiters reaches a final result.
+    // Successful reopen resubmits the waiters so they retry their original
+    // requests; failed reopen completes every waiter with the reopen error.
+    // Transient Reopen OOM retries happen before this function is called.
     void CompleteReopenWaiters(std::vector<KvRequest *> waiters,
                                KvError reopen_err);
     bool HasPendingDelayedRequests() const

@@ -388,13 +388,18 @@ void Shard::PromoteReadyDelayedReopenRequests()
 void Shard::CompleteReopenWaiters(std::vector<KvRequest *> waiters,
                                   KvError reopen_err)
 {
-    for (KvRequest *pending_req : waiters)
+    if (reopen_err != KvError::NoError)
     {
-        if (reopen_err != KvError::NoError)
+        for (KvRequest *pending_req : waiters)
         {
             pending_req->SetDone(reopen_err);
         }
-        else if (!store_->SendRequest(pending_req))
+        return;
+    }
+
+    for (KvRequest *pending_req : waiters)
+    {
+        if (!store_->SendRequest(pending_req))
         {
             pending_req->SetDone(KvError::NotRunning);
         }
