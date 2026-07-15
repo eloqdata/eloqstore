@@ -154,14 +154,10 @@ TEST_CASE("failed external reopen completes pending reopen waiters",
     EloqStore *store = InitStore(opts);
 
     // Heap-allocate the parked waiter; on failure the shard may still own it.
-    auto waiter_done = std::make_shared<std::atomic<bool>>(false);
     auto *waiter = new eloqstore::ReadRequest();
     waiter->SetArgs(test_tbl_id, "k0");
     waiter->SetReopen(true);
-    REQUIRE(store->ExecAsyn(waiter,
-                            0,
-                            [waiter_done](eloqstore::KvRequest *)
-                            { waiter_done->store(true); }));
+    REQUIRE(store->ExecAsyn(waiter));
 
     // In local mode, the external reopen becomes the driver and fails waiters
     // with its own InvalidArgs result.
@@ -172,11 +168,11 @@ TEST_CASE("failed external reopen completes pending reopen waiters",
 
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(4);
-    while (!waiter_done->load() && std::chrono::steady_clock::now() < deadline)
+    while (!waiter->IsDone() && std::chrono::steady_clock::now() < deadline)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    const bool done = waiter_done->load();
+    const bool done = waiter->IsDone();
     const eloqstore::KvError waiter_err =
         done ? waiter->Error() : eloqstore::KvError::NoError;
     if (done)

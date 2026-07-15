@@ -2238,14 +2238,10 @@ TEST_CASE("successful external reopen drives pending reopen waiters",
     tester.Upsert(0, 10);
 
     // Heap-allocate the parked waiter; on failure the shard may still own it.
-    auto waiter_done = std::make_shared<std::atomic<bool>>(false);
     auto *waiter = new eloqstore::ReadRequest();
     waiter->SetArgs(test_tbl_id, test_util::Key(1, 7));
     waiter->SetReopen(true);
-    REQUIRE(store->ExecAsyn(waiter,
-                            0,
-                            [waiter_done](eloqstore::KvRequest *)
-                            { waiter_done->store(true); }));
+    REQUIRE(store->ExecAsyn(waiter));
 
     // The external reopen takes over the parked waiter immediately.
     eloqstore::ReopenRequest external_reopen;
@@ -2255,11 +2251,11 @@ TEST_CASE("successful external reopen drives pending reopen waiters",
 
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(4);
-    while (!waiter_done->load() && std::chrono::steady_clock::now() < deadline)
+    while (!waiter->IsDone() && std::chrono::steady_clock::now() < deadline)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    const bool done = waiter_done->load();
+    const bool done = waiter->IsDone();
     const eloqstore::KvError waiter_err =
         done ? waiter->Error() : eloqstore::KvError::NoError;
     const std::string waiter_value = done ? waiter->value_ : "";
