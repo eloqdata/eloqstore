@@ -12,10 +12,12 @@
  *                  storm control per-file liveness exactly.
  *   2. baseline  — closed-loop uniform-random point reads at fixed
  *                  concurrency for baseline_secs. No writes.
- *   3. mixed     — the measured workload: a write-dominated op mix (default
+ *   3. mixed     — the measured workload: a write-dominated op mix (target
  *                  90% write key-ops / 10% point reads, --write_read_ratio)
- *                  where reads are paced off completed write batches so the
- *                  ratio holds regardless of relative speeds; set
+ *                  where completed write batches grant read credits. The
+ *                  ratio is a read upper bound: slow readers can make the
+ *                  achieved mix more write-heavy, which achieved_write_pct
+ *                  reports. Set
  *                  write_read_ratio=0 for the original unthrottled
  *                  reads-vs-storm shape. The writes overwrite a rotating
  *                  strided subset of keys (span of every ratio, default 3
@@ -30,7 +32,9 @@
  * (computed from raw samples, not a sliding window), the storm's write MB/s,
  * and per-shard IoQosStats deltas (in-flight watermarks, budget-blocked
  * counts/time, fdatasync). Greppable one-line summaries are prefixed with
- * "RESULT" for sweep scripts.
+ * "RESULT" for sweep scripts. A run exits nonzero if either measured phase
+ * has errors, missing keys, fewer than --min_read_samples successes, or an
+ * enabled BG budget records no mixed-phase background page reads.
  *
  * EloqStore options (including the QoS knobs) come from --kvoptions ini, so
  * sweeps only vary the ini / flags. See opts_interference.ini.
@@ -47,7 +51,6 @@
 #include <thread>
 #include <vector>
 
-#include "async_io_manager.h"  // IoQosStats
 #include "coding.h"
 #include "eloq_store.h"
 #include "utils.h"
@@ -70,10 +73,13 @@ DEFINE_uint32(storm_span, 3, "keys overwritten within each stride");
 DEFINE_uint32(storm_batch_keys, 2048, "keys per storm batch-write request");
 DEFINE_uint32(write_read_ratio,
               9,
-              "write key-ops per point read in the mixed phase (9 = 90/10 "
-              "write/read op mix). 0 = reads run unthrottled closed-loop "
-              "alongside the writes (the original storm shape)");
+              "completed write key-ops required to grant one mixed-phase "
+              "read (9 targets at least 90% writes; slow readers can make it "
+              "more write-heavy). 0 = unthrottled closed-loop reads");
 DEFINE_bool(load, true, "load data first (false reuses an existing store)");
+DEFINE_uint64(min_read_samples,
+              1000,
+              "minimum successful reads required in each measured phase");
 
 using namespace std::chrono;
 
@@ -84,9 +90,9 @@ constexpr char kTable[] = "ifb";
 std::atomic<int> g_phase{0};  // 0 load, 1 baseline, 2 mixed, 3 done
 
 // Read pacing for the mixed phase: every completed storm batch adds its key
-// count; issuing one read consumes write_read_ratio credits, so reads track
-// the write throughput at the configured op ratio (e.g. 9 -> 10% reads /
-// 90% writes by ops).
+// count; issuing one read consumes write_read_ratio credits, allowing at most
+// one read per ratio completed writes. Slow readers can make the actual mix
+// more write-heavy; achieved_write_pct reports it.
 std::atomic<int64_t> g_read_credits{0};
 
 bool TryConsumeReadCredits()
@@ -121,10 +127,6 @@ std::string MakeKey(uint64_t key)
 
 struct Reader
 {
-    explicit Reader(uint32_t id) : id_(id)
-    {
-    }
-    const uint32_t id_;
     eloqstore::ReadRequest request_;
     char key_[sizeof(uint64_t)];
     uint64_t start_us_{0};
@@ -153,24 +155,43 @@ void ReportPhase(const char *name, PhaseLatencies &lat, double secs)
     std::sort(lat.samples.begin(), lat.samples.end());
     const size_t n = lat.samples.size();
     const uint64_t qps = secs > 0 ? static_cast<uint64_t>(n / secs) : 0;
+    const uint64_t p99 = Percentile(lat.samples, 0.99);
     LOG(INFO) << "RESULT phase=" << name << " reads=" << n << " qps=" << qps
               << " p50=" << Percentile(lat.samples, 0.50)
-              << " p90=" << Percentile(lat.samples, 0.90)
-              << " p99=" << Percentile(lat.samples, 0.99)
+              << " p90=" << Percentile(lat.samples, 0.90) << " p99=" << p99
               << " p999=" << Percentile(lat.samples, 0.999)
               << " max=" << (n ? lat.samples.back() : 0)
               << " not_found=" << lat.not_found << " errors=" << lat.errors
               << " (latency us)";
 }
 
+bool ValidatePhase(const char *name, const PhaseLatencies &lat)
+{
+    bool valid = true;
+    if (lat.samples.size() < FLAGS_min_read_samples)
+    {
+        LOG(ERROR) << name << " phase produced only " << lat.samples.size()
+                   << " successful reads; require at least "
+                   << FLAGS_min_read_samples;
+        valid = false;
+    }
+    if (lat.not_found != 0 || lat.errors != 0)
+    {
+        LOG(ERROR) << name << " phase had not_found=" << lat.not_found
+                   << " errors=" << lat.errors;
+        valid = false;
+    }
+    return valid;
+}
+
 /**
  * Read driver. Baseline phase: closed loop at FLAGS_read_concurrency.
  * Mixed phase with write_read_ratio > 0: reads are additionally gated on
- * credits produced by completed storm writes, holding the op mix at
- * 1 read : ratio writes (reads pause when writes stall, and vice versa
- * never outrun the ratio). Each completion is recorded into the phase the
- * request was ISSUED in (so a request straddling a phase flip does not
- * contaminate the other phase).
+ * credits produced by completed storm writes, preventing reads from exceeding
+ * 1 read per ratio writes. Writers are not paced by readers, so slow readers
+ * can produce a more write-heavy mix. Each completion is recorded into the
+ * phase the request was ISSUED in (so a request straddling a phase flip does
+ * not contaminate the other phase).
  */
 void ReadLoop(eloqstore::EloqStore *store,
               PhaseLatencies *baseline,
@@ -182,12 +203,15 @@ void ReadLoop(eloqstore::EloqStore *store,
     idle.reserve(FLAGS_read_concurrency);
     for (uint32_t i = 0; i < FLAGS_read_concurrency; i++)
     {
-        readers[i] = std::make_unique<Reader>(i);
+        readers[i] = std::make_unique<Reader>();
         idle.push_back(readers[i].get());
     }
 
     auto callback = [&finished](eloqstore::KvRequest *req)
-    { finished.enqueue(reinterpret_cast<Reader *>(req->UserData())); };
+    {
+        CHECK(finished.enqueue(reinterpret_cast<Reader *>(req->UserData())))
+            << "read completion queue allocation failed";
+    };
 
     std::mt19937_64 rnd(12345);
     auto send_req = [&](Reader *reader)
@@ -271,7 +295,6 @@ struct StormWriter
     uint64_t bytes_written_{0};
     uint64_t keys_written_{0};
     uint32_t batch_keys_{0};  // keys in the currently in-flight batch
-    bool done_{false};
 };
 
 /**
@@ -336,7 +359,11 @@ StormTotals StormLoop(eloqstore::EloqStore *store)
         writers[i] = std::make_unique<StormWriter>(i);
     }
     auto callback = [&finished](eloqstore::KvRequest *req)
-    { finished.enqueue(reinterpret_cast<StormWriter *>(req->UserData())); };
+    {
+        CHECK(
+            finished.enqueue(reinterpret_cast<StormWriter *>(req->UserData())))
+            << "storm completion queue allocation failed";
+    };
 
     for (auto &w : writers)
     {
@@ -452,7 +479,12 @@ int main(int argc, char *argv[])
 {
     google::ParseCommandLineFlags(&argc, &argv, true);
     CHECK_GT(FLAGS_partitions, 0u);
+    CHECK_GT(FLAGS_keys_per_partition, 0u);
     CHECK_GT(FLAGS_read_concurrency, 0u);
+    CHECK_GT(FLAGS_baseline_secs, 0u);
+    CHECK_GT(FLAGS_storm_secs, 0u);
+    CHECK_GT(FLAGS_storm_batch_keys, 0u);
+    CHECK_GT(FLAGS_min_read_samples, 0u);
     CHECK_GT(FLAGS_storm_span, 0u);
     CHECK_GT(FLAGS_storm_ratio, FLAGS_storm_span)
         << "storm must be a PARTIAL overwrite (span < ratio); a full "
@@ -487,6 +519,7 @@ int main(int argc, char *argv[])
     PhaseLatencies baseline, storm_lat;
 
     // Baseline phase: reads only.
+    uint64_t mixed_bg_read_pages = 0;
     for (size_t s = 0; s < num_shards; s++)
     {
         qos_start[s] = store.GetIoQosStats(s);
@@ -541,8 +574,23 @@ int main(int argc, char *argv[])
                        s,
                        options.data_page_size,
                        FLAGS_storm_secs);
+        mixed_bg_read_pages += qos_end[s].bg_read_.admitted_pages_ -
+                               qos_mid[s].bg_read_.admitted_pages_;
     }
 
+    const bool baseline_valid = ValidatePhase("baseline", baseline);
+    const bool mixed_valid = ValidatePhase("mixed", storm_lat);
+    bool interference_valid = true;
+    if (options.max_inflight_read != 0 && mixed_bg_read_pages == 0)
+    {
+        LOG(ERROR) << "mixed phase produced no budgeted background page "
+                      "reads; the intended write/compaction interference was "
+                      "not exercised";
+        interference_valid = false;
+    }
+    const bool valid = baseline_valid && mixed_valid && interference_valid;
+    LOG(INFO) << "RESULT validation=" << (valid ? "pass" : "fail");
+
     store.Stop();
-    return 0;
+    return valid ? 0 : 2;
 }

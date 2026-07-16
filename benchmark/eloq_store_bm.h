@@ -133,12 +133,7 @@ struct ReadOperation
     explicit ReadOperation(const Benchmark *bm);
 
     ReadOperation(const ReadOperation &rhs) = delete;
-    ReadOperation(ReadOperation &&rhs)
-        : req_(std::move(rhs.req_)),
-          key_(std::move(rhs.key_)),
-          start_ts_(rhs.start_ts_)
-    {
-    }
+    ReadOperation(ReadOperation &&rhs) noexcept = default;
 
     req_uptr req_;
     std::string key_;

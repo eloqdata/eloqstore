@@ -318,9 +318,12 @@ The two read-side options deliberately live at different levels:
   pools dwarf the ≤ max_inflight_write pages of pins; only tests noticed).
 - **`max_inflight_write` is redefined, not retired.** It is the M1 write cap
   (configured data-page units, default dropped from 32768 to 512).
-  `WriteReqPool` stays sized to it; in-flight writes can never exceed it, so
-  the pool bound and the QoS bound coincide. Note this is a behavioral
-  change for deployments that set the old option explicitly.
+  In-flight pages are bounded by `max(cap, one request's cost)` because one
+  oversized request may run alone to guarantee progress. `WriteReqPool` stays
+  numerically sized to the option, but counts request objects rather than page
+  units; it is therefore a conservative allocation bound, not the QoS bound
+  itself. Note this is a behavioral change for deployments that set the old
+  option explicitly.
 - **`max_write_concurrency` is no longer an IO-QoS knob.** Note it is
   enforced **per shard** (each shard's `TaskManager` counts its own active
   write tasks against the store-wide option value), so the device-wide task
@@ -387,7 +390,7 @@ Export per-shard counters from day one; tuning must be measurement-driven:
 - Cumulative blocked time and counts per admission class: `read_` is foreground
   waits only, `bg_read_` is background waits, and `write_` is all write waits.
 - Background write bytes/sec (actual, vs. limit when M3 lands).
-- fdatasync count and latency histogram.
+- fdatasync count and cumulative batch wall time.
 
 ## Evaluation Plan
 

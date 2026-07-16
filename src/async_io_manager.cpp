@@ -205,7 +205,15 @@ void IoBudget::Acquire(uint32_t cost, bool background)
                                       ? bg_cap_ - bg_inflight
                                       : 0;
         const uint32_t fg_cap = cap_ > reserved ? cap_ - reserved : 0;
-        return inflight + cost > fg_cap && inflight != 0;
+        const bool exceeds_fg_cap =
+            uint64_t{inflight} + cost > uint64_t{fg_cap};
+        // Oversized requests may exceed the configured cap only when they are
+        // alone and no background entitlement is reserved. Without the
+        // reserved check, a foreground request can steal a 100% BG slice in
+        // the wake-to-admit gap whenever total inflight briefly reaches zero.
+        const bool oversized_alone =
+            inflight == 0 && reserved == 0 && cost > cap_;
+        return exceeds_fg_cap && !oversized_alone;
     };
     // Each class queues behind its own existing waiters (approximate FIFO
     // across arrivals within the class).
@@ -230,8 +238,25 @@ void IoBudget::Acquire(uint32_t cost, bool background)
             zone.Wait(ThdTask());
             if (use_bg)
             {
-                TEST_FAIL_POINT_ACTION("IoBudgetBgWake",
-                                       ThdTask()->YieldToLowPQ());
+                TEST_FAIL_POINT_ACTION("IoBudgetBgWake", {
+                    FailPoint &fail_point = FailPoint::GetInstance();
+                    if (fail_point.PauseRequested() &&
+                        !fail_point.PauseReached())
+                    {
+                        // Prove that the paused regression reached the exact
+                        // wake gap with foreground demand both ready and
+                        // queued, rather than relying on cumulative counters.
+                        CHECK(!waiting_.Empty());
+                        CHECK_GT(shard->ready_tasks_.Size(), 0);
+                        CHECK(shard->ready_tasks_.Peek()->Type() ==
+                              TaskType::Read);
+                    }
+                    do
+                    {
+                        ThdTask()->YieldToLowPQ();
+                        fail_point.MarkPauseReached();
+                    } while (fail_point.PauseRequested());
+                });
             }
         } while (must_wait());
         const uint64_t waited_us = shard->DurationMicroseconds(start_us);
@@ -312,8 +337,7 @@ IouringMgr::IouringMgr(const KvOptions *opts, uint32_t fd_limit)
     : AsyncIoManager(opts), fd_limit_(fd_limit)
 {
     memset(&ring_, 0, sizeof(ring_));
-    const char *iostats_env = getenv("ELOQ_IO_STATS");
-    io_stats_enabled_ = iostats_env != nullptr && iostats_env[0] == '1';
+    io_stats_enabled_ = IoStatsEnabled();
     lru_fd_head_.next_ = &lru_fd_tail_;
     lru_fd_tail_.prev_ = &lru_fd_head_;
 
@@ -321,11 +345,13 @@ IouringMgr::IouringMgr(const KvOptions *opts, uint32_t fd_limit)
     write_req_pool_ = std::make_unique<WriteReqPool>(pool_size);
     merged_write_req_pool_ = std::make_unique<MergedWriteReqPool>(pool_size);
 
-    // In-flight page-IO budgets (docs/design/io_qos.md M1/M2). The write cap
-    // shares max_inflight_write with the request-pool sizing above, so the
-    // pool bound and the QoS bound coincide by construction. The read budget
-    // carries the background sub-budget; the write budget has none — all
-    // page writes come from write tasks, which are background by definition.
+    // In-flight page-IO budgets (docs/design/io_qos.md M1/M2). The request
+    // pools above count request objects, while the write budget counts page
+    // units and permits one oversized request to run alone; sharing the option
+    // makes pool sizing conservative but does not make the bounds identical.
+    // The read budget carries the background sub-budget; the write budget has
+    // none — all page writes come from write tasks, which are background by
+    // definition.
     read_budget_.SetCap(options_->max_inflight_read);
     write_budget_.SetCap(options_->max_inflight_write);
     if (options_->max_inflight_read != 0)
@@ -2250,6 +2276,7 @@ void IouringMgr::PollComplete()
             task = static_cast<KvTask *>(ptr);
             if (type == UserDataType::KvTaskPageRead)
             {
+                TEST_FAIL_POINT_ACTION("KvTaskPageReadCqe", cqe->res = -EIO);
                 read_budget_.Release(1, task->IsBackground());
                 if (io_stats_enabled_)
                 {
@@ -2265,6 +2292,7 @@ void IouringMgr::PollComplete()
             BaseReq *req = static_cast<BaseReq *>(ptr);
             if (type == UserDataType::BaseReqPageRead)
             {
+                TEST_FAIL_POINT_ACTION("BaseReqPageReadCqe", cqe->res = -EIO);
                 read_budget_.Release(1, req->task_->IsBackground());
             }
             req->res_ = cqe->res;

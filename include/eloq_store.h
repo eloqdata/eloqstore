@@ -34,7 +34,6 @@ namespace eloqstore
 {
 class Shard;
 class EloqStore;
-struct IoQosStats;
 
 enum class RequestType : uint8_t
 {
@@ -986,9 +985,9 @@ public:
 
     /**
      * @brief Per-shard IO QoS statistics (in-flight page-IO budgets,
-     * fdatasync accounting; see docs/design/io_qos.md). Counters use
-     * single-writer relaxed atomics, yielding a race-free but non-coherent
-     * live snapshot and exact values once the shard is quiesced.
+     * fdatasync accounting; see docs/design/io_qos.md). Backing counters use
+     * single-writer relaxed atomics; the returned plain value is a race-free
+     * but non-coherent live snapshot and is exact once the shard is quiesced.
      * Returns zeros for invalid shard IDs or managers without budgets.
      */
     IoQosStats GetIoQosStats(size_t shard_id) const;

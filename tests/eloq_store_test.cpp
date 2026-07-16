@@ -14,6 +14,8 @@
 
 namespace fs = std::filesystem;
 
+static_assert(sizeof(eloqstore::IoQosStats) > 0);
+
 eloqstore::KvOptions CreateValidOptions(const fs::path &test_dir)
 {
     eloqstore::KvOptions options;
@@ -41,6 +43,40 @@ void CleanupTestDir(const fs::path &test_dir)
         fs::remove_all(test_dir);
     }
 }
+
+TEST_CASE("KvOptions parses QoS knobs and preserves malformed defaults",
+          "[eloq_store]")
+{
+    const fs::path test_dir = CreateTestDir("_qos_options");
+    const fs::path ini_path = test_dir / "eloqstore.ini";
+    {
+        std::ofstream ini(ini_path);
+        REQUIRE(ini.is_open());
+        ini << "[run]\nmax_inflight_write = 73\n"
+               "max_inflight_read = 17\n"
+               "bg_read_ratio = 42\n"
+               "[permanent]\nstore_path = /tmp/unused\n";
+    }
+
+    eloqstore::KvOptions options;
+    REQUIRE(options.LoadFromIni(ini_path.c_str()) == 0);
+    REQUIRE(options.max_inflight_write == 73);
+    REQUIRE(options.max_inflight_read == 17);
+    REQUIRE(options.bg_read_ratio == 42);
+
+    {
+        std::ofstream ini(ini_path);
+        REQUIRE(ini.is_open());
+        ini << "[run]\nmax_inflight_write = invalid\n"
+               "[permanent]\nstore_path = /tmp/unused\n";
+    }
+    options = eloqstore::KvOptions{};
+    REQUIRE(options.LoadFromIni(ini_path.c_str()) == 0);
+    REQUIRE(options.max_inflight_write ==
+            eloqstore::KvOptions{}.max_inflight_write);
+    CleanupTestDir(test_dir);
+}
+
 TEST_CASE("EloqStore ValidateOptions validates all parameters", "[eloq_store]")
 {
     auto test_dir = CreateTestDir("_validate_options");
@@ -48,6 +84,11 @@ TEST_CASE("EloqStore ValidateOptions validates all parameters", "[eloq_store]")
 
     // Test valid configuration
     REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == true);
+
+    // Write budget 0 is not a disable switch: every write must be bounded.
+    options.max_inflight_write = 0;
+    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
+    options = CreateValidOptions(test_dir);  // restore valid value
 
     // Test data_page_size that is not page-aligned
     options.data_page_size = 4097;  // not page-aligned

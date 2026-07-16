@@ -82,9 +82,11 @@ const eloqstore::KvOptions cloud_archive_opts = {
  * Create (or replace) the per-binary test store. Stops and destroys any
  * previously created store first, so at most one EloqStore instance is ever
  * started in the process — required by the process-global Options() pointer.
- * All test store creation must go through here; do not construct EloqStore
- * directly in tests. Pass cleanup = false to keep existing local/cloud state
- * (warm-restart and cache-reuse tests).
+ * Tests using this shared fixture must create stores through InitStore.
+ * Intentional multi-instance/topology tests may own EloqStore instances
+ * directly and are responsible for compatible process-global options. Pass
+ * cleanup = false to keep existing local/cloud state (warm-restart and
+ * cache-reuse tests).
  */
 eloqstore::EloqStore *InitStore(const eloqstore::KvOptions &opts,
                                 bool cleanup = true);

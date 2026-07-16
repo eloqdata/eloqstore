@@ -27,6 +27,37 @@ enum class StoreMode
     Cloud
 };
 
+/**
+ * @brief Plain snapshot of one shard's IO QoS statistics.
+ *
+ * The backing counters are single-writer relaxed atomics. Sampling them is
+ * race-free but not coherent across fields while the shard is live; values
+ * are exact once the shard is quiesced. See docs/design/io_qos.md.
+ */
+struct IoQosStats
+{
+    struct Budget
+    {
+        uint32_t inflight_{0};        // pages currently admitted
+        uint32_t high_watermark_{0};  // max pages ever admitted
+        uint64_t blocked_count_{0};   // acquisitions that had to wait
+        uint64_t blocked_us_{0};      // cumulative wait time
+        // Cumulative configured data pages ever admitted by this budget. This
+        // is budgeted page-IO volume, not total device traffic. Metadata,
+        // manifest, bulk file/snapshot, fdatasync, and segment IO are
+        // unbudgeted and therefore absent.
+        uint64_t admitted_pages_{0};
+    };
+    Budget read_;
+    // Background slice of read_ (M2), bounded by the bg sub-budget. Inflight,
+    // high-watermark, and admitted pages are subsets of read_; blocked fields
+    // are per-class (read_ is foreground, bg_read_ is background).
+    Budget bg_read_;
+    Budget write_;
+    uint64_t fdatasync_count_{0};  // write-path fdatasync ops (FdatasyncFiles)
+    uint64_t fdatasync_us_{0};     // cumulative batch wall time
+};
+
 using PageId = uint32_t;
 constexpr PageId MaxPageId = UINT32_MAX;
 

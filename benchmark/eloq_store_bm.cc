@@ -550,7 +550,6 @@ struct Get2Client
     moodycamel::BlockingConcurrentQueue<EloqStoreBM::ReadOperation *> done_;
     std::vector<uint64_t> lat_us_;
     uint64_t outstanding_{0};
-    uint64_t successes_{0};
     uint64_t read_failed_{0};
     uint64_t issue_failed_{0};
 };
@@ -566,7 +565,8 @@ uint64_t Get2NowUs()
 void Benchmark::OnReadV2(::eloqstore::KvRequest *req)
 {
     auto *op = reinterpret_cast<ReadOperation *>(req->UserData());
-    static_cast<Get2Client *>(op->client_)->done_.enqueue(op);
+    CHECK(static_cast<Get2Client *>(op->client_)->done_.enqueue(op))
+        << "GET2 completion queue allocation failed";
 }
 
 void Benchmark::RunGet2(uint32_t client_threads,
@@ -628,7 +628,7 @@ void Benchmark::RunGet2(uint32_t client_threads,
                 }
                 std::vector<uint32_t> shard_out(nshards, 0);
 
-                auto issue = [&](ReadOperation *op) -> bool
+                auto issue = [&](ReadOperation *op)
                 {
                     uint64_t key_index =
                         gen.get_key_index(OBJECT_GENERATOR_KEY_RANDOM);
@@ -665,11 +665,10 @@ void Benchmark::RunGet2(uint32_t client_threads,
                                                OnReadV2))
                     {
                         ++me.issue_failed_;
-                        return false;
+                        return;
                     }
                     ++shard_out[op->shard_];
                     ++me.outstanding_;
-                    return true;
                 };
 
                 auto complete = [&](ReadOperation *op)
@@ -684,7 +683,6 @@ void Benchmark::RunGet2(uint32_t client_threads,
                         return;
                     }
                     me.lat_us_.push_back(Get2NowUs() - op->start_ts_);
-                    ++me.successes_;
                 };
 
                 for (auto &op : ops)
@@ -727,16 +725,15 @@ void Benchmark::RunGet2(uint32_t client_threads,
     const double dur_sec = (Get2NowUs() - bench_start) / 1e6;
 
     std::vector<uint64_t> all;
-    uint64_t successes = 0;
     uint64_t read_failures = 0;
     uint64_t issue_failures = 0;
     for (auto &cl : clients)
     {
-        successes += cl.successes_;
         read_failures += cl.read_failed_;
         issue_failures += cl.issue_failed_;
         all.insert(all.end(), cl.lat_us_.begin(), cl.lat_us_.end());
     }
+    const uint64_t successes = all.size();
     std::sort(all.begin(), all.end());
     auto pct = [&](double p) -> uint64_t
     {
