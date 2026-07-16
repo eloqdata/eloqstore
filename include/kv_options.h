@@ -415,14 +415,13 @@ struct KvOptions
      */
     uint16_t prewarm_task_count = 3;
     /**
-     * @brief Maximum reopen-retry attempts when a request fails with missing
-     * underlying resources in cloud/standby mode.
+     * @brief Maximum automatic reopen-retry attempts when a request fails with
+     * missing underlying resources in cloud/standby mode.
      */
     uint8_t auto_reopen_retry_times = 10;
     uint8_t auto_oom_retry_times = 5;
     /**
-     * @brief Pending time in microseconds for ResourceMissing-triggered
-     * reopen requests.
+     * @brief Pending time in microseconds for auto-reopen requests.
      * The reopen will wait up to this duration for pending writes to complete
      * before executing.
      */
