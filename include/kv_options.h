@@ -79,6 +79,8 @@ struct KvOptions
      * page, so the cap means the same thing in append and non-append mode.
      * Also sizes the write request pools. With `enable_data_page_cache`, it
      * bounds cached-page write-promotion pins held until IO completion.
+     * Metadata, manifest, bulk file/snapshot, fdatasync, and segment IO are
+     * exempt.
      * Cannot be zero.
      *
      * NOTE: before the IO QoS work this option only sized the non-append
@@ -90,8 +92,8 @@ struct KvOptions
     /**
      * @brief Per-shard cap on in-flight page-read IO, in configured
      * data-page units (`data_page_size`; docs/design/io_qos.md M1). Applies to
-     * data-page reads
-     * (ReadPage/ReadPages); metadata and segment IO are exempt.
+     * data-page reads (ReadPage/ReadPages); metadata, manifest, bulk file
+     * reads (ReadFile/ReadFilePrefix), and segment IO are exempt.
      * 0 disables the read budget.
      *
      * This is the device-calibration knob of the QoS sizing contract (see

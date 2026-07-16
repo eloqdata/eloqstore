@@ -403,18 +403,18 @@ void ReportQosDelta(const char *name,
                     const eloqstore::IoQosStats &begin,
                     const eloqstore::IoQosStats &end,
                     size_t shard,
+                    uint32_t data_page_size,
                     double secs)
 {
     auto d = [](uint64_t b, uint64_t e) { return e - b; };
-    // Store-issued page IO in MB/s over the phase: every page metered by the
-    // budgets (user data + compaction relocations + index pages). This is
-    // the device-facing rate to compare against the fio calibration curve —
-    // unlike the workload's logical write MB/s, it includes background
-    // amplification (and excludes only manifest/fdatasync/segment IO).
+    // Budgeted page IO in MB/s over the phase: user data, compaction
+    // relocations, and index pages. This is not total device traffic; metadata,
+    // manifest, bulk file/snapshot, fdatasync, and segment IO are unbudgeted.
     auto mbps = [&](const eloqstore::IoQosStats::Budget &b,
                     const eloqstore::IoQosStats::Budget &e)
     {
-        return secs > 0 ? (d(b.admitted_pages_, e.admitted_pages_) * 4096) /
+        return secs > 0 ? (d(b.admitted_pages_, e.admitted_pages_) *
+                           static_cast<double>(data_page_size)) /
                               (secs * (1 << 20))
                         : 0.0;
     };
@@ -423,17 +423,18 @@ void ReportQosDelta(const char *name,
               << d(begin.read_.blocked_count_, end.read_.blocked_count_)
               << " read_blocked_us="
               << d(begin.read_.blocked_us_, end.read_.blocked_us_)
-              << " read_page_mbps=" << mbps(begin.read_, end.read_)
+              << " read_budgeted_page_mbps=" << mbps(begin.read_, end.read_)
               << " bg_read_hwm=" << end.bg_read_.high_watermark_
               << " bg_read_blocked="
               << d(begin.bg_read_.blocked_count_, end.bg_read_.blocked_count_)
               << " bg_read_blocked_us="
               << d(begin.bg_read_.blocked_us_, end.bg_read_.blocked_us_)
-              << " bg_read_page_mbps=" << mbps(begin.bg_read_, end.bg_read_)
+              << " bg_read_budgeted_page_mbps="
+              << mbps(begin.bg_read_, end.bg_read_)
               << " write_hwm=" << end.write_.high_watermark_
               << " write_blocked="
               << d(begin.write_.blocked_count_, end.write_.blocked_count_)
-              << " write_page_mbps=" << mbps(begin.write_, end.write_)
+              << " write_budgeted_page_mbps=" << mbps(begin.write_, end.write_)
               << " fdatasync="
               << d(begin.fdatasync_count_, end.fdatasync_count_)
               << " fdatasync_us=" << d(begin.fdatasync_us_, end.fdatasync_us_);
@@ -522,9 +523,18 @@ int main(int argc, char *argv[])
               << static_cast<int>(achieved_write_pct + 0.5);
     for (size_t s = 0; s < num_shards; s++)
     {
-        ReportQosDelta(
-            "baseline", qos_start[s], qos_mid[s], s, FLAGS_baseline_secs);
-        ReportQosDelta("mixed", qos_mid[s], qos_end[s], s, FLAGS_storm_secs);
+        ReportQosDelta("baseline",
+                       qos_start[s],
+                       qos_mid[s],
+                       s,
+                       options.data_page_size,
+                       FLAGS_baseline_secs);
+        ReportQosDelta("mixed",
+                       qos_mid[s],
+                       qos_end[s],
+                       s,
+                       options.data_page_size,
+                       FLAGS_storm_secs);
     }
 
     store.Stop();

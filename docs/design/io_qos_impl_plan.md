@@ -99,7 +99,7 @@ never by the blocked task) and unreachable in practice with caps ≪
 | `IouringMgr::SubmitMergedWrite` (~777) | `write_budget_.Acquire(bytes / data_page_size)` after `merged_write_req_pool_->Alloc`, before `GetSQE`. |
 
 Exempt (unchanged): all metadata ops, manifest IO, `ReadFile` /
-`WriteSnapshot` bulk paths, `Fdatasync` (instrumented only),
+`ReadFilePrefix` / `WriteSnapshot` bulk paths, `Fdatasync` (instrumented only),
 `ReadSegments` / `WriteSegments` (out of scope per design Non-Goals).
 
 ### Release point

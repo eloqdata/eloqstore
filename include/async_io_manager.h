@@ -69,12 +69,10 @@ struct IoQosStats
         uint32_t high_watermark_{0};  // max pages ever admitted
         uint64_t blocked_count_{0};   // acquisitions that had to wait
         uint64_t blocked_us_{0};      // cumulative wait time
-        // Cumulative pages ever admitted. For the write budget this is the
-        // store-issued device write volume in pages (user data pages,
-        // compaction relocations, index pages — everything metered by the
-        // budget), i.e. the store-side counterpart of device write MB/s for
-        // comparing against the fio calibration curve. Excludes manifest
-        // appends, fdatasync, and segment IO (unbudgeted).
+        // Cumulative configured data pages ever admitted by this budget. This
+        // is budgeted page-IO volume, not total device traffic. Metadata,
+        // manifest, bulk file/snapshot, fdatasync, and segment IO are
+        // unbudgeted and therefore absent.
         uint64_t admitted_pages_{0};
     };
     Budget read_;

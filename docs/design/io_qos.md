@@ -136,8 +136,9 @@ separately.
 Segment IO (`ReadSegments` / `WriteSegments`, zero-copy large values) is
 **out of scope** — see Non-Goals.
 
-Metadata operations (open, statx, rename, unlink, mkdir) are exempt; their
-burst size is already bounded by the 128-op chunking from #455.
+Metadata operations (open, statx, rename, unlink, mkdir), manifest IO, and bulk
+file/snapshot paths (`ReadFile`, `ReadFilePrefix`, `WriteSnapshot`) are exempt;
+metadata burst size is already bounded by the 128-op chunking from #455.
 `fdatasync` is not counted initially but is instrumented (see Evaluation).
 
 Enforcement follows the existing idiom, per class (read or write). The
@@ -189,8 +190,8 @@ class ever appears, split the write budget then.)
 Read budget structure:
 
 - Foreground reads: `inflight_read_pages_ ≤ max_inflight_read`.
-- Background reads (compaction move batches, batch-write tree-traversal
-  reads, GC/upload-path reads): additionally
+- Background page reads (compaction move batches, batch-write tree-traversal
+  reads, GC/prewarm page reads): additionally
   `bg_inflight_read_pages_ ≤ bg_read_limit` (a fraction of
   `max_inflight_read`, e.g. 25%).
 
