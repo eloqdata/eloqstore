@@ -559,6 +559,9 @@ void Shard::OnReceivedReq(KvRequest *req)
         auto *wreq = reinterpret_cast<WriteRequest *>(req);
         auto [it, _] = pending_queues_.try_emplace(req->tbl_id_);
         it->second.PushBack(wreq);
+        // This only dispatches writes that have already been dequeued from the
+        // shard's request queue. Later read requests still sitting in
+        // requests_ are not being bypassed by this per-table pending queue.
         TryStartPendingWrite(req->tbl_id_);
         return;
     }
@@ -815,13 +818,8 @@ bool Shard::ProcessReq(KvRequest *req)
             // pointer comparison above prevents replacing it.
             it->second.SetExternalDriver(reopen_req);
         }
-        task->result_err_ = KvError::NoError;
         auto lbd = [task, req]() -> KvError
-        {
-            KvError reopen_err = task->Reopen(req->TableId());
-            task->result_err_ = reopen_err;
-            return reopen_err;
-        };
+        { return task->Reopen(req->TableId()); };
         StartTask(task, req, lbd);
         break;
     }
@@ -1046,12 +1044,48 @@ finish:
 void Shard::OnTaskFinished(KvTask *task)
 {
     KvRequest *req = task->req_;
-    const bool auto_reopen = task->needs_auto_reopen_;
-    const bool oom_retry = task->needs_oom_retry_;
+    const KvError err = task->result_err_;
     const TaskType task_type = task->Type();
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    const RequestType request_type = req->Type();
+    const metrics::TimePoint request_start = finished_request_start_;
+#endif
+    bool oom_retry = false;
+    bool auto_reopen = false;
+    bool request_completed = true;
+
+    if (__builtin_expect(err == KvError::OutOfMem, 0))
+    {
+        if (req->oom_retry_remaining_ > 0)
+        {
+            --req->oom_retry_remaining_;
+            oom_retry = true;
+            request_completed = false;
+            LOG(WARNING) << "Task hit out of memory; retrying ("
+                         << static_cast<int>(req->oom_retry_remaining_)
+                         << " attempts left)";
+        }
+        else
+        {
+            LOG(ERROR) << "Task is aborted due to out of memory";
+        }
+    }
+    else if (__builtin_expect(err == KvError::ResourceMissing, 0))
+    {
+        const StoreMode mode = store_->Mode();
+        if (req->AutoReopenRetry() && req->reopen_retry_remaining_ > 0 &&
+            (mode == StoreMode::Cloud || mode == StoreMode::StandbyReplica))
+        {
+            CHECK(req->TableId().IsValid());
+            --req->reopen_retry_remaining_;
+            auto_reopen = true;
+            request_completed = false;
+        }
+    }
+
     task->req_ = nullptr;
-    task->needs_auto_reopen_ = false;
-    task->needs_oom_retry_ = false;
+    task->result_err_ = KvError::NoError;
+
     auto retry_oom = [this, req]()
     {
         // The aborted task released its pins; re-enqueue the request at the
@@ -1074,15 +1108,39 @@ void Shard::OnTaskFinished(KvTask *task)
         }
     };
 
+    if (request_completed)
+    {
+        req->SetDone(err);
+        // SetDone can invoke the user callback or wake a waiter that destroys
+        // the request. Branches that still use req below are all
+        // request_completed == false paths.
+        req = nullptr;
+    }
+
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    if (request_completed && store_->EnableMetrics())
+    {
+        metrics::Meter *meter = store_->GetMetricsMeter(shard_id_);
+        assert(meter != nullptr);
+        const char *request_type_str =
+            eloqstore::RequestTypeToString(request_type);
+        meter->CollectDuration(metrics::NAME_ELOQSTORE_REQUEST_LATENCY,
+                               request_start,
+                               request_type_str);
+        meter->Collect(
+            metrics::NAME_ELOQSTORE_REQUESTS_COMPLETED, 1.0, request_type_str);
+    }
+#endif
+
+    bool dispatch_pending_writes = false;
     if (!task->ReadOnly())
     {
         auto wtask = reinterpret_cast<WriteTask *>(task);
-        auto it = pending_queues_.find(wtask->TableId());
-        assert(it != pending_queues_.end());
-        PendingWriteQueue &pending_q = it->second;
+        auto pending_it = pending_queues_.find(wtask->TableId());
+        assert(pending_it != pending_queues_.end());
+        PendingWriteQueue &pending_q = pending_it->second;
         if (__builtin_expect(task_type == TaskType::Reopen && !oom_retry, 0))
         {
-            auto *rtask = static_cast<ReopenTask *>(task);
             auto reopen_it = pending_reopens_.find(wtask->TableId());
             if (reopen_it != pending_reopens_.end())
             {
@@ -1092,39 +1150,36 @@ void Shard::OnTaskFinished(KvTask *task)
                 // waiters; a waiter may immediately re-enter this shard and
                 // must not attach to the old state.
                 pending_reopens_.erase(reopen_it);
-                CompleteReopenWaiters(std::move(waiters), rtask->result_err_);
+                CompleteReopenWaiters(std::move(waiters), err);
             }
         }
         pending_q.running_ = false;
-        task_mgr_.FreeTask(task);
         if (pending_q.Empty())
         {
             // No more write requests, remove the pending queue.
-            pending_queues_.erase(it);
+            pending_queues_.erase(pending_it);
         }
-        if (oom_retry)
-        {
-            retry_oom();
-            return;
-        }
-        TryDispatchPendingWrites();
-    }
-    else
-    {
-        task_mgr_.FreeTask(task);
-        if (oom_retry)
-        {
-            retry_oom();
-            return;
-        }
+        dispatch_pending_writes = true;
     }
 
-    if (__builtin_expect(!auto_reopen, 1))
+    task_mgr_.FreeTask(task);
+
+    if (__builtin_expect(oom_retry, 0))
     {
+        retry_oom();
         return;
     }
 
-    EnqueueReopenWaiter(req);
+    if (__builtin_expect(auto_reopen, 0))
+    {
+        EnqueueReopenWaiter(req);
+        return;
+    }
+
+    if (dispatch_pending_writes)
+    {
+        TryDispatchPendingWrites();
+    }
 }
 
 #ifdef ELOQ_MODULE_ENABLED

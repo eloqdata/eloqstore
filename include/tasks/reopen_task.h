@@ -17,10 +17,6 @@ public:
     void Reset(const TableIdent &tbl_id) override
     {
         WriteTask::Reset(tbl_id);
-        result_err_ = KvError::NoError;
     }
-
-    // Latched before SetDone hands external requests back to their owners.
-    KvError result_err_{KvError::NoError};
 };
 }  // namespace eloqstore

@@ -210,8 +210,7 @@ public:
     uint32_t inflight_io_{0};
     int io_res_{0};
     uint32_t io_flags_{0};
-    bool needs_auto_reopen_{false};
-    bool needs_oom_retry_{false};
+    KvError result_err_{KvError::NoError};
 
     TaskStatus status_{TaskStatus::Idle};
     KvRequest *req_{nullptr};
