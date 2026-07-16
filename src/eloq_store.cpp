@@ -197,11 +197,6 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
         LOG(ERROR) << "Invalid option overflow_pointers";
         return false;
     }
-    if (opts.max_write_batch_pages == 0)
-    {
-        LOG(ERROR) << "Invalid option max_write_batch_pages";
-        return false;
-    }
     if (!opts.cloud_store_path.empty())
     {
         LOG(ERROR) << "cloud mode already support standby, reset "

@@ -11,6 +11,7 @@
 
 #include "async_io_manager.h"
 #include "common.h"
+#include "fail_point.h"
 #include "test_utils.h"
 
 using test_util::MapVerifier;
@@ -215,6 +216,71 @@ TEST_CASE("io budgets: failed write drains the budget", "[io_qos]")
     recover.Read(7);
 }
 
+TEST_CASE("io budgets: negative WriteReq CQE drains and recovers", "[io_qos]")
+{
+    eloqstore::KvOptions opts = default_opts;
+    opts.max_inflight_write = 8;
+    eloqstore::EloqStore *store = InitStore(opts);
+    const eloqstore::TableIdent tbl_id{"qos-write-cqe", 0};
+    const uint64_t ts = utils::UnixTs<std::chrono::milliseconds>();
+
+    eloqstore::BatchWriteRequest failed;
+    failed.SetTableId(tbl_id);
+    for (uint32_t i = 0; i < 100; ++i)
+    {
+        failed.AddWrite(test_util::Key(i, 7),
+                        std::string(200, 'w'),
+                        ts,
+                        eloqstore::WriteOp::Upsert);
+    }
+    eloqstore::FailPoint::GetInstance().ArmOnce("WriteReqCqe");
+    store->ExecSync(&failed);
+    eloqstore::FailPoint::GetInstance().Disarm();
+
+    REQUIRE(failed.Error() != eloqstore::KvError::NoError);
+    REQUIRE(ShardStats(store).write_.inflight_ == 0);
+
+    eloqstore::BatchWriteRequest recovery;
+    recovery.SetTableId(tbl_id);
+    recovery.AddWrite("recovery", "value", ts + 1, eloqstore::WriteOp::Upsert);
+    store->ExecSync(&recovery);
+    REQUIRE(recovery.Error() == eloqstore::KvError::NoError);
+    REQUIRE(ShardStats(store).write_.inflight_ == 0);
+}
+
+TEST_CASE("io budgets: negative MergedWriteReq CQE drains and recovers",
+          "[io_qos]")
+{
+    eloqstore::KvOptions opts = append_opts;
+    opts.max_inflight_write = 64;
+    eloqstore::EloqStore *store = InitStore(opts);
+    const eloqstore::TableIdent tbl_id{"qos-merged-cqe", 0};
+    const uint64_t ts = utils::UnixTs<std::chrono::milliseconds>();
+
+    eloqstore::BatchWriteRequest failed;
+    failed.SetTableId(tbl_id);
+    for (uint32_t i = 0; i < 400; ++i)
+    {
+        failed.AddWrite(test_util::Key(i, 7),
+                        std::string(3000, 'm'),
+                        ts,
+                        eloqstore::WriteOp::Upsert);
+    }
+    eloqstore::FailPoint::GetInstance().ArmOnce("MergedWriteReqCqe");
+    store->ExecSync(&failed);
+    eloqstore::FailPoint::GetInstance().Disarm();
+
+    REQUIRE(failed.Error() != eloqstore::KvError::NoError);
+    REQUIRE(ShardStats(store).write_.inflight_ == 0);
+
+    eloqstore::BatchWriteRequest recovery;
+    recovery.SetTableId(tbl_id);
+    recovery.AddWrite("recovery", "value", ts + 1, eloqstore::WriteOp::Upsert);
+    store->ExecSync(&recovery);
+    REQUIRE(recovery.Error() == eloqstore::KvError::NoError);
+    REQUIRE(ShardStats(store).write_.inflight_ == 0);
+}
+
 TEST_CASE("io budgets: shutdown while tasks queue behind the budget",
           "[io_qos]")
 {
@@ -375,6 +441,231 @@ TEST_CASE("bg sub-budget: batch-write leaf loads are background", "[io_qos]")
     REQUIRE(stats.bg_read_.inflight_ == 0);
     REQUIRE(stats.bg_read_.high_watermark_ >= 1);
     REQUIRE(stats.bg_read_.high_watermark_ <= 2);
+}
+
+TEST_CASE("bg sub-budget: pending demand survives the wake gap", "[io_qos]")
+{
+    eloqstore::KvOptions opts = default_opts;
+    opts.num_threads = 1;
+    opts.max_inflight_read = 2;
+    opts.bg_read_ratio = 50;  // bg cap = 1
+    opts.overflow_pointers = 128;
+    eloqstore::EloqStore *store = InitStore(opts);
+
+    const eloqstore::TableIdent fg_tbl{"qos-wake-fg", 0};
+    MapVerifier fg_seed(fg_tbl, store, false);
+    fg_seed.SetValueSize(600 * 1024);
+    fg_seed.Upsert(0);
+
+    const eloqstore::TableIdent bg_tbl{"qos-wake-bg", 0};
+    MapVerifier bg_seed(bg_tbl, store, false);
+    bg_seed.SetValueSize(200);
+    bg_seed.Upsert(0, 2000);
+
+    std::atomic<bool> stop_fg{false};
+    std::atomic<bool> fg_failed{false};
+    std::atomic<uint64_t> fg_done{0};
+    eloqstore::FailPoint::GetInstance().ArmPersistent("IoBudgetBgWake");
+
+    std::vector<std::thread> readers;
+    readers.reserve(8);
+    for (int i = 0; i < 8; ++i)
+    {
+        readers.emplace_back(
+            [&]
+            {
+                while (!stop_fg.load(std::memory_order_relaxed))
+                {
+                    eloqstore::ReadRequest req;
+                    req.SetArgs(fg_tbl, test_util::Key(0, 7));
+                    store->ExecSync(&req);
+                    if (req.Error() != eloqstore::KvError::NoError)
+                    {
+                        fg_failed.store(true, std::memory_order_relaxed);
+                    }
+                    fg_done.fetch_add(1, std::memory_order_relaxed);
+                }
+            });
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    eloqstore::BatchWriteRequest bg_req;
+    bg_req.SetTableId(bg_tbl);
+    bg_req.AddWrite(test_util::Key(1000, 7),
+                    std::string(200, 'b'),
+                    utils::UnixTs<std::chrono::milliseconds>() + 1,
+                    eloqstore::WriteOp::Upsert);
+    std::atomic<bool> bg_done{false};
+    const uint64_t fg_before = fg_done.load(std::memory_order_relaxed);
+    store->ExecAsyn(&bg_req,
+                    0,
+                    [&bg_done](eloqstore::KvRequest *)
+                    { bg_done.store(true, std::memory_order_relaxed); });
+
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (bg_done.load(std::memory_order_relaxed) &&
+            fg_done.load(std::memory_order_relaxed) > fg_before)
+        {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    const bool bg_completed_while_armed =
+        bg_done.load(std::memory_order_relaxed);
+    const uint64_t fg_after = fg_done.load(std::memory_order_relaxed);
+
+    stop_fg.store(true, std::memory_order_relaxed);
+    eloqstore::FailPoint::GetInstance().Disarm();
+    for (std::thread &reader : readers)
+    {
+        reader.join();
+    }
+    store->Stop();
+
+    const eloqstore::IoQosStats stats = ShardStats(store);
+    CAPTURE(fg_before, fg_after);
+    REQUIRE(fg_after > fg_before);
+    REQUIRE(bg_completed_while_armed);
+    REQUIRE_FALSE(fg_failed.load(std::memory_order_relaxed));
+    REQUIRE(bg_done.load(std::memory_order_relaxed));
+    REQUIRE(bg_req.Error() == eloqstore::KvError::NoError);
+    REQUIRE(stats.read_.inflight_ == 0);
+    REQUIRE(stats.bg_read_.inflight_ == 0);
+    REQUIRE(stats.read_.high_watermark_ <= 2);
+    REQUIRE(stats.bg_read_.high_watermark_ <= 1);
+    REQUIRE(stats.bg_read_.blocked_count_ > 0);
+}
+
+TEST_CASE("bg sub-budget: repeated ungated contention", "[io_qos][stress]")
+{
+    eloqstore::KvOptions opts = default_opts;
+    opts.num_threads = 1;
+    opts.max_inflight_read = 2;
+    opts.bg_read_ratio = 50;
+    opts.overflow_pointers = 128;
+    eloqstore::EloqStore *store = InitStore(opts);
+
+    const eloqstore::TableIdent fg_tbl{"qos-stress-fg", 0};
+    MapVerifier fg_seed(fg_tbl, store, false);
+    fg_seed.SetValueSize(600 * 1024);
+    fg_seed.Upsert(0);
+
+    const eloqstore::TableIdent bg_tbl{"qos-stress-bg", 0};
+    MapVerifier bg_seed(bg_tbl, store, false);
+    bg_seed.SetValueSize(200);
+    bg_seed.Upsert(0, 2000);
+
+    std::atomic<bool> failed{false};
+    for (uint64_t round = 1; round <= 10; ++round)
+    {
+        std::atomic<uint32_t> ready{0};
+        std::atomic<bool> start{false};
+        std::vector<std::thread> readers;
+        readers.reserve(8);
+        for (int i = 0; i < 8; ++i)
+        {
+            readers.emplace_back(
+                [&]
+                {
+                    ready.fetch_add(1, std::memory_order_relaxed);
+                    while (!start.load(std::memory_order_relaxed))
+                    {
+                        std::this_thread::yield();
+                    }
+                    for (int read = 0; read < 4; ++read)
+                    {
+                        eloqstore::ReadRequest req;
+                        req.SetArgs(fg_tbl, test_util::Key(0, 7));
+                        store->ExecSync(&req);
+                        if (req.Error() != eloqstore::KvError::NoError)
+                        {
+                            failed.store(true, std::memory_order_relaxed);
+                        }
+                    }
+                });
+        }
+        while (ready.load(std::memory_order_relaxed) != readers.size())
+        {
+            std::this_thread::yield();
+        }
+        start.store(true, std::memory_order_relaxed);
+
+        eloqstore::BatchWriteRequest bg_req;
+        bg_req.SetTableId(bg_tbl);
+        bg_req.AddWrite(test_util::Key(1000, 7),
+                        std::string(200, 'b'),
+                        utils::UnixTs<std::chrono::milliseconds>() + round,
+                        eloqstore::WriteOp::Upsert);
+        store->ExecSync(&bg_req);
+        if (bg_req.Error() != eloqstore::KvError::NoError)
+        {
+            failed.store(true, std::memory_order_relaxed);
+        }
+        for (std::thread &reader : readers)
+        {
+            reader.join();
+        }
+    }
+
+    const eloqstore::IoQosStats stats = ShardStats(store);
+    REQUIRE_FALSE(failed.load(std::memory_order_relaxed));
+    REQUIRE(stats.read_.inflight_ == 0);
+    REQUIRE(stats.bg_read_.inflight_ == 0);
+    REQUIRE(stats.read_.high_watermark_ <= 2);
+    REQUIRE(stats.bg_read_.high_watermark_ <= 1);
+    REQUIRE(stats.bg_read_.blocked_count_ > 0);
+}
+
+TEST_CASE("io qos stats: concurrent sampling", "[io_qos][stats]")
+{
+    eloqstore::KvOptions opts = default_opts;
+    opts.max_inflight_read = 2;
+    opts.max_inflight_write = 8;
+    eloqstore::EloqStore *store = InitStore(opts);
+
+    std::atomic<bool> stop{false};
+    std::atomic<uint64_t> samples{0};
+    std::atomic<bool> workload_active{false};
+    std::atomic<uint64_t> active_samples{0};
+    std::thread sampler(
+        [&]
+        {
+            while (!stop.load(std::memory_order_relaxed))
+            {
+                const eloqstore::IoQosStats stats = store->GetIoQosStats(0);
+                (void) stats;
+                samples.fetch_add(1, std::memory_order_relaxed);
+                if (workload_active.load(std::memory_order_relaxed))
+                {
+                    active_samples.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        });
+
+    MapVerifier verify(test_tbl_id, store, false);
+    verify.SetValueSize(3000);
+    workload_active.store(true, std::memory_order_relaxed);
+    for (int round = 0; round < 3; ++round)
+    {
+        verify.WriteRnd(0, 1000, 0, 50);
+        for (int i = 0; i < 100; ++i)
+        {
+            verify.Read(std::rand() % 1000);
+        }
+    }
+    workload_active.store(false, std::memory_order_relaxed);
+
+    stop.store(true, std::memory_order_relaxed);
+    sampler.join();
+    const eloqstore::IoQosStats stats = ShardStats(store);
+    REQUIRE(samples.load(std::memory_order_relaxed) > 0);
+    REQUIRE(active_samples.load(std::memory_order_relaxed) > 0);
+    REQUIRE(stats.read_.inflight_ == 0);
+    REQUIRE(stats.bg_read_.inflight_ == 0);
+    REQUIRE(stats.write_.inflight_ == 0);
 }
 
 TEST_CASE("io budgets: defaults are behavior-neutral", "[io_qos]")

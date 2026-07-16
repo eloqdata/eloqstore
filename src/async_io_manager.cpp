@@ -178,56 +178,93 @@ void IoBudget::Acquire(uint32_t cost, bool background)
     // escape per class: a request with cost > (sub-)cap is admitted alone
     // once the relevant count drains, guaranteeing progress (see IoBudget
     // doc comment). Background is additionally bounded by its sub-budget.
-    // Foreground must not take units reserved for *queued* background
-    // demand (bg_cap_ - bg_inflight_ while bg_waiting_ is non-empty):
-    // without that reservation, sustained foreground saturation would
+    // Foreground must not take units reserved for pending background demand.
+    // Pending spans the full first-wait-to-admission interval, including a
+    // wake followed by a yield or re-wait, when the wait queue is empty.
+    // Without that reservation, sustained foreground saturation would
     // starve background forever — every freed unit would be re-acquired by
     // a foreground waiter and compaction could never bootstrap its share.
-    // While background has no queued demand, foreground may use the entire
+    // While background has no pending demand, foreground may use the entire
     // budget.
     auto must_wait = [this, cost, use_bg]()
     {
+        const uint32_t inflight = inflight_.load(std::memory_order_relaxed);
         if (use_bg)
         {
-            if (inflight_ + cost > cap_ && inflight_ != 0)
+            if (inflight + cost > cap_ && inflight != 0)
             {
                 return true;
             }
-            return bg_inflight_ + cost > bg_cap_ && bg_inflight_ != 0;
+            const uint32_t bg_inflight =
+                bg_inflight_.load(std::memory_order_relaxed);
+            return bg_inflight + cost > bg_cap_ && bg_inflight != 0;
         }
-        const uint32_t reserved =
-            (bg_cap_ != 0 && !bg_waiting_.Empty()) ? bg_cap_ - bg_inflight_ : 0;
-        return inflight_ + cost > cap_ - reserved && inflight_ != 0;
+        const uint32_t bg_inflight =
+            bg_inflight_.load(std::memory_order_relaxed);
+        const uint32_t reserved = bg_pending_ != 0 && bg_inflight < bg_cap_
+                                      ? bg_cap_ - bg_inflight
+                                      : 0;
+        const uint32_t fg_cap = cap_ > reserved ? cap_ - reserved : 0;
+        return inflight + cost > fg_cap && inflight != 0;
     };
     // Each class queues behind its own existing waiters (approximate FIFO
     // across arrivals within the class).
     WaitingZone &zone = use_bg ? bg_waiting_ : waiting_;
+    bool pending_bg = false;
     if (!zone.Empty() || must_wait())
     {
         // TSC-based clock (see Shard::ReadTimeMicroseconds): Acquire always
         // runs on the shard thread, after Shard::Init calibrated the TSC.
         const uint64_t start_us = shard->ReadTimeMicroseconds();
-        (use_bg ? bg_blocked_count_ : blocked_count_)++;
+        std::atomic<uint64_t> &blocked_count =
+            use_bg ? bg_blocked_count_ : blocked_count_;
+        blocked_count.store(blocked_count.load(std::memory_order_relaxed) + 1,
+                            std::memory_order_relaxed);
+        if (use_bg)
+        {
+            ++bg_pending_;
+            pending_bg = true;
+        }
         do
         {
             zone.Wait(ThdTask());
+            if (use_bg)
+            {
+                TEST_FAIL_POINT_ACTION("IoBudgetBgWake",
+                                       ThdTask()->YieldToLowPQ());
+            }
         } while (must_wait());
         const uint64_t waited_us = shard->DurationMicroseconds(start_us);
-        (use_bg ? bg_blocked_us_ : blocked_us_) += waited_us;
+        std::atomic<uint64_t> &blocked_us =
+            use_bg ? bg_blocked_us_ : blocked_us_;
+        blocked_us.store(blocked_us.load(std::memory_order_relaxed) + waited_us,
+                         std::memory_order_relaxed);
     }
-    inflight_ += cost;
-    admitted_pages_ += cost;
-    if (inflight_ > high_watermark_)
+    if (pending_bg)
     {
-        high_watermark_ = inflight_;
+        CHECK_GT(bg_pending_, 0);
+        --bg_pending_;
+    }
+    const uint32_t inflight = inflight_.load(std::memory_order_relaxed) + cost;
+    inflight_.store(inflight, std::memory_order_relaxed);
+    admitted_pages_.store(
+        admitted_pages_.load(std::memory_order_relaxed) + cost,
+        std::memory_order_relaxed);
+    if (inflight > high_watermark_.load(std::memory_order_relaxed))
+    {
+        high_watermark_.store(inflight, std::memory_order_relaxed);
     }
     if (use_bg)
     {
-        bg_inflight_ += cost;
-        bg_admitted_pages_ += cost;
-        if (bg_inflight_ > bg_high_watermark_)
+        const uint32_t bg_inflight =
+            bg_inflight_.load(std::memory_order_relaxed) + cost;
+        bg_inflight_.store(bg_inflight, std::memory_order_relaxed);
+        bg_admitted_pages_.store(
+            bg_admitted_pages_.load(std::memory_order_relaxed) + cost,
+            std::memory_order_relaxed);
+        if (bg_inflight > bg_high_watermark_.load(std::memory_order_relaxed))
         {
-            bg_high_watermark_ = bg_inflight_;
+            bg_high_watermark_.store(bg_inflight, std::memory_order_relaxed);
         }
     }
 }
@@ -238,12 +275,15 @@ void IoBudget::Release(uint32_t cost, bool background)
     {
         return;
     }
-    assert(inflight_ >= cost);
-    inflight_ -= cost;
+    const uint32_t inflight = inflight_.load(std::memory_order_relaxed);
+    CHECK_GE(inflight, cost);
+    inflight_.store(inflight - cost, std::memory_order_relaxed);
     if (background && bg_cap_ != 0)
     {
-        assert(bg_inflight_ >= cost);
-        bg_inflight_ -= cost;
+        const uint32_t bg_inflight =
+            bg_inflight_.load(std::memory_order_relaxed);
+        CHECK_GE(bg_inflight, cost);
+        bg_inflight_.store(bg_inflight - cost, std::memory_order_relaxed);
     }
     // Each freed page-unit can admit at most one waiter; over-waking is safe
     // because woken tasks re-check the admission condition and re-wait.
@@ -253,7 +293,7 @@ void IoBudget::Release(uint32_t cost, bool background)
     // would be futile. Unused wake credits are forwarded to foreground —
     // when background is saturated or idle, all credits go to foreground.
     size_t woken = 0;
-    if (bg_cap_ != 0 && bg_inflight_ < bg_cap_)
+    if (bg_cap_ != 0 && bg_inflight_.load(std::memory_order_relaxed) < bg_cap_)
     {
         woken = bg_waiting_.WakeN(cost);
     }
@@ -1470,7 +1510,7 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
     // Write-budget admission (io_qos.md M1): cost in 4KB-page units so the
     // cap means the same thing in append and non-append mode. Must mirror
     // the release cost computed from bytes_ in PollComplete.
-    write_budget_.Acquire(MergedWriteCost(bytes));
+    write_budget_.Acquire(MergedWriteCost(req->bytes_));
     io_uring_sqe *sqe = GetSQE(UserDataType::MergedWriteReq, req);
     auto [fd, registered] = req->fd_ref_.FdPair();
     if (registered)
@@ -2232,6 +2272,7 @@ void IouringMgr::PollComplete()
         case UserDataType::WriteReq:
         {
             WriteReq *req = static_cast<WriteReq *>(ptr);
+            TEST_FAIL_POINT_ACTION("WriteReqCqe", cqe->res = -EIO);
             KvError err;
             assert(cqe->res <= options_->data_page_size);
             if (cqe->res < 0)
@@ -2260,6 +2301,7 @@ void IouringMgr::PollComplete()
         case UserDataType::MergedWriteReq:
         {
             MergedWriteReq *req = static_cast<MergedWriteReq *>(ptr);
+            TEST_FAIL_POINT_ACTION("MergedWriteReqCqe", cqe->res = -EIO);
             KvError err;
             if (cqe->res < 0)
             {
@@ -2305,7 +2347,7 @@ void IouringMgr::PollComplete()
 
     io_uring_cq_advance(&ring_, cnt);
     waiting_sqe_.WakeN(cnt);
-    assert(inflight_ios_ >= cnt);
+    CHECK_GE(inflight_ios_, cnt);
     inflight_ios_ -= cnt;
 
     if (io_stats_enabled_)
@@ -2570,8 +2612,12 @@ KvError IouringMgr::FdatasyncFiles(const TableIdent &tbl_id,
         io_uring_prep_fsync(sqe, fd, IORING_FSYNC_DATASYNC);
     }
     ThdTask()->WaitIo();
-    fdatasync_count_ += reqs.size();
-    fdatasync_us_ += shard->DurationMicroseconds(fsync_start_us);
+    fdatasync_count_.store(
+        fdatasync_count_.load(std::memory_order_relaxed) + reqs.size(),
+        std::memory_order_relaxed);
+    fdatasync_us_.store(fdatasync_us_.load(std::memory_order_relaxed) +
+                            shard->DurationMicroseconds(fsync_start_us),
+                        std::memory_order_relaxed);
 
     // Check results.
     KvError err = KvError::NoError;
