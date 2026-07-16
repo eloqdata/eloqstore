@@ -2230,6 +2230,10 @@ void IouringMgr::Submit()
 
 void IouringMgr::PollComplete()
 {
+    if (io_stats_enabled_)
+    {
+        loop_now_us_ = Shard::ReadTimeMicroseconds();
+    }
     io_uring_cqe *cqe = nullptr;
     io_uring_peek_cqe(&ring_, &cqe);
     unsigned head;
@@ -2352,7 +2356,6 @@ void IouringMgr::PollComplete()
 
     if (io_stats_enabled_)
     {
-        loop_now_us_ = Shard::ReadTimeMicroseconds();
         if (round_prev_us_ != 0)
         {
             const uint64_t r = loop_now_us_ - round_prev_us_;
