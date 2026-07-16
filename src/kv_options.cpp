@@ -157,7 +157,7 @@ int KvOptions::LoadFromIni(const char *path)
     if (reader.HasValue(sec_run, "max_inflight_read"))
     {
         max_inflight_read =
-            reader.GetUnsigned(sec_run, "max_inflight_read", 32);
+            reader.GetUnsigned(sec_run, "max_inflight_read", 64);
     }
     if (reader.HasValue(sec_run, "bg_read_ratio"))
     {

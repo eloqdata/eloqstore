@@ -196,8 +196,17 @@ foreground reclaims the whole budget the moment background demand drains.
 
 Two read `WaitingZone`s (one per class, FIFO within class). On release,
 background waiters are woken first while the sub-budget has room (those
-units are reserved for them anyway); unused wake credits are forwarded to
-foreground (`WaitingZone::WakeN` returns the number actually woken).
+units are reserved for them anyway), and foreground is **always** woken as
+well — not merely handed leftover credits. The leftover-only scheme shipped
+first and starved the foreground class under write storms (found 2026-07-11
+on Azure NVMe): background forms a saturated treadmill whose queue never
+empties, so every release re-donates its credit to background; once any
+foreground read queued (admission is FIFO-behind-waiters) and the last
+foreground in-flight's credit landed in a background dip, the foreground
+class had **no remaining wake source** until background's queue drained —
+observed as multi-second foreground gate stalls (p999 120–312 ms, gate
+waits up to 3.7 s). Over-waking is safe by construction: woken tasks
+re-check the admission condition and re-wait.
 
 The ratio starts **static**. An adaptive policy (shrink `bg_read_limit`
 toward a floor when foreground waiters exist, grow toward the full budget
@@ -221,18 +230,17 @@ compaction, since interference tracks bytes/sec rather than queue depth.
 ### New options (per shard)
 
 ```
-uint32_t max_inflight_read = 32;     // pages; 0 = disabled
+uint32_t max_inflight_read = 64;     // pages; 0 = disabled
 uint32_t bg_read_ratio = 25;         // percent of max_inflight_read
 uint32_t max_inflight_write = 512;   // pages; REDEFINED existing option
                                      // (was 32768, pool sizing only)
 uint64_t bg_write_rate_limit = 0;    // bytes/sec; 0 = disabled (M3)
 ```
 
-max_inflight_read = 32 and bg_read_ratio = 25 were set from the WSL
-interference sweeps (2026-07-03): total caps 32–256 were indistinguishable
-at fixed bg_cap, 32 matched that box's BDP and gave the campaign's best
-p50/p999, and bg_cap 8 (25% of 32) sat exactly at the measured background
-demand line — tail protection at zero write-throughput cost (the
+bg_read_ratio = 25 was set from the WSL interference sweeps (2026-07-03):
+total caps 32–256 were indistinguishable at fixed bg_cap, 32 matched that
+box's BDP and gave the campaign's best p50/p999, and bg_cap 8 (25% of 32)
+sat exactly at the measured background demand line — tail protection at zero write-throughput cost (the
 write-throughput knee appeared only at bg_cap 4). Real-device calibration
 (the QD sweep below) should re-derive max_inflight_read per device; the
 ratio is policy and should transfer. max_inflight_write's real default
@@ -244,7 +252,12 @@ The two read-side options deliberately live at different levels:
 
 - **`max_inflight_read` is device calibration.** Size it from the device's
   bandwidth-delay product: `c × max_random_read_IOPS × t_read(unloaded) /
-  num_threads`, with c ≈ 2–4 for die-imbalance and burst headroom. Below
+  num_threads`, with c ≈ 2–4 for die-imbalance and burst headroom (Azure
+  local-NVMe calibration 2026-07-11 measured the knee at c ≈ 5–7: budgets
+  64–128 for 16 shards on 8 × ~250K-IOPS devices at ~150 µs loaded latency,
+  indistinguishable within cloud-environment noise; 32 showed genuine
+  foreground queueing under 128 concurrent readers — the budget must also
+  cover peak per-shard foreground concurrency, not only the BDP). Below
   the BDP the cap costs read throughput; far above it the cap stops
   representing the device queue and the ratio contract below degrades.
   Validation signal: foreground `read_blocked` should stay ≈ 0 under
@@ -265,6 +278,13 @@ The two read-side options deliberately live at different levels:
   remedy is raising `max_inflight_read` (the device has headroom the
   calibration missed), not the ratio — raising the ratio spends the tail
   contract.
+- **The background slice needs an absolute floor.** Batch writes issue
+  their own read-modify-write page fetches under the background class, so
+  a tiny `ratio × cap` throttles ingest itself, not just compaction:
+  measured at bg_cap = 3 (ratio 10 of cap 32), write throughput halved and
+  the paced foreground collapsed with it. Until the engine enforces
+  `bg_cap = max(floor, ratio × cap)` (floor ≈ 8 on tested devices), do not
+  configure combinations that yield bg_cap below ~8.
 
 ## Interaction with Existing Knobs
 

@@ -8,6 +8,7 @@
 #include <linux/openat2.h>
 #include <signal.h>
 #include <spawn.h>
+#include <sys/syscall.h>
 #include <sys/uio.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -256,13 +257,24 @@ void IoBudget::Release(uint32_t cost, bool background)
     {
         woken = bg_waiting_.WakeN(cost);
     }
-    waiting_.WakeN(cost - woken);
+    // Always give foreground a wake as well, not only the leftover
+    // credits. When background is a saturated treadmill (its queue never
+    // empties, so every release re-donates to background), foreground
+    // waiters would otherwise have no wake source once the last
+    // foreground in-flight completes: the class deadlocks behind
+    // `!zone.Empty()` admission until background's queue happens to
+    // drain (observed as multi-hundred-ms foreground gate stalls under
+    // write storms). Over-waking is safe: woken tasks re-check the
+    // admission condition and re-wait.
+    waiting_.WakeN(cost > woken ? cost - woken : 1);
 }
 
 IouringMgr::IouringMgr(const KvOptions *opts, uint32_t fd_limit)
     : AsyncIoManager(opts), fd_limit_(fd_limit)
 {
     memset(&ring_, 0, sizeof(ring_));
+    const char *iostats_env = getenv("ELOQ_IO_STATS");
+    io_stats_enabled_ = iostats_env != nullptr && iostats_env[0] == '1';
     lru_fd_head_.next_ = &lru_fd_tail_;
     lru_fd_tail_.prev_ = &lru_fd_head_;
 
@@ -854,7 +866,11 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
             // before SQE prep; released per CQE in PollComplete, so each
             // retry iteration re-acquires. Background tasks are additionally
             // bounded by the BG sub-budget.
+            const uint64_t t_gate =
+                io_stats_enabled_ ? shard->ReadTimeMicroseconds() : 0;
             read_budget_.Acquire(1, ThdTask()->IsBackground());
+            const uint64_t t_sqe =
+                io_stats_enabled_ ? shard->ReadTimeMicroseconds() : 0;
             io_uring_sqe *sqe = GetSQE(UserDataType::KvTaskPageRead, ThdTask());
             if (fd.second)
             {
@@ -878,6 +894,46 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
                     sqe, fd.first, dst, options_->data_page_size, offset);
             }
             res = ThdTask()->WaitIoResult();
+            if (io_stats_enabled_)
+            {
+                const uint64_t t_res = shard->ReadTimeMicroseconds();
+                const uint64_t cqe = ThdTask()->op_cqe_us_;
+                const uint64_t t_task = ThdTask()->op_start_us_;
+                if (t_task != 0)
+                {
+                    ThdTask()->op_start_us_ = 0;  // first page read only
+                    KvRequest *r = ThdTask()->req_;
+                    if (r != nullptr && r->dbg_enqueue_us_ != 0 &&
+                        r->dbg_dequeue_us_ >= r->dbg_enqueue_us_ &&
+                        t_task >= r->dbg_dequeue_us_)
+                    {
+                        const uint64_t d3 =
+                            r->dbg_dequeue_us_ - r->dbg_enqueue_us_;
+                        const uint64_t d5 = t_task - r->dbg_dequeue_us_;
+                        stage_sum_us_[3] += d3;
+                        stage_max_us_[3] = std::max(stage_max_us_[3], d3);
+                        stage_sum_us_[5] += d5;
+                        stage_max_us_[5] = std::max(stage_max_us_[5], d5);
+                    }
+                    if (t_gate > t_task)
+                    {
+                        const uint64_t d4 = t_gate - t_task;
+                        stage_sum_us_[4] += d4;
+                        stage_max_us_[4] = std::max(stage_max_us_[4], d4);
+                    }
+                }
+                const uint64_t d0 = t_sqe - t_gate;                 // gate wait
+                const uint64_t d1 = cqe > t_sqe ? cqe - t_sqe : 0;  // sqe->cqe
+                const uint64_t d2 =
+                    t_res > cqe ? t_res - cqe : 0;  // cqe->resume
+                stage_sum_us_[0] += d0;
+                stage_sum_us_[1] += d1;
+                stage_sum_us_[2] += d2;
+                stage_max_us_[0] = std::max(stage_max_us_[0], d0);
+                stage_max_us_[1] = std::max(stage_max_us_[1], d1);
+                stage_max_us_[2] = std::max(stage_max_us_[2], d2);
+                ++stage_cnt_;
+            }
             if (res == 0)
             {
                 LOG(ERROR) << "read page failed, reach end of file, file id:"
@@ -2152,6 +2208,10 @@ void IouringMgr::PollComplete()
             if (type == UserDataType::KvTaskPageRead)
             {
                 read_budget_.Release(1, task->IsBackground());
+                if (io_stats_enabled_)
+                {
+                    task->op_cqe_us_ = loop_now_us_;
+                }
             }
             task->io_res_ = cqe->res;
             task->io_flags_ = cqe->flags;
@@ -2245,6 +2305,76 @@ void IouringMgr::PollComplete()
 
     io_uring_cq_advance(&ring_, cnt);
     waiting_sqe_.WakeN(cnt);
+    assert(inflight_ios_ >= cnt);
+    inflight_ios_ -= cnt;
+
+    if (io_stats_enabled_)
+    {
+        loop_now_us_ = Shard::ReadTimeMicroseconds();
+        if (round_prev_us_ != 0)
+        {
+            const uint64_t r = loop_now_us_ - round_prev_us_;
+            round_sum_us_ += r;
+            round_max_us_ = std::max(round_max_us_, r);
+            ++round_cnt_;
+        }
+        round_prev_us_ = loop_now_us_;
+        ++stats_iters_;
+        if (cnt > 0)
+        {
+            ++stats_polls_nonzero_;
+            stats_cqes_ += cnt;
+            ++stats_batch_hist_[cnt > 8 ? 0 : cnt];
+        }
+        if (loop_now_us_ >= stats_next_flush_us_)
+        {
+            if (stats_next_flush_us_ != 0 && VLOG_IS_ON(1) && stats_cqes_ > 0)
+            {
+                const uint64_t n = stage_cnt_ > 0 ? stage_cnt_ : 1;
+                VLOG(1) << "opstages n=" << stage_cnt_
+                        << " gate_avg=" << stage_sum_us_[0] / n
+                        << " sqe2cqe_avg=" << stage_sum_us_[1] / n
+                        << " cqe2res_avg=" << stage_sum_us_[2] / n
+                        << " q_wait_avg=" << stage_sum_us_[3] / n
+                        << " start_lag_avg=" << stage_sum_us_[5] / n
+                        << " task2gate_avg=" << stage_sum_us_[4] / n
+                        << " q_wait_max=" << stage_max_us_[3]
+                        << " start_lag_max=" << stage_max_us_[5]
+                        << " task2gate_max=" << stage_max_us_[4]
+                        << " round_avg_ns="
+                        << (round_cnt_ ? round_sum_us_ * 1000 / round_cnt_ : 0)
+                        << " round_max_us=" << round_max_us_
+                        << " gate_max=" << stage_max_us_[0]
+                        << " sqe2cqe_max=" << stage_max_us_[1]
+                        << " cqe2res_max=" << stage_max_us_[2];
+                std::fill(
+                    std::begin(stage_sum_us_), std::end(stage_sum_us_), 0);
+                std::fill(
+                    std::begin(stage_max_us_), std::end(stage_max_us_), 0);
+                stage_cnt_ = 0;
+                round_sum_us_ = 0;
+                round_max_us_ = 0;
+                round_cnt_ = 0;
+                VLOG(1) << "loopstats tid=" << syscall(SYS_gettid)
+                        << " iters/s=" << stats_iters_ / 5
+                        << " cqes/s=" << stats_cqes_ / 5 << " avg_batch="
+                        << static_cast<double>(stats_cqes_) /
+                               static_cast<double>(stats_polls_nonzero_)
+                        << " hist(1..8,9+)=" << stats_batch_hist_[1] << ","
+                        << stats_batch_hist_[2] << "," << stats_batch_hist_[3]
+                        << "," << stats_batch_hist_[4] << ","
+                        << stats_batch_hist_[5] << "," << stats_batch_hist_[6]
+                        << "," << stats_batch_hist_[7] << ","
+                        << stats_batch_hist_[8] << "," << stats_batch_hist_[0];
+            }
+            stats_iters_ = 0;
+            stats_polls_nonzero_ = 0;
+            stats_cqes_ = 0;
+            std::fill(
+                std::begin(stats_batch_hist_), std::end(stats_batch_hist_), 0);
+            stats_next_flush_us_ = loop_now_us_ + 5'000'000;
+        }
+    }
 }
 
 int IouringMgr::MakeDir(FdIdx dir_fd, const char *path)
@@ -3293,6 +3423,7 @@ io_uring_sqe *IouringMgr::GetSQE(UserDataType type, const void *user_ptr)
     // state does not leak to non-fixed operations.
     sqe->flags = 0;
     ThdTask()->inflight_io_++;
+    ++inflight_ios_;
     prepared_sqe_++;
     return sqe;
 }
@@ -4395,7 +4526,7 @@ std::pair<size_t, size_t> CloudStoreMgr::TrimRestoredCacheUsage()
 
 bool CloudStoreMgr::IsIdle()
 {
-    return file_cleaner_.status_ == TaskStatus::Idle &&
+    return IouringMgr::IsIdle() && file_cleaner_.status_ == TaskStatus::Idle &&
            pending_gc_cleanup_.empty() && active_prewarm_tasks_ == 0 &&
            inflight_cloud_slots_ == 0 && !obj_store_.HasPendingWork();
 }

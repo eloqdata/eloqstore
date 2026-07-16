@@ -36,6 +36,14 @@ DEFINE_uint32(batch_size,
               64,
               "The batch size of one write request (MB) (default: 64).");
 DEFINE_string(storage, "eloqstore", "The storage used to store the data.");
+DEFINE_uint32(client_threads, 4, "GET2: number of client threads.");
+DEFINE_uint32(inflight_per_client,
+              125,
+              "GET2: async requests each client keeps in flight.");
+DEFINE_uint32(per_shard_cap,
+              0,
+              "GET2: max outstanding per shard per client (0 = unlimited); "
+              "bounds the blast radius of a stalled shard.");
 DEFINE_uint32(request_cnt,
               32,
               "The number of concurrent read requests (default: 32)");

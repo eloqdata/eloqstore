@@ -7,6 +7,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <string>
@@ -180,21 +181,60 @@ void Shard::WorkLoop()
         }
 #endif
 
-        io_mgr_->Submit();
-
-        io_mgr_->PollComplete();
-        PromoteReadyDelayedReopenRequests();
-        ExecuteReadyTasks();
-
-        int nreqs = dequeue_requests();
-        if (nreqs < 0)
+        if (!IoStatsEnabled())
         {
-            // Exit.
-            break;
+            io_mgr_->Submit();
+            io_mgr_->PollComplete();
+            PromoteReadyDelayedReopenRequests();
+            ExecuteReadyTasks();
+            int nreqs = dequeue_requests();
+            if (nreqs < 0)
+            {
+                break;
+            }
+            for (int i = 0; i < nreqs; i++)
+            {
+                OnReceivedReq(reqs[i]);
+            }
         }
-        for (int i = 0; i < nreqs; i++)
+        else
         {
-            OnReceivedReq(reqs[i]);
+            // Stats mode: time each loop phase; report any round > 1ms
+            // with its phase breakdown to locate rare multi-ms stalls.
+            timespec cpu0;
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu0);
+            const uint64_t t0 = ReadTimeMicroseconds();
+            io_mgr_->Submit();
+            const uint64_t t1 = ReadTimeMicroseconds();
+            io_mgr_->PollComplete();
+            const uint64_t t2 = ReadTimeMicroseconds();
+            PromoteReadyDelayedReopenRequests();
+            const uint64_t t3 = ReadTimeMicroseconds();
+            ExecuteReadyTasks();
+            const uint64_t t4 = ReadTimeMicroseconds();
+            int nreqs = dequeue_requests();
+            if (nreqs < 0)
+            {
+                break;
+            }
+            for (int i = 0; i < nreqs; i++)
+            {
+                OnReceivedReq(reqs[i]);
+            }
+            const uint64_t t5 = ReadTimeMicroseconds();
+            if (t5 - t0 > 1000)
+            {
+                timespec cpu1;
+                clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu1);
+                const uint64_t cpu_us =
+                    (cpu1.tv_sec - cpu0.tv_sec) * 1000000ULL +
+                    (cpu1.tv_nsec - cpu0.tv_nsec) / 1000;
+                LOG(INFO) << "SLOWROUND total=" << t5 - t0
+                          << "us cpu=" << cpu_us << "us submit=" << t1 - t0
+                          << " poll=" << t2 - t1 << " promote=" << t3 - t2
+                          << " execute=" << t4 - t3 << " intake=" << t5 - t4
+                          << " nreqs=" << nreqs;
+            }
         }
 
 #ifdef ELOQSTORE_WITH_TXSERVICE
@@ -563,6 +603,10 @@ GlobalRegisteredMemory *Shard::GlobalRegMem()
 
 void Shard::OnReceivedReq(KvRequest *req)
 {
+    if (IoStatsEnabled())
+    {
+        req->dbg_dequeue_us_ = ReadTimeMicroseconds();
+    }
     if (req->Reopen())
     {
         req->SetReopen(false);
