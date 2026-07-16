@@ -43,7 +43,7 @@ Responsibilities:
   `read_budget_` (`max_inflight_read`; `ReadPage`/`ReadPages`, per-page
   acquisition so a batch larger than the cap cannot deadlock) and
   `write_budget_` (`max_inflight_write`; `WritePage` cost 1,
-  `SubmitMergedWrite` cost `bytes / data_page_size`). Budget is acquired
+  `SubmitMergedWrite` cost `ceil(bytes / data_page_size)`). Budget is acquired
   immediately before SQE prep and released per CQE in `PollComplete`, which
   distinguishes budgeted page reads from metadata ops via the
   `KvTaskPageRead`/`BaseReqPageRead` user-data types. A cap of 0 disables a

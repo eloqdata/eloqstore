@@ -104,6 +104,9 @@ public:
 private:
     void WorkLoop();
     void InitIoMgrAndPagePool();
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    void CollectPeriodicGauges(metrics::Meter *meter);
+#endif
     bool ExecuteReadyTasks();
     void OnTaskFinished(KvTask *task);
     void RetryOomRequest(KvRequest *req);
@@ -285,9 +288,8 @@ private:
 #endif
 
 #ifdef ELOQSTORE_WITH_TXSERVICE
-    size_t work_one_round_count_{
-        0};  // Counter for frequency-controlled metric collection (not atomic
-             // since each Shard runs in single-threaded context)
+    // Not atomic: both scheduler modes execute one shard serially.
+    size_t gauge_collection_round_count_{0};
 #endif
 
     // TSC frequency in cycles per microsecond (measured at initialization)

@@ -96,7 +96,7 @@ never by the blocked task) and unreachable in practice with caps ≪
 | `IouringMgr::ReadPage` (`async_io_manager.cpp` ~484) | `read_budget_.Acquire(1)` at the top of the `read_page` lambda's retry loop, before `GetSQE`. Release is per-CQE, so each retry re-acquires. |
 | `IouringMgr::ReadPages` (~565) | Acquire **per page** inside `send_req`, not per batch. Rationale: a 128-page compaction batch must not deadlock against a BG sub-budget of 64 (commit 2); per-page acquisition lets the task block mid-batch while already-submitted pages complete. This supersedes the "atomic batch acquire" idea discussed during design review. |
 | `IouringMgr::WritePage` (~742) | `write_budget_.Acquire(1)` after `write_req_pool_->Alloc`, before `GetSQE`. |
-| `IouringMgr::SubmitMergedWrite` (~777) | `write_budget_.Acquire(bytes / data_page_size)` after `merged_write_req_pool_->Alloc`, before `GetSQE`. |
+| `IouringMgr::SubmitMergedWrite` (~777) | `write_budget_.Acquire(ceil(bytes / data_page_size))` after `merged_write_req_pool_->Alloc`, before `GetSQE`. |
 
 Exempt (unchanged): all metadata ops, manifest IO, `ReadFile` /
 `ReadFilePrefix` / `WriteSnapshot` bulk paths, `Fdatasync` (instrumented only),
