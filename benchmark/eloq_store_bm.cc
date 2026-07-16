@@ -549,7 +549,9 @@ struct Get2Client
 {
     moodycamel::BlockingConcurrentQueue<EloqStoreBM::ReadOperation *> done_;
     std::vector<uint64_t> lat_us_;
-    uint64_t completed_{0};
+    uint64_t outstanding_{0};
+    uint64_t successes_{0};
+    uint64_t read_failed_{0};
     uint64_t issue_failed_{0};
 };
 
@@ -571,7 +573,26 @@ void Benchmark::RunGet2(uint32_t client_threads,
                         uint32_t inflight,
                         uint32_t per_shard_cap)
 {
-    const uint32_t nshards = worker_cnt_ > 0 ? worker_cnt_ : 1;
+    CHECK_GT(client_threads, 0U) << "GET2 client_threads must be positive";
+    CHECK_GT(inflight, 0U) << "GET2 inflight_per_client must be positive";
+    CHECK_GT(partition_count_, 0U) << "GET2 partition_count must be positive";
+
+    const uint16_t nshards = worker_cnt_;
+    std::vector<uint16_t> partition_shards(partition_count_);
+    std::vector<bool> reachable_shards(nshards, false);
+    for (uint32_t part = 0; part < partition_count_; ++part)
+    {
+        const ::eloqstore::TableIdent table_id(table_name_str, part);
+        partition_shards[part] = table_id.ShardIndex(nshards);
+        reachable_shards[partition_shards[part]] = true;
+    }
+    const uint64_t reachable_count =
+        std::count(reachable_shards.begin(), reachable_shards.end(), true);
+    const uint64_t cap_capacity = reachable_count * per_shard_cap;
+    CHECK(per_shard_cap == 0 || inflight <= cap_capacity)
+        << "GET2 inflight_per_client=" << inflight
+        << " exceeds reachable per-shard capacity=" << cap_capacity;
+
     std::atomic<bool> stop{false};
     std::vector<Get2Client> clients(client_threads);
     std::vector<std::thread> thds;
@@ -580,7 +601,14 @@ void Benchmark::RunGet2(uint32_t client_threads,
     for (uint32_t c = 0; c < client_threads; ++c)
     {
         thds.emplace_back(
-            [this, c, inflight, per_shard_cap, nshards, &clients, &stop]()
+            [this,
+             c,
+             inflight,
+             per_shard_cap,
+             nshards,
+             &partition_shards,
+             &clients,
+             &stop]()
             {
                 Get2Client &me = clients[c];
                 object_generator gen;
@@ -599,7 +627,6 @@ void Benchmark::RunGet2(uint32_t client_threads,
                     ops.back().client_ = &me;
                 }
                 std::vector<uint32_t> shard_out(nshards, 0);
-                uint64_t issued = 0;
 
                 auto issue = [&](ReadOperation *op) -> bool
                 {
@@ -608,17 +635,25 @@ void Benchmark::RunGet2(uint32_t client_threads,
                     uint32_t part = key_index % partition_count_;
                     if (per_shard_cap > 0)
                     {
-                        for (int tries = 0;
-                             shard_out[part % nshards] >= per_shard_cap &&
-                             tries < 8;
-                             ++tries)
+                        uint32_t selected = partition_count_;
+                        for (uint32_t offset = 0; offset < partition_count_;
+                             ++offset)
                         {
-                            key_index =
-                                gen.get_key_index(OBJECT_GENERATOR_KEY_RANDOM);
-                            part = key_index % partition_count_;
+                            const uint32_t candidate =
+                                (static_cast<uint64_t>(part) + offset) %
+                                partition_count_;
+                            if (shard_out[partition_shards[candidate]] <
+                                per_shard_cap)
+                            {
+                                selected = candidate;
+                                break;
+                            }
                         }
+                        CHECK_LT(selected, partition_count_)
+                            << "GET2 per-shard cap accounting lost capacity";
+                        part = selected;
                     }
-                    op->shard_ = part % nshards;
+                    op->shard_ = partition_shards[part];
                     op->key_.clear();
                     gen.generate_key(key_index, op->key_);
                     op->req_->SetArgs(
@@ -633,37 +668,52 @@ void Benchmark::RunGet2(uint32_t client_threads,
                         return false;
                     }
                     ++shard_out[op->shard_];
-                    ++issued;
+                    ++me.outstanding_;
                     return true;
+                };
+
+                auto complete = [&](ReadOperation *op)
+                {
+                    CHECK_GT(me.outstanding_, 0U);
+                    CHECK_GT(shard_out[op->shard_], 0U);
+                    --me.outstanding_;
+                    --shard_out[op->shard_];
+                    if (op->req_->Error() != ::eloqstore::KvError::NoError)
+                    {
+                        ++me.read_failed_;
+                        return;
+                    }
+                    me.lat_us_.push_back(Get2NowUs() - op->start_ts_);
+                    ++me.successes_;
                 };
 
                 for (auto &op : ops)
                 {
+                    if (stop.load(std::memory_order_acquire))
+                    {
+                        break;
+                    }
                     issue(&op);
                 }
                 ReadOperation *done_op = nullptr;
-                while (!stop.load(std::memory_order_relaxed))
+                while (!stop.load(std::memory_order_acquire))
                 {
                     if (!me.done_.wait_dequeue_timed(done_op, 10000))
                     {
                         continue;
                     }
-                    const uint64_t now = Get2NowUs();
-                    me.lat_us_.push_back(now - done_op->start_ts_);
-                    ++me.completed_;
-                    --shard_out[done_op->shard_];
-                    issue(done_op);
-                }
-                // Drain remaining in-flight before exiting.
-                uint64_t drained = me.completed_;
-                const uint64_t deadline = Get2NowUs() + 3000000;
-                while (drained + me.issue_failed_ < issued &&
-                       Get2NowUs() < deadline)
-                {
-                    if (me.done_.wait_dequeue_timed(done_op, 10000))
+                    complete(done_op);
+                    if (!stop.load(std::memory_order_acquire))
                     {
-                        ++drained;
+                        issue(done_op);
                     }
+                }
+                // The callbacks reference `ops` and `me`; keep both alive
+                // until every accepted request has completed.
+                while (me.outstanding_ > 0)
+                {
+                    me.done_.wait_dequeue(done_op);
+                    complete(done_op);
                 }
             });
     }
@@ -677,10 +727,14 @@ void Benchmark::RunGet2(uint32_t client_threads,
     const double dur_sec = (Get2NowUs() - bench_start) / 1e6;
 
     std::vector<uint64_t> all;
-    uint64_t total = 0;
+    uint64_t successes = 0;
+    uint64_t read_failures = 0;
+    uint64_t issue_failures = 0;
     for (auto &cl : clients)
     {
-        total += cl.completed_;
+        successes += cl.successes_;
+        read_failures += cl.read_failed_;
+        issue_failures += cl.issue_failed_;
         all.insert(all.end(), cl.lat_us_.begin(), cl.lat_us_.end());
     }
     std::sort(all.begin(), all.end());
@@ -696,9 +750,11 @@ void Benchmark::RunGet2(uint32_t client_threads,
     };
     LOG(INFO) << "GET2 finished: clients=" << client_threads
               << " inflight=" << inflight << " per_shard_cap=" << per_shard_cap
-              << " completed=" << total << " duration=" << dur_sec
+              << " successes=" << successes
+              << " read_failures=" << read_failures
+              << " issue_failures=" << issue_failures << " duration=" << dur_sec
               << "s QPS:" << std::fixed << std::setprecision(2)
-              << total / dur_sec;
+              << successes / dur_sec;
     LOG(INFO) << "Latency: Min->" << (all.empty() ? 0 : all.front())
               << ", Max->" << (all.empty() ? 0 : all.back()) << ", Mean->"
               << (all.empty() ? 0

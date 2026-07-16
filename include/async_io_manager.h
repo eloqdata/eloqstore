@@ -1201,7 +1201,9 @@ public:
     // flushed as one VLOG(1) line every 5s: iteration rate, CQE rate,
     // and the reap-batch-size histogram (how many CQEs each non-empty
     // PollComplete found). Used to observe completion-batching regimes.
-    uint64_t loop_now_us_{0};  // stamped by Submit() each loop iteration
+    // Stamped once at PollComplete entry and shared by that round's CQEs and
+    // loop statistics.
+    uint64_t loop_now_us_{0};
     uint64_t stats_next_flush_us_{0};
     uint64_t stats_iters_{0};
     uint64_t stats_polls_nonzero_{0};

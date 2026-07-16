@@ -131,7 +131,8 @@ void Shard::WorkLoop()
     // and no active tasks.
     // This allows the thread to exit gracefully when the store is stopped.
     std::array<KvRequest *, 128> reqs;
-    auto dequeue_requests = [this, &reqs]() -> int
+    auto dequeue_requests = [this,
+                             &reqs](uint64_t *queue_wait_us = nullptr) -> int
     {
         size_t nreqs = requests_.try_dequeue_bulk(reqs.data(), reqs.size());
         // Idle state, wait for new requests or exit.
@@ -151,8 +152,14 @@ void Shard::WorkLoop()
                 return 0;
             }
             const auto timeout = std::chrono::milliseconds(100);
+            const uint64_t wait_start =
+                queue_wait_us == nullptr ? 0 : ReadTimeMicroseconds();
             nreqs = requests_.wait_dequeue_bulk_timed(
                 reqs.data(), reqs.size(), timeout);
+            if (queue_wait_us != nullptr)
+            {
+                *queue_wait_us += ReadTimeMicroseconds() - wait_start;
+            }
         }
 
         return nreqs;
@@ -212,7 +219,8 @@ void Shard::WorkLoop()
             const uint64_t t3 = ReadTimeMicroseconds();
             ExecuteReadyTasks();
             const uint64_t t4 = ReadTimeMicroseconds();
-            int nreqs = dequeue_requests();
+            uint64_t queue_wait_us = 0;
+            int nreqs = dequeue_requests(&queue_wait_us);
             if (nreqs < 0)
             {
                 break;
@@ -222,17 +230,21 @@ void Shard::WorkLoop()
                 OnReceivedReq(reqs[i]);
             }
             const uint64_t t5 = ReadTimeMicroseconds();
-            if (t5 - t0 > 1000)
+            const uint64_t total_us = t5 - t0;
+            const uint64_t active_us = total_us - queue_wait_us;
+            if (active_us > 1000)
             {
                 timespec cpu1;
                 clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu1);
                 const uint64_t cpu_us =
                     (cpu1.tv_sec - cpu0.tv_sec) * 1000000ULL +
                     (cpu1.tv_nsec - cpu0.tv_nsec) / 1000;
-                LOG(INFO) << "SLOWROUND total=" << t5 - t0
-                          << "us cpu=" << cpu_us << "us submit=" << t1 - t0
-                          << " poll=" << t2 - t1 << " promote=" << t3 - t2
-                          << " execute=" << t4 - t3 << " intake=" << t5 - t4
+                LOG(INFO) << "SLOWROUND total=" << total_us
+                          << "us active=" << active_us << "us cpu=" << cpu_us
+                          << "us submit=" << t1 - t0 << " poll=" << t2 - t1
+                          << " promote=" << t3 - t2 << " execute=" << t4 - t3
+                          << " intake=" << t5 - t4 - queue_wait_us
+                          << " queue_wait=" << queue_wait_us
                           << " nreqs=" << nreqs;
             }
         }
