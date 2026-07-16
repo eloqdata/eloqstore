@@ -54,9 +54,8 @@ inline const Name NAME_ELOQSTORE_INFLIGHT_BG_READ_PAGES{
 inline const Name NAME_ELOQSTORE_INFLIGHT_WRITE_PAGES{
     "eloqstore_inflight_write_pages"};
 
-// Collection interval for Phase 9-11 gauge metrics (index buffer pool, page
-// pool, open file, local space) These metrics are collected every N
-// WorkOneRound() calls to reduce overhead
+// Periodic scheduler gauges are collected every N active shard rounds to
+// reduce overhead.
 inline constexpr size_t ELOQSTORE_GAUGE_COLLECTION_INTERVAL = 1000;
 }  // namespace metrics
 #endif  // ELOQSTORE_WITH_TXSERVICE

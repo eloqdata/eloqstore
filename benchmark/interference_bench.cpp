@@ -199,7 +199,8 @@ void ReadLoop(eloqstore::EloqStore *store,
                                  std::string_view(reader->key_, sizeof(key)));
         reader->issue_phase_ = g_phase.load(std::memory_order_relaxed);
         reader->start_us_ = utils::UnixTs<microseconds>();
-        store->ExecAsyn(&reader->request_, uint64_t(reader), callback);
+        CHECK(store->ExecAsyn(&reader->request_, uint64_t(reader), callback))
+            << "read issue rejected; fixed-depth result is invalid";
     };
 
     size_t inflight = 0;
@@ -215,13 +216,16 @@ void ReadLoop(eloqstore::EloqStore *store,
                                                               : nullptr;
             if (dst != nullptr)
             {
-                dst->samples.push_back(lat);
-                if (reader->request_.Error() == eloqstore::KvError::NotFound)
+                if (reader->request_.Error() == eloqstore::KvError::NoError)
+                {
+                    dst->samples.push_back(lat);
+                }
+                else if (reader->request_.Error() ==
+                         eloqstore::KvError::NotFound)
                 {
                     dst->not_found++;
                 }
-                else if (reader->request_.Error() !=
-                         eloqstore::KvError::NoError)
+                else
                 {
                     dst->errors++;
                 }
@@ -337,7 +341,8 @@ StormTotals StormLoop(eloqstore::EloqStore *store)
     for (auto &w : writers)
     {
         NextStormBatch(*w);
-        store->ExecAsyn(&w->request_, uint64_t(w.get()), callback);
+        CHECK(store->ExecAsyn(&w->request_, uint64_t(w.get()), callback))
+            << "initial storm issue rejected; fixed-depth result is invalid";
     }
     size_t inflight = writers.size();
     while (inflight > 0)
@@ -354,7 +359,8 @@ StormTotals StormLoop(eloqstore::EloqStore *store)
             continue;
         }
         NextStormBatch(*w);
-        store->ExecAsyn(&w->request_, uint64_t(w), callback);
+        CHECK(store->ExecAsyn(&w->request_, uint64_t(w), callback))
+            << "storm reissue rejected; fixed-depth result is invalid";
     }
     StormTotals total;
     for (auto &w : writers)
