@@ -53,16 +53,17 @@ Responsibilities:
   With `enable_data_page_cache`, `max_inflight_write` also bounds cached-page
   pins retained by write promotion until the corresponding IO completes.
   The read budget carries a **background sub-budget** (`bg_read_ratio`
-  percent of `max_inflight_read`): page reads from tasks where
-  `KvTask::IsBackground()` (BatchWrite, BackgroundWrite, EvictFile, Prewarm)
-  are additionally bounded by it, so compaction/GC/batch-write read bursts
-  cannot crowd foreground point reads out of the device queue. Foreground may
-  use the entire read budget while background has no pending demand. Once a
-  background acquisition enters the wait path, its unused sub-budget stays
-  reserved through admission, including the wake-to-admit gap. Each class
-  waits on its own FIFO zone; release wakes background first and always wakes
-  foreground. The write budget has no split — all page writes come from write
-  tasks, i.e. background.
+  percent of `max_inflight_read`): budgeted page reads from `BatchWrite` and
+  `BackgroundWrite` (compaction) tasks are additionally bounded by it, so they
+  cannot crowd foreground point reads out of the device queue. `EvictFile` and
+  `Prewarm` are background task types, but local-GC `ReadFile` and
+  prewarm/download whole-file bulk IO remain exempt. Foreground may use the
+  entire read budget while background has no pending demand. Once a background
+  acquisition enters the wait path, its unused sub-budget stays reserved
+  through admission, including the wake-to-admit gap. Each class waits on its
+  own FIFO zone; release wakes background first and always wakes foreground.
+  The write budget has no split — all page writes come from write tasks, i.e.
+  background.
   `GetIoQosStats()` (also surfaced as `EloqStore::GetIoQosStats(shard_id)`)
   exposes in-flight/high-watermark/blocked counters (total read, bg-read slice,
   write) plus write-path fdatasync count and latency. The blocked fields are
