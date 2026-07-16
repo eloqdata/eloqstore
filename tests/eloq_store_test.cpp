@@ -64,9 +64,9 @@ TEST_CASE("EloqStore ValidateOptions validates all parameters", "[eloq_store]")
     REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
     options = CreateValidOptions(test_dir);  // restore valid value
 
-    // Test invalid max_write_batch_pages
+    // The retired per-task write throttle no longer constrains validation.
     options.max_write_batch_pages = 0;
-    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
+    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == true);
     options = CreateValidOptions(test_dir);  // restore valid value
 
     // Test invalid max_cloud_concurrency (cloud mode)

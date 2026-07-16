@@ -986,9 +986,9 @@ public:
 
     /**
      * @brief Per-shard IO QoS statistics (in-flight page-IO budgets,
-     * fdatasync accounting; see docs/design/io_qos.md). Counters are
-     * mutated by the shard thread and read here without synchronization —
-     * exact once the shard is quiesced, diagnostic-quality otherwise.
+     * fdatasync accounting; see docs/design/io_qos.md). Counters use
+     * single-writer relaxed atomics, yielding a race-free but non-coherent
+     * live snapshot and exact values once the shard is quiesced.
      * Returns zeros for invalid shard IDs or managers without budgets.
      */
     IoQosStats GetIoQosStats(size_t shard_id) const;

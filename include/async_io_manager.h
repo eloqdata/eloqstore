@@ -57,9 +57,9 @@ public:
 /**
  * @brief Per-shard IO QoS statistics (see docs/design/io_qos.md).
  *
- * Snapshot semantics follow TailScratchAcquireCount: counters are mutated
- * only by the owning shard thread and read without synchronization by
- * tests/diagnostics; values are exact once the shard is quiesced.
+ * Counters are single-writer relaxed atomics so tests/diagnostics can sample
+ * a race-free, non-coherent snapshot while the shard is live. Values are exact
+ * once the shard is quiesced.
  */
 struct IoQosStats
 {
@@ -78,8 +78,9 @@ struct IoQosStats
         uint64_t admitted_pages_{0};
     };
     Budget read_;
-    // Background slice of read_ (M2): pages admitted by background tasks,
-    // bounded by the bg sub-budget. Always <= read_ component-wise.
+    // Background slice of read_ (M2), bounded by the bg sub-budget. Inflight,
+    // high-watermark, and admitted pages are subsets of read_; blocked fields
+    // are per-class (read_ is foreground, bg_read_ is background).
     Budget bg_read_;
     Budget write_;
     uint64_t fdatasync_count_{0};  // write-path fdatasync ops (FdatasyncFiles)
@@ -97,13 +98,14 @@ struct IoQosStats
  * Optional background sub-budget (M2): when `bg_cap_` is non-zero,
  * acquisitions with `background = true` are additionally bounded by
  * `bg_inflight_ <= bg_cap_`. Background never exceeds its slice. Foreground
- * may consume the entire budget while background has no queued demand; once
- * background waiters exist, their unused entitlement (bg_cap_ -
- * bg_inflight_) is reserved and new foreground admissions leave it alone,
- * so background always ramps to its share — sustained foreground
+ * may consume the entire budget while background has no pending demand; once
+ * background acquisitions enter the wait path, their unused entitlement
+ * (bg_cap_ - bg_inflight_) is reserved and new foreground admissions leave it
+ * alone, so background always ramps to its share — sustained foreground
  * saturation cannot starve it. Each class waits on its own FIFO zone;
  * release wakes background waiters first (freed units are reserved for
- * them while they queue) and forwards unused wake credits to foreground.
+ * them while they queue) and also wakes foreground so a saturated background
+ * queue cannot strand foreground waiters.
  *
  * A cap of 0 disables the budget (Acquire/Release are no-ops). A request
  * whose cost exceeds the (sub-)cap (e.g. a merged write larger than a small
@@ -126,36 +128,39 @@ public:
     void Release(uint32_t cost, bool background = false);
     IoQosStats::Budget Stats() const
     {
-        return {inflight_,
-                high_watermark_,
-                blocked_count_,
-                blocked_us_,
-                admitted_pages_};
+        return {inflight_.load(std::memory_order_relaxed),
+                high_watermark_.load(std::memory_order_relaxed),
+                blocked_count_.load(std::memory_order_relaxed),
+                blocked_us_.load(std::memory_order_relaxed),
+                admitted_pages_.load(std::memory_order_relaxed)};
     }
     IoQosStats::Budget BgStats() const
     {
-        return {bg_inflight_,
-                bg_high_watermark_,
-                bg_blocked_count_,
-                bg_blocked_us_,
-                bg_admitted_pages_};
+        return {bg_inflight_.load(std::memory_order_relaxed),
+                bg_high_watermark_.load(std::memory_order_relaxed),
+                bg_blocked_count_.load(std::memory_order_relaxed),
+                bg_blocked_us_.load(std::memory_order_relaxed),
+                bg_admitted_pages_.load(std::memory_order_relaxed)};
     }
 
 private:
     uint32_t cap_{0};
-    uint32_t inflight_{0};
+    std::atomic<uint32_t> inflight_{0};
     uint32_t bg_cap_{0};  // 0 = no background sub-budget
-    uint32_t bg_inflight_{0};
-    // The remaining fields are observability only (tests, tuning, metrics);
-    // admission decisions read nothing but the caps and inflight counters.
-    uint32_t high_watermark_{0};
-    uint64_t blocked_count_{0};
-    uint64_t blocked_us_{0};
-    uint64_t admitted_pages_{0};
-    uint32_t bg_high_watermark_{0};
-    uint64_t bg_blocked_count_{0};
-    uint64_t bg_blocked_us_{0};
-    uint64_t bg_admitted_pages_{0};
+    std::atomic<uint32_t> bg_inflight_{0};
+    // BG acquisitions that entered the wait path but have not admitted yet.
+    // A wake does not end demand: the task can yield or re-wait before admit.
+    uint32_t bg_pending_{0};
+    // The remaining atomic fields are observability only (tests, tuning,
+    // metrics); admission decisions additionally read bg_pending_.
+    std::atomic<uint32_t> high_watermark_{0};
+    std::atomic<uint64_t> blocked_count_{0};
+    std::atomic<uint64_t> blocked_us_{0};
+    std::atomic<uint64_t> admitted_pages_{0};
+    std::atomic<uint32_t> bg_high_watermark_{0};
+    std::atomic<uint64_t> bg_blocked_count_{0};
+    std::atomic<uint64_t> bg_blocked_us_{0};
+    std::atomic<uint64_t> bg_admitted_pages_{0};
     WaitingZone waiting_;     // foreground waiters
     WaitingZone bg_waiting_;  // background waiters
 };
@@ -1172,8 +1177,8 @@ public:
     IoBudget read_budget_;
     IoBudget write_budget_;
     // Write-path fdatasync instrumentation (FdatasyncFiles batches).
-    uint64_t fdatasync_count_{0};
-    uint64_t fdatasync_us_{0};
+    std::atomic<uint64_t> fdatasync_count_{0};
+    std::atomic<uint64_t> fdatasync_us_{0};
 
     // Counter for consecutive Submit() calls that skipped the kernel
     // entry (no prepared SQEs and IORING_SQ_TASKRUN not set). When the
@@ -1311,8 +1316,9 @@ public:
         stats.read_ = read_budget_.Stats();
         stats.bg_read_ = read_budget_.BgStats();
         stats.write_ = write_budget_.Stats();
-        stats.fdatasync_count_ = fdatasync_count_;
-        stats.fdatasync_us_ = fdatasync_us_;
+        stats.fdatasync_count_ =
+            fdatasync_count_.load(std::memory_order_relaxed);
+        stats.fdatasync_us_ = fdatasync_us_.load(std::memory_order_relaxed);
         return stats;
     }
 
