@@ -6,8 +6,11 @@
  * high-watermarks respect the caps (except the documented oversized-request
  * admission), and disabled budgets stay untouched.
  */
+#include <gflags/gflags.h>
+
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
+#include <limits>
 
 #include "async_io_manager.h"
 #include "common.h"
@@ -15,6 +18,11 @@
 #include "test_utils.h"
 
 using test_util::MapVerifier;
+
+namespace eloqstore
+{
+DECLARE_uint64(max_processing_time_microseconds);
+}
 
 namespace
 {
@@ -52,6 +60,10 @@ TEST_CASE("io budgets: accounting invariants under tiny caps", "[io_qos]")
     REQUIRE(stats.read_.high_watermark_ <= 4);
     REQUIRE(stats.write_.high_watermark_ >= 1);
     REQUIRE(stats.write_.high_watermark_ <= 8);
+    REQUIRE(stats.read_.admitted_pages_ > 0);
+    REQUIRE(stats.write_.admitted_pages_ > 0);
+    REQUIRE(stats.fdatasync_count_ > 0);
+    REQUIRE(stats.fdatasync_us_ > 0);
 }
 
 TEST_CASE("io budgets: overflow read batch larger than the cap", "[io_qos]")
@@ -79,6 +91,7 @@ TEST_CASE("io budgets: overflow read batch larger than the cap", "[io_qos]")
     REQUIRE(stats.read_.high_watermark_ <= 4);
     // A 128-page batch through a 4-page budget must have waited.
     REQUIRE(stats.read_.blocked_count_ > 0);
+    REQUIRE(stats.read_.blocked_us_ > 0);
 }
 
 TEST_CASE("io budgets: merged append writes and oversized admission",
@@ -237,7 +250,7 @@ TEST_CASE("io budgets: negative WriteReq CQE drains and recovers", "[io_qos]")
     store->ExecSync(&failed);
     eloqstore::FailPoint::GetInstance().Disarm();
 
-    REQUIRE(failed.Error() != eloqstore::KvError::NoError);
+    REQUIRE(failed.Error() == eloqstore::KvError::IoFail);
     REQUIRE(ShardStats(store).write_.inflight_ == 0);
 
     eloqstore::BatchWriteRequest recovery;
@@ -270,7 +283,7 @@ TEST_CASE("io budgets: negative MergedWriteReq CQE drains and recovers",
     store->ExecSync(&failed);
     eloqstore::FailPoint::GetInstance().Disarm();
 
-    REQUIRE(failed.Error() != eloqstore::KvError::NoError);
+    REQUIRE(failed.Error() == eloqstore::KvError::IoFail);
     REQUIRE(ShardStats(store).write_.inflight_ == 0);
 
     eloqstore::BatchWriteRequest recovery;
@@ -279,6 +292,72 @@ TEST_CASE("io budgets: negative MergedWriteReq CQE drains and recovers",
     store->ExecSync(&recovery);
     REQUIRE(recovery.Error() == eloqstore::KvError::NoError);
     REQUIRE(ShardStats(store).write_.inflight_ == 0);
+}
+
+TEST_CASE("io budgets: negative KvTaskPageRead CQE drains and recovers",
+          "[io_qos]")
+{
+    eloqstore::KvOptions opts = default_opts;
+    opts.max_inflight_read = 4;
+    eloqstore::EloqStore *store = InitStore(opts);
+    const eloqstore::TableIdent tbl_id{"qos-read-cqe", 0};
+    MapVerifier seed(tbl_id, store, false);
+    seed.SetValueSize(200);
+    seed.Upsert(0, 100);
+    const std::string key = test_util::Key(7, 7);
+    const std::string expected = seed.DataSet().at(key).value_;
+
+    eloqstore::ReadRequest failed;
+    failed.SetArgs(tbl_id, key);
+    eloqstore::FailPoint::GetInstance().ArmOnce("KvTaskPageReadCqe");
+    store->ExecSync(&failed);
+    eloqstore::FailPoint::GetInstance().Disarm();
+
+    REQUIRE(failed.Error() == eloqstore::KvError::IoFail);
+    REQUIRE(ShardStats(store).read_.inflight_ == 0);
+
+    eloqstore::ReadRequest recovery;
+    recovery.SetArgs(tbl_id, key);
+    store->ExecSync(&recovery);
+    REQUIRE(recovery.Error() == eloqstore::KvError::NoError);
+    REQUIRE(recovery.value_ == expected);
+    REQUIRE(ShardStats(store).read_.inflight_ == 0);
+}
+
+TEST_CASE("io budgets: negative BaseReqPageRead CQE drains and recovers",
+          "[io_qos]")
+{
+    eloqstore::KvOptions opts = default_opts;
+    opts.max_inflight_read = 4;
+    opts.overflow_pointers = 128;
+    eloqstore::EloqStore *store = InitStore(opts);
+    const eloqstore::TableIdent tbl_id{"qos-batch-read-cqe", 0};
+    MapVerifier seed(tbl_id, store, false);
+    constexpr uint32_t value_size = 32 * 1024;
+    seed.SetValueSize(value_size);
+    seed.Upsert(0);
+    const std::string key = test_util::Key(0, 7);
+    const std::string expected = seed.DataSet().at(key).value_;
+
+    eloqstore::ReadRequest failed;
+    failed.SetArgs(tbl_id, key);
+    eloqstore::FailPoint::GetInstance().ArmOnce("BaseReqPageReadCqe");
+    store->ExecSync(&failed);
+    eloqstore::FailPoint::GetInstance().Disarm();
+
+    REQUIRE(failed.Error() == eloqstore::KvError::IoFail);
+    eloqstore::IoQosStats stats = ShardStats(store);
+    REQUIRE(stats.read_.inflight_ == 0);
+    REQUIRE(stats.bg_read_.inflight_ == 0);
+
+    eloqstore::ReadRequest recovery;
+    recovery.SetArgs(tbl_id, key);
+    store->ExecSync(&recovery);
+    REQUIRE(recovery.Error() == eloqstore::KvError::NoError);
+    REQUIRE(recovery.value_ == expected);
+    stats = ShardStats(store);
+    REQUIRE(stats.read_.inflight_ == 0);
+    REQUIRE(stats.bg_read_.inflight_ == 0);
 }
 
 TEST_CASE("io budgets: shutdown while tasks queue behind the budget",
@@ -346,14 +425,15 @@ TEST_CASE("io budgets: disabled read budget stays untouched", "[io_qos]")
 
 TEST_CASE("bg sub-budget: compaction batch reads are bounded", "[io_qos]")
 {
-    // Append mode with full-overwrite rounds drives space amplification past
-    // file_amplify_factor, so the shard schedules compaction between batch
-    // writes (per-table writes serialize behind the internal compact
-    // request, so by the time the last sync write returns, earlier
-    // compactions have completed). Compaction move batches issue up to
-    // 128-page ReadPages bursts from a BackgroundWrite task — the
+    // Append mode with repeated 3-of-5 partial overwrites drives space
+    // amplification past file_amplify_factor, so the shard schedules
+    // compaction between batch writes (per-table writes serialize behind the
+    // internal compact request, so by the time the last sync write returns,
+    // earlier compactions have completed). Compaction move batches issue up
+    // to 128-page ReadPages bursts from a BackgroundWrite task — the
     // BaseReqPageRead BG path — which must stay within the BG sub-budget
-    // (25% of 8 = 2 pages) while foreground keeps the full budget.
+    // (25% of 8 = 2 pages). Separate tests cover foreground capacity and
+    // concurrent foreground/background admission.
     eloqstore::KvOptions opts = append_opts;
     opts.file_amplify_factor = 2;
     opts.max_inflight_read = 8;
@@ -388,6 +468,7 @@ TEST_CASE("bg sub-budget: compaction batch reads are bounded", "[io_qos]")
     REQUIRE(stats.write_.inflight_ == 0);
     // Compaction ran and its reads were charged to the BG class...
     REQUIRE(stats.bg_read_.high_watermark_ >= 1);
+    REQUIRE(stats.bg_read_.admitted_pages_ > 0);
     // ...and never exceeded the sub-budget.
     REQUIRE(stats.bg_read_.high_watermark_ <= 2);
     // A 128-page move batch through a 2-page sub-budget must have waited.
@@ -443,12 +524,19 @@ TEST_CASE("bg sub-budget: batch-write leaf loads are background", "[io_qos]")
     REQUIRE(stats.bg_read_.high_watermark_ <= 2);
 }
 
-TEST_CASE("bg sub-budget: pending demand survives the wake gap", "[io_qos]")
+TEST_CASE("bg sub-budget: full reservation survives the wake gap", "[io_qos]")
 {
+    // Keep the scheduler in the high-priority loop after the fail point moves
+    // the woken BG task to low priority. This makes the intended ordering
+    // independent of the process-wide round-budget flag.
+    google::FlagSaver scheduler_flag_saver;
+    eloqstore::FLAGS_max_processing_time_microseconds =
+        std::numeric_limits<uint64_t>::max();
+
     eloqstore::KvOptions opts = default_opts;
     opts.num_threads = 1;
-    opts.max_inflight_read = 2;
-    opts.bg_read_ratio = 50;  // bg cap = 1
+    opts.max_inflight_read = 1;
+    opts.bg_read_ratio = 100;  // pending BG demand reserves the full cap
     opts.overflow_pointers = 128;
     eloqstore::EloqStore *store = InitStore(opts);
 
@@ -464,8 +552,8 @@ TEST_CASE("bg sub-budget: pending demand survives the wake gap", "[io_qos]")
 
     std::atomic<bool> stop_fg{false};
     std::atomic<bool> fg_failed{false};
+    std::atomic<uint64_t> fg_started{0};
     std::atomic<uint64_t> fg_done{0};
-    eloqstore::FailPoint::GetInstance().ArmPersistent("IoBudgetBgWake");
 
     std::vector<std::thread> readers;
     readers.reserve(8);
@@ -474,6 +562,7 @@ TEST_CASE("bg sub-budget: pending demand survives the wake gap", "[io_qos]")
         readers.emplace_back(
             [&]
             {
+                fg_started.fetch_add(1, std::memory_order_relaxed);
                 while (!stop_fg.load(std::memory_order_relaxed))
                 {
                     eloqstore::ReadRequest req;
@@ -487,7 +576,34 @@ TEST_CASE("bg sub-budget: pending demand survives the wake gap", "[io_qos]")
                 }
             });
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+
+    auto wait_until = [](auto &&condition, std::chrono::milliseconds timeout)
+    {
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+        while (!condition())
+        {
+            if (std::chrono::steady_clock::now() >= deadline)
+            {
+                return false;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        return true;
+    };
+
+    eloqstore::IoQosStats primed_stats;
+    const bool fg_primed = wait_until(
+        [&]
+        {
+            primed_stats = ShardStats(store);
+            return fg_started.load(std::memory_order_relaxed) ==
+                       readers.size() &&
+                   fg_done.load(std::memory_order_relaxed) == 0 &&
+                   primed_stats.read_.inflight_ == opts.max_inflight_read &&
+                   primed_stats.read_.blocked_count_ >=
+                       readers.size() - opts.max_inflight_read;
+        },
+        std::chrono::seconds(2));
 
     eloqstore::BatchWriteRequest bg_req;
     bg_req.SetTableId(bg_tbl);
@@ -496,22 +612,40 @@ TEST_CASE("bg sub-budget: pending demand survives the wake gap", "[io_qos]")
                     utils::UnixTs<std::chrono::milliseconds>() + 1,
                     eloqstore::WriteOp::Upsert);
     std::atomic<bool> bg_done{false};
-    const uint64_t fg_before = fg_done.load(std::memory_order_relaxed);
-    store->ExecAsyn(&bg_req,
-                    0,
-                    [&bg_done](eloqstore::KvRequest *)
-                    { bg_done.store(true, std::memory_order_relaxed); });
-
-    const auto deadline =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
-    while (std::chrono::steady_clock::now() < deadline)
+    bool bg_issued = false;
+    if (fg_primed)
     {
-        if (bg_done.load(std::memory_order_relaxed) &&
-            fg_done.load(std::memory_order_relaxed) > fg_before)
+        eloqstore::FailPoint::GetInstance().ArmPersistentPaused(
+            "IoBudgetBgWake");
+        bg_issued = store->ExecAsyn(
+            &bg_req,
+            0,
+            [&bg_done](eloqstore::KvRequest *)
+            { bg_done.store(true, std::memory_order_relaxed); });
+    }
+    const bool wake_gap_observed =
+        bg_issued &&
+        wait_until(
+            [&] { return eloqstore::FailPoint::GetInstance().PauseReached(); },
+            std::chrono::seconds(2));
+    const bool bg_incomplete_at_barrier =
+        !bg_done.load(std::memory_order_relaxed);
+    const eloqstore::IoQosStats barrier_stats = ShardStats(store);
+    const uint64_t fg_before = fg_done.load(std::memory_order_relaxed);
+    eloqstore::FailPoint::GetInstance().ReleasePause();
+    if (wake_gap_observed)
+    {
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
+        while (std::chrono::steady_clock::now() < deadline)
         {
-            break;
+            if (bg_done.load(std::memory_order_relaxed) &&
+                fg_done.load(std::memory_order_relaxed) > fg_before)
+            {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     const bool bg_completed_while_armed =
         bg_done.load(std::memory_order_relaxed);
@@ -526,7 +660,20 @@ TEST_CASE("bg sub-budget: pending demand survives the wake gap", "[io_qos]")
     store->Stop();
 
     const eloqstore::IoQosStats stats = ShardStats(store);
-    CAPTURE(fg_before, fg_after);
+    CAPTURE(fg_primed,
+            bg_issued,
+            wake_gap_observed,
+            bg_incomplete_at_barrier,
+            barrier_stats.read_.inflight_,
+            primed_stats.read_.inflight_,
+            primed_stats.read_.blocked_count_,
+            fg_before,
+            fg_after);
+    REQUIRE(fg_primed);
+    REQUIRE(bg_issued);
+    REQUIRE(wake_gap_observed);
+    REQUIRE(bg_incomplete_at_barrier);
+    REQUIRE(barrier_stats.read_.inflight_ == 0);
     REQUIRE(fg_after > fg_before);
     REQUIRE(bg_completed_while_armed);
     REQUIRE_FALSE(fg_failed.load(std::memory_order_relaxed));
@@ -534,7 +681,7 @@ TEST_CASE("bg sub-budget: pending demand survives the wake gap", "[io_qos]")
     REQUIRE(bg_req.Error() == eloqstore::KvError::NoError);
     REQUIRE(stats.read_.inflight_ == 0);
     REQUIRE(stats.bg_read_.inflight_ == 0);
-    REQUIRE(stats.read_.high_watermark_ <= 2);
+    REQUIRE(stats.read_.high_watermark_ <= 1);
     REQUIRE(stats.bg_read_.high_watermark_ <= 1);
     REQUIRE(stats.bg_read_.blocked_count_ > 0);
 }

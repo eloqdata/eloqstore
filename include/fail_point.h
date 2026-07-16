@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cstdint>
 #include <cstring>
 
 // Test-only error injection. Unlike KillPoint (kill_point.h), which SIGTERMs
@@ -55,20 +56,48 @@ public:
     // @p name must be a string literal (stored by pointer, not copied).
     void ArmOnce(const char *name)
     {
-        persistent_.store(false, std::memory_order_relaxed);
-        armed_.store(name, std::memory_order_release);
+        Arm(name, false, false);
     }
 
     // Arm until Disarm. Used by scheduler regressions that must perturb every
     // matching wake throughout a bounded observation window.
     void ArmPersistent(const char *name)
     {
-        persistent_.store(true, std::memory_order_relaxed);
-        armed_.store(name, std::memory_order_release);
+        Arm(name, true, false);
+    }
+
+    // Arm a persistent point and hold a cooperatively-yielding action at its
+    // first wake until the test observes the exact scheduler state. The action
+    // calls MarkPauseReached() only after yielding once, then polls
+    // PauseRequested() between further yields so it never blocks the shard.
+    void ArmPersistentPaused(const char *name)
+    {
+        Arm(name, true, true);
+    }
+
+    void ReleasePause()
+    {
+        paused_.store(false, std::memory_order_release);
+    }
+
+    bool PauseRequested() const
+    {
+        return paused_.load(std::memory_order_acquire);
+    }
+
+    void MarkPauseReached()
+    {
+        pause_reached_.store(true, std::memory_order_release);
+    }
+
+    bool PauseReached() const
+    {
+        return pause_reached_.load(std::memory_order_acquire);
     }
 
     void Disarm()
     {
+        paused_.store(false, std::memory_order_release);
         armed_.store(nullptr, std::memory_order_release);
     }
 
@@ -90,7 +119,17 @@ public:
     }
 
 private:
+    void Arm(const char *name, bool persistent, bool paused)
+    {
+        pause_reached_.store(false, std::memory_order_relaxed);
+        paused_.store(paused, std::memory_order_relaxed);
+        persistent_.store(persistent, std::memory_order_relaxed);
+        armed_.store(name, std::memory_order_release);
+    }
+
     std::atomic<const char *> armed_{nullptr};
     std::atomic<bool> persistent_{false};
+    std::atomic<bool> paused_{false};
+    std::atomic<bool> pause_reached_{false};
 };
 }  // namespace eloqstore

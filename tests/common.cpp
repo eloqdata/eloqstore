@@ -16,15 +16,14 @@ eloqstore::EloqStore *InitStore(const eloqstore::KvOptions &opts, bool cleanup)
     // destructor's worker-thread joins and LRU-cached fd releases finish
     // before we count the new store's fd budget below.
     //
-    // Every test-created store must go through InitStore — never construct
-    // an EloqStore directly in a test while another may be running. The
-    // process-global `eloq_store` pointer (Options()/Comp() plumbing)
-    // assumes at most one started store per process; a second concurrent
-    // instance leaves one store's teardown reading a nulled/foreign global
-    // (observed as a flaky SIGSEGV in Prewarmer::Shutdown). Tests that need
-    // to preserve on-disk/cloud state across store generations (warm
-    // restart, cache-trim) pass cleanup = false instead of bypassing
-    // InitStore.
+    // Tests using this shared fixture must go through InitStore — never mix a
+    // directly-owned store with this process-global instance. The global
+    // Options()/Comp() plumbing assumes compatible live stores; overlapping
+    // incompatible instances can leave teardown reading a nulled/foreign
+    // global (observed as a flaky SIGSEGV in Prewarmer::Shutdown). Intentional
+    // multi-instance/topology tests own and coordinate all instances instead.
+    // Tests that only need to preserve on-disk/cloud state across generations
+    // (warm restart, cache-trim) pass cleanup = false.
     if (eloq_store)
     {
         if (!eloq_store->IsStopped())

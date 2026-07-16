@@ -22,10 +22,8 @@
 #    total bytes written per step exceed the SLC cache if you want
 #    steady-state numbers; watch for a step whose actual write MB/s sags
 #    below the target — that is the fold-over signature.
-#  * Run against a FILE on the target filesystem (not the raw device) to
-#    include filesystem effects, or a raw block device for pure-device
-#    numbers. Never point this at a device with data you care about when
-#    using --device.
+#  * The script always runs against files below --dir, so the result includes
+#    filesystem effects. Use a dedicated directory on the target device.
 #
 # Requires: fio, python3.
 #
