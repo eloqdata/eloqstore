@@ -92,8 +92,9 @@ struct KvOptions
     /**
      * @brief Per-shard cap on in-flight page-read IO, in configured
      * data-page units (`data_page_size`; docs/design/io_qos.md M1). Applies to
-     * data-page reads (ReadPage/ReadPages); metadata, manifest, bulk file
-     * reads (ReadFile/ReadFilePrefix), and segment IO are exempt.
+     * data-page reads (ReadPage/ReadPages). Local-GC ReadFile and
+     * prewarm/download whole-file bulk IO remain exempt, as do metadata,
+     * manifest, and segment IO.
      * 0 disables the read budget.
      *
      * This is the device-calibration knob of the QoS sizing contract (see
@@ -106,9 +107,10 @@ struct KvOptions
     uint32_t max_inflight_read = 64;
     /**
      * @brief Background share of max_inflight_read, in percent (clamped to
-     * 1..100; docs/design/io_qos.md M2). Page reads issued by background
-     * tasks (batch write, compaction, GC, prewarm) are bounded by this
-     * sub-budget so they cannot crowd out foreground point reads.
+     * 1..100; docs/design/io_qos.md M2). Page reads issued by batch-write and
+     * compaction tasks are bounded by this sub-budget so they cannot crowd out
+     * foreground point reads. Local GC and prewarm/download use exempt
+     * whole-file bulk IO instead.
      * Foreground reads may use the entire read budget while no background
      * acquisition is pending; pending background demand reserves its unused
      * share through admission. No effect when the read budget is disabled

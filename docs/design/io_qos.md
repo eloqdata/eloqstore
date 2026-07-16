@@ -179,7 +179,8 @@ task-type predicate. Add `KvTask::IsBackground()`:
 - Foreground: `Read`, `Scan`, `ListObject`, `ListStandbyPartition`, `Reopen`.
 
 Do **not** reuse `ReadOnly()` — `EvictFile` and `Prewarm` are read-only but
-background.
+background. They do not currently issue budgeted page reads: local GC uses
+`ReadFile`, while prewarm/download uses whole-file bulk IO; both remain exempt.
 
 The FG/BG split only applies to the **read** budget. All page writes are
 issued by write tasks (`BatchWrite`, `BackgroundWrite`), which are background
@@ -190,8 +191,8 @@ class ever appears, split the write budget then.)
 Read budget structure:
 
 - Foreground reads: `inflight_read_pages_ ≤ max_inflight_read`.
-- Background page reads (compaction move batches, batch-write tree-traversal
-  reads, GC/prewarm page reads): additionally
+- Background page reads (compaction move batches and batch-write tree-traversal
+  reads): additionally
   `bg_inflight_read_pages_ ≤ bg_read_limit` (a fraction of
   `max_inflight_read`, e.g. 25%).
 
@@ -355,8 +356,9 @@ All budgets are per shard, but the device is shared by all shards
   waiters — no cross-thread coroutine resumption needed.
 - Cloud mode: NIC bandwidth is shared between background uploads and
   foreground cache-miss downloads; the same FG/BG discipline should
-  eventually apply to cloud slots. Upload-path bulk disk reads
-  (`ReadFilePrefix`) remain exempt from the page-IO budget.
+  eventually apply to cloud slots. Whole-file upload, prewarm/download, and
+  snapshot disk IO remains exempt from the page-IO budget, including
+  `ReadFile`, `ReadFilePrefix`, and `WriteSnapshot` bulk paths.
 
 ## Non-Goals
 
