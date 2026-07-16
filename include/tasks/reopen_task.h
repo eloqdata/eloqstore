@@ -13,10 +13,5 @@ public:
         return TaskType::Reopen;
     }
     KvError Reopen(const TableIdent &tbl_id);
-
-    void Reset(const TableIdent &tbl_id) override
-    {
-        WriteTask::Reset(tbl_id);
-    }
 };
 }  // namespace eloqstore
