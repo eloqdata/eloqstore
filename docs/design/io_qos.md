@@ -14,15 +14,16 @@ time-budgeted cooperative yield (`MaybeYield()` /
 `eloqstore_yield_budget_us`, default 20µs) bounds how long any single
 compaction/GC coroutine segment holds the worker thread, and GC unlink/close
 SQE preparation is chunked into 128-op batches. What remains — and what this
-document addresses — is that **CPU priority is lost at the IO boundary**.
-Within one 20µs slice a background task can still burst up to 128 page reads
-(compaction move batches, `DoCompactDataFile`) plus writes into the io_uring
-ring, and nothing distinguishes those requests from foreground reads at the
-ring or device level. Reads are not budgeted at all; writes are budgeted only
-per-task. Yielding controls when background IO is *issued*, not how much of
-it queues at the device once issued.
+document addresses — was that **CPU priority was lost at the IO boundary**.
+Before M1/M2, one 20µs slice could still burst up to 128 page reads (compaction
+move batches, `DoCompactDataFile`) plus writes into the io_uring ring, and
+nothing distinguished those requests from foreground reads at the ring or
+device level. Reads were not budgeted at all; writes were budgeted only
+per-task. Yielding controlled when background IO was *issued*, not how much of
+it queued at the device once issued.
 
-This document proposes three per-shard mechanisms:
+This document defines three per-shard mechanisms. M1 and M2 are implemented;
+M3 remains a measurement-gated follow-up:
 
 - **M1**: per-shard caps on in-flight page IO, with **separate caps for
   reads and writes** — they are different device resources and must be
@@ -43,11 +44,14 @@ page/segment IO, pools), `08-data-lifecycle.md` (compaction/GC cadence).
 Implementing this design requires updating those docs in the same change
 (see CLAUDE.md).
 
-## Current Mechanisms and Gaps
+## Baseline and Current Mechanisms
 
-### What exists today
+### Pre-QoS baseline
 
-| Mechanism | Location | Scope |
+The table and gaps below describe the baseline before M1/M2, not the current
+implementation.
+
+| Baseline mechanism | Location | Scope |
 |---|---|---|
 | Two ready queues (high / low priority), 400µs low-priority slice | `Shard::ExecuteReadyTasks`, `KvTask::YieldToLowPQ` | CPU only |
 | Time-budgeted cooperative yield: `MaybeYield()` once a coroutine segment exceeds `eloqstore_yield_budget_us` (20µs) — added by #455 | `MaybeYield`, `Shard::CurResumeElapsedUs` | CPU only |
@@ -59,21 +63,27 @@ Implementing this design requires updating those docs in the same change
 | `max_write_concurrency` bounds concurrent write tasks (incl. compaction: `GetBackgroundWrite` returns null at the limit) | `TaskManager` | Default unlimited in local mode |
 | Cloud slots (`max_cloud_concurrency`), cloud buffer pool | `CloudStoreMgr` | Cloud HTTP, not disk |
 
-### Gaps
+### Baseline gaps addressed by M1/M2
 
-1. **Reads have no budget anywhere.** Page compaction
+1. **Reads had no budget anywhere.** Page compaction
    (`DoCompactDataFile`) issues bursts of up to `max_read_pages_batch` (128)
    page reads per move batch through the same `ReadPages` path as foreground
    reads.
-2. **No shard-global in-flight IO counter.** Only per-task `inflight_io_` and
-   `prepared_sqe_` exist. The effective global bounds (4096 SQEs, 32K
+2. **There was no shard-global in-flight IO counter.** Only per-task
+   `inflight_io_` and `prepared_sqe_` existed. The effective global bounds
+   (4096 SQEs, 32K
    in-flight writes) are far beyond the queue depth at which NVMe read
    latency degrades.
-3. **No FG/BG tagging of IO.** SQEs are indistinguishable once submitted;
-   `sqe->ioprio` is never set. A background task scheduled for one 20µs
+3. **There was no FG/BG tagging of IO.** SQEs were indistinguishable once
+   submitted; `sqe->ioprio` was never set. A background task scheduled for one 20µs
    slice can leave 128+ requests queued at the device ahead of every
    subsequent foreground read — the yield discipline of #455 bounds CPU
    occupation per slice, not the IO submitted within it.
+
+The current M1/M2 implementation uses per-shard defaults of 64 configured
+data pages for reads, a 25% background read slice, and 512 configured data
+pages for writes. The old `max_write_batch_pages` throttle has no effect; M3
+is still deferred.
 
 ## Device-Level Rationale
 
@@ -107,8 +117,9 @@ Consequences for the design:
 
 ### M1: Per-shard in-flight page-IO caps, reads and writes separate
 
-Two per-shard counters of in-flight **page** IO (in 4KB-page units), with
-independent caps, enforced at the page-IO entry points of `IouringMgr`.
+Two per-shard counters of in-flight **page** IO (in configured
+`data_page_size` units), with independent caps, enforced at the page-IO entry
+points of `IouringMgr`.
 Reads and writes are deliberately **not** mixed in one budget: they are
 different device resources (reads need deep queue depth for IOPS; writes
 saturate bandwidth at shallow depth and their interference tracks sustained
@@ -119,9 +130,9 @@ separately.
   `ReadPage` / `ReadPages`, cost 1 per page.
 - Write budget (`inflight_write_pages_` ≤ `max_inflight_write`, option
   redefined — see Interaction with Existing Knobs):
-  `WritePage`, cost 1; `SubmitMergedWrite`, cost = bytes / data_page_size
-  (a 1MB merged write counts as 256 pages), so the cap means the same thing
-  in append and non-append mode.
+  `WritePage`, cost 1; `SubmitMergedWrite`, cost = bytes rounded up to
+  `data_page_size` (a 1MB merged write counts as 256 pages at the default 4KB
+  page size), so the cap means the same thing in append and non-append mode.
 Segment IO (`ReadSegments` / `WriteSegments`, zero-copy large values) is
 **out of scope** — see Non-Goals.
 
@@ -134,9 +145,9 @@ in-flight counter holds only previously admitted, not-yet-completed IO; each
 request is counted exactly once, from admission to completion. For a new
 request of size `cost` (page-units, not yet counted):
 
-```
+```text
 acquire(class, cost):                 // at the page-IO entry point
-    while inflight[class] + cost > cap[class]:
+    while inflight[class] != 0 and inflight[class] + cost > cap[class]:
         wait on waiting_zone[class] (FIFO)
     inflight[class] += cost           // admitted; prep SQE(s) and submit
 
@@ -184,9 +195,10 @@ Read budget structure:
   `max_inflight_read`, e.g. 25%).
 
 Background never exceeds its sub-budget. Foreground can consume the entire
-read budget **while background has no queued demand**; once background
-waiters exist, their unused entitlement (`bg_read_limit − bg_inflight`) is
-reserved — new foreground admissions leave it alone. Without the
+read budget **while background has no pending demand**; once a background
+acquisition enters the wait path, its unused entitlement
+(`bg_read_limit − bg_inflight`) stays reserved through admission, including
+the wake-to-admit gap — new foreground admissions leave it alone. Without the
 reservation, sustained foreground saturation would starve background
 forever (every freed unit would be re-acquired by a foreground waiter and
 compaction could never bootstrap its share), letting space amplification
@@ -229,22 +241,20 @@ compaction, since interference tracks bytes/sec rather than queue depth.
 
 ### New options (per shard)
 
-```
-uint32_t max_inflight_read = 64;     // pages; 0 = disabled
+```cpp
+uint32_t max_inflight_read = 64;     // configured data pages; 0 = disabled
 uint32_t bg_read_ratio = 25;         // percent of max_inflight_read
-uint32_t max_inflight_write = 512;   // pages; REDEFINED existing option
+uint32_t max_inflight_write = 512;   // configured data pages; redefined option
                                      // (was 32768, pool sizing only)
 uint64_t bg_write_rate_limit = 0;    // bytes/sec; 0 = disabled (M3)
 ```
 
-bg_read_ratio = 25 was set from the WSL interference sweeps (2026-07-03):
-total caps 32–256 were indistinguishable at fixed bg_cap, 32 matched that
-box's BDP and gave the campaign's best p50/p999, and bg_cap 8 (25% of 32)
-sat exactly at the measured background demand line — tail protection at zero write-throughput cost (the
-write-throughput knee appeared only at bg_cap 4). Real-device calibration
-(the QD sweep below) should re-derive max_inflight_read per device; the
-ratio is policy and should transfer. max_inflight_write's real default
-still awaits commit 4.
+The WSL interference sweeps (2026-07-03) initially selected a read cap of 32
+and `bg_read_ratio = 25`. Azure NVMe validation (2026-07-11) then showed real
+foreground queueing at 32 while 64–128 were indistinguishable, so the shipped
+read default is 64 and the policy ratio remains 25%. The shipped write default
+is 512. Real-device calibration (the QD sweep below) should still re-derive the
+read cap per device; the ratio is policy and should transfer.
 
 ### Sizing contract: device knob × policy knob
 
@@ -304,8 +314,8 @@ The two read-side options deliberately live at different levels:
   `max_inflight_write` rather than by the per-task drain, so pathologically
   small buffer pools must account for in-flight-write pins (production
   pools dwarf the ≤ max_inflight_write pages of pins; only tests noticed).
-- **`max_inflight_write` is redefined, not retired.** It becomes the M1
-  write cap (page units, default dropped from 32768 to a few hundred).
+- **`max_inflight_write` is redefined, not retired.** It is the M1 write cap
+  (configured data-page units, default dropped from 32768 to 512).
   `WriteReqPool` stays sized to it; in-flight writes can never exceed it, so
   the pool bound and the QoS bound coincide. Note this is a behavioral
   change for deployments that set the old option explicitly.
@@ -344,17 +354,16 @@ All budgets are per shard, but the device is shared by all shards
   waiters — no cross-thread coroutine resumption needed.
 - Cloud mode: NIC bandwidth is shared between background uploads and
   foreground cache-miss downloads; the same FG/BG discipline should
-  eventually apply to cloud slots. Also note upload-path disk reads
-  (`ReadFilePrefix`) are issued by background write tasks and are therefore
-  automatically counted against the BG disk budget — remember this when
-  sizing it in cloud mode.
+  eventually apply to cloud slots. Upload-path bulk disk reads
+  (`ReadFilePrefix`) remain exempt from the page-IO budget.
 
 ## Non-Goals
 
 - **Segment IO (zero-copy large values) is not budgeted.** Segments exist to
   serve very large values, a workload where throughput matters rather than
   tail latency and fairness, so FG/BG isolation is not a goal there.
-  Segment IO is neither counted against `max_inflight_io` nor classified;
+  Segment IO is counted against neither `max_inflight_read` nor
+  `max_inflight_write`, and is not classified;
   segment compaction keeps its existing bounds (`max_segments_batch`
   in-flight segments per batch via the shared `GlobalRegisteredMemory` pool,
   `segment_compact_yield_every`). Revisit only if large-value traffic is
@@ -370,8 +379,10 @@ All budgets are per shard, but the device is shared by all shards
 
 Export per-shard counters from day one; tuning must be measurement-driven:
 
-- Current and high-watermark in-flight pages, split FG/BG, read/write.
-- Cumulative blocked-time and block counts per class (budget wait).
+- Current and high-watermark pages for total reads, the BG-read subset, and
+  writes; foreground read usage is total minus BG.
+- Cumulative blocked time and counts per admission class: `read_` is foreground
+  waits only, `bg_read_` is background waits, and `write_` is all write waits.
 - Background write bytes/sec (actual, vs. limit when M3 lands).
 - fdatasync count and latency histogram.
 
@@ -395,7 +406,7 @@ Export per-shard counters from day one; tuning must be measurement-driven:
 3. **Verify TRIM**: confirm the filesystem issues discards for GC-deleted
    files (`discard` mount option or periodic `fstrim`); otherwise the
    WAF ≈ 1 assumption silently breaks on aged drives.
-4. **Staged rollout**:
+4. **Historical staged rollout** (M1/M2 and throttle retirement are complete):
    - Land M1+M2 with existing throttles left in place (loosened).
    - Re-run the read-vs-compaction benchmark; confirm the new mechanism
      alone protects foreground p99.

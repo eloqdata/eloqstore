@@ -12,7 +12,7 @@ Source: `include/async_io_manager.h`, `src/async_io_manager.cpp`,
 `AsyncIoManager` is the shard-facing storage interface. One instance per
 shard, chosen by `AsyncIoManager::Instance` from the store mode:
 
-```
+```text
 AsyncIoManager (abstract: ReadPage/WritePage/ReadSegments/Manifest ops/...)
 ├── MemStoreMgr        store_path empty — pages and manifests in RAM (tests)
 └── IouringMgr         local filesystem over io_uring — the substrate
@@ -38,7 +38,8 @@ Responsibilities:
   reads when the buffer is registered), `WritePage`. `ConvFilePageId` splits a
   `FilePageId` into `(file_id, offset)` by `pages_per_file_shift`.
 - **In-flight page-IO budgets** (`IoBudget`, see `docs/design/io_qos.md`
-  M1/M2) — two per-shard counters in 4KB-page units with independent caps:
+  M1/M2) — two per-shard counters in configured `data_page_size` units with
+  independent caps:
   `read_budget_` (`max_inflight_read`; `ReadPage`/`ReadPages`, per-page
   acquisition so a batch larger than the cap cannot deadlock) and
   `write_budget_` (`max_inflight_write`; `WritePage` cost 1,
@@ -47,21 +48,25 @@ Responsibilities:
   distinguishes budgeted page reads from metadata ops via the
   `KvTaskPageRead`/`BaseReqPageRead` user-data types. A cap of 0 disables a
   budget; a single request costlier than the cap is admitted alone once the
-  budget drains. Metadata, manifest, and segment IO are exempt.
+  budget drains. Metadata, manifest, and segment IO are exempt. With
+  `enable_data_page_cache`, `max_inflight_write` also bounds cached-page pins
+  retained by write promotion until the corresponding IO completes.
   The read budget carries a **background sub-budget** (`bg_read_ratio`
   percent of `max_inflight_read`): page reads from tasks where
   `KvTask::IsBackground()` (BatchWrite, BackgroundWrite, EvictFile, Prewarm)
   are additionally bounded by it, so compaction/GC/batch-write read bursts
-  cannot crowd foreground point reads out of the device queue. Foreground
-  may use the entire read budget while background has no queued demand;
-  once background waiters exist their unused sub-budget is reserved from
-  new foreground admissions, so neither class can starve the other. Each
-  class waits on its own FIFO zone; release wakes background first and
-  forwards unused wake credits to foreground. The write budget has no
-  split — all page writes come from write tasks, i.e. background.
+  cannot crowd foreground point reads out of the device queue. Foreground may
+  use the entire read budget while background has no pending demand. Once a
+  background acquisition enters the wait path, its unused sub-budget stays
+  reserved through admission, including the wake-to-admit gap. Each class
+  waits on its own FIFO zone; release wakes background first and always wakes
+  foreground. The write budget has no split — all page writes come from write
+  tasks, i.e. background.
   `GetIoQosStats()` (also surfaced as `EloqStore::GetIoQosStats(shard_id)`)
-  exposes in-flight/high-watermark/blocked counters (read, bg-read slice,
-  write) plus write-path fdatasync count and latency.
+  exposes in-flight/high-watermark/blocked counters (total read, bg-read slice,
+  write) plus write-path fdatasync count and latency. The blocked fields are
+  per admission class: `read_` counts foreground waits, `bg_read_` background
+  waits, and `write_` all write waits.
 - **FD cache** — `LruFD` per (partition, `TypedFileId`), doubly-linked LRU
   bounded by the shard's fd budget; `EvictFD` closes idle descriptors.
   Open/close exclusion per FD via a coroutine `Mutex`. Data files open with

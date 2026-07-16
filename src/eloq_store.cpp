@@ -2371,6 +2371,13 @@ void EloqStore::InitializeMetrics(metrics::MetricsRegistry *metrics_registry,
                                      metrics::Type::Gauge);
         metrics_meters_[i]->Register(metrics::NAME_ELOQSTORE_LOCAL_SPACE_LIMIT,
                                      metrics::Type::Gauge);
+        metrics_meters_[i]->Register(
+            metrics::NAME_ELOQSTORE_INFLIGHT_READ_PAGES, metrics::Type::Gauge);
+        metrics_meters_[i]->Register(
+            metrics::NAME_ELOQSTORE_INFLIGHT_BG_READ_PAGES,
+            metrics::Type::Gauge);
+        metrics_meters_[i]->Register(
+            metrics::NAME_ELOQSTORE_INFLIGHT_WRITE_PAGES, metrics::Type::Gauge);
     }
 
     enable_eloqstore_metrics_ = true;

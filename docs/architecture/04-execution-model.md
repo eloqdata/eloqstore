@@ -66,11 +66,13 @@ Scheduling primitives:
   so release never depends on the blocked task being scheduled. Background
   tasks (`KvTask::IsBackground()`: BatchWrite, BackgroundWrite, EvictFile,
   Prewarm) are additionally confined to a read sub-budget (`bg_read_ratio`)
-  and wait on a separate FIFO zone. While background waiters queue, their
-  unused sub-budget is reserved from new foreground admissions (neither
-  class can starve the other); release wakes background first and forwards
-  unused wake credits to foreground. See `docs/design/io_qos.md` (M1/M2);
-  the acquire order is FD/mutex → pools/buffers → budget → SQE.
+  and wait on a separate FIFO zone. From a background acquisition's first wait
+  through admission (including the wake-to-admit gap), its unused sub-budget is
+  reserved from new foreground admissions. Release wakes background first and
+  always wakes foreground; both classes re-check admission, so neither can
+  starve the other. See `docs/design/io_qos.md` (M1/M2); the acquire order is
+  FD/mutex → pools/buffers → budget → SQE, with no voluntary yield after budget
+  admission and an equal-cost release per CQE.
 
 `TaskManager` keeps one free-list pool per task type (`BatchWriteTask`,
 `BackgroundWrite`, `ReadTask`, `ScanTask`, `ListObjectTask`,

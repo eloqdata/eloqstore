@@ -287,11 +287,10 @@ void IoBudget::Release(uint32_t cost, bool background)
     }
     // Each freed page-unit can admit at most one waiter; over-waking is safe
     // because woken tasks re-check the admission condition and re-wait.
-    // Background waiters are woken first: while background has queued
-    // demand and sub-budget room, freed units are reserved for it (see the
-    // admission rule in Acquire), so waking foreground for those units
-    // would be futile. Unused wake credits are forwarded to foreground —
-    // when background is saturated or idle, all credits go to foreground.
+    // Background waiters are woken first while the sub-budget has room.
+    // Their demand and unused entitlement stay reserved through admission,
+    // including the wake-to-admit gap (see Acquire), so foreground tasks woken
+    // for those units simply re-check and re-wait.
     size_t woken = 0;
     if (bg_cap_ != 0 && bg_inflight_.load(std::memory_order_relaxed) < bg_cap_)
     {
@@ -1507,9 +1506,9 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
             static_cast<uint32_t>(req->pages_.size() - 1);
     }
 
-    // Write-budget admission (io_qos.md M1): cost in 4KB-page units so the
-    // cap means the same thing in append and non-append mode. Must mirror
-    // the release cost computed from bytes_ in PollComplete.
+    // Write-budget admission (io_qos.md M1): cost in configured data-page
+    // units so the cap means the same thing in append and non-append mode.
+    // Must mirror the release cost computed from bytes_ in PollComplete.
     write_budget_.Acquire(MergedWriteCost(req->bytes_));
     io_uring_sqe *sqe = GetSQE(UserDataType::MergedWriteReq, req);
     auto [fd, registered] = req->fd_ref_.FdPair();
