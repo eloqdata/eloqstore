@@ -48,9 +48,10 @@ Responsibilities:
   distinguishes budgeted page reads from metadata ops via the
   `KvTaskPageRead`/`BaseReqPageRead` user-data types. A cap of 0 disables a
   budget; a single request costlier than the cap is admitted alone once the
-  budget drains. Metadata, manifest, and segment IO are exempt. With
-  `enable_data_page_cache`, `max_inflight_write` also bounds cached-page pins
-  retained by write promotion until the corresponding IO completes.
+  budget drains. Metadata, manifest, bulk file/snapshot paths (`ReadFile`,
+  `ReadFilePrefix`, `WriteSnapshot`), `Fdatasync`, and segment IO are exempt.
+  With `enable_data_page_cache`, `max_inflight_write` also bounds cached-page
+  pins retained by write promotion until the corresponding IO completes.
   The read budget carries a **background sub-budget** (`bg_read_ratio`
   percent of `max_inflight_read`): page reads from tasks where
   `KvTask::IsBackground()` (BatchWrite, BackgroundWrite, EvictFile, Prewarm)
