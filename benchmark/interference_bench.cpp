@@ -65,8 +65,8 @@ DEFINE_uint32(val_size,
 DEFINE_uint32(read_concurrency, 32, "concurrent point reads (closed loop)");
 DEFINE_uint32(baseline_secs, 15, "seconds of read-only baseline phase");
 DEFINE_uint32(storm_secs, 60, "seconds of read + write-storm phase");
-DEFINE_uint32(storm_ratio, 5, "overwrite span out of every ratio keys");
-DEFINE_uint32(storm_span, 3, "overwrite span out of every ratio keys");
+DEFINE_uint32(storm_ratio, 5, "key-stride width of the overwrite pattern");
+DEFINE_uint32(storm_span, 3, "keys overwritten within each stride");
 DEFINE_uint32(storm_batch_keys, 2048, "keys per storm batch-write request");
 DEFINE_uint32(write_read_ratio,
               9,

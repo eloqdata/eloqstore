@@ -90,22 +90,20 @@ struct IoQosStats
 /**
  * @brief Per-shard in-flight page-IO budget (M1/M2 in docs/design/io_qos.md).
  *
- * Counts admitted, not-yet-completed page IO in 4KB-page units. Tasks block
- * in Acquire when admission would exceed the cap; IouringMgr::PollComplete
- * releases per CQE and wakes waiters, so release never depends on the
- * blocked task being scheduled.
+ * Counts admitted, not-yet-completed page IO in configured data-page units
+ * (`KvOptions::data_page_size`). Tasks block in Acquire when admission would
+ * exceed the cap; IouringMgr::PollComplete releases per CQE and wakes waiters,
+ * so release never depends on the blocked task being scheduled.
  *
  * Optional background sub-budget (M2): when `bg_cap_` is non-zero,
  * acquisitions with `background = true` are additionally bounded by
  * `bg_inflight_ <= bg_cap_`. Background never exceeds its slice. Foreground
  * may consume the entire budget while background has no pending demand; once
- * background acquisitions enter the wait path, their unused entitlement
- * (bg_cap_ - bg_inflight_) is reserved and new foreground admissions leave it
- * alone, so background always ramps to its share — sustained foreground
- * saturation cannot starve it. Each class waits on its own FIFO zone;
- * release wakes background waiters first (freed units are reserved for
- * them while they queue) and also wakes foreground so a saturated background
- * queue cannot strand foreground waiters.
+ * a background acquisition enters the wait path, its unused entitlement
+ * (bg_cap_ - bg_inflight_) stays reserved through admission, including the
+ * wake-to-admit gap. Each class waits on its own FIFO zone; release wakes
+ * background waiters first and always wakes foreground, so neither sustained
+ * foreground saturation nor a saturated background queue can starve a class.
  *
  * A cap of 0 disables the budget (Acquire/Release are no-ops). A request
  * whose cost exceeds the (sub-)cap (e.g. a merged write larger than a small
@@ -1325,7 +1323,7 @@ public:
     }
 
     /**
-     * @brief Write-budget cost of a merged write in 4KB-page units.
+     * @brief Write-budget cost of a merged write in configured data-page units.
      * Acquire (SubmitMergedWrite) and release (PollComplete) must use this
      * same formula so the budget balances exactly.
      */

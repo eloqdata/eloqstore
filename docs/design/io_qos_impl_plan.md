@@ -59,14 +59,15 @@ ample room. Current types: `KvTask`, `BaseReq`, `WriteReq`,
 `MergedWriteReq`. Add:
 
 - `KvTaskPageRead` — single-page read issued via the `KvTask` path
-  (`IouringMgr::ReadPage`). Cost 1. Handled identically to `KvTask` in
+  (`IouringMgr::ReadPage`). Cost 1 configured data page. Handled identically to
+  `KvTask` in
   `PollComplete`, plus `read_budget_.Release(1)`.
 - `BaseReqPageRead` — per-page read in a batch (`IouringMgr::ReadPages`).
   Handled identically to `BaseReq`, plus `read_budget_.Release(1)`.
 
 Metadata ops keep `KvTask`/`BaseReq` and are never charged. Write costs are
-already derivable: `WriteReq` = 1 page; `MergedWriteReq` = `bytes_ /
-data_page_size` (round up; assert page alignment).
+already derivable in configured data-page units: `WriteReq` = 1;
+`MergedWriteReq` = `bytes_ / data_page_size` (round up; assert page alignment).
 
 FG/BG at release time (needed by commit 2) comes from the task pointer every
 req type already carries: `task->IsBackground()`.
@@ -95,7 +96,7 @@ never by the blocked task) and unreachable in practice with caps ≪
 | `IouringMgr::ReadPage` (`async_io_manager.cpp` ~484) | `read_budget_.Acquire(1)` at the top of the `read_page` lambda's retry loop, before `GetSQE`. Release is per-CQE, so each retry re-acquires. |
 | `IouringMgr::ReadPages` (~565) | Acquire **per page** inside `send_req`, not per batch. Rationale: a 128-page compaction batch must not deadlock against a BG sub-budget of 64 (commit 2); per-page acquisition lets the task block mid-batch while already-submitted pages complete. This supersedes the "atomic batch acquire" idea discussed during design review. |
 | `IouringMgr::WritePage` (~742) | `write_budget_.Acquire(1)` after `write_req_pool_->Alloc`, before `GetSQE`. |
-| `IouringMgr::SubmitMergedWrite` (~777) | `write_budget_.Acquire(bytes / page_size)` after `merged_write_req_pool_->Alloc`, before `GetSQE`. |
+| `IouringMgr::SubmitMergedWrite` (~777) | `write_budget_.Acquire(bytes / data_page_size)` after `merged_write_req_pool_->Alloc`, before `GetSQE`. |
 
 Exempt (unchanged): all metadata ops, manifest IO, `ReadFile` /
 `WriteSnapshot` bulk paths, `Fdatasync` (instrumented only),
@@ -109,10 +110,10 @@ policy in commit 1 is a plain `WakeN` on the released budget's zone.
 
 ### Options and validation
 
-- `kv_options.h`: add `max_inflight_read = 256`; redefine
-  `max_inflight_write` (page units, keep old default 32768 in this commit —
-  the default drops in commit 4). Add INI parsing in `kv_options.cpp` and
-  equality-operator entries.
+- `kv_options.h`: add `max_inflight_read` (initially 256; shipped default 64);
+  redefine `max_inflight_write` in configured data-page units (keep old default
+  32768 in this commit — the shipped default drops to 512 in commit 4). Add INI
+  parsing in `kv_options.cpp` and equality-operator entries.
 - `eloq_store.cpp` option validation: `max_inflight_write != 0` already
   enforced; nothing else hard-fails. `max_inflight_read == 0` disables the
   read budget (documented).
@@ -122,10 +123,12 @@ policy in commit 1 is a plain `WakeN` on the released budget's zone.
 ### Stats
 
 `struct IoQosStats` (per budget: current, high-watermark, blocked count,
-cumulative blocked µs) + `IouringMgr::GetIoQosStats()`. Wire into the
-`ELOQSTORE_WITH_TXSERVICE` metrics meter behind the existing
-`EnableMetrics()` guard; otherwise reachable from tests via the store's
-shard accessors. Add an fdatasync counter + latency accumulator in
+cumulative blocked µs) + `IouringMgr::GetIoQosStats()`. `read_` blocked fields
+count foreground waits only, `bg_read_` counts background waits, and `write_`
+counts all write waits. The `ELOQSTORE_WITH_TXSERVICE` meter registers gauges
+for current total-read, BG-read, and write usage behind the existing
+`EnableMetrics()` guard; full stats remain reachable through the store's shard
+accessors. Add an fdatasync counter + latency accumulator in
 `SyncFiles`/`FdatasyncFiles` in the same commit (evaluation step 2 needs
 it).
 
@@ -147,13 +150,10 @@ it).
 > taking a `background` flag) rather than as a separate class, so the write
 > budget reuses the same type with no sub-budget configured; per-class
 > oversized-request escape and FIFO zones as described; stats gained a
-> `bg_read_` slice and a BG-read inflight gauge. (b) The wake policy below
-> ("wake FG waiters first") was found to starve background under sustained
-> foreground saturation — recycling alone cannot even bootstrap BG's share
-> from zero. Replaced by a demand-gated reservation: while BG waiters
-> queue, their unused entitlement is off-limits to new FG admissions;
-> release wakes BG first and forwards unused wake credits to FG
-> (`WaitingZone::WakeN` now returns the count actually woken).
+> `bg_read_` slice and a BG-read inflight gauge. (b) Waking FG first was found
+> to starve background under sustained foreground saturation. Demand is now
+> tracked from first wait through admission, so the unused BG entitlement stays
+> reserved across wake-to-admit; release wakes BG first and always wakes FG.
 
 - `KvTask::IsBackground()` in `tasks/task.h`: `BatchWrite`,
   `BackgroundWrite`, `EvictFile`, `Prewarm` → true; explicitly not
@@ -162,9 +162,9 @@ it).
   (`bg_waiting_`). Acquire for a BG task additionally checks
   `bg_inflight_ + cost > bg_cap_`. Release decrements both counters when
   the completing request's `task->IsBackground()`.
-- Wake policy: on read-budget release, wake FG waiters first (`waiting_`),
-  then BG waiters only while `bg_inflight_ < bg_cap_` and total headroom
-  remains. Spurious wakes are safe (acquire re-checks in its while loop).
+- Wake policy: on read-budget release, wake BG waiters while
+  `bg_inflight_ < bg_cap_`, and always wake FG as well. Spurious wakes are safe
+  (acquire re-checks in its loop).
 - Option `bg_read_ratio = 25` (percent, clamp 1–100);
   `bg_cap_ = max_inflight_read * ratio / 100`, min 1 page... but see next
   line: `bg_cap_` must be ≥ 1 and the per-page acquisition from commit 1
@@ -204,7 +204,8 @@ it).
 > campaign (real-device confirmation still advisable before release).
 > Details: `WritePage` throttle branch removed (budget admission comment
 > left in its place); `max_write_batch_pages` deprecated — parsed with a
-> LOG(WARNING), validation kept for compat, field documented as no-effect;
+> LOG(WARNING), validation removed so all values are accepted, field documented
+> as no-effect;
 > `max_inflight_write` default 32768 → 512, validated by a {512, 2048,
 > 32768} sweep (512 binds marginally — hwm pinned, 6–26 blocks/30s — at
 > equal-or-best write throughput and read tails; natural demand ceiling was
@@ -212,19 +213,19 @@ it).
 > enable_data_page_cache, write-promotion pins are now bounded by
 > max_inflight_write instead of the per-task drain; the data_page_cache OOM
 > test was recalibrated to `max_inflight_write = 1` (tiny 2-slot pool).
-> Earlier same-day change under this commit's umbrella:
-> max_inflight_read default 256 → 32, bg_read_ratio stays 25.
+> The read default moved from 256 to 32 in the initial WSL campaign, then to
+> the shipped value 64 after Azure NVMe validation; bg_read_ratio stays 25.
 
-Only after the interference benchmark confirms M1+M2 alone protect
-foreground p99 (design evaluation step 4):
+The implemented change was gated on the interference benchmark confirming
+that M1+M2 alone protect foreground p99 (design evaluation step 4):
 
-- Remove the `inflight_io_ >= max_write_batch_pages → WaitWrite()` branch in
+- Removed the `inflight_io_ >= max_write_batch_pages → WaitWrite()` branch in
   `WriteTask::WritePage` (`write_task.cpp` ~304). Keep the CPU yields and
   the terminal `WaitWrite()`.
-- Drop `max_inflight_write` default 32768 → calibrated value (~512).
+- Dropped `max_inflight_write` default 32768 → calibrated value 512.
   Release-notes entry: behavioral change for deployments setting it
   explicitly.
-- Deprecate `max_write_batch_pages` in `kv_options.h` (keep parsing,
+- Deprecated `max_write_batch_pages` in `kv_options.h` (keep parsing,
   ignore, log a warning) for one release before deletion.
 
 ## Commit 5 — M3 rate limiter (deferred)
@@ -238,8 +239,8 @@ degradation that inflight caps don't remove: token bucket (bytes) in
 
 ## Testing plan
 
-> **Status (2026-07-03):** unit-test items 1–6 all implemented in
-> `tests/io_qos.cpp` (11 cases). Notes: item 4's "two concurrent merged
+> **Status:** unit-test items 1–6 and the later regression cases are implemented
+> in `tests/io_qos.cpp` (16 cases). Notes: item 4's "two concurrent merged
 > writes" requires multiple partitions' write tasks — a single task's
 > flushes don't overlap (it yields per page while filling the next buffer);
 > item 5 uses the read-only-directory injection (kill points SIGTERM the

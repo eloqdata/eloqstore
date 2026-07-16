@@ -73,10 +73,12 @@ struct KvOptions
      */
     uint32_t io_queue_size = 4096;
     /**
-     * @brief Per-shard cap on in-flight page-write IO, in 4KB-page units
-     * (docs/design/io_qos.md M1). A merged append-mode write of N bytes
-     * counts as N / data_page_size pages, so the cap means the same thing
-     * in append and non-append mode. Also sizes the write request pools.
+     * @brief Per-shard cap on in-flight page-write IO, in configured
+     * data-page units (`data_page_size`; docs/design/io_qos.md M1). A merged
+     * append-mode write is charged by its byte length rounded up to a data
+     * page, so the cap means the same thing in append and non-append mode.
+     * Also sizes the write request pools. With `enable_data_page_cache`, it
+     * bounds cached-page write-promotion pins held until IO completion.
      * Cannot be zero.
      *
      * NOTE: before the IO QoS work this option only sized the non-append
@@ -86,8 +88,9 @@ struct KvOptions
      */
     uint32_t max_inflight_write = 512;
     /**
-     * @brief Per-shard cap on in-flight page-read IO, in 4KB-page units
-     * (docs/design/io_qos.md M1). Applies to data-page reads
+     * @brief Per-shard cap on in-flight page-read IO, in configured
+     * data-page units (`data_page_size`; docs/design/io_qos.md M1). Applies to
+     * data-page reads
      * (ReadPage/ReadPages); metadata and segment IO are exempt.
      * 0 disables the read budget.
      *
@@ -104,8 +107,10 @@ struct KvOptions
      * 1..100; docs/design/io_qos.md M2). Page reads issued by background
      * tasks (batch write, compaction, GC, prewarm) are bounded by this
      * sub-budget so they cannot crowd out foreground point reads.
-     * Foreground reads may use the entire read budget. No effect when the
-     * read budget is disabled (max_inflight_read = 0).
+     * Foreground reads may use the entire read budget while no background
+     * acquisition is pending; pending background demand reserves its unused
+     * share through admission. No effect when the read budget is disabled
+     * (max_inflight_read = 0).
      */
     uint32_t bg_read_ratio = 25;
     /**
@@ -114,7 +119,7 @@ struct KvOptions
      * many writes outstanding). Superseded by the shard-wide write budget
      * `max_inflight_write` (docs/design/io_qos.md, plan commit 4), which
      * bounds in-flight write pages across all tasks without the
-     * drain-to-zero sawtooth. Parsed and validated for compatibility;
+     * drain-to-zero sawtooth. Parsed for compatibility and otherwise ignored;
      * scheduled for removal one release after deprecation.
      */
     uint32_t max_write_batch_pages = 32;
