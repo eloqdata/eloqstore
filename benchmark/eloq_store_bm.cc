@@ -1,10 +1,23 @@
 #include "eloq_store_bm.h"
 
+#include <gflags/gflags.h>
+
+#include <algorithm>
+#include <atomic>
 #include <cassert>
+#include <chrono>
 #include <iomanip>
 #include <numeric>
+#include <thread>
 
+// https://github.com/cameron314/concurrentqueue/issues/280
+#undef BLOCK_SIZE
+#include "../external/concurrentqueue/blockingconcurrentqueue.h"
 #include "kv_options.h"
+
+DECLARE_uint32(client_threads);
+DECLARE_uint32(inflight_per_client);
+DECLARE_uint32(per_shard_cap);
 
 namespace EloqStoreBM
 {
@@ -530,6 +543,172 @@ void Benchmark::GenBatchRecord(const Benchmark &bm,
 #endif
 }
 
+namespace
+{
+struct Get2Client
+{
+    moodycamel::BlockingConcurrentQueue<EloqStoreBM::ReadOperation *> done_;
+    std::vector<uint64_t> lat_us_;
+    uint64_t completed_{0};
+    uint64_t issue_failed_{0};
+};
+
+uint64_t Get2NowUs()
+{
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+}  // namespace
+
+void Benchmark::OnReadV2(::eloqstore::KvRequest *req)
+{
+    auto *op = reinterpret_cast<ReadOperation *>(req->UserData());
+    static_cast<Get2Client *>(op->client_)->done_.enqueue(op);
+}
+
+void Benchmark::RunGet2(uint32_t client_threads,
+                        uint32_t inflight,
+                        uint32_t per_shard_cap)
+{
+    const uint32_t nshards = worker_cnt_ > 0 ? worker_cnt_ : 1;
+    std::atomic<bool> stop{false};
+    std::vector<Get2Client> clients(client_threads);
+    std::vector<std::thread> thds;
+    const uint64_t bench_start = Get2NowUs();
+
+    for (uint32_t c = 0; c < client_threads; ++c)
+    {
+        thds.emplace_back(
+            [this, c, inflight, per_shard_cap, nshards, &clients, &stop]()
+            {
+                Get2Client &me = clients[c];
+                object_generator gen;
+                gen.set_random_data(true);
+                gen.set_random_seed(20260711 + c * 7919);
+                gen.set_key_size(key_byte_size_);
+                gen.set_data_size_fixed(value_byte_size_);
+                gen.set_key_prefix(key_prefix_.data());
+                gen.set_key_range(key_minimum_, key_maximum_);
+
+                std::vector<ReadOperation> ops;
+                ops.reserve(inflight);
+                for (uint32_t i = 0; i < inflight; ++i)
+                {
+                    ops.emplace_back(this);
+                    ops.back().client_ = &me;
+                }
+                std::vector<uint32_t> shard_out(nshards, 0);
+                uint64_t issued = 0;
+
+                auto issue = [&](ReadOperation *op) -> bool
+                {
+                    uint64_t key_index =
+                        gen.get_key_index(OBJECT_GENERATOR_KEY_RANDOM);
+                    uint32_t part = key_index % partition_count_;
+                    if (per_shard_cap > 0)
+                    {
+                        for (int tries = 0;
+                             shard_out[part % nshards] >= per_shard_cap &&
+                             tries < 8;
+                             ++tries)
+                        {
+                            key_index =
+                                gen.get_key_index(OBJECT_GENERATOR_KEY_RANDOM);
+                            part = key_index % partition_count_;
+                        }
+                    }
+                    op->shard_ = part % nshards;
+                    op->key_.clear();
+                    gen.generate_key(key_index, op->key_);
+                    op->req_->SetArgs(
+                        ::eloqstore::TableIdent(table_name_str, part),
+                        op->key_);
+                    op->start_ts_ = Get2NowUs();
+                    if (!eloq_store_->ExecAsyn(op->req_.get(),
+                                               reinterpret_cast<uint64_t>(op),
+                                               OnReadV2))
+                    {
+                        ++me.issue_failed_;
+                        return false;
+                    }
+                    ++shard_out[op->shard_];
+                    ++issued;
+                    return true;
+                };
+
+                for (auto &op : ops)
+                {
+                    issue(&op);
+                }
+                ReadOperation *done_op = nullptr;
+                while (!stop.load(std::memory_order_relaxed))
+                {
+                    if (!me.done_.wait_dequeue_timed(done_op, 10000))
+                    {
+                        continue;
+                    }
+                    const uint64_t now = Get2NowUs();
+                    me.lat_us_.push_back(now - done_op->start_ts_);
+                    ++me.completed_;
+                    --shard_out[done_op->shard_];
+                    issue(done_op);
+                }
+                // Drain remaining in-flight before exiting.
+                uint64_t drained = me.completed_;
+                const uint64_t deadline = Get2NowUs() + 3000000;
+                while (drained + me.issue_failed_ < issued &&
+                       Get2NowUs() < deadline)
+                {
+                    if (me.done_.wait_dequeue_timed(done_op, 10000))
+                    {
+                        ++drained;
+                    }
+                }
+            });
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(total_test_time_sec_));
+    stop.store(true, std::memory_order_release);
+    for (auto &t : thds)
+    {
+        t.join();
+    }
+    const double dur_sec = (Get2NowUs() - bench_start) / 1e6;
+
+    std::vector<uint64_t> all;
+    uint64_t total = 0;
+    for (auto &cl : clients)
+    {
+        total += cl.completed_;
+        all.insert(all.end(), cl.lat_us_.begin(), cl.lat_us_.end());
+    }
+    std::sort(all.begin(), all.end());
+    auto pct = [&](double p) -> uint64_t
+    {
+        if (all.empty())
+        {
+            return 0;
+        }
+        size_t idx =
+            std::min(all.size() - 1, static_cast<size_t>(p * all.size()));
+        return all[idx];
+    };
+    LOG(INFO) << "GET2 finished: clients=" << client_threads
+              << " inflight=" << inflight << " per_shard_cap=" << per_shard_cap
+              << " completed=" << total << " duration=" << dur_sec
+              << "s QPS:" << std::fixed << std::setprecision(2)
+              << total / dur_sec;
+    LOG(INFO) << "Latency: Min->" << (all.empty() ? 0 : all.front())
+              << ", Max->" << (all.empty() ? 0 : all.back()) << ", Mean->"
+              << (all.empty() ? 0
+                              : std::accumulate(all.begin(), all.end(), 0ULL) /
+                                    all.size())
+              << ", p50->" << pct(0.50) << ", p90->" << pct(0.90) << ", p95->"
+              << pct(0.95) << ", p99->" << pct(0.99) << ", p99.9->"
+              << pct(0.999) << ", p99.99->" << pct(0.9999);
+}
+
 void Benchmark::OnRead(::eloqstore::KvRequest *req)
 {
     ::eloqstore::ReadRequest *read_req =
@@ -611,6 +790,7 @@ void Benchmark::OnRead(::eloqstore::KvRequest *req)
     // get next key randomly.
     int8_t iter = obj_iter_type(read_op->bm_->key_pattern_, GET_CMD_IDX);
     uint64_t key_index = read_obj_gen.get_key_index(iter);
+
     read_op->key_.clear();
     read_obj_gen.generate_key(key_index, read_op->key_);
 
@@ -725,6 +905,7 @@ Benchmark::Benchmark(std::string &command,
       key_pattern_(key_pattern),
       result_(worker_cnt, this)
 {
+    worker_cnt_ = worker_cnt;
 }
 
 bool Benchmark::OpenEloqStore(const eloqstore::KvOptions &kv_options)
@@ -847,6 +1028,13 @@ void Benchmark::RunBenchmark()
                 return;
             }
         }
+    }
+    else if (command_ == "GET2")
+    {
+        RunGet2(FLAGS_client_threads,
+                FLAGS_inflight_per_client,
+                FLAGS_per_shard_cap);
+        return;
     }
     else
     {

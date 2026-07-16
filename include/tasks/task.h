@@ -231,6 +231,14 @@ public:
     int io_res_{0};
     uint32_t io_flags_{0};
     KvError result_err_{KvError::NoError};
+    // Loop-time (us) when this task's latest page-read CQE was reaped;
+    // stage-timing instrumentation only (ELOQ_IO_STATS=1).
+    uint64_t op_cqe_us_{0};
+    // Stage-timing (ELOQ_IO_STATS=1): when this task began executing its
+    // read; consumed (zeroed) by the first instrumented page read.
+    uint64_t op_start_us_{0};
+    bool needs_auto_reopen_{false};
+    bool needs_oom_retry_{false};
 
     TaskStatus status_{TaskStatus::Idle};
     KvRequest *req_{nullptr};

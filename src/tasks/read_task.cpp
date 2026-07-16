@@ -35,6 +35,10 @@ KvError LocateAndProcess(const TableIdent &tbl_id,
                          uint64_t &expire_ts,
                          Handler &&handler)
 {
+    if (IoStatsEnabled())
+    {
+        ThdTask()->op_start_us_ = Shard::ReadTimeMicroseconds();
+    }
     auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_id);
     CHECK_KV_ERR(err);
     RootMeta *meta = root_handle.Get();

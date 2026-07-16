@@ -2196,6 +2196,10 @@ bool EloqStore::SendRequest(KvRequest *req)
     }
 
     req->err_ = KvError::NoError;
+    if (IoStatsEnabled())
+    {
+        req->dbg_enqueue_us_ = Shard::ReadTimeMicroseconds();
+    }
 #ifdef ELOQ_MODULE_ENABLED
     {
         std::lock_guard<bthread::Mutex> lk(req->mutex_);

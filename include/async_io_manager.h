@@ -657,6 +657,16 @@ public:
     ~IouringMgr() override;
     KvError Init(Shard *shard) override;
     void Submit() override;
+    // A shard must not idle-block while this ring has prepared or
+    // submitted-but-unreaped IO: CQE delivery under DEFER_TASKRUN
+    // requires this thread to keep entering the kernel. The base class
+    // returns true unconditionally, which let shards sleep up to the
+    // 100ms request-wait timeout with CQEs pending (observed during
+    // prewarm, whose IO is not owned by an active task).
+    bool IsIdle() override
+    {
+        return inflight_ios_ == 0;
+    }
     void PollComplete() override;
     char *AcquireWriteBuffer(uint16_t &buf_index) override;
     void ReleaseWriteBuffer(char *ptr, uint16_t buf_index) override;
@@ -1179,6 +1189,33 @@ public:
     // there's nothing to do.
     static constexpr uint32_t kForceSubmitEveryNoOps = 10;
     uint32_t consecutive_skipped_submits_{0};
+    // SQEs handed out minus CQEs reaped (single shard thread).
+    uint32_t inflight_ios_{0};
+
+    // Loop-behavior stats, maintained by the owning shard thread and
+    // flushed as one VLOG(1) line every 5s: iteration rate, CQE rate,
+    // and the reap-batch-size histogram (how many CQEs each non-empty
+    // PollComplete found). Used to observe completion-batching regimes.
+    uint64_t loop_now_us_{0};  // stamped by Submit() each loop iteration
+    uint64_t stats_next_flush_us_{0};
+    uint64_t stats_iters_{0};
+    uint64_t stats_polls_nonzero_{0};
+    uint64_t stats_cqes_{0};
+    uint64_t stats_batch_hist_[9]{};  // index 1..8 = batch size, 0 = 9+
+    // Per-stage read-path timing (ELOQ_IO_STATS=1): [0]=budget-gate wait,
+    // [1]=SQE->CQE (pre-dispatch + device + reap), [2]=CQE->task resume,
+    // [3]=enqueue->dequeue (queue wait), [4]=task-start->gate
+    // (index/root walk), [5]=dequeue->task-start (start lag).
+    bool io_stats_enabled_{false};
+    uint64_t stage_sum_us_[6]{};
+    uint64_t stage_max_us_[6]{};
+    // Loop round-length tracking (gap between successive PollComplete
+    // calls on this shard) while stats are enabled.
+    uint64_t round_prev_us_{0};
+    uint64_t round_sum_us_{0};
+    uint64_t round_max_us_{0};
+    uint64_t round_cnt_{0};
+    uint64_t stage_cnt_{0};
 
     // Active branch for this shard.
     std::string active_branch_{MainBranchName};

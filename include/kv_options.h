@@ -98,7 +98,7 @@ struct KvOptions
      * `read_blocked` staying ~0 under representative load validates the
      * value; nonzero means undersized.
      */
-    uint32_t max_inflight_read = 32;
+    uint32_t max_inflight_read = 64;
     /**
      * @brief Background share of max_inflight_read, in percent (clamped to
      * 1..100; docs/design/io_qos.md M2). Page reads issued by background

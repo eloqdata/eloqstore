@@ -82,7 +82,7 @@ public:
     // counter on aarch64). Public so shard-thread code outside Shard (e.g.
     // IoBudget blocked-time accounting) can time intervals without a
     // clock_gettime call.
-    uint64_t ReadTimeMicroseconds();
+    static uint64_t ReadTimeMicroseconds();
     uint64_t DurationMicroseconds(uint64_t start_us);
 
     std::atomic<bool> io_mgr_and_page_pool_inited_{false};
