@@ -4690,6 +4690,59 @@ private:
 };
 }  // namespace
 
+KvError CloudStoreMgr::ListManifestObjects(
+    const TableIdent &tbl_id,
+    const std::function<void(const std::string &)> &on_object)
+{
+    std::string remote_path =
+        tbl_id.ToString() + "/" + FileNameManifest + FileNameSeparator;
+    std::string continuation_token;
+    KvTask *current_task = ThdTask();
+    do
+    {
+        ObjectStore::ListTask list_task(remote_path, false);
+        // Flat manifest keys; no delimiter so the response cannot carry
+        // CommonPrefixes entries (see GetManifest).
+        list_task.SetRecursive(true);
+        list_task.SetContinuationToken(continuation_token);
+        list_task.SetKvTask(current_task);
+        AcquireCloudSlot(current_task);
+        obj_store_.SubmitTask(&list_task, shard);
+        current_task->WaitIo();
+
+        if (list_task.error_ != KvError::NoError)
+        {
+            LOG(ERROR) << "CloudStoreMgr::ListManifestObjects: list objects "
+                          "failed for "
+                       << tbl_id << " : " << ErrorString(list_task.error_);
+            return list_task.error_;
+        }
+
+        std::vector<std::string> batch_files;
+        std::string next_token;
+        if (!obj_store_.ParseListObjectsResponse(
+                list_task.response_data_.view(),
+                list_task.json_data_,
+                &batch_files,
+                nullptr,
+                &next_token))
+        {
+            LOG(ERROR) << "CloudStoreMgr::ListManifestObjects: parse list "
+                          "response failed for table "
+                       << tbl_id;
+            return KvError::Corrupted;
+        }
+
+        for (const std::string &name : batch_files)
+        {
+            on_object(name);
+        }
+        continuation_token = std::move(next_token);
+    } while (!continuation_token.empty());
+
+    return KvError::NoError;
+}
+
 std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
     const TableIdent &tbl_id, std::string_view archive_tag)
 {
@@ -4732,84 +4785,40 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
         {
             uint64_t best_term = 0;
             bool found = false;
-            std::vector<std::string> cloud_files;
-            std::string remote_path =
-                tbl_id.ToString() + "/" + FileNameManifest + FileNameSeparator;
-
-            std::string continuation_token;
-            KvTask *current_task = ThdTask();
-            do
+            KvError list_err = ListManifestObjects(
+                tbl_id,
+                [&](const std::string &name)
+                {
+                    if (name == CurrentTermFileName)
+                    {
+                        return;
+                    }
+                    uint64_t term = 0;
+                    std::string_view branch_name;
+                    std::optional<std::string> tag;
+                    if (!ParseManifestFileSuffix(name, branch_name, term, tag))
+                    {
+                        // Transient directory-style entry from a racing
+                        // drop; see CloudStoreMgr::GetManifest for details.
+                        LOG(WARNING) << "CloudStoreMgr::RefreshManifest: skip "
+                                        "unrecognized entry under manifest "
+                                        "prefix of table "
+                                     << tbl_id << ": " << name;
+                        return;
+                    }
+                    if (tag.has_value())
+                    {
+                        return;
+                    }
+                    if (term >= best_term)
+                    {
+                        found = true;
+                        best_term = term;
+                    }
+                });
+            if (list_err != KvError::NoError)
             {
-                ObjectStore::ListTask list_task(remote_path, false);
-                // Flat manifest keys; no delimiter so the response cannot
-                // carry CommonPrefixes entries (see GetManifest).
-                list_task.SetRecursive(true);
-                list_task.SetContinuationToken(continuation_token);
-                list_task.SetKvTask(current_task);
-                AcquireCloudSlot(current_task);
-                obj_store_.SubmitTask(&list_task, shard);
-                current_task->WaitIo();
-
-                if (list_task.error_ != KvError::NoError)
-                {
-                    LOG(ERROR)
-                        << "CloudStoreMgr::RefreshManifest: list objects "
-                           "failed for "
-                        << tbl_id << " : " << ErrorString(list_task.error_);
-                    return {nullptr, list_task.error_};
-                }
-
-                std::vector<std::string> batch_files;
-                std::string next_token;
-                if (!obj_store_.ParseListObjectsResponse(
-                        list_task.response_data_.view(),
-                        list_task.json_data_,
-                        &batch_files,
-                        nullptr,
-                        &next_token))
-                {
-                    LOG(ERROR) << "CloudStoreMgr::RefreshManifest: parse list "
-                                  "response failed for table "
-                               << tbl_id;
-                    return {nullptr, KvError::Corrupted};
-                }
-
-                cloud_files.insert(cloud_files.end(),
-                                   std::make_move_iterator(batch_files.begin()),
-                                   std::make_move_iterator(batch_files.end()));
-                continuation_token = std::move(next_token);
-            } while (!continuation_token.empty());
-
-            if (cloud_files.empty() || (cloud_files.size() == 1 &&
-                                        cloud_files[0] == CurrentTermFileName))
-            {
-                return {nullptr, KvError::NotFound};
-            }
-
-            for (const std::string &name : cloud_files)
-            {
-                uint64_t term = 0;
-                std::string_view branch_name;
-                std::optional<std::string> tag;
-                if (!ParseManifestFileSuffix(name, branch_name, term, tag))
-                {
-                    // Transient directory-style entry from a racing drop;
-                    // see CloudStoreMgr::GetManifest for details.
-                    LOG(WARNING)
-                        << "CloudStoreMgr::RefreshManifest: skip unrecognized "
-                           "entry under manifest prefix of table "
-                        << tbl_id << ": " << name;
-                    continue;
-                }
-                if (tag.has_value())
-                {
-                    continue;
-                }
-                if (term >= best_term)
-                {
-                    found = true;
-                    best_term = term;
-                }
+                return {nullptr, list_err};
             }
 
             if (!found)
@@ -4916,6 +4925,59 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
     };
 
     KvError dl_err = download_to_buffer(selected_filename);
+
+    if (dl_err == KvError::NotFound)
+    {
+        // Archives are named with the term of the process that created them
+        // and are never re-termed, so after a failover every pre-existing
+        // tag lives under an earlier term and the current-term name above
+        // misses. Mirror the tagless path: stream the manifest-prefix
+        // listing and select the newest archive of the active branch
+        // carrying this tag.
+        uint64_t best_term = 0;
+        bool found = false;
+        KvError list_err = ListManifestObjects(
+            tbl_id,
+            [&](const std::string &name)
+            {
+                uint64_t term = 0;
+                std::string_view branch_name;
+                std::optional<std::string> tag;
+                if (!ParseManifestFileSuffix(name, branch_name, term, tag))
+                {
+                    // Transient directory-style entry from a racing drop;
+                    // see CloudStoreMgr::GetManifest for details.
+                    LOG(WARNING)
+                        << "CloudStoreMgr::RefreshManifest: skip unrecognized "
+                           "entry under manifest prefix of table "
+                        << tbl_id << ": " << name;
+                    return;
+                }
+                if (!tag.has_value() || *tag != archive_tag ||
+                    branch_name != GetActiveBranch() || term > process_term)
+                {
+                    return;
+                }
+                if (term >= best_term)
+                {
+                    found = true;
+                    best_term = term;
+                }
+            });
+        if (list_err != KvError::NoError)
+        {
+            return {nullptr, list_err};
+        }
+
+        if (!found)
+        {
+            return {nullptr, KvError::NotFound};
+        }
+        selected_term = best_term;
+        selected_filename =
+            BranchArchiveName(GetActiveBranch(), selected_term, archive_tag);
+        dl_err = download_to_buffer(selected_filename);
+    }
 
     if (dl_err != KvError::NoError)
     {

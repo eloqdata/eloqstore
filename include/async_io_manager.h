@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <deque>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -1325,6 +1326,16 @@ public:
 
 private:
     void WaitForCloudTasksToDrain();
+
+    /**
+     * @brief Lists every cloud object under @p tbl_id's manifest prefix
+     * (paginated, no delimiter), invoking @p on_object for each name as the
+     * pages stream in — nothing is accumulated across pages. Shared by the
+     * tagless and archive-tag fallbacks of RefreshManifest.
+     */
+    KvError ListManifestObjects(
+        const TableIdent &tbl_id,
+        const std::function<void(const std::string &)> &on_object);
 
 private:
     int CreateFile(LruFD::Ref dir_fd,

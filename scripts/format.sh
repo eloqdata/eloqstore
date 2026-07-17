@@ -24,7 +24,7 @@ install_clang_format_18_1_8() {
       TINFO_PKG_URL="https://security.ubuntu.com/ubuntu/pool/universe/n/ncurses"
       ;;
     aarch64|arm64)
-      TINFO_PKG_URL="https://cn.ports.ubuntu.com/pool/universe/n/ncurses"
+      TINFO_PKG_URL="https://ports.ubuntu.com/pool/universe/n/ncurses"
       ;;
     *)
       echo "[ERROR] Unsupported arch: $ARCH"
@@ -33,7 +33,7 @@ install_clang_format_18_1_8() {
   esac
 
   $SUDO apt update
-  local TINFO_DEB="libtinfo5_6.3-2ubuntu0.1_${DPKG}.deb"
+  local TINFO_DEB="libtinfo5_6.3-2ubuntu0.2_${DPKG}.deb"
   local TINFO_URL="${TINFO_PKG_URL}/${TINFO_DEB}"
 
   echo "[INFO] Downloading ${TINFO_DEB} from ${TINFO_URL}"
