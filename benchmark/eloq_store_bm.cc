@@ -660,13 +660,10 @@ void Benchmark::RunGet2(uint32_t client_threads,
                                 selected >= part
                                     ? selected - part
                                     : partition_count_ - (part - selected);
-                            if (key_index + forward <= key_maximum_)
+                            key_index += forward;
+                            if (key_index > key_maximum_)
                             {
-                                key_index += forward;
-                            }
-                            else
-                            {
-                                key_index -= partition_count_ - forward;
+                                key_index -= partition_count_;
                             }
                         }
                         part = selected;

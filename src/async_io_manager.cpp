@@ -189,15 +189,13 @@ void IoBudget::Acquire(uint32_t cost, bool background)
     auto must_wait = [this, cost, use_bg]()
     {
         const uint32_t inflight = inflight_.load(std::memory_order_relaxed);
+        const uint32_t bg_inflight =
+            bg_inflight_.load(std::memory_order_relaxed);
         if (use_bg)
         {
-            const uint32_t bg_inflight =
-                bg_inflight_.load(std::memory_order_relaxed);
             return (inflight + cost > cap_ && inflight != 0) ||
                    (bg_inflight + cost > bg_cap_ && bg_inflight != 0);
         }
-        const uint32_t bg_inflight =
-            bg_inflight_.load(std::memory_order_relaxed);
         const uint32_t reserved = bg_pending_ != 0 && bg_inflight < bg_cap_
                                       ? bg_cap_ - bg_inflight
                                       : 0;
