@@ -1174,6 +1174,10 @@ void Shard::RetryOomRequest(KvRequest *req)
 #else
     req->done_.store(false, std::memory_order_relaxed);
 #endif
+    if (IoStatsEnabled())
+    {
+        req->dbg_enqueue_us_ = ReadTimeMicroseconds();
+    }
     // AddKvRequest refuses new work once the store is stopping; complete the
     // retried request with NotRunning instead of dropping it.
     if (!AddKvRequest(req))
