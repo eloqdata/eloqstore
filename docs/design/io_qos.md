@@ -80,10 +80,11 @@ implementation.
    subsequent foreground read — the yield discipline of #455 bounds CPU
    occupation per slice, not the IO submitted within it.
 
-The current M1/M2 implementation uses per-shard defaults of 64 configured
-data pages for reads, a 25% background read slice, and 512 configured data
-pages for writes. The old `max_write_batch_pages` throttle has no effect; M3
-is still deferred.
+The current M1/M2 implementation uses a per-shard default of 64 configured
+data pages for reads and a 25% background read slice. The write budget is
+available but retains its effectively-unbounded 32768-page default; 512 remains
+an explicit opt-in value. The old `max_write_batch_pages` throttle has no
+effect; M3 is still deferred.
 
 ## Device-Level Rationale
 
@@ -246,17 +247,19 @@ compaction, since interference tracks bytes/sec rather than queue depth.
 ```cpp
 uint32_t max_inflight_read = 64;     // configured data pages; 0 = disabled
 uint32_t bg_read_ratio = 25;         // percent of max_inflight_read
-uint32_t max_inflight_write = 512;   // configured data pages; redefined option
-                                     // (was 32768, pool sizing only)
+uint32_t max_inflight_write = 32768; // configured data pages; redefined option
+                                     // effectively unbounded by default
 uint64_t bg_write_rate_limit = 0;    // bytes/sec; 0 = disabled (M3)
 ```
 
 The WSL interference sweeps (2026-07-03) initially selected a read cap of 32
 and `bg_read_ratio = 25`. Azure NVMe validation (2026-07-11) then showed real
 foreground queueing at 32 while 64–128 were indistinguishable, so the shipped
-read default is 64 and the policy ratio remains 25%. The shipped write default
-is 512. Real-device calibration (the QD sweep below) should still re-derive the
-read cap per device; the ratio is policy and should transfer.
+read default is 64 and the policy ratio remains 25%. A later Azure NVMe
+acceptance run failed the p99.9 target with write cap 512, so the shipped write
+default remains 32768 and smaller caps are opt-in. Real-device calibration (the
+QD sweep below) should still re-derive the read cap per device; the ratio is
+policy and should transfer.
 
 ### Sizing contract: device knob × policy knob
 
@@ -317,7 +320,9 @@ The two read-side options deliberately live at different levels:
   small buffer pools must account for in-flight-write pins (production
   pools dwarf the ≤ max_inflight_write pages of pins; only tests noticed).
 - **`max_inflight_write` is redefined, not retired.** It is the M1 write cap
-  (configured data-page units, default dropped from 32768 to 512).
+  (configured data-page units). The default remains 32768, effectively
+  unbounded; 512 is an explicit opt-in value until the release acceptance
+  target is met.
   In-flight pages are bounded by `max(cap, one request's cost)` because one
   oversized request may run alone to guarantee progress. `WriteReqPool` stays
   numerically sized to the option, but counts request objects rather than page
@@ -416,9 +421,9 @@ Export per-shard counters from day one; tuning must be measurement-driven:
    - Land M1+M2 with existing throttles left in place (loosened).
    - Re-run the read-vs-compaction benchmark; confirm the new mechanism
      alone protects foreground p99.
-   - Remove the `max_write_batch_pages` throttle and drop the
-     `max_inflight_write` default to its new QoS value in a follow-up
-     commit, so a regression identifies which mechanism was load-bearing.
+   - Remove the `max_write_batch_pages` throttle, but keep
+     `max_inflight_write` effectively unbounded by default until a calibrated
+     QoS value meets the release acceptance target.
    - Sweep `max_write_concurrency` ∈ {1, 2, 4, 8} in local mode; pick the
      throughput knee (expected at 2–4).
    - Evaluate M3 against the calibration curve; enable if M1+M2 leave a

@@ -84,11 +84,12 @@ struct KvOptions
      * Cannot be zero.
      *
      * NOTE: before the IO QoS work this option only sized the non-append
-     * write request pool and defaulted to 32768 (effectively unbounded);
-     * deployments that set it explicitly should re-derive their value as a
-     * queue-depth cap.
+     * write request pool. It retains the 32768 default (effectively
+     * unbounded) because the current in-flight budgets have not met the
+     * read-tail acceptance target. Deployments opting into write QoS should
+     * set a calibrated queue-depth cap explicitly.
      */
-    uint32_t max_inflight_write = 512;
+    uint32_t max_inflight_write = 32 << 10;
     /**
      * @brief Per-shard cap on in-flight page-read IO, in configured
      * data-page units (`data_page_size`; docs/design/io_qos.md M1). Applies to

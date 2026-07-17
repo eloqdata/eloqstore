@@ -418,7 +418,7 @@ TEST_CASE("io budgets: disabled read budget stays untouched", "[io_qos]")
     REQUIRE(stats.read_.inflight_ == 0);
     REQUIRE(stats.read_.high_watermark_ == 0);
     REQUIRE(stats.read_.blocked_count_ == 0);
-    // The write budget (default 512) still counts, it just never blocks.
+    // The effectively-unbounded default write budget still counts.
     REQUIRE(stats.write_.inflight_ == 0);
     REQUIRE(stats.write_.blocked_count_ == 0);
 }
@@ -795,7 +795,7 @@ TEST_CASE("io qos stats: concurrent sampling", "[io_qos][stats]")
 
 TEST_CASE("io budgets: defaults are behavior-neutral", "[io_qos]")
 {
-    // At default caps (read 64, write 512) a single-threaded unit
+    // At default caps (read 64, write 32768) a single-threaded unit
     // workload of small values must never block on a budget: foreground
     // point reads are sequential (in-flight 1) and batch-write leaf loads
     // are sequential background singles, well under bg_cap = 16.

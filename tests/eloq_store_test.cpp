@@ -48,6 +48,8 @@ void CleanupTestDir(const fs::path &test_dir)
 TEST_CASE("KvOptions parses QoS knobs and preserves malformed defaults",
           "[eloq_store]")
 {
+    REQUIRE(eloqstore::KvOptions{}.max_inflight_write == 32768);
+
     const fs::path test_dir = CreateTestDir("_qos_options");
     const fs::path ini_path = test_dir / "eloqstore.ini";
     {
