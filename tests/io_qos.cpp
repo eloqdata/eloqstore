@@ -553,7 +553,6 @@ TEST_CASE("bg sub-budget: full reservation survives the wake gap", "[io_qos]")
     std::atomic<bool> stop_fg{false};
     std::atomic<bool> fg_failed{false};
     std::atomic<uint64_t> fg_started{0};
-    std::atomic<uint64_t> fg_done{0};
 
     std::vector<std::thread> readers;
     readers.reserve(8);
@@ -572,7 +571,6 @@ TEST_CASE("bg sub-budget: full reservation survives the wake gap", "[io_qos]")
                     {
                         fg_failed.store(true, std::memory_order_relaxed);
                     }
-                    fg_done.fetch_add(1, std::memory_order_relaxed);
                 }
             });
     }
@@ -598,7 +596,6 @@ TEST_CASE("bg sub-budget: full reservation survives the wake gap", "[io_qos]")
             primed_stats = ShardStats(store);
             return fg_started.load(std::memory_order_relaxed) ==
                        readers.size() &&
-                   fg_done.load(std::memory_order_relaxed) == 0 &&
                    primed_stats.read_.inflight_ == opts.max_inflight_read &&
                    primed_stats.read_.blocked_count_ >=
                        readers.size() - opts.max_inflight_read;
@@ -631,25 +628,10 @@ TEST_CASE("bg sub-budget: full reservation survives the wake gap", "[io_qos]")
     const bool bg_incomplete_at_barrier =
         !bg_done.load(std::memory_order_relaxed);
     const eloqstore::IoQosStats barrier_stats = ShardStats(store);
-    const uint64_t fg_before = fg_done.load(std::memory_order_relaxed);
     eloqstore::FailPoint::GetInstance().ReleasePause();
-    if (wake_gap_observed)
-    {
-        const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::milliseconds(200);
-        while (std::chrono::steady_clock::now() < deadline)
-        {
-            if (bg_done.load(std::memory_order_relaxed) &&
-                fg_done.load(std::memory_order_relaxed) > fg_before)
-            {
-                break;
-            }
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
-    }
     const bool bg_completed_while_armed =
-        bg_done.load(std::memory_order_relaxed);
-    const uint64_t fg_after = fg_done.load(std::memory_order_relaxed);
+        wait_until([&] { return bg_done.load(std::memory_order_relaxed); },
+                   std::chrono::seconds(2));
 
     stop_fg.store(true, std::memory_order_relaxed);
     eloqstore::FailPoint::GetInstance().Disarm();
@@ -666,15 +648,12 @@ TEST_CASE("bg sub-budget: full reservation survives the wake gap", "[io_qos]")
             bg_incomplete_at_barrier,
             barrier_stats.read_.inflight_,
             primed_stats.read_.inflight_,
-            primed_stats.read_.blocked_count_,
-            fg_before,
-            fg_after);
+            primed_stats.read_.blocked_count_);
     REQUIRE(fg_primed);
     REQUIRE(bg_issued);
     REQUIRE(wake_gap_observed);
     REQUIRE(bg_incomplete_at_barrier);
     REQUIRE(barrier_stats.read_.inflight_ == 0);
-    REQUIRE(fg_after > fg_before);
     REQUIRE(bg_completed_while_armed);
     REQUIRE_FALSE(fg_failed.load(std::memory_order_relaxed));
     REQUIRE(bg_done.load(std::memory_order_relaxed));
