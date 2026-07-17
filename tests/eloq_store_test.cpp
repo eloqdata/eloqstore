@@ -31,7 +31,8 @@ eloqstore::KvOptions CreateValidOptions(const fs::path &test_dir)
 
 fs::path CreateTestDir(const std::string &suffix = "")
 {
-    fs::path test_dir = fs::temp_directory_path() / ("eloqstore_test" + suffix);
+    fs::path test_dir =
+        fs::temp_directory_path() / "test-data" / ("eloqstore_test" + suffix);
     fs::create_directories(test_dir);
     return test_dir;
 }
@@ -294,8 +295,7 @@ TEST_CASE("EloqStore Start validates local store paths", "[eloq_store]")
     }
 
     // test the non exist path
-    fs::path nonexistent_path =
-        fs::temp_directory_path() / "nonexistent_eloqstore_test";
+    fs::path nonexistent_path = test_dir / "nonexistent_eloqstore_test";
     options.store_path = {nonexistent_path};
     {
         eloqstore::EloqStore store(options);
@@ -307,7 +307,7 @@ TEST_CASE("EloqStore Start validates local store paths", "[eloq_store]")
     }
 
     // the path is file
-    fs::path file_path = fs::temp_directory_path() / "eloqstore_file_test";
+    fs::path file_path = test_dir / "eloqstore_file_test";
     std::ofstream file(file_path);
     file.close();
     options.store_path = {file_path};
