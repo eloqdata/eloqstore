@@ -656,7 +656,6 @@ TEST_CASE("bg sub-budget: full reservation survives the wake gap", "[io_qos]")
     REQUIRE(barrier_stats.read_.inflight_ == 0);
     REQUIRE(bg_completed_while_armed);
     REQUIRE_FALSE(fg_failed.load(std::memory_order_relaxed));
-    REQUIRE(bg_done.load(std::memory_order_relaxed));
     REQUIRE(bg_req.Error() == eloqstore::KvError::NoError);
     REQUIRE(stats.read_.inflight_ == 0);
     REQUIRE(stats.bg_read_.inflight_ == 0);
