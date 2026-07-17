@@ -639,35 +639,29 @@ void Benchmark::RunGet2(uint32_t client_threads,
                     uint32_t part = key_index % partition_count_;
                     if (per_shard_cap > 0)
                     {
-                        uint32_t selected = partition_count_;
-                        for (uint32_t offset = 0; offset < partition_count_;
-                             ++offset)
+                        uint32_t forward = 0;
+                        for (; forward < partition_count_; ++forward)
                         {
                             const uint32_t candidate =
-                                (static_cast<uint64_t>(part) + offset) %
+                                (static_cast<uint64_t>(part) + forward) %
                                 partition_count_;
                             if (shard_out[partition_shards[candidate]] <
                                 per_shard_cap)
                             {
-                                selected = candidate;
+                                part = candidate;
                                 break;
                             }
                         }
-                        CHECK_LT(selected, partition_count_)
+                        CHECK_LT(forward, partition_count_)
                             << "GET2 per-shard cap accounting lost capacity";
-                        if (selected != part)
+                        if (forward != 0)
                         {
-                            const uint32_t forward =
-                                selected >= part
-                                    ? selected - part
-                                    : partition_count_ - (part - selected);
                             key_index += forward;
                             if (key_index > key_maximum_)
                             {
                                 key_index -= partition_count_;
                             }
                         }
-                        part = selected;
                     }
                     CHECK_GE(key_index, key_minimum_);
                     CHECK_LE(key_index, key_maximum_);
