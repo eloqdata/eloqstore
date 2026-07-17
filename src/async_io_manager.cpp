@@ -191,13 +191,10 @@ void IoBudget::Acquire(uint32_t cost, bool background)
         const uint32_t inflight = inflight_.load(std::memory_order_relaxed);
         if (use_bg)
         {
-            if (inflight + cost > cap_ && inflight != 0)
-            {
-                return true;
-            }
             const uint32_t bg_inflight =
                 bg_inflight_.load(std::memory_order_relaxed);
-            return bg_inflight + cost > bg_cap_ && bg_inflight != 0;
+            return (inflight + cost > cap_ && inflight != 0) ||
+                   (bg_inflight + cost > bg_cap_ && bg_inflight != 0);
         }
         const uint32_t bg_inflight =
             bg_inflight_.load(std::memory_order_relaxed);

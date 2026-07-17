@@ -118,7 +118,9 @@ policy in commit 1 is a plain `WakeN` on the released budget's zone.
   enforced; nothing else hard-fails. `max_inflight_read == 0` disables the
   read budget (documented).
 - `WriteReqPool` stays sized by `max_inflight_write` (unchanged line in
-  `IouringMgr` ctor) — pool bound and QoS bound coincide by construction.
+  `IouringMgr` ctor) as a conservative request-object allocation bound. QoS
+  counts configured page units, and a merged request may consume multiple
+  units.
 
 ### Stats
 
@@ -317,14 +319,19 @@ caps to make blocking paths hot:
 
 ### Performance acceptance (per target device, after commit 3)
 
-- **Success criterion** (from evaluation step 0 re-baseline): read p99
-  during compaction ≤ agreed multiple of idle p99 (set the number from the
-  re-baseline gap, not a priori).
-- **No-regression guards**: pure-read throughput and pure-write throughput
-  within noise (±3%) of pre-QoS baseline at default caps — the hot-path
-  cost is two counter checks per IO, so any regression indicates a wake
-  storm or false blocking.
-- Sweeps: `max_inflight_read` ∈ {64, 128, 256, 512}, `bg_read_ratio` ∈
+- **User-confirmed product target**: read p99.9 below 10 ms during concurrent
+  write, compaction, and GC.
+- **Measured status: FAIL / not release-ready.** Median read p99.9 was
+  19.779 ms for the control and 18.711 ms for the candidate. This was a
+  same-binary comparison that differed only in the read budget; both conditions
+  retained the write budget, and the main campaign did not include a pure-write
+  comparison.
+- **Outstanding no-regression guards**: pure-read throughput and pure-write
+  throughput within noise (±3%) of the pre-QoS baseline at default caps — the
+  hot-path cost is two counter checks per IO, so any regression indicates a
+  wake storm or false blocking.
+- **Outstanding sweeps**: `max_inflight_read` ∈ {64, 128, 256, 512},
+  `bg_read_ratio` ∈
   {10, 25, 50}, `max_inflight_write` ∈ {256, 512, 1024},
   `max_write_concurrency` ∈ {1, 2, 4, 8}; record read tails + BG
   throughput; pick defaults at the knees.
