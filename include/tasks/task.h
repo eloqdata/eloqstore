@@ -237,8 +237,6 @@ public:
     // Stage-timing (ELOQ_IO_STATS=1): when this task began executing its
     // read; consumed (zeroed) by the first instrumented page read.
     uint64_t op_start_us_{0};
-    bool needs_auto_reopen_{false};
-    bool needs_oom_retry_{false};
 
     TaskStatus status_{TaskStatus::Idle};
     KvRequest *req_{nullptr};
