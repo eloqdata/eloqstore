@@ -576,9 +576,10 @@ void Benchmark::RunGet2(uint32_t client_threads,
     CHECK_GT(client_threads, 0U) << "GET2 client_threads must be positive";
     CHECK_GT(inflight, 0U) << "GET2 inflight_per_client must be positive";
     CHECK_GT(partition_count_, 0U) << "GET2 partition_count must be positive";
+    CHECK_GE(key_maximum_, key_minimum_)
+        << "GET2 key_maximum must not be less than key_minimum";
     CHECK(per_shard_cap == 0 ||
-          (key_maximum_ >= key_minimum_ &&
-           key_maximum_ - key_minimum_ >= partition_count_ - 1));
+          key_maximum_ - key_minimum_ >= partition_count_ - 1);
 
     const uint16_t nshards = worker_cnt_;
     std::vector<uint16_t> partition_shards(partition_count_);
