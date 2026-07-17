@@ -342,9 +342,11 @@ caps to make blocking paths hot:
     17.111/16.268/15.751 ms respectively: the full policy improved 7.9% versus
     32768 but still missed the 10 ms target by 57.5%. All nine runs had
     concurrent compaction/GC and passed their validity gates.
-  - The tested configurations set their caps explicitly and ran with
-    `ELOQ_IO_STATS` disabled, so the subsequent default restoration and
-    opt-in timing cleanup do not change the exercised data path.
+  - The tested configurations set their caps explicitly, so the subsequent
+    default restoration does not change the exercised admission
+    configuration. The retained run metadata did not record
+    `ELOQ_IO_STATS`; the later timing cleanup is diagnostic-only, but this
+    campaign was not repeated at that later commit.
 - **Outstanding no-regression guards**: pure-read throughput and pure-write
   throughput within noise (±3%) of the pre-QoS baseline at default caps — the
   hot-path cost is two counter checks per IO, so any regression indicates a

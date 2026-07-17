@@ -66,8 +66,8 @@ There are two groups of knobs:
   - `--data_append_mode`, `--pages_per_file_shift`, `--data_page_size`
   - `--buffer_pool_size`, `--io_queue_size`, `--fd_limit`
   - `--manifest_limit`, `--init_page_count`
-  - `--max_inflight_write`, `--max_write_batch_pages`
+  - `--max_inflight_write` (`--max_write_batch_pages` is deprecated and
+    ignored)
   - `--file_amplify_factor`, `--local_space_limit`, `--reserve_space_ratio`
   - `--overflow_pointers`, `--data_page_restart_interval`,
     `--index_page_restart_interval`
-

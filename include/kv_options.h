@@ -83,11 +83,11 @@ struct KvOptions
      * exempt.
      * Cannot be zero.
      *
-     * NOTE: before the IO QoS work this option only sized the non-append
-     * write request pool. It retains the 32768 default (effectively
-     * unbounded) because the current in-flight budgets have not met the
-     * read-tail acceptance target. Deployments opting into write QoS should
-     * set a calibrated queue-depth cap explicitly.
+     * NOTE: before the IO QoS work this option only sized the write request
+     * pools. It retains the 32768 default (effectively unbounded) because the
+     * current in-flight budgets have not met the read-tail acceptance target.
+     * Deployments opting into write QoS should set a calibrated queue-depth
+     * cap explicitly.
      */
     uint32_t max_inflight_write = 32 << 10;
     /**
