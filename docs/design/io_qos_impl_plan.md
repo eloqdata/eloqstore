@@ -325,7 +325,9 @@ caps to make blocking paths hot:
   19.779 ms for the control and 18.711 ms for the candidate. This was a
   same-binary comparison that differed only in the read budget; both conditions
   retained the write budget, and the main campaign did not include a pure-write
-  comparison.
+  comparison. These medians are from the 2026-07-16 local-NVMe campaign at
+  commit `c625004a32f474f446ba8adeba2d2d68f93dcee7` on `/dev/nvme1n1`
+  (`Microsoft NVMe Direct Disk v2`); they were not rerun at the final PR tip.
 - **Outstanding no-regression guards**: pure-read throughput and pure-write
   throughput within noise (±3%) of the pre-QoS baseline at default caps — the
   hot-path cost is two counter checks per IO, so any regression indicates a
