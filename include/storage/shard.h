@@ -99,6 +99,7 @@ private:
     void InitIoMgrAndPagePool();
     bool ExecuteReadyTasks();
     void OnTaskFinished(KvTask *task);
+    void RetryOomRequest(KvRequest *req);
     void OnReceivedReq(KvRequest *req);
     bool ProcessReq(KvRequest *req);
     void EnqueueReopenWaiter(KvRequest *req);

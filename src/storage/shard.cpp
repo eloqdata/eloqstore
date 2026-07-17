@@ -1041,6 +1041,28 @@ finish:
     return busy;
 }
 
+void Shard::RetryOomRequest(KvRequest *req)
+{
+    // The aborted task released its pins; re-enqueue the request at the tail of
+    // this shard's queue so other in-flight tasks get a chance to release their
+    // pins before the next attempt.
+    req->err_ = KvError::NoError;
+#ifdef ELOQ_MODULE_ENABLED
+    {
+        std::lock_guard<bthread::Mutex> lk(req->mutex_);
+        req->done_ = false;
+    }
+#else
+    req->done_.store(false, std::memory_order_relaxed);
+#endif
+    // AddKvRequest refuses new work once the store is stopping; complete the
+    // retried request with NotRunning instead of dropping it.
+    if (!AddKvRequest(req))
+    {
+        req->SetDone(KvError::NotRunning);
+    }
+}
+
 void Shard::OnTaskFinished(KvTask *task)
 {
     KvRequest *req = task->req_;
@@ -1086,35 +1108,66 @@ void Shard::OnTaskFinished(KvTask *task)
     task->req_ = nullptr;
     task->result_err_ = KvError::NoError;
 
-    auto retry_oom = [this, req]()
+    KvRequest *done_req = request_completed ? req : nullptr;
+    bool dispatch_pending_writes = false;
+    bool complete_reopen_waiters = false;
+    std::vector<KvRequest *> reopen_waiters;
+    if (!task->ReadOnly())
     {
-        // The aborted task released its pins; re-enqueue the request at the
-        // tail of this shard's queue so other in-flight tasks get a chance
-        // to release their pins before the next attempt.
-        req->err_ = KvError::NoError;
-#ifdef ELOQ_MODULE_ENABLED
+        auto wtask = reinterpret_cast<WriteTask *>(task);
+        auto pending_it = pending_queues_.find(wtask->TableId());
+        assert(pending_it != pending_queues_.end());
+        PendingWriteQueue &pending_q = pending_it->second;
+        if (__builtin_expect(task_type == TaskType::Reopen && !oom_retry, 0))
         {
-            std::lock_guard<bthread::Mutex> lk(req->mutex_);
-            req->done_ = false;
+            auto reopen_it = pending_reopens_.find(wtask->TableId());
+            if (reopen_it != pending_reopens_.end())
+            {
+                if (reopen_it->second.IsCurrentInternalDriver(
+                        static_cast<ReopenRequest *>(req)))
+                {
+                    // The embedded internal ReopenRequest is destroyed when
+                    // this state is erased; no external caller is waiting on
+                    // that request object, so do not SetDone it afterward.
+                    done_req = nullptr;
+                }
+                reopen_waiters = std::move(reopen_it->second.waiters_);
+                complete_reopen_waiters = true;
+                // Drop the completed reopen state before re-enqueueing
+                // waiters; a waiter may immediately re-enter this shard and
+                // must not attach to the old state.
+                pending_reopens_.erase(reopen_it);
+            }
         }
-#else
-        req->done_.store(false, std::memory_order_relaxed);
-#endif
-        // AddKvRequest refuses new work once the store is stopping; complete
-        // the retried request with NotRunning instead of dropping it.
-        if (!AddKvRequest(req))
+        pending_q.running_ = false;
+        if (pending_q.Empty())
         {
-            req->SetDone(KvError::NotRunning);
+            // No more write requests, remove the pending queue.
+            pending_queues_.erase(pending_it);
         }
-    };
+        dispatch_pending_writes = true;
+    }
 
-    if (request_completed)
+    task_mgr_.FreeTask(task);
+
+    if (__builtin_expect(oom_retry, 0))
     {
-        req->SetDone(err);
+        RetryOomRequest(req);
+        return;
+    }
+
+    if (__builtin_expect(auto_reopen, 0))
+    {
+        EnqueueReopenWaiter(req);
+        return;
+    }
+
+    if (done_req != nullptr)
+    {
+        done_req->SetDone(err);
         // SetDone can invoke the user callback or wake a waiter that destroys
-        // the request. Branches that still use req below are all
-        // request_completed == false paths.
-        req = nullptr;
+        // the request. Everything below uses only values captured above.
+        done_req = nullptr;
     }
 
 #ifdef ELOQSTORE_WITH_TXSERVICE
@@ -1132,48 +1185,9 @@ void Shard::OnTaskFinished(KvTask *task)
     }
 #endif
 
-    bool dispatch_pending_writes = false;
-    if (!task->ReadOnly())
+    if (complete_reopen_waiters)
     {
-        auto wtask = reinterpret_cast<WriteTask *>(task);
-        auto pending_it = pending_queues_.find(wtask->TableId());
-        assert(pending_it != pending_queues_.end());
-        PendingWriteQueue &pending_q = pending_it->second;
-        if (__builtin_expect(task_type == TaskType::Reopen && !oom_retry, 0))
-        {
-            auto reopen_it = pending_reopens_.find(wtask->TableId());
-            if (reopen_it != pending_reopens_.end())
-            {
-                std::vector<KvRequest *> waiters =
-                    std::move(reopen_it->second.waiters_);
-                // Drop the completed reopen state before re-enqueueing
-                // waiters; a waiter may immediately re-enter this shard and
-                // must not attach to the old state.
-                pending_reopens_.erase(reopen_it);
-                CompleteReopenWaiters(std::move(waiters), err);
-            }
-        }
-        pending_q.running_ = false;
-        if (pending_q.Empty())
-        {
-            // No more write requests, remove the pending queue.
-            pending_queues_.erase(pending_it);
-        }
-        dispatch_pending_writes = true;
-    }
-
-    task_mgr_.FreeTask(task);
-
-    if (__builtin_expect(oom_retry, 0))
-    {
-        retry_oom();
-        return;
-    }
-
-    if (__builtin_expect(auto_reopen, 0))
-    {
-        EnqueueReopenWaiter(req);
-        return;
+        CompleteReopenWaiters(std::move(reopen_waiters), err);
     }
 
     if (dispatch_pending_writes)
