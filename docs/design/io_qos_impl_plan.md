@@ -16,7 +16,7 @@ describe (CLAUDE.md requirement).
 | 1 | M1: budget state, acquire/release plumbing, options, stats getter | Core; behavior-neutral at default caps until tightened |
 | 2 | M2: `IsBackground()`, BG read sub-budget, wake policy | Small delta on top of 1 |
 | 3 | Interference benchmark + fio calibration script | Test-only |
-| 4 | Retire `max_write_batch_pages` throttle; drop `max_inflight_write` default to QoS value | Behavioral; gated on benchmark results |
+| 4 | Retire `max_write_batch_pages`; keep write QoS opt-in until acceptance passes | Behavioral; gated on benchmark results |
 | 5 | M3 rate limiter (deferred; only if step-4 benchmarks show a sustained-write gap) | Optional |
 
 ## Commit 1 — M1: in-flight page-IO budgets
@@ -112,8 +112,8 @@ policy in commit 1 is a plain `WakeN` on the released budget's zone.
 
 - `kv_options.h`: add `max_inflight_read` (initially 256; shipped default 64);
   redefine `max_inflight_write` in configured data-page units (keep old default
-  32768 in this commit — the shipped default drops to 512 in commit 4). Add INI
-  parsing in `kv_options.cpp` and equality-operator entries.
+  32768 through release acceptance; lower caps remain opt-in). Add INI parsing
+  in `kv_options.cpp` and equality-operator entries.
 - `eloq_store.cpp` option validation: `max_inflight_write != 0` already
   enforced; nothing else hard-fails. `max_inflight_read == 0` disables the
   read budget (documented).
@@ -202,16 +202,20 @@ it).
 
 ## Commit 4 — retire superseded throttles (gated on benchmarks)
 
-> **Status: implemented** (2026-07-03), gated on the WSL interference
-> campaign (real-device confirmation still advisable before release).
+> **Status: implemented** (2026-07-03) except for default tightening. The
+> throttle retirement shipped in the branch, but the later Azure NVMe
+> acceptance run rejected making the calibrated write cap the default.
 > Details: `WritePage` throttle branch removed (budget admission comment
 > left in its place); `max_write_batch_pages` deprecated — parsed with a
 > LOG(WARNING), validation removed so all values are accepted, field documented
 > as no-effect;
-> `max_inflight_write` default 32768 → 512, validated by a {512, 2048,
-> 32768} sweep (512 binds marginally — hwm pinned, 6–26 blocks/30s — at
-> equal-or-best write throughput and read tails; natural demand ceiling was
-> 2048 = 8 concurrent 1MB merged writes). One behavioral consequence: with
+> The WSL sweep initially selected `max_inflight_write = 512` from
+> {512, 2048, 32768} (512 bound marginally — hwm pinned,
+> 6–26 blocks/30s — at equal-or-best write throughput and read tails;
+> natural demand ceiling was 2048 = 8 concurrent 1MB merged writes).
+> The later Azure NVMe acceptance run did not justify making that value the
+> default, so the final default remains 32768 and 512 is opt-in. One behavioral
+> consequence of selecting a smaller value: with
 > enable_data_page_cache, write-promotion pins are now bounded by
 > max_inflight_write instead of the per-task drain; the data_page_cache OOM
 > test was recalibrated to `max_inflight_write = 1` (tiny 2-slot pool).
@@ -224,9 +228,9 @@ that M1+M2 alone protect foreground p99 (design evaluation step 4):
 - Removed the `inflight_io_ >= max_write_batch_pages → WaitWrite()` branch in
   `WriteTask::WritePage` (`write_task.cpp` ~304). Keep the CPU yields and
   the terminal `WaitWrite()`.
-- Dropped `max_inflight_write` default 32768 → calibrated value 512.
-  Release-notes entry: behavioral change for deployments setting it
-  explicitly.
+- Kept `max_inflight_write` at 32768 by default; calibrated lower values such
+  as 512 are explicit opt-ins. Deployments setting the option must interpret
+  it under its new page-budget semantics.
 - Deprecated `max_write_batch_pages` in `kv_options.h` (keep parsing,
   ignore, log a warning) for one release before deletion.
 
@@ -321,13 +325,26 @@ caps to make blocking paths hot:
 
 - **User-confirmed product target**: read p99.9 below 10 ms during concurrent
   write, compaction, and GC.
-- **Measured status: FAIL / not release-ready.** Median read p99.9 was
-  19.779 ms for the control and 18.711 ms for the candidate. This was a
-  same-binary comparison that differed only in the read budget; both conditions
-  retained the write budget, and the main campaign did not include a pure-write
-  comparison. These medians are from the 2026-07-16 local-NVMe campaign at
-  commit `c625004a32f474f446ba8adeba2d2d68f93dcee7` on `/dev/nvme1n1`
-  (`Microsoft NVMe Direct Disk v2`); they were not rerun at the final PR tip.
+- **Measured status: FAIL / not release-ready.**
+  - In the 2026-07-16 same-binary campaign, median read p99.9 was
+    19.779 ms with read QoS disabled and 18.711 ms with read QoS enabled.
+    Both conditions retained the 512-page write budget, so that campaign did
+    not isolate its effect. It ran at
+    `c625004a32f474f446ba8adeba2d2d68f93dcee7` on `/dev/nvme1n1`
+    (`Microsoft NVMe Direct Disk v2`).
+  - The 2026-07-17 three-condition follow-up used three balanced-order,
+    fresh-store repetitions at
+    `42b7f94084f196264615a77ccb20a35c284f5d12`. Median logical write
+    throughput was 19,473 key-ops/s with write cap 32768, 19,337 with write
+    cap 512 (-0.7%), and 19,693 with the full 64/25%/512 policy. The 512 cap
+    reached its high-water mark and recorded a median 53 write blocks, but was
+    not sustained-throughput-discriminating. Median read p99.9 was
+    17.111/16.268/15.751 ms respectively: the full policy improved 7.9% versus
+    32768 but still missed the 10 ms target by 57.5%. All nine runs had
+    concurrent compaction/GC and passed their validity gates.
+  - The tested configurations set their caps explicitly and ran with
+    `ELOQ_IO_STATS` disabled, so the subsequent default restoration and
+    opt-in timing cleanup do not change the exercised data path.
 - **Outstanding no-regression guards**: pure-read throughput and pure-write
   throughput within noise (±3%) of the pre-QoS baseline at default caps — the
   hot-path cost is two counter checks per IO, so any regression indicates a
