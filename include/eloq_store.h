@@ -142,7 +142,7 @@ public:
     const TableIdent &TableId() const;
     uint64_t UserData() const;
     // Stage-timing instrumentation only (ELOQ_IO_STATS=1): microsecond
-    // timestamp when SendRequest enqueued this request to its shard.
+    // timestamp when the current attempt was enqueued to its shard.
     uint64_t dbg_enqueue_us_{0};
     uint64_t dbg_dequeue_us_{0};
 
