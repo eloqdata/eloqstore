@@ -576,6 +576,9 @@ void Benchmark::RunGet2(uint32_t client_threads,
     CHECK_GT(client_threads, 0U) << "GET2 client_threads must be positive";
     CHECK_GT(inflight, 0U) << "GET2 inflight_per_client must be positive";
     CHECK_GT(partition_count_, 0U) << "GET2 partition_count must be positive";
+    CHECK(per_shard_cap == 0 ||
+          (key_maximum_ >= key_minimum_ &&
+           key_maximum_ - key_minimum_ >= partition_count_ - 1));
 
     const uint16_t nshards = worker_cnt_;
     std::vector<uint16_t> partition_shards(partition_count_);
@@ -651,8 +654,26 @@ void Benchmark::RunGet2(uint32_t client_threads,
                         }
                         CHECK_LT(selected, partition_count_)
                             << "GET2 per-shard cap accounting lost capacity";
+                        if (selected != part)
+                        {
+                            const uint32_t forward =
+                                selected >= part
+                                    ? selected - part
+                                    : partition_count_ - (part - selected);
+                            if (key_index + forward <= key_maximum_)
+                            {
+                                key_index += forward;
+                            }
+                            else
+                            {
+                                key_index -= partition_count_ - forward;
+                            }
+                        }
                         part = selected;
                     }
+                    CHECK_GE(key_index, key_minimum_);
+                    CHECK_LE(key_index, key_maximum_);
+                    CHECK_EQ(key_index % partition_count_, part);
                     op->shard_ = partition_shards[part];
                     op->key_.clear();
                     gen.generate_key(key_index, op->key_);
@@ -741,8 +762,8 @@ void Benchmark::RunGet2(uint32_t client_threads,
         {
             return 0;
         }
-        size_t idx =
-            std::min(all.size() - 1, static_cast<size_t>(p * all.size()));
+        const size_t idx =
+            static_cast<size_t>(p * static_cast<double>(all.size() - 1));
         return all[idx];
     };
     LOG(INFO) << "GET2 finished: clients=" << client_threads
