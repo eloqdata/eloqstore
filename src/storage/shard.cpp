@@ -1161,8 +1161,6 @@ void Shard::OnTaskFinished(KvTask *task)
                 // No more write requests, remove the pending queue.
                 pending_queues_.erase(pending_it);
             }
-            // No more write requests, remove the pending queue.
-            pending_queues_.erase(pending_it);
         }
         dispatch_pending_writes = true;
     }
