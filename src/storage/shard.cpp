@@ -1142,6 +1142,17 @@ void Shard::OnTaskFinished(KvTask *task)
         pending_q.running_ = false;
         if (pending_q.Empty())
         {
+            // The internal compact / local-gc / clean-expired requests are
+            // embedded in this queue; erasing it destroys them. They have no
+            // external waiter or callback, so drop done_req when it points at
+            // one of them to avoid SetDone()-ing a freed request afterwards
+            // (mirrors the embedded internal reopen-driver handling above).
+            if (done_req == &pending_q.compact_req_ ||
+                done_req == &pending_q.local_gc_req_ ||
+                done_req == &pending_q.expire_req_)
+            {
+                done_req = nullptr;
+            }
             // No more write requests, remove the pending queue.
             pending_queues_.erase(pending_it);
         }
