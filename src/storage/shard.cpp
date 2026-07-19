@@ -1147,11 +1147,19 @@ void Shard::OnTaskFinished(KvTask *task)
             // external waiter or callback, so drop done_req when it points at
             // one of them to avoid SetDone()-ing a freed request afterwards
             // (mirrors the embedded internal reopen-driver handling above).
-            if (done_req == &pending_q.compact_req_ ||
-                done_req == &pending_q.local_gc_req_ ||
-                done_req == &pending_q.expire_req_)
+            bool is_embedded = (req == &pending_q.compact_req_ ||
+                                req == &pending_q.local_gc_req_ ||
+                                req == &pending_q.expire_req_);
+            if (is_embedded)
             {
                 done_req = nullptr;
+            }
+            // Do not erase the queue if an embedded request is being retried
+            // (e.g. OOM), as erasing it would destroy the request object.
+            if (!is_embedded || request_completed)
+            {
+                // No more write requests, remove the pending queue.
+                pending_queues_.erase(pending_it);
             }
             // No more write requests, remove the pending queue.
             pending_queues_.erase(pending_it);
