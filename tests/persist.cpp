@@ -175,6 +175,48 @@ TEST_CASE("drop table clears all partitions", "[persist][droptable]")
     run_drop_table_case(cloud_options, "cloud");
 }
 
+TEST_CASE("drop table cloud list respects table name boundary",
+          "[persist][droptable][cloud]")
+{
+    eloqstore::EloqStore *store = InitStore(cloud_options);
+    const std::string key = test_util::Key(1);
+
+    auto write_table = [&](std::string_view table_name)
+    {
+        std::vector<eloqstore::WriteDataEntry> entries;
+        entries.emplace_back(key,
+                             test_util::Value(1, 32),
+                             1,
+                             eloqstore::WriteOp::Upsert);
+        eloqstore::BatchWriteRequest write_req;
+        write_req.SetArgs(eloqstore::TableIdent{std::string(table_name), 0},
+                          std::move(entries));
+        store->ExecSync(&write_req);
+        REQUIRE(write_req.Error() == eloqstore::KvError::NoError);
+    };
+
+    write_table("a");
+    write_table("aa");
+
+    eloqstore::DropTableRequest drop_req;
+    drop_req.SetArgs("a");
+    store->ExecSync(&drop_req);
+    REQUIRE(drop_req.Error() == eloqstore::KvError::NoError);
+
+    eloqstore::ReadRequest dropped_read;
+    dropped_read.SetArgs(eloqstore::TableIdent{"a", 0}, key);
+    store->ExecSync(&dropped_read);
+    REQUIRE(dropped_read.Error() == eloqstore::KvError::NotFound);
+
+    eloqstore::ReadRequest adjacent_read;
+    adjacent_read.SetArgs(eloqstore::TableIdent{"aa", 0}, key);
+    store->ExecSync(&adjacent_read);
+    REQUIRE(adjacent_read.Error() == eloqstore::KvError::NoError);
+
+    store->Stop();
+    CleanupStore(cloud_options);
+}
+
 TEST_CASE("simple LRU for opened fd", "[persist]")
 {
     eloqstore::KvOptions options{
