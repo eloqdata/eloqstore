@@ -6005,6 +6005,8 @@ int CloudStoreMgr::ReserveCacheSpace(size_t size)
             LOG(WARNING) << "Cannot reserve " << size
                          << " bytes: used=" << used_local_space_
                          << " limit=" << shard_local_space_limit_
+                         << " open_fds=" << lru_fd_count_ << "/" << fd_limit_
+                         << " closed_files=" << closed_files_.size()
                          << " no evictable files" << " task=" << current_task;
             return -ENOSPC;
         }
