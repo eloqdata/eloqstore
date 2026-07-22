@@ -1182,8 +1182,14 @@ KvError EloqStore::CollectTablePartitions(
     }
     else
     {
+        std::string partition_prefix = table_name;
+        partition_prefix.push_back(TableIdent::separator);
         std::vector<std::string> objects;
         ListObjectRequest list_object_request(&objects);
+        // Partition object directories are named <table>.<partition>. Use a
+        // raw prefix so DropTable does not paginate through the entire bucket.
+        list_object_request.SetRemotePath(partition_prefix);
+        list_object_request.SetEnsureTrailingSlash(false);
 
         bool has_more = false;
         do
@@ -1214,7 +1220,8 @@ KvError EloqStore::CollectTablePartitions(
 
             for (auto &object_name : objects)
             {
-                TableIdent ident = TableIdent::FromString(object_name);
+                TableIdent ident =
+                    TableIdent::FromString(partition_prefix + object_name);
                 if (!ident.IsValid() || ident.tbl_name_ != table_name)
                 {
                     continue;

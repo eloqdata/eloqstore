@@ -364,6 +364,23 @@ public:
     {
         remote_path_ = std::move(remote_path);
     }
+
+    /**
+     * @brief Control whether the remote path is treated as a directory.
+     *
+     * Disable this when the path is an object-key prefix that must not gain a
+     * trailing slash, such as a table name followed by TableIdent::separator.
+     */
+    void SetEnsureTrailingSlash(bool ensure_trailing_slash)
+    {
+        ensure_trailing_slash_ = ensure_trailing_slash;
+    }
+
+    bool EnsureTrailingSlash() const
+    {
+        return ensure_trailing_slash_;
+    }
+
     void SetRecursive(bool recursive)
     {
         recursive_ = recursive;
@@ -417,6 +434,7 @@ private:
     std::vector<std::string> *objects_;
     std::vector<utils::CloudObjectInfo> *details_{nullptr};
     std::string remote_path_;
+    bool ensure_trailing_slash_{true};
     bool recursive_{false};
     std::string continuation_token_;       // input token
     std::string next_continuation_token_;  // output token
