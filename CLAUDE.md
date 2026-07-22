@@ -55,7 +55,9 @@ SDK tests (also run in CI): `python3 -m build --wheel` + pytest in `python/`; in
 
 ## Formatting
 
-`bash scripts/format.sh` — installs clang-format 18.1.8 on first run and formats the tree. Main branch has a format check in CI; run before committing. Style is Google-based with Allman braces, 4-space indent, right pointer alignment (see `.clang-format`).
+`bash scripts/format.sh` — installs clang-format 18.1.8 on first run and formats the tree. Style is Google-based with Allman braces, 4-space indent, right pointer alignment (see `.clang-format`).
+
+**Always run `bash scripts/format.sh` and commit any changes it makes before opening (or updating) a PR.** The main branch has a format check in CI that will fail the PR otherwise — hand-written code that looks fine often still gets re-wrapped by clang-format (e.g. a call that now fits on one line). Don't rely on writing conforming code by hand; run the script.
 
 ## Architecture
 
