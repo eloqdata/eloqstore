@@ -184,10 +184,8 @@ TEST_CASE("drop table cloud list respects table name boundary",
     auto write_table = [&](std::string_view table_name)
     {
         std::vector<eloqstore::WriteDataEntry> entries;
-        entries.emplace_back(key,
-                             test_util::Value(1, 32),
-                             1,
-                             eloqstore::WriteOp::Upsert);
+        entries.emplace_back(
+            key, test_util::Value(1, 32), 1, eloqstore::WriteOp::Upsert);
         eloqstore::BatchWriteRequest write_req;
         write_req.SetArgs(eloqstore::TableIdent{std::string(table_name), 0},
                           std::move(entries));
