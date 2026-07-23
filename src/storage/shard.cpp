@@ -1511,13 +1511,30 @@ void Shard::InitializeTscFrequency()
 
             while (total_slept < MAX_TOTAL_MICROSECONDS)
             {
+                // Divide by the MEASURED elapsed wall time, not the
+                // requested sleep: sleep_for() reliably oversleeps by
+                // scheduler latency (~60us for a 1ms request), and dividing
+                // by the nominal duration inflated cycles-per-us by ~6% —
+                // making every TSC-derived duration (and the M4 rate
+                // budget's refill) run ~6% slow. The overshoot is
+                // systematic, so the stability check below cannot catch it.
+                timespec mono_start, mono_end;
+                clock_gettime(CLOCK_MONOTONIC, &mono_start);
                 uint64_t start_cycles = __rdtsc();
                 std::this_thread::sleep_for(
                     std::chrono::microseconds(SLEEP_MICROSECONDS));
                 uint64_t end_cycles = __rdtsc();
+                clock_gettime(CLOCK_MONOTONIC, &mono_end);
                 uint64_t elapsed_cycles = end_cycles - start_cycles;
-                uint64_t freq = elapsed_cycles /
-                                SLEEP_MICROSECONDS;  // cycles per microsecond
+                const int64_t elapsed_ns =
+                    (mono_end.tv_sec - mono_start.tv_sec) * 1'000'000'000LL +
+                    (mono_end.tv_nsec - mono_start.tv_nsec);
+                const uint64_t elapsed_us =
+                    static_cast<uint64_t>(std::max<int64_t>(elapsed_ns, 0)) /
+                    1000;
+                uint64_t freq =
+                    elapsed_cycles /
+                    std::max<uint64_t>(elapsed_us, 1);  // cycles per us
 
                 total_slept += SLEEP_MICROSECONDS;
 
