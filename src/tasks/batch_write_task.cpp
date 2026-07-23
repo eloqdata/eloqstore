@@ -1026,7 +1026,21 @@ KvError BatchWriteTask::FlushIndexPage(MemCachedPage::Handle &idx_page,
     // Flushes the built index page.
     idx_page->SetPageId(page_id);
     KvError err = WritePage(idx_page);
-    CHECK_KV_ERR(err);
+    if (err != KvError::NoError)
+    {
+        // The write failed. WritePageCallback leaves a still-pinned page for
+        // the caller to reclaim (it cannot free a page the caller pins). Free
+        // it here, mirroring TruncateIndexPage: if the page was promoted into
+        // the active list on a successful sibling write it is no longer
+        // detached and must be left alone.
+        MemCachedPage *page = idx_page.Get();
+        idx_page.Reset();
+        if (page->IsDetached() && !page->IsPinned())
+        {
+            shard->IndexManager()->FreePage(page);
+        }
+        return err;
+    }
 
     // The parent node needs to be updated only when the index page splits and
     // the current page is either a newly generated page or the root page.
