@@ -946,8 +946,6 @@ void WriteTask::TriggerTTL()
 
 KvError WriteTask::RunFileGc() const
 {
-    assert(Options()->data_append_mode);
-
     RetainedFiles retained_files;
     std::vector<MappingSnapshot::Ref> snapshot_array;
     KvError build_err = BuildRetainedFiles(
