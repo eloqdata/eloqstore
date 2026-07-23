@@ -80,7 +80,7 @@ public:
 
     // Cheap TSC-based clock (rdtsc / calibrated cycles-per-us; ARM virtual
     // counter on aarch64). Public so shard-thread code outside Shard (e.g.
-    // IoBudget blocked-time accounting) can time intervals without a
+    // RateBudget blocked-time accounting) can time intervals without a
     // clock_gettime call.
     static uint64_t ReadTimeMicroseconds();
     uint64_t DurationMicroseconds(uint64_t start_us);

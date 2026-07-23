@@ -36,24 +36,25 @@ enum class StoreMode
  */
 struct IoQosStats
 {
-    struct Budget
+    // Device rate budget (M4). rate_ is the foreground class; bg_rate_ is
+    // background (background-task reads and all write-path IO), paced by
+    // its partitioned share.
+    struct Rate
     {
-        uint32_t inflight_{0};        // pages currently admitted
-        uint32_t high_watermark_{0};  // max pages ever admitted
         uint64_t blocked_count_{0};   // acquisitions that had to wait
         uint64_t blocked_us_{0};      // cumulative wait time
-        // Cumulative configured data pages ever admitted by this budget. This
-        // is budgeted page-IO volume, not total device traffic. Metadata,
-        // manifest, bulk file/snapshot, fdatasync, and segment IO are
-        // unbudgeted and therefore absent.
-        uint64_t admitted_pages_{0};
+        uint64_t admitted_ops_{0};    // cumulative device-op cost admitted
+        uint64_t admitted_bytes_{0};  // cumulative bytes admitted
+        // Of admitted_ops_, the ops granted from the OTHER class's idle
+        // surplus (borrow-when-idle; see RateBudget).
+        uint64_t borrowed_ops_{0};
     };
-    Budget read_;
-    // Background slice of read_ (M2), bounded by the bg sub-budget. Inflight,
-    // high-watermark, and admitted pages are subsets of read_; blocked fields
-    // are per-class (read_ is foreground, bg_read_ is background).
-    Budget bg_read_;
-    Budget write_;
+    Rate rate_;
+    Rate bg_rate_;
+    // Single class-blind in-flight device-command window (max_inflight_io).
+    uint32_t io_window_inflight_{0};
+    uint32_t io_window_hwm_{0};
+    uint64_t io_window_blocked_{0};
     uint64_t fdatasync_count_{0};  // write-path fdatasync ops (FdatasyncFiles)
     uint64_t fdatasync_us_{0};     // cumulative batch wall time
 };

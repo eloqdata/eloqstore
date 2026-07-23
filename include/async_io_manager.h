@@ -55,77 +55,148 @@ public:
 };
 
 /**
- * @brief Per-shard in-flight page-IO budget (M1/M2 in docs/design/io_qos.md).
+ * @brief Per-shard device rate budget (docs/design/io_qos.md M4).
  *
- * Counts admitted, not-yet-completed page IO in configured data-page units
- * (`KvOptions::data_page_size`). Tasks block in Acquire when admission would
- * exceed the cap; IouringMgr::PollComplete releases per CQE and wakes waiters,
- * so release never depends on the blocked task being scheduled.
+ * Two token buckets — device operations and bytes — refilled lazily from
+ * the shard clock once per event-loop iteration (RefillAndWake, called
+ * from IouringMgr::Submit) and spent at the same entry points as the page
+ * IO paths. Admission uses debt semantics: a task waits until the
+ * balances are positive, then subtracts its full cost, letting a balance
+ * go negative. The long-run rate therefore equals the refill rate
+ * exactly, and a single IO costlier than the bucket capacity (a 1MB
+ * merged write against a small bytes bucket) admits without deadlock —
+ * it just drives the balance into debt that subsequent refills pay off
+ * before the next admission.
  *
- * Optional background sub-budget (M2): when `bg_cap_` is non-zero,
- * acquisitions with `background = true` are additionally bounded by
- * `bg_inflight_ <= bg_cap_`. Background never exceeds its slice. Foreground
- * may consume the entire budget while background has no pending demand; once
- * a background acquisition enters the wait path, its unused entitlement
- * (bg_cap_ - bg_inflight_) stays reserved through admission, including the
- * wake-to-admit gap. Each class waits on its own FIFO zone; release wakes
- * background waiters first and always wakes foreground, so neither sustained
- * foreground saturation nor a saturated background queue can starve a class.
+ * The budget is PARTITIONED by class, not shared: foreground buckets
+ * refill at (100 - rate_bg_ratio) percent of the rate and are charged
+ * only by foreground IO; background buckets refill at rate_bg_ratio
+ * percent and are charged by background IO (background reads and all
+ * write-path IO). A shared balance was tried first and rejected: one
+ * large background debit (a merged write charged at the device's
+ * accounting granularity) drove the common balance negative and stalled
+ * every foreground read behind the write's debt for ~0.5 ms per MB
+ * (measured 2026-07-21, storm p99 1.0 ms shared vs 0.4 ms partitioned).
+ * Partitioning alone would waste idle-background headroom; ASYMMETRIC
+ * borrowing repairs that: FOREGROUND ONLY may admit on background's
+ * balance, and only while background has no waiters and a positive
+ * balance; the debit lands on background (see CanAdmit). With background
+ * idle, foreground runs at the full configured rate; the moment
+ * background demand appears, lending stops and background resumes at
+ * worst one IO-cost below zero. Background never borrows — foreground's
+ * share is a guarantee against background, and symmetric borrowing
+ * measurably collapsed that guarantee (see CanAdmit).
+ * There is deliberately no Release(): a rate budget meters issuance per
+ * second, not occupancy. A token is consumed by sending the IO, and how
+ * fast the device completes it is irrelevant — refunding on completion
+ * would collapse the rate limit into a mere concurrency ceiling. (The
+ * occupancy role belongs to the max_inflight_io window, which does pair
+ * AcquireIoWindow with a completion-time ReleaseIoWindow.)
+ * Wake-ups are refill-driven, never completion-driven: spent tokens are
+ * gone, time is the only credit source, so waiter progress depends only
+ * on the shard loop running. Each refill runs peek-and-grant per class
+ * (GrantWaiters): the waker charges the FIFO head's recorded cost on its
+ * behalf before waking it, so wake counts are exact even with
+ * heterogeneous costs and woken tasks never re-queue.
  *
- * A cap of 0 disables the budget (Acquire/Release are no-ops). A request
- * whose cost exceeds the (sub-)cap (e.g. a merged write larger than a small
- * configured cap) is admitted alone once the relevant count drains to zero,
- * so in-flight IO is bounded by max(cap, single-request cost) and progress
- * is guaranteed.
+ * Balances are stored scaled by kScale (1 token = kScale units) so refill
+ * arithmetic (rate/sec x elapsed microseconds) stays in integers.
  */
-class IoBudget
+class RateBudget
 {
 public:
-    void SetCap(uint32_t cap)
+    void SetRates(uint64_t ops_per_sec,
+                  uint64_t bytes_per_sec,
+                  uint32_t burst_ms,
+                  uint32_t bg_ratio_pct);
+    bool Enabled() const
     {
-        cap_ = cap;
+        return fg_ops_rate_ != 0 || fg_bytes_rate_ != 0 || bg_ops_rate_ != 0 ||
+               bg_bytes_rate_ != 0;
     }
-    void SetBgCap(uint32_t bg_cap)
+    void Acquire(uint32_t ops, uint64_t bytes, bool background);
+    void RefillAndWake(uint64_t now_us);
+    IoQosStats::Rate Stats() const
     {
-        bg_cap_ = bg_cap;
-    }
-    void Acquire(uint32_t cost, bool background = false);
-    void Release(uint32_t cost, bool background = false);
-    IoQosStats::Budget Stats() const
-    {
-        return {inflight_.load(std::memory_order_relaxed),
-                high_watermark_.load(std::memory_order_relaxed),
-                blocked_count_.load(std::memory_order_relaxed),
+        return {blocked_count_.load(std::memory_order_relaxed),
                 blocked_us_.load(std::memory_order_relaxed),
-                admitted_pages_.load(std::memory_order_relaxed)};
+                admitted_ops_.load(std::memory_order_relaxed),
+                admitted_bytes_.load(std::memory_order_relaxed),
+                borrowed_ops_.load(std::memory_order_relaxed)};
     }
-    IoQosStats::Budget BgStats() const
+    IoQosStats::Rate BgStats() const
     {
-        return {bg_inflight_.load(std::memory_order_relaxed),
-                bg_high_watermark_.load(std::memory_order_relaxed),
-                bg_blocked_count_.load(std::memory_order_relaxed),
+        return {bg_blocked_count_.load(std::memory_order_relaxed),
                 bg_blocked_us_.load(std::memory_order_relaxed),
-                bg_admitted_pages_.load(std::memory_order_relaxed)};
+                bg_admitted_ops_.load(std::memory_order_relaxed),
+                bg_admitted_bytes_.load(std::memory_order_relaxed),
+                bg_borrowed_ops_.load(std::memory_order_relaxed)};
     }
 
 private:
-    uint32_t cap_{0};
-    std::atomic<uint32_t> inflight_{0};
-    uint32_t bg_cap_{0};  // 0 = no background sub-budget
-    std::atomic<uint32_t> bg_inflight_{0};
-    // BG acquisitions that entered the wait path but have not admitted yet.
-    // A wake does not end demand: the task can yield or re-wait before admit.
-    uint32_t bg_pending_{0};
-    // The remaining atomic fields are observability only (tests, tuning,
-    // metrics); admission decisions additionally read bg_pending_.
-    std::atomic<uint32_t> high_watermark_{0};
+    static constexpr int64_t kScale = 1'000'000;
+
+    /**
+     * @brief Whether the class's own balances are all positive.
+     */
+    bool Positive(bool background) const;
+    /**
+     * @brief Admission test with asymmetric borrow-when-idle.
+     *
+     * A class is admissible on its own positive balances; foreground
+     * additionally on background's — while background has NO waiters (the
+     * instant its demand appears, lending stops) and a positive balance
+     * (surplus is lent, debt is never transferred). The borrow debit
+     * lands on background's buckets, so its refill repays the loan and it
+     * restarts at worst one IO-cost below zero. Background never borrows.
+     *
+     * @param background The class requesting admission.
+     * @return True if an acquisition of this class may proceed now.
+     */
+    bool CanAdmit(bool background) const;
+    /**
+     * @brief Charge @p ops / @p bytes to the granting balances (own, or
+     * the lender's when borrowing) and update the class's counters. Debt
+     * semantics: balances may go negative.
+     */
+    void Charge(uint32_t ops, uint64_t bytes, bool background);
+    /**
+     * @brief Peek-and-grant admission for the class's FIFO: while the
+     * class is admissible, charge the head waiter's recorded cost
+     * (KvTask::rate_wait_ops_/bytes_) on its behalf, then wake it. Exact
+     * wake counts for heterogeneous costs; the woken task's Acquire tail
+     * does nothing — this is the only waker of the rate zones, so a wake
+     * means the charge already happened.
+     */
+    void GrantWaiters(bool background);
+
+    // Per-class token rates per second; 0 disables that bucket.
+    uint64_t fg_ops_rate_{0};
+    uint64_t fg_bytes_rate_{0};
+    uint64_t bg_ops_rate_{0};
+    uint64_t bg_bytes_rate_{0};
+    uint64_t burst_us_{0};        // bucket capacity, microseconds of refill
+    uint64_t last_refill_us_{0};  // 0 = first refill pending
+    // Scaled balances (1 token = kScale units); may go negative (debt).
+    int64_t fg_ops_bal_{0};
+    int64_t fg_bytes_bal_{0};
+    int64_t bg_ops_bal_{0};
+    int64_t bg_bytes_bal_{0};
+    // Observability only; admission reads nothing but rates and balances.
+    // Atomic (relaxed) because IoQosStats is sampled from other threads
+    // while the shard runs (see the concurrent-sampling test); the shard
+    // thread is the only writer.
     std::atomic<uint64_t> blocked_count_{0};
     std::atomic<uint64_t> blocked_us_{0};
-    std::atomic<uint64_t> admitted_pages_{0};
-    std::atomic<uint32_t> bg_high_watermark_{0};
+    std::atomic<uint64_t> admitted_ops_{0};
+    std::atomic<uint64_t> admitted_bytes_{0};
     std::atomic<uint64_t> bg_blocked_count_{0};
     std::atomic<uint64_t> bg_blocked_us_{0};
-    std::atomic<uint64_t> bg_admitted_pages_{0};
+    std::atomic<uint64_t> bg_admitted_ops_{0};
+    std::atomic<uint64_t> bg_admitted_bytes_{0};
+    // Ops admitted from the other class's surplus (borrow-when-idle).
+    std::atomic<uint64_t> borrowed_ops_{0};
+    std::atomic<uint64_t> bg_borrowed_ops_{0};
     WaitingZone waiting_;     // foreground waiters
     WaitingZone bg_waiting_;  // background waiters
 };
@@ -627,12 +698,14 @@ public:
     ~IouringMgr() override;
     KvError Init(Shard *shard) override;
     void Submit() override;
-    // A shard must not idle-block while this ring has prepared or
-    // submitted-but-unreaped IO: CQE delivery under DEFER_TASKRUN
-    // requires this thread to keep entering the kernel. The base class
-    // returns true unconditionally, which let shards sleep up to the
-    // 100ms request-wait timeout with CQEs pending (observed during
-    // prewarm, whose IO is not owned by an active task).
+    /**
+     * @brief A shard must not idle-block while this ring has prepared or
+     * submitted-but-unreaped IO: CQE delivery under DEFER_TASKRUN
+     * requires this thread to keep entering the kernel. The base class
+     * returns true unconditionally, which let shards sleep up to the
+     * 100ms request-wait timeout with CQEs pending (observed during
+     * prewarm, whose IO is not owned by an active task).
+     */
     bool IsIdle() override
     {
         return inflight_ios_ == 0;
@@ -1136,11 +1209,15 @@ public:
     WaitingZone waiting_sqe_;
     uint32_t prepared_sqe_{0};
 
-    // Per-shard in-flight page-IO budgets (M1, docs/design/io_qos.md).
-    // Reads and writes are separate device resources with independent caps
-    // (max_inflight_read / max_inflight_write).
-    IoBudget read_budget_;
-    IoBudget write_budget_;
+    RateBudget rate_budget_;
+    // Single class-blind in-flight device-command window (max_inflight_io;
+    // see AcquireIoWindow). 0 cap = disabled. The shard thread is the only
+    // writer; atomics (relaxed) allow cross-thread stats sampling.
+    uint32_t io_window_cap_{0};
+    std::atomic<uint32_t> io_window_inflight_{0};
+    std::atomic<uint32_t> io_window_hwm_{0};
+    std::atomic<uint64_t> io_window_blocked_{0};
+    WaitingZone io_window_waiting_;
     // Write-path fdatasync instrumentation (FdatasyncFiles batches).
     std::atomic<uint64_t> fdatasync_count_{0};
     std::atomic<uint64_t> fdatasync_us_{0};
@@ -1280,24 +1357,45 @@ public:
     IoQosStats GetIoQosStats() const override
     {
         IoQosStats stats;
-        stats.read_ = read_budget_.Stats();
-        stats.bg_read_ = read_budget_.BgStats();
-        stats.write_ = write_budget_.Stats();
         stats.fdatasync_count_ =
             fdatasync_count_.load(std::memory_order_relaxed);
         stats.fdatasync_us_ = fdatasync_us_.load(std::memory_order_relaxed);
+        stats.rate_ = rate_budget_.Stats();
+        stats.bg_rate_ = rate_budget_.BgStats();
+        stats.io_window_inflight_ =
+            io_window_inflight_.load(std::memory_order_relaxed);
+        stats.io_window_hwm_ = io_window_hwm_.load(std::memory_order_relaxed);
+        stats.io_window_blocked_ =
+            io_window_blocked_.load(std::memory_order_relaxed);
         return stats;
     }
 
     /**
-     * @brief Write-budget cost of a merged write in configured data-page units.
-     * Acquire (SubmitMergedWrite) and release (PollComplete) must use this
-     * same formula so the budget balances exactly.
+     * @brief Single class-blind cap on in-flight device commands
+     * (KvOptions::max_inflight_io; 0 = off). Companion to the rate budget:
+     * rate governs allocation per second with class policy; this bounds
+     * the instantaneous outstanding window toward the device, smoothing
+     * the rate bucket's burst release. Cost is device commands: 1 per page
+     * IO, ceil(len / kDeviceCmdBytes) per merged write. Oversized-request
+     * escape: a cost above the cap admits alone once the
+     * window drains. Completion-driven wake in PollComplete.
      */
-    uint32_t MergedWriteCost(size_t bytes) const
+    void AcquireIoWindow(uint32_t cost);
+    void ReleaseIoWindow(uint32_t cost);
+    /**
+     * @brief Kernel splits large submissions into device commands of at
+     * most this size (queue-depth currency; distinct from
+     * rate_limit_io_unit, the hypervisor-accounting currency).
+     */
+    static constexpr uint32_t kDeviceCmdBytes = 256 * 1024;
+    /**
+     * @brief In-flight-window cost of a submission of @p bytes, in device
+     * commands. Acquire and release must use the same formula.
+     */
+    static uint32_t DeviceCmdCost(size_t bytes)
     {
-        const uint32_t page_size = options_->data_page_size;
-        return static_cast<uint32_t>((bytes + page_size - 1) / page_size);
+        return static_cast<uint32_t>((bytes + kDeviceCmdBytes - 1) /
+                                     kDeviceCmdBytes);
     }
 
     /**

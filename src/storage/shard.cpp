@@ -139,13 +139,14 @@ void Shard::CollectPeriodicGauges(metrics::Meter *meter)
     meter->Collect(metrics::NAME_ELOQSTORE_LOCAL_SPACE_USED,
                    static_cast<double>(io_mgr_->GetLocalSpaceUsed()));
 
+    // The M1/M2 count budgets (and their per-class in-flight gauges) are
+    // retired in favor of the M4 rate budget (docs/design/io_qos.md). The
+    // closest surviving instantaneous-depth gauge is the class-blind
+    // in-flight device-command window; report it under the read-pages
+    // metric name until dedicated rate-budget metrics are defined.
     const IoQosStats qos = io_mgr_->GetIoQosStats();
     meter->Collect(metrics::NAME_ELOQSTORE_INFLIGHT_READ_PAGES,
-                   static_cast<double>(qos.read_.inflight_));
-    meter->Collect(metrics::NAME_ELOQSTORE_INFLIGHT_BG_READ_PAGES,
-                   static_cast<double>(qos.bg_read_.inflight_));
-    meter->Collect(metrics::NAME_ELOQSTORE_INFLIGHT_WRITE_PAGES,
-                   static_cast<double>(qos.write_.inflight_));
+                   static_cast<double>(qos.io_window_inflight_));
 }
 #endif
 
