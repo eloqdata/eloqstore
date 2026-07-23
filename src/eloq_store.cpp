@@ -1190,6 +1190,7 @@ KvError EloqStore::CollectTablePartitions(
         // raw prefix so DropTable does not paginate through the entire bucket.
         list_object_request.SetRemotePath(partition_prefix);
         list_object_request.SetEnsureTrailingSlash(false);
+        std::string partition_path = partition_prefix;
 
         bool has_more = false;
         do
@@ -1220,8 +1221,9 @@ KvError EloqStore::CollectTablePartitions(
 
             for (auto &object_name : objects)
             {
-                TableIdent ident =
-                    TableIdent::FromString(partition_prefix + object_name);
+                partition_path.resize(partition_prefix.size());
+                partition_path.append(object_name);
+                TableIdent ident = TableIdent::FromString(partition_path);
                 if (!ident.IsValid() || ident.tbl_name_ != table_name)
                 {
                     continue;
