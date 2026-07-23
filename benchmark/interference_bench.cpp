@@ -2,8 +2,9 @@
  * IO QoS interference benchmark (docs/design/io_qos.md, plan commit 3).
  *
  * Measures how much a background write/compaction storm degrades foreground
- * point-read tail latency, and how the IO QoS knobs (max_inflight_read,
- * bg_read_ratio, max_inflight_write) change that.
+ * point-read tail latency, and how the IO QoS knobs (disk_rate_limit_iops,
+ * rate_bg_ratio, rate_limit_burst_ms, rate_limit_io_unit, max_inflight_io)
+ * change that.
  *
  * Phases:
  *   1. load      — fill P partitions with K keys of ~val_size bytes each.
@@ -30,11 +31,11 @@
  *
  * Reports per phase: read QPS and exact p50/p90/p99/p99.9/max latency
  * (computed from raw samples, not a sliding window), the storm's write MB/s,
- * and per-shard IoQosStats deltas (in-flight watermarks, budget-blocked
- * counts/time, fdatasync). Greppable one-line summaries are prefixed with
+ * and per-shard IoQosStats deltas (rate-budget blocks/spend/borrows, io
+ * window, fdatasync). Greppable one-line summaries are prefixed with
  * "RESULT" for sweep scripts. A run exits nonzero if either measured phase
  * has errors, missing keys, fewer than --min_read_samples successes, or an
- * enabled BG budget records no mixed-phase background page reads.
+ * enabled rate budget records no mixed-phase background spend.
  *
  * EloqStore options (including the QoS knobs) come from --kvoptions ini, so
  * sweeps only vary the ini / flags. See opts_interference.ini.
@@ -435,42 +436,30 @@ void Load(eloqstore::EloqStore *store)
 void ReportQosDelta(const char *name,
                     const eloqstore::IoQosStats &begin,
                     const eloqstore::IoQosStats &end,
-                    size_t shard,
-                    uint32_t data_page_size,
-                    double secs)
+                    size_t shard)
 {
     auto d = [](uint64_t b, uint64_t e) { return e - b; };
-    // Budgeted page IO in MB/s over the phase: user data, compaction
-    // relocations, and index pages. This is not total device traffic; metadata,
-    // manifest, bulk file/snapshot, fdatasync, and segment IO are unbudgeted.
-    auto mbps = [&](const eloqstore::IoQosStats::Budget &b,
-                    const eloqstore::IoQosStats::Budget &e)
-    {
-        return secs > 0 ? (d(b.admitted_pages_, e.admitted_pages_) *
-                           static_cast<double>(data_page_size)) /
-                              (secs * (1 << 20))
-                        : 0.0;
-    };
-    LOG(INFO) << "RESULT qos phase=" << name << " shard=" << shard
-              << " read_hwm=" << end.read_.high_watermark_ << " read_blocked="
-              << d(begin.read_.blocked_count_, end.read_.blocked_count_)
-              << " read_blocked_us="
-              << d(begin.read_.blocked_us_, end.read_.blocked_us_)
-              << " read_budgeted_page_mbps=" << mbps(begin.read_, end.read_)
-              << " bg_read_hwm=" << end.bg_read_.high_watermark_
-              << " bg_read_blocked="
-              << d(begin.bg_read_.blocked_count_, end.bg_read_.blocked_count_)
-              << " bg_read_blocked_us="
-              << d(begin.bg_read_.blocked_us_, end.bg_read_.blocked_us_)
-              << " bg_read_budgeted_page_mbps="
-              << mbps(begin.bg_read_, end.bg_read_)
-              << " write_hwm=" << end.write_.high_watermark_
-              << " write_blocked="
-              << d(begin.write_.blocked_count_, end.write_.blocked_count_)
-              << " write_budgeted_page_mbps=" << mbps(begin.write_, end.write_)
-              << " fdatasync="
-              << d(begin.fdatasync_count_, end.fdatasync_count_)
-              << " fdatasync_us=" << d(begin.fdatasync_us_, end.fdatasync_us_);
+    LOG(INFO)
+        << "RESULT qos phase=" << name << " shard=" << shard
+        << " fdatasync=" << d(begin.fdatasync_count_, end.fdatasync_count_)
+        << " fdatasync_us=" << d(begin.fdatasync_us_, end.fdatasync_us_)
+        << " rate_blocked="
+        << d(begin.rate_.blocked_count_, end.rate_.blocked_count_)
+        << " rate_blocked_us="
+        << d(begin.rate_.blocked_us_, end.rate_.blocked_us_)
+        << " rate_ops=" << d(begin.rate_.admitted_ops_, end.rate_.admitted_ops_)
+        << " rate_mb="
+        << (d(begin.rate_.admitted_bytes_, end.rate_.admitted_bytes_) >> 20)
+        << " rate_borrowed="
+        << d(begin.rate_.borrowed_ops_, end.rate_.borrowed_ops_)
+        << " bg_rate_blocked="
+        << d(begin.bg_rate_.blocked_count_, end.bg_rate_.blocked_count_)
+        << " bg_rate_blocked_us="
+        << d(begin.bg_rate_.blocked_us_, end.bg_rate_.blocked_us_)
+        << " bg_rate_borrowed="
+        << d(begin.bg_rate_.borrowed_ops_, end.bg_rate_.borrowed_ops_)
+        << " io_hwm=" << end.io_window_hwm_ << " io_blocked="
+        << d(begin.io_window_blocked_, end.io_window_blocked_);
 }
 
 }  // namespace
@@ -562,30 +551,20 @@ int main(int argc, char *argv[])
               << static_cast<int>(achieved_write_pct + 0.5);
     for (size_t s = 0; s < num_shards; s++)
     {
-        ReportQosDelta("baseline",
-                       qos_start[s],
-                       qos_mid[s],
-                       s,
-                       options.data_page_size,
-                       FLAGS_baseline_secs);
-        ReportQosDelta("mixed",
-                       qos_mid[s],
-                       qos_end[s],
-                       s,
-                       options.data_page_size,
-                       FLAGS_storm_secs);
-        mixed_bg_read_pages += qos_end[s].bg_read_.admitted_pages_ -
-                               qos_mid[s].bg_read_.admitted_pages_;
+        ReportQosDelta("baseline", qos_start[s], qos_mid[s], s);
+        ReportQosDelta("mixed", qos_mid[s], qos_end[s], s);
+        mixed_bg_read_pages += qos_end[s].bg_rate_.admitted_ops_ -
+                               qos_mid[s].bg_rate_.admitted_ops_;
     }
 
     const bool baseline_valid = ValidatePhase("baseline", baseline);
     const bool mixed_valid = ValidatePhase("mixed", storm_lat);
     bool interference_valid = true;
-    if (options.max_inflight_read != 0 && mixed_bg_read_pages == 0)
+    if (options.disk_rate_limit_iops != 0 && mixed_bg_read_pages == 0)
     {
-        LOG(ERROR) << "mixed phase produced no budgeted background page "
-                      "reads; the intended write/compaction interference was "
-                      "not exercised";
+        LOG(ERROR) << "mixed phase recorded no background rate-budget "
+                      "spend; the intended write/compaction interference "
+                      "was not exercised";
         interference_valid = false;
     }
     const bool valid = baseline_valid && mixed_valid && interference_valid;

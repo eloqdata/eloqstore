@@ -118,6 +118,16 @@ Consequences for the design:
 
 ### M1: Per-shard in-flight page-IO caps, reads and writes separate
 
+> **Superseded (2026-07-22).** The count budgets shipped, were validated,
+> and were then retired in favor of M4: on rate-metered cloud disks the
+> tail is set by the hypervisor's rate limiter, which a concurrency cap
+> cannot address (measured: properly-sized count caps recovered a fraction
+> of the rate budget's result), and the write cap could not bind below one
+> merged write buffer. `max_inflight_read` / `bg_read_ratio` are deprecated
+> no-ops; `max_inflight_write` reverted to write request-pool sizing;
+> instantaneous depth bounding, if wanted, is the single class-blind
+> `max_inflight_io` window. The sections below are kept as design record.
+
 Two per-shard counters of in-flight **page** IO (in configured
 `data_page_size` units), with independent caps, enforced at the page-IO entry
 points of `IouringMgr`.
@@ -172,6 +182,10 @@ Rules:
   implementation.
 
 ### M2: Foreground/background classification and BG sub-budget
+
+> **Superseded (2026-07-22).** The FG/BG classification survives — it is
+> the class model of the M4 rate budget (`rate_bg_ratio`) — but the
+> count-domain sub-budget described here is retired with M1.
 
 Every page IO is issued from a `KvTask` (`ThdTask()`), so classification is a
 task-type predicate. Add `KvTask::IsBackground()`:
@@ -242,14 +256,208 @@ M3 is deferred until experiments confirm that in-flight capping alone (M1+M2)
 is insufficient — which the die-collision model predicts for sustained
 compaction, since interference tracks bytes/sec rather than queue depth.
 
+**Status 2026-07-21: subsumed by M4 below.** The Azure campaign confirmed the
+prediction — interference tracks rate, not queue depth — and additionally
+showed that on cloud disks the dominant tail source is the *hypervisor's own
+rate limiter*, which M4 addresses for all IO classes, not only background
+writes.
+
+### M4: Per-shard device rate limiting (ops/sec + bytes/sec)
+
+**Motivation (measured 2026-07-21, Azure L-series local NVMe).** Cloud disks
+are provisioned rate limits, not devices: `/dev/nvme1n1` enforced ~275K IOPS,
+holding the overflow fraction of IOs for a quantized ~3 ms (bimodal latency:
+90 µs or ~3 ms, nothing between). A read-only workload driving the disk at
+its ceiling showed p99.9 = 3.3 ms with all engine stages clean; deep-queue
+fio reproduced the plateau (6.7 ms) at the same 275K ceiling, and sub-ceiling
+fio showed the true device tail is ~200 µs. AWS documents the same
+enforcement for Nitro instance-store NVMe ("performance exceeded" counters);
+GCP Local SSD limits scale with instance shape. Conclusion: **the engine must
+own the queue** — admit IO below the provisioned ceiling so waiting happens
+in user space (FIFO, foreground-prioritized, observable) instead of in the
+hypervisor's limiter (random ~ms quantized holds, no priority).
+
+Count caps (M1) cannot express this robustly: the count that keeps the rate
+at the ceiling is `rate × latency`, and the sweet spot is narrow — on the
+test disk, 24 in-flight store-wide eliminated throttle holds (p99.9
+3,252 → 419 µs, −8% throughput) while 32 in-flight retained nearly the full
+throttle tail and 16 forfeited 40% of throughput. A rate budget hits the
+target directly and stays correct as latency shifts with the workload mix.
+
+**Budget derivation — simple division.** The deployment knows the per-disk
+provisioned limits, the number of disks (`store_path` count), and the number
+of shards (`num_threads`). Each shard's rate budget is:
+
+```
+shard_iops  = disk_rate_limit_iops × num_store_paths / num_threads
+shard_bytes = disk_rate_limit_mbps × num_store_paths / num_threads
+```
+
+This assumes shards spread IO uniformly across disks (true on average with
+the store-path LUT). Instantaneous skew wastes some ceiling — accepted for
+v1; per-(shard, path) buckets are a later refinement if skew shows up in the
+gauges.
+
+**Mechanism.** Two token buckets per shard — `ops` and `bytes` — sharing the
+M2 class policy:
+
+- *Lazy refill, no timers.* The shard event loop already runs continuously;
+  on each loop iteration (same hook as budget wake today), refill from the
+  TSC clock: `tokens += rate × (now − last)`, capped at
+  `rate × rate_limit_burst_ms`. `Shard::ReadTimeMicroseconds()` is already
+  static and cheap.
+- *Debt admission.* `Acquire(cost)` waits until the balance is **positive**,
+  then subtracts the full cost, allowing the balance to go negative. Long-run
+  rate equals the refill rate exactly, a single large IO (1MB merged write =
+  256 pages of byte-tokens) never deadlocks against a small bucket, and no
+  submission needs to be split. This also fixes the M1 write-cap quantum
+  problem measured on 2026-07-21: with count caps, `SubmitMergedWrite`
+  acquires whole-buffer units, so `max_inflight_write` below
+  `write_buffer_size / data_page_size` (256 at defaults) cannot bind — the
+  gauge showed 256 in flight under a cap of 64. Under M4 the byte bucket
+  charges actual bytes and paces exactly.
+- *Class policy: partitioned buckets.* The budget is split by class:
+  foreground buckets refill at `(100 − rate_bg_ratio)` percent of the
+  shard rate and are charged only by foreground reads; background buckets
+  refill at `rate_bg_ratio` percent and are charged by background reads
+  and all write-path IO. (`rate_bg_ratio` is a separate option from
+  `bg_read_ratio` because it governs writes too, not only reads.) A
+  shared-balance variant — foreground draws freely, background capped at
+  a sub-share — was implemented first and measured worse (2026-07-21):
+  with writes charged at the device's true accounting granularity, one
+  merged write's debit drove the shared balance negative and every
+  foreground read arriving in the next ~0.5 ms/MB waited out the write's
+  debt (storm p99 1.0 ms shared vs 0.4 ms partitioned). Partitioning
+  isolates each class's debt at the cost of not lending an idle class's
+  headroom; **asymmetric borrow-when-idle** (implemented 2026-07-22)
+  repairs that: foreground only may admit on background's balance, while
+  background has no waiters and a positive balance, with the debit landing
+  on background. Read-only throughput recovers to the full configured rate
+  (243K vs 183K partition-only on the test disk, p99.9 413 µs) while storm
+  isolation is unchanged (183.5K, ~720 µs, writes pinned to the background
+  share). Background must never borrow: the symmetric variant was tried
+  and reverted — a closed-loop foreground's waiting zone empties for
+  microseconds between completion and resubmission, and in those windows
+  storm-driven background skimmed the foreground refill wholesale
+  (measured ~2M borrowed ops/shard per storm; foreground fell 183K → 116K
+  QPS and p99.9 720 µs → 5.6 ms). Foreground's share is a guarantee
+  against background and must hold regardless of how idle foreground
+  momentarily looks. Reverse lending (idle foreground donating to
+  background) would need genuine idle-hysteresis to be safe; deferred.
+  Each refill
+  wakes each class's zone independently — no cross-class wake coupling,
+  hence no starvation coupling either.
+- *Charging points* are the existing M1 acquire sites: `ReadPage`/`ReadPages`
+  (ops = pages, bytes = pages × page size), `WritePage` (1 page),
+  `SubmitMergedWrite` (ops = ceil(len / rate_limit_io_unit) to mirror the
+  device-command split of large IOs, bytes = len), `fdatasync` (1 op).
+- *Waiting/waking* reuse the existing per-class `WaitingZone`s; the wake site
+  moves from completion (`Release`) to refill (once per loop iteration).
+  There is no completion-driven release — spent tokens are gone; the refill
+  is the only credit source.
+
+**Relation to M1/M2.** The count caps remain as burst-depth guards (a rate
+bucket alone would admit `burst_ms` worth of IO instantaneously after an idle
+gap). Their sizing pressure disappears: set them to `2 × shard_iops ×
+t_read(loaded)` and forget them; the rate budget is the binding control. M3
+(background write bytes/sec) becomes the BG class share of the byte bucket —
+no separate mechanism.
+
+**Recommended production configuration (validated 2026-07-22): the rate
+knobs alone — the count caps are retired.** With the partitioned buckets,
+the tuned count caps changed storm p99.9 by nothing measurable (709 vs
+722 µs, same throughput), and they were subsequently removed. Configure
+`disk_rate_limit_iops` (95% of the measured disk ceiling; default 275K —
+the measured Azure v2 local-NVMe ceiling — with rate limiting ON by
+default), `rate_bg_ratio` (the one policy choice), and
+`rate_limit_io_unit` (a platform constant — 2 KB on Azure local NVMe,
+i.e. written bytes cost twice read bytes per 4 KB; values ≥16 KB
+measurably leak hypervisor throttling, 4 KB is equivalent to 2 KB).
+`max_inflight_io` (single class-blind in-flight command window) exists as
+an off-by-default safety bound; measured inert on Azure — the rate-metered
+hypervisor does not penalize instantaneous depth at burst-window
+magnitudes, so relocating the queue to user space changes nothing there.
+
+**New options.**
+
+```
+uint64_t disk_rate_limit_iops = 275000; // per store_path; 0 = off. ON by
+                                     // default: 275K is the measured Azure
+                                     // v2 local-NVMe ceiling and a sane
+                                     // cloud starting point. Multiple
+                                     // store paths are assumed identical
+                                     // devices; per-shard budget =
+                                     // iops x paths / num_threads. Devices
+                                     // faster than ~290K IOPS are capped
+                                     // until raised/disabled; measure and
+                                     // set 95% of ceiling for precision.
+uint64_t disk_rate_limit_mbps = 0;   // per store_path; 0 = bytes bucket off
+uint32_t rate_limit_burst_ms  = 2;   // bucket capacity, ms of refill;
+                                     // = worst idle-edge latency transient.
+                                     // 1/2/4 ms cost no throughput (deep-
+                                     // queue A/B 2026-07-22); smaller
+                                     // flattens the distribution (median
+                                     // up, tail down), larger the reverse.
+                                     // 1 ms for tail-first deployments.
+uint32_t rate_limit_io_unit   = 2048; // ops-cost quantum for large IOs:
+                                     // the hypervisor ACCOUNTING currency
+                                     // (Azure: a written 4KB costs two
+                                     // read units, fio-fitted and
+                                     // ladder-confirmed; >=16KB leaks
+                                     // throttling). Overcharges writes on
+                                     // platforms with cheaper accounting
+                                     // — the safe direction.
+uint32_t rate_bg_ratio        = 25;  // background share of the rate, percent
+```
+
+**Calibration.** Measure the disk ceiling once with deep-queue fio (4 jobs ×
+QD64 exposes the enforced rate directly as the IOPS plateau; the latency
+plateau confirms throttling rather than saturation), then set
+`disk_rate_limit_iops` to ~90–95% of it. The refill runs on the shard TSC
+clock, so that clock's accuracy bounds the limiter's: a calibration bug
+(fixed 2026-07-22 — cycles divided by the requested sleep instead of the
+measured elapsed time) made the clock ~6% slow and every configured rate
+silently deliver 94%; after the fix, delivered rate is within ~1% of
+configured, which is also why the 5–10% headroom below the measured
+ceiling matters — at 100% the margin is smaller than the ceiling's own
+measurement error. On AWS, the documented
+instance-store limits (and the NVMe "performance exceeded" counters) give
+the number without probing. Leave 5–10% headroom: the hypervisor's own
+bucket must never be the binding limiter, or its quantized holds reappear.
+
+**Validation plan.**
+
+- Read-only at the ceiling (the 2026-07-21 scenario): sweep
+  `disk_rate_limit_iops` ±20% around calibrated; expect a *wide* plateau of
+  good tails (vs. the count cap's knife-edge between 24 and 32 in-flight),
+  p99.9 within ~2× the true device tail, throughput within 10% of ceiling.
+- Mixed storm: foreground p99.9 tracks the read-only number; background
+  (compaction) absorbs the deficit; write throughput cost reported.
+- Cross-check the ops/bytes gauges against `iostat` per phase.
+
+**Future: adaptive rate.** The provisioned ceiling can be discovered at run
+time: on AWS, read the exceeded-counters; elsewhere, detect the throttle
+signature (bimodal completion-latency histogram with a fixed ~ms mode) and
+walk the rate down until it disappears. Deferred until the static version is
+validated in production.
+
 ### New options (per shard)
 
-```cpp
-uint32_t max_inflight_read = 64;     // configured data pages; 0 = disabled
-uint32_t bg_read_ratio = 25;         // percent of max_inflight_read
-uint32_t max_inflight_write = 32768; // configured data pages; redefined option
-                                     // effectively unbounded by default
-uint64_t bg_write_rate_limit = 0;    // bytes/sec; 0 = disabled (M3)
+> **Superseded (2026-07-22):** the surviving option surface is the M4
+> block below. `max_inflight_read` and `bg_read_ratio` are deprecated
+> no-ops, `max_inflight_write` is write request-pool sizing again
+> (default back to 32768), and `bg_write_rate_limit` (M3) was never
+> shipped — background write pacing is the background share of the M4
+> byte bucket.
+
+```
+uint32_t max_inflight_read = 64;     // configured data pages [DEPRECATED]
+uint32_t bg_read_ratio = 25;         // percent of max_inflight_read [DEPR.]
+uint32_t max_inflight_write = 32768; // configured data pages; effectively
+                                     // unbounded by default
+                                     //             [REVERTED to pool sizing]
+uint64_t bg_write_rate_limit = 0;    // bytes/sec; 0 = disabled (M3) [never
+                                     //  shipped; subsumed by M4]
 ```
 
 The WSL interference sweeps (2026-07-03) initially selected a read cap of 32

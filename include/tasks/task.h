@@ -231,6 +231,11 @@ public:
     int io_res_{0};
     uint32_t io_flags_{0};
     KvError result_err_{KvError::NoError};
+    // Rate-budget waiter handshake (RateBudget::Acquire / RefillAndWake):
+    // the acquisition cost is recorded here at enqueue so the waker can
+    // peek the FIFO head and charge on its behalf before waking it.
+    uint32_t rate_wait_ops_{0};
+    uint64_t rate_wait_bytes_{0};
     // Loop-time (us) when this task's latest page-read CQE was reaped;
     // stage-timing instrumentation only (ELOQ_IO_STATS=1).
     uint64_t op_cqe_us_{0};
@@ -253,12 +258,20 @@ public:
     /**
      * @brief Wake up to n waiters in FIFO order.
      * @return The number actually woken (< n when the zone drains), so the
-     * caller can forward unused wake credits to another zone (see
-     * IoBudget::Release).
+     * caller can forward unused wake credits to another zone.
      */
     size_t WakeN(size_t n);
     void WakeAll();
     bool Empty() const;
+    /**
+     * @brief The next waiter in FIFO order without waking it, or nullptr.
+     * Lets a waker peek the head's recorded cost and debit on its behalf
+     * before waking (see RateBudget::RefillAndWake).
+     */
+    KvTask *Head() const
+    {
+        return head_;
+    }
 
 private:
     void PushBack(KvTask *task);

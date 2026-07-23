@@ -167,165 +167,228 @@ bool AsyncIoManager::IsIdle()
     return true;
 }
 
-void IoBudget::Acquire(uint32_t cost, bool background)
+void RateBudget::SetRates(uint64_t ops_per_sec,
+                          uint64_t bytes_per_sec,
+                          uint32_t burst_ms,
+                          uint32_t bg_ratio_pct)
 {
-    if (cap_ == 0)
+    // Partition the total rate between the classes (see class comment):
+    // background gets ratio percent, foreground the rest. Clamped so both
+    // classes always have a nonzero share when the budget is enabled.
+    const uint32_t ratio = std::clamp<uint32_t>(bg_ratio_pct, 1, 99);
+    fg_ops_rate_ = ops_per_sec * (100 - ratio) / 100;
+    fg_bytes_rate_ = bytes_per_sec * (100 - ratio) / 100;
+    bg_ops_rate_ = ops_per_sec * ratio / 100;
+    bg_bytes_rate_ = bytes_per_sec * ratio / 100;
+    burst_us_ = uint64_t{std::max<uint32_t>(burst_ms, 1)} * 1000;
+}
+
+bool RateBudget::Positive(bool background) const
+{
+    if (background)
+    {
+        return (bg_ops_rate_ == 0 || bg_ops_bal_ > 0) &&
+               (bg_bytes_rate_ == 0 || bg_bytes_bal_ > 0);
+    }
+    return (fg_ops_rate_ == 0 || fg_ops_bal_ > 0) &&
+           (fg_bytes_rate_ == 0 || fg_bytes_bal_ > 0);
+}
+
+bool RateBudget::CanAdmit(bool background) const
+{
+    if (Positive(background))
+    {
+        return true;
+    }
+    if (background)
+    {
+        // Background never borrows. Symmetric borrowing was tried and
+        // reverted (2026-07-22): a closed-loop foreground's waiting zone
+        // empties for microseconds between completion and resubmission,
+        // and in those windows storm-driven background (whose demand is
+        // effectively unbounded) skimmed the foreground refill wholesale —
+        // measured as bg_rate_borrowed ~2M ops/shard per storm, foreground
+        // QPS 183K -> 116K, p99.9 720 µs -> 5.6 ms. Foreground's share is
+        // a guarantee AGAINST background; it must hold no matter how idle
+        // foreground momentarily looks.
+        return false;
+    }
+    // Foreground may borrow background's surplus while background has no
+    // queued demand. Requiring a positive lender balance means surplus is
+    // lent, never debt — background restarts at worst one IO-cost below
+    // zero when its demand returns. Lending in this direction can only
+    // reduce device contention for the class the tail contract protects.
+    return bg_waiting_.Empty() && Positive(true);
+}
+
+void IouringMgr::AcquireIoWindow(uint32_t cost)
+{
+    if (io_window_cap_ == 0)
     {
         return;
     }
-    const bool use_bg = background && bg_cap_ != 0;
-    // Admission conditions. `inflight != 0` implements the oversized-request
-    // escape per class: a request with cost > (sub-)cap is admitted alone
-    // once the relevant count drains, guaranteeing progress (see IoBudget
-    // doc comment). Background is additionally bounded by its sub-budget.
-    // Foreground must not take units reserved for pending background demand.
-    // Pending spans the full first-wait-to-admission interval, including a
-    // wake followed by a yield or re-wait, when the wait queue is empty.
-    // Without that reservation, sustained foreground saturation would
-    // starve background forever — every freed unit would be re-acquired by
-    // a foreground waiter and compaction could never bootstrap its share.
-    // While background has no pending demand, foreground may use the entire
-    // budget.
-    auto must_wait = [this, cost, use_bg]()
+    // Class-blind FIFO with the oversized-request escape (cost above the
+    // cap admits alone once the window drains).
+    // Queue behind existing waiters so arrival order is preserved.
+    auto inflight = [this]
+    { return io_window_inflight_.load(std::memory_order_relaxed); };
+    if (!io_window_waiting_.Empty() ||
+        (inflight() + cost > io_window_cap_ && inflight() != 0))
     {
-        const uint32_t inflight = inflight_.load(std::memory_order_relaxed);
-        const uint32_t bg_inflight =
-            bg_inflight_.load(std::memory_order_relaxed);
-        if (use_bg)
-        {
-            return (inflight + cost > cap_ && inflight != 0) ||
-                   (bg_inflight + cost > bg_cap_ && bg_inflight != 0);
-        }
-        const uint32_t reserved = bg_pending_ != 0 && bg_inflight < bg_cap_
-                                      ? bg_cap_ - bg_inflight
-                                      : 0;
-        const uint32_t fg_cap = cap_ > reserved ? cap_ - reserved : 0;
-        const bool exceeds_fg_cap =
-            uint64_t{inflight} + cost > uint64_t{fg_cap};
-        // Oversized requests may exceed the configured cap only when they are
-        // alone and no background entitlement is reserved. Without the
-        // reserved check, a foreground request can steal a 100% BG slice in
-        // the wake-to-admit gap whenever total inflight briefly reaches zero.
-        const bool oversized_alone =
-            inflight == 0 && reserved == 0 && cost > cap_;
-        return exceeds_fg_cap && !oversized_alone;
-    };
-    // Each class queues behind its own existing waiters (approximate FIFO
-    // across arrivals within the class).
-    WaitingZone &zone = use_bg ? bg_waiting_ : waiting_;
-    bool pending_bg = false;
-    if (!zone.Empty() || must_wait())
-    {
-        // TSC-based clock (see Shard::ReadTimeMicroseconds): Acquire always
-        // runs on the shard thread, after Shard::Init calibrated the TSC.
-        const uint64_t start_us = shard->ReadTimeMicroseconds();
-        std::atomic<uint64_t> &blocked_count =
-            use_bg ? bg_blocked_count_ : blocked_count_;
-        blocked_count.store(blocked_count.load(std::memory_order_relaxed) + 1,
-                            std::memory_order_relaxed);
-        if (use_bg)
-        {
-            ++bg_pending_;
-            pending_bg = true;
-        }
+        io_window_blocked_.fetch_add(1, std::memory_order_relaxed);
         do
         {
-            zone.Wait(ThdTask());
-            if (use_bg)
-            {
-                TEST_FAIL_POINT_ACTION("IoBudgetBgWake", {
-                    FailPoint &fail_point = FailPoint::GetInstance();
-                    if (fail_point.PauseRequested() &&
-                        !fail_point.PauseReached())
-                    {
-                        // Prove that the paused regression reached the exact
-                        // wake gap with foreground demand both ready and
-                        // queued, rather than relying on cumulative counters.
-                        CHECK(!waiting_.Empty());
-                        CHECK_GT(shard->ready_tasks_.Size(), 0);
-                        CHECK(shard->ready_tasks_.Peek()->Type() ==
-                              TaskType::Read);
-                    }
-                    do
-                    {
-                        ThdTask()->YieldToLowPQ();
-                        fail_point.MarkPauseReached();
-                    } while (fail_point.PauseRequested());
-                });
-            }
-        } while (must_wait());
-        const uint64_t waited_us = shard->DurationMicroseconds(start_us);
-        std::atomic<uint64_t> &blocked_us =
-            use_bg ? bg_blocked_us_ : blocked_us_;
-        blocked_us.store(blocked_us.load(std::memory_order_relaxed) + waited_us,
-                         std::memory_order_relaxed);
+            io_window_waiting_.Wait(ThdTask());
+        } while (inflight() + cost > io_window_cap_ && inflight() != 0);
     }
-    if (pending_bg)
+    const uint32_t now_inflight = inflight() + cost;
+    io_window_inflight_.store(now_inflight, std::memory_order_relaxed);
+    if (now_inflight > io_window_hwm_.load(std::memory_order_relaxed))
     {
-        CHECK_GT(bg_pending_, 0);
-        --bg_pending_;
-    }
-    const uint32_t inflight = inflight_.load(std::memory_order_relaxed) + cost;
-    inflight_.store(inflight, std::memory_order_relaxed);
-    admitted_pages_.store(
-        admitted_pages_.load(std::memory_order_relaxed) + cost,
-        std::memory_order_relaxed);
-    if (inflight > high_watermark_.load(std::memory_order_relaxed))
-    {
-        high_watermark_.store(inflight, std::memory_order_relaxed);
-    }
-    if (use_bg)
-    {
-        const uint32_t bg_inflight =
-            bg_inflight_.load(std::memory_order_relaxed) + cost;
-        bg_inflight_.store(bg_inflight, std::memory_order_relaxed);
-        bg_admitted_pages_.store(
-            bg_admitted_pages_.load(std::memory_order_relaxed) + cost,
-            std::memory_order_relaxed);
-        if (bg_inflight > bg_high_watermark_.load(std::memory_order_relaxed))
-        {
-            bg_high_watermark_.store(bg_inflight, std::memory_order_relaxed);
-        }
+        io_window_hwm_.store(now_inflight, std::memory_order_relaxed);
     }
 }
 
-void IoBudget::Release(uint32_t cost, bool background)
+void IouringMgr::ReleaseIoWindow(uint32_t cost)
 {
-    if (cap_ == 0)
+    if (io_window_cap_ == 0)
     {
         return;
     }
-    const uint32_t inflight = inflight_.load(std::memory_order_relaxed);
-    CHECK_GE(inflight, cost);
-    inflight_.store(inflight - cost, std::memory_order_relaxed);
-    if (background && bg_cap_ != 0)
+    const uint32_t cur = io_window_inflight_.load(std::memory_order_relaxed);
+    assert(cur >= cost);
+    io_window_inflight_.store(cur - cost, std::memory_order_relaxed);
+    // Each freed command can admit at most one waiter; over-waking is safe
+    // (woken tasks re-check and re-wait).
+    io_window_waiting_.WakeN(cost);
+}
+
+void RateBudget::Charge(uint32_t ops, uint64_t bytes, bool background)
+{
+    // Debt semantics: subtract the full cost, letting the balance go
+    // negative. Callers guarantee CanAdmit(background) held at the moment
+    // of the charge.
+    const int64_t ops_cost = int64_t{ops} * kScale;
+    const int64_t bytes_cost = static_cast<int64_t>(bytes) * kScale;
+    if (background)
     {
-        const uint32_t bg_inflight =
-            bg_inflight_.load(std::memory_order_relaxed);
-        CHECK_GE(bg_inflight, cost);
-        bg_inflight_.store(bg_inflight - cost, std::memory_order_relaxed);
+        // Background admits only on its own positive balances (CanAdmit
+        // never lets it borrow), so a background charge always debits the
+        // background buckets — the foreground debit is unreachable by
+        // construction, not by luck.
+        assert(Positive(true));
+        bg_ops_bal_ -= ops_cost;
+        bg_bytes_bal_ -= bytes_cost;
+        bg_admitted_ops_.fetch_add(ops, std::memory_order_relaxed);
+        bg_admitted_bytes_.fetch_add(bytes, std::memory_order_relaxed);
+        return;
     }
-    // Each freed page-unit can admit at most one waiter; over-waking is safe
-    // because woken tasks re-check the admission condition and re-wait.
-    // Background waiters are woken first while the sub-budget has room.
-    // Their demand and unused entitlement stay reserved through admission,
-    // including the wake-to-admit gap (see Acquire), so foreground tasks woken
-    // for those units simply re-check and re-wait.
-    size_t woken = 0;
-    if (bg_cap_ != 0 && bg_inflight_.load(std::memory_order_relaxed) < bg_cap_)
+    // Foreground: exhausted own balances mean this admission was granted
+    // from background's idle surplus (CanAdmit's borrow arm) — the debit
+    // lands on the lender so its refill repays the loan.
+    const bool borrowed = !Positive(false);
+    if (borrowed)
     {
-        woken = bg_waiting_.WakeN(cost);
+        bg_ops_bal_ -= ops_cost;
+        bg_bytes_bal_ -= bytes_cost;
     }
-    // Always give foreground a wake as well, not only the leftover
-    // credits. When background is a saturated treadmill (its queue never
-    // empties, so every release re-donates to background), foreground
-    // waiters would otherwise have no wake source once the last
-    // foreground in-flight completes: the class deadlocks behind
-    // `!zone.Empty()` admission until background's queue happens to
-    // drain (observed as multi-hundred-ms foreground gate stalls under
-    // write storms). Over-waking is safe: woken tasks re-check the
-    // admission condition and re-wait.
-    waiting_.WakeN(cost > woken ? cost - woken : 1);
+    else
+    {
+        fg_ops_bal_ -= ops_cost;
+        fg_bytes_bal_ -= bytes_cost;
+    }
+    admitted_ops_.fetch_add(ops, std::memory_order_relaxed);
+    admitted_bytes_.fetch_add(bytes, std::memory_order_relaxed);
+    if (borrowed)
+    {
+        borrowed_ops_.fetch_add(ops, std::memory_order_relaxed);
+    }
+}
+
+void RateBudget::Acquire(uint32_t ops, uint64_t bytes, bool background)
+{
+    if (!Enabled())
+    {
+        return;
+    }
+    WaitingZone &zone = background ? bg_waiting_ : waiting_;
+    if (zone.Empty() && CanAdmit(background))
+    {
+        // Fast path: no queue and an admissible balance — charge inline.
+        Charge(ops, bytes, background);
+        return;
+    }
+    // Queue behind existing waiters of the class (FIFO within class) with
+    // the cost recorded for the waker: RefillAndWake peeks the FIFO head,
+    // charges its recorded cost and only then wakes it, so wake counts
+    // are exact for heterogeneous costs and a woken task never re-queues.
+    // GrantWaiters is the ONLY waker of these zones, so by the time this
+    // task resumes its cost has already been charged and there is nothing
+    // left to do here; a second wake source must not be added without
+    // extending this handshake.
+    KvTask *task = ThdTask();
+    task->rate_wait_ops_ = ops;
+    task->rate_wait_bytes_ = bytes;
+    const uint64_t start_us = shard->ReadTimeMicroseconds();
+    (background ? bg_blocked_count_ : blocked_count_)
+        .fetch_add(1, std::memory_order_relaxed);
+    zone.Wait(task);
+    (background ? bg_blocked_us_ : blocked_us_)
+        .fetch_add(shard->DurationMicroseconds(start_us),
+                   std::memory_order_relaxed);
+}
+
+void RateBudget::RefillAndWake(uint64_t now_us)
+{
+    if (now_us <= last_refill_us_)
+    {
+        return;
+    }
+    // The elapsed time is clamped to the burst window, which has three
+    // effects. (1) An idle gap banks at most one bucket of credit: a shard
+    // idle for a second does not come back with a second's worth of
+    // tokens, only rate x burst_us_. (2) The very first call is well
+    // defined: last_refill_us_ is 0, so the raw elapsed would be the
+    // absolute clock value; clamped, the budget simply starts with one
+    // full bucket of allowance. (3) rate x elapsed cannot overflow int64
+    // no matter how long the gap.
+    const uint64_t elapsed = std::min(now_us - last_refill_us_, burst_us_);
+    last_refill_us_ = now_us;
+    auto refill = [elapsed, this](int64_t &bal, uint64_t rate)
+    {
+        if (rate == 0)
+        {
+            return;
+        }
+        const int64_t cap = static_cast<int64_t>(rate * burst_us_);
+        bal = std::min(bal + static_cast<int64_t>(rate * elapsed), cap);
+    };
+    refill(fg_ops_bal_, fg_ops_rate_);
+    refill(fg_bytes_bal_, fg_bytes_rate_);
+    refill(bg_ops_bal_, bg_ops_rate_);
+    refill(bg_bytes_bal_, bg_bytes_rate_);
+    // The classes have disjoint buckets, so grant each independently; the
+    // admission test includes the borrow path, so a foreground waiter
+    // whose lender just became idle-and-positive is granted too.
+    GrantWaiters(false);
+    GrantWaiters(true);
+}
+
+void RateBudget::GrantWaiters(bool background)
+{
+    // Peek-and-grant: charge the FIFO head's recorded cost on its behalf,
+    // mark it granted, then wake it — exact wake counts with
+    // heterogeneous costs, no over-waking, no re-queue churn. The debt
+    // rule is preserved verbatim: each charge may drive the balance
+    // negative, and the loop stops exactly where serialized admission
+    // would.
+    WaitingZone &zone = background ? bg_waiting_ : waiting_;
+    while (!zone.Empty() && CanAdmit(background))
+    {
+        KvTask *head = zone.Head();
+        Charge(head->rate_wait_ops_, head->rate_wait_bytes_, background);
+        zone.WakeOne();
+    }
 }
 
 IouringMgr::IouringMgr(const KvOptions *opts, uint32_t fd_limit)
@@ -340,24 +403,35 @@ IouringMgr::IouringMgr(const KvOptions *opts, uint32_t fd_limit)
     write_req_pool_ = std::make_unique<WriteReqPool>(pool_size);
     merged_write_req_pool_ = std::make_unique<MergedWriteReqPool>(pool_size);
 
-    // In-flight page-IO budgets (docs/design/io_qos.md M1/M2). The request
-    // pools above count request objects, while the write budget counts page
-    // units and permits one oversized request to run alone; sharing the option
-    // makes pool sizing conservative but does not make the bounds identical.
-    // The read budget carries the background sub-budget; the write budget has
-    // none — all page writes come from write tasks, which are background by
-    // definition.
-    read_budget_.SetCap(options_->max_inflight_read);
-    write_budget_.SetCap(options_->max_inflight_write);
-    if (options_->max_inflight_read != 0)
+    // Device admission control (docs/design/io_qos.md M4): the rate budget
+    // (below) plus the optional class-blind in-flight command window. The
+    // M1/M2 count budgets are retired; max_inflight_read / bg_read_ratio
+    // are deprecated no-ops and max_inflight_write only sizes the request
+    // pools above.
+    io_window_cap_ = options_->max_inflight_io;
+
+    // Device rate budget (docs/design/io_qos.md M4): the per-disk
+    // provisioned limits, spread across shards by simple division. Assumes
+    // shards spread IO uniformly across store paths (true on average via
+    // the store-path LUT).
+    if (options_->disk_rate_limit_iops != 0 ||
+        options_->disk_rate_limit_mbps != 0)
     {
-        const uint32_t ratio =
-            std::clamp<uint32_t>(options_->bg_read_ratio, 1, 100);
-        const uint32_t bg_cap = std::max<uint32_t>(
-            1,
-            static_cast<uint32_t>(uint64_t{options_->max_inflight_read} *
-                                  ratio / 100));
-        read_budget_.SetBgCap(bg_cap);
+        const uint64_t num_disks =
+            std::max<uint64_t>(1, options_->store_path.size());
+        const uint64_t shards = std::max<uint16_t>(1, options_->num_threads);
+        const uint64_t shard_ops =
+            options_->disk_rate_limit_iops * num_disks / shards;
+        const uint64_t shard_bytes = options_->disk_rate_limit_mbps *
+                                     num_disks * (uint64_t{1} << 20) / shards;
+        rate_budget_.SetRates(shard_ops,
+                              shard_bytes,
+                              options_->rate_limit_burst_ms,
+                              options_->rate_bg_ratio);
+        LOG(INFO) << "IO rate budget: " << shard_ops << " ops/s, "
+                  << (shard_bytes >> 20) << " MB/s per shard ("
+                  << options_->disk_rate_limit_iops << " iops x " << num_disks
+                  << " disks / " << shards << " shards)";
     }
 }
 
@@ -928,7 +1002,14 @@ std::pair<Page, KvError> IouringMgr::ReadPage(const TableIdent &tbl_id,
             // bounded by the BG sub-budget.
             const uint64_t t_gate =
                 io_stats_enabled_ ? shard->ReadTimeMicroseconds() : 0;
-            read_budget_.Acquire(1, ThdTask()->IsBackground());
+            // Rate-budget admission (M4) before the count budget: the rate
+            // bucket paces device ops/bytes per second; the count budget
+            // stays as the burst-depth guard closest to SQE prep. Both are
+            // coroutine waits with independent wake sources (time vs CQE),
+            // so ordering cannot deadlock.
+            rate_budget_.Acquire(
+                1, options_->data_page_size, ThdTask()->IsBackground());
+            AcquireIoWindow(1);
             const uint64_t t_sqe =
                 io_stats_enabled_ ? shard->ReadTimeMicroseconds() : 0;
             io_uring_sqe *sqe = GetSQE(UserDataType::KvTaskPageRead, ThdTask());
@@ -1073,7 +1154,10 @@ KvError IouringMgr::ReadPages(const TableIdent &tbl_id,
         // Read-budget admission (io_qos.md M1/M2) is per page, not per batch:
         // the task may block mid-batch while already-submitted pages
         // complete, so a batch larger than the (sub-)budget cannot deadlock.
-        read_budget_.Acquire(1, req->task_->IsBackground());
+        // Rate budget (M4) first, same per-page granularity.
+        rate_budget_.Acquire(
+            1, options_->data_page_size, req->task_->IsBackground());
+        AcquireIoWindow(1);
         auto [fd, registered] = req->fd_ref_.FdPair();
         io_uring_sqe *sqe = GetSQE(UserDataType::BaseReqPageRead, req);
         if (registered)
@@ -1220,8 +1304,12 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
     auto [fd, registered] = fd_ref.FdPair();
     WriteReq *req = write_req_pool_->Alloc(std::move(fd_ref), std::move(page));
     // Write-budget admission (io_qos.md M1): after every other blocking
-    // acquisition (FD, req pool), immediately before SQE prep.
-    write_budget_.Acquire(1);
+    // acquisition (FD, req pool), immediately before SQE prep. The rate
+    // budget (M4) is charged first; write tasks classify as background,
+    // so page writes draw from the background sub-bucket.
+    rate_budget_.Acquire(
+        1, options_->data_page_size, ThdTask()->IsBackground());
+    AcquireIoWindow(1);
     io_uring_sqe *sqe = GetSQE(UserDataType::WriteReq, req);
     if (registered)
     {
@@ -1527,10 +1615,19 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
             static_cast<uint32_t>(req->pages_.size() - 1);
     }
 
-    // Write-budget admission (io_qos.md M1): cost in configured data-page
-    // units so the cap means the same thing in append and non-append mode.
-    // Must mirror the release cost computed from bytes_ in PollComplete.
-    write_budget_.Acquire(MergedWriteCost(req->bytes_));
+    // Write-budget admission (io_qos.md M1): cost in 4KB-page units so the
+    // cap means the same thing in append and non-append mode. Must mirror
+    // the release cost computed from bytes_ in PollComplete.
+    // Rate budget (M4) first: ops cost mirrors the kernel's split of large
+    // IOs into device commands of at most rate_limit_io_unit bytes; the
+    // bytes bucket is charged the full length. Debt admission means this
+    // single large acquisition never deadlocks against the bucket size.
+    const uint32_t io_unit = std::max<uint32_t>(options_->rate_limit_io_unit,
+                                                options_->data_page_size);
+    rate_budget_.Acquire(static_cast<uint32_t>((bytes + io_unit - 1) / io_unit),
+                         bytes,
+                         ThdTask()->IsBackground());
+    AcquireIoWindow(DeviceCmdCost(bytes));
     io_uring_sqe *sqe = GetSQE(UserDataType::MergedWriteReq, req);
     auto [fd, registered] = req->fd_ref_.FdPair();
     if (registered)
@@ -2183,6 +2280,14 @@ std::pair<FileId, uint32_t> IouringMgr::ConvFileSegmentId(
 
 void IouringMgr::Submit()
 {
+    // Refill the device rate budget once per loop iteration (M4). Must run
+    // on every iteration — including no-op ones — because refill is the
+    // only wake source for rate-budget waiters.
+    if (rate_budget_.Enabled())
+    {
+        rate_budget_.RefillAndWake(Shard::ReadTimeMicroseconds());
+    }
+
     const uint32_t prepared_before = prepared_sqe_;
     const uint32_t sq_flags = ring_.sq.kflags == nullptr ? 0 : *ring_.sq.kflags;
     const bool need_taskrun = (sq_flags & IORING_SQ_TASKRUN) != 0;
@@ -2272,7 +2377,7 @@ void IouringMgr::PollComplete()
             if (type == UserDataType::KvTaskPageRead)
             {
                 TEST_FAIL_POINT_ACTION("KvTaskPageReadCqe", cqe->res = -EIO);
-                read_budget_.Release(1, task->IsBackground());
+                ReleaseIoWindow(1);
                 if (io_stats_enabled_)
                 {
                     task->op_cqe_us_ = loop_now_us_;
@@ -2288,7 +2393,7 @@ void IouringMgr::PollComplete()
             if (type == UserDataType::BaseReqPageRead)
             {
                 TEST_FAIL_POINT_ACTION("BaseReqPageReadCqe", cqe->res = -EIO);
-                read_budget_.Release(1, req->task_->IsBackground());
+                ReleaseIoWindow(1);
             }
             req->res_ = cqe->res;
             req->flags_ = cqe->flags;
@@ -2316,12 +2421,7 @@ void IouringMgr::PollComplete()
             req->task_->WritePageCallback(std::move(req->page_), err);
             task = req->task_;
             write_req_pool_->Free(req);
-            // No class argument: the write budget has no background
-            // sub-budget (all page writes come from write tasks, i.e.
-            // background — see io_qos.md M2), so acquire and release both
-            // use the default. Must stay symmetric with WritePage's
-            // Acquire.
-            write_budget_.Release(1);
+            ReleaseIoWindow(1);
             break;
         }
         case UserDataType::MergedWriteReq:
@@ -2356,10 +2456,8 @@ void IouringMgr::PollComplete()
                                        req->release_indices_[i]);
                 }
             }
-            // No class argument (see the WriteReq case): the write budget
-            // has no background sub-budget. Cost must mirror
-            // SubmitMergedWrite's Acquire exactly.
-            write_budget_.Release(MergedWriteCost(req->bytes_));
+            // Cost must mirror SubmitMergedWrite's AcquireIoWindow exactly.
+            ReleaseIoWindow(DeviceCmdCost(req->bytes_));
             merged_write_req_pool_->Free(req);
             continue;
         }
@@ -2620,6 +2718,10 @@ KvError IouringMgr::FdatasyncFiles(const TableIdent &tbl_id,
     // Fsync all dirty files/directory.
     std::vector<FsyncReq> reqs;
     reqs.reserve(fds.size());
+    // Rate budget (M4): one device op per fsync, no bytes. Other metadata
+    // ops (open, statx, rename, ...) stay exempt, matching M1.
+    rate_budget_.Acquire(
+        static_cast<uint32_t>(fds.size()), 0, ThdTask()->IsBackground());
     // Instrumented for IO QoS evaluation (io_qos.md): fsync stalls are a
     // distinct interference channel from page-IO queueing.
     const uint64_t fsync_start_us = shard->ReadTimeMicroseconds();
