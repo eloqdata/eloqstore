@@ -1907,12 +1907,11 @@ KvError BatchWriteTask::Drop()
         root_meta_mgr->UpdateBytes(entry, 0);
     }
 
-    // 3. Schedule async GC to clean up orphaned data files.  GC will find no
-    //    manifest, treat all data files as unreferenced, delete them, and
-    //    remove the now-empty partition directory.  GC requires append mode.
-    if (Options()->data_append_mode && !shard->HasPendingLocalGc(tbl_ident_))
+    // 3. Schedule mode-aware GC. In cloud mode it removes orphaned objects
+    //    before cleaning the local cache; other modes clean local files.
+    if (Options()->data_append_mode && !shard->HasPendingFileGc(tbl_ident_))
     {
-        shard->AddPendingLocalGc(tbl_ident_);
+        shard->AddPendingFileGc(tbl_ident_);
     }
 
     return KvError::NoError;

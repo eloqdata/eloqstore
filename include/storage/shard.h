@@ -44,6 +44,8 @@ public:
 
     void AddPendingCompact(const TableIdent &tbl_id);
     bool HasPendingCompact(const TableIdent &tbl_id);
+    void AddPendingFileGc(const TableIdent &tbl_id);
+    bool HasPendingFileGc(const TableIdent &tbl_id);
     void AddPendingTTL(const TableIdent &tbl_id);
     bool HasPendingTTL(const TableIdent &tbl_id);
     void AddPendingLocalGc(const TableIdent &tbl_id);
@@ -224,6 +226,7 @@ private:
 
         // Requests from internal
         CompactRequest compact_req_;
+        FileGcRequest file_gc_req_;
         LocalGcRequest local_gc_req_;
         CleanExpiredRequest expire_req_;
         bool running_{false};

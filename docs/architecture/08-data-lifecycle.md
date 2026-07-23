@@ -48,7 +48,7 @@ One write task per partition at a time (doc 04). `Apply()`:
    file pages recycle when its last reader releases.
 6. `UpdateMeta(trigger_compact=true)` checks both mappers' space
    amplification and flags the shard's pending-compact set; `TriggerTTL` /
-   `TriggerFileGC` similarly self-schedule maintenance.
+   `RunFileGc` similarly performs mode-aware maintenance.
 
 Failure at any point: `Abort()` — the CoW state is discarded, `AbortWrite`
 cancels buffered file writes, the published tree is untouched.
@@ -68,11 +68,13 @@ which enqueue the embedded singleton requests in each `PendingWriteQueue`.
   per-file utilization re-checked against `file_amplify_factor`), then over
   segment files (`segment_file_amplify_factor`, yielding every
   `segment_compact_yield_every` segments to the low-priority queue); one
-  `UpdateMeta(false)`; one `TriggerFileGC`.
+  `UpdateMeta(false)`; one `RunFileGc`.
 - **TTL cleanup** (`CleanExpiredKeys`): when `RootMeta::next_expire_ts_` has
   passed, scan the TTL tree range `[0, now]`, delete expired keys from both
   trees.
-- **Local GC / file GC** — below.
+- **File GC** — `FileGcRequest` selects cloud or local collection from the
+  store mode and is queued after Drop. `LocalGcRequest` is local-only and is
+  used when reopen must discard cached state without deleting remote objects.
 - **CreateArchive / CreateBranch / DeleteBranch** — manifest-level operations
   (doc 06) executed under the write lock for the partition.
 
@@ -84,7 +86,8 @@ owned partitions at `archive_interval_secs`, bounded by `max_archive_tasks`.
 Deletes data/segment files no longer referenced by any manifest, archive, or
 in-flight write. Two drivers, same rules:
 
-- `ExecuteLocalGC` (local/standby modes) — lists the partition directory.
+- `ExecuteLocalGC` (local/standby modes, plus explicitly local-only cleanup in
+  cloud mode) — lists the partition directory.
 - `ExecuteCloudGC` (cloud mode) — lists the partition's objects; deletions
   propagate to the local cache (`ScheduleLocalFileCleanup`, then directory
   cleanup when the partition empties).

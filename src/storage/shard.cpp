@@ -439,6 +439,38 @@ bool Shard::HasPendingCompact(const TableIdent &tbl_id)
 #endif
 }
 
+void Shard::AddPendingFileGc(const TableIdent &tbl_id)
+{
+    assert(!HasPendingFileGc(tbl_id));
+    auto it = pending_queues_.find(tbl_id);
+    assert(it != pending_queues_.end());
+    PendingWriteQueue &pending_q = it->second;
+    FileGcRequest &req = pending_q.file_gc_req_;
+    req.SetTableId(tbl_id);
+#ifdef ELOQ_MODULE_ENABLED
+    {
+        std::lock_guard<bthread::Mutex> lk(req.mutex_);
+        req.done_ = false;
+    }
+#else
+    req.done_.store(false, std::memory_order_relaxed);
+#endif
+    pending_q.PushBack(&req);
+}
+
+bool Shard::HasPendingFileGc(const TableIdent &tbl_id)
+{
+    auto it = pending_queues_.find(tbl_id);
+    assert(it != pending_queues_.end());
+    PendingWriteQueue &pending_q = it->second;
+#ifdef ELOQ_MODULE_ENABLED
+    std::lock_guard<bthread::Mutex> lk(pending_q.file_gc_req_.mutex_);
+    return !pending_q.file_gc_req_.done_;
+#else
+    return !pending_q.file_gc_req_.done_.load(std::memory_order_relaxed);
+#endif
+}
+
 void Shard::AddPendingTTL(const TableIdent &tbl_id)
 {
     // Send CleanExpiredRequest from internal.
@@ -928,6 +960,17 @@ bool Shard::ProcessReq(KvRequest *req)
         StartTask(task, req, lbd);
         return true;
     }
+    case RequestType::FileGc:
+    {
+        BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());
+        if (task == nullptr)
+        {
+            return false;
+        }
+        auto lbd = [task]() -> KvError { return task->RunFileGc(); };
+        StartTask(task, req, lbd);
+        return true;
+    }
     case RequestType::LocalGc:
     {
         BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());
@@ -1144,12 +1187,14 @@ void Shard::OnTaskFinished(KvTask *task)
         pending_q.running_ = false;
         if (pending_q.Empty())
         {
-            // The internal compact / local-gc / clean-expired requests are
-            // embedded in this queue; erasing it destroys them. They have no
-            // external waiter or callback, so drop done_req when it points at
-            // one of them to avoid SetDone()-ing a freed request afterwards
-            // (mirrors the embedded internal reopen-driver handling above).
+            // The internal compact / file-gc / local-gc / clean-expired
+            // requests are embedded in this queue; erasing it destroys them.
+            // They have no external waiter or callback, so drop done_req when
+            // it points at one of them to avoid SetDone()-ing a freed request
+            // afterwards (mirrors the embedded internal reopen-driver handling
+            // above).
             bool is_embedded = (req == &pending_q.compact_req_ ||
+                                req == &pending_q.file_gc_req_ ||
                                 req == &pending_q.local_gc_req_ ||
                                 req == &pending_q.expire_req_);
             if (is_embedded)

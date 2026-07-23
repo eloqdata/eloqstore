@@ -21,7 +21,7 @@ public:
      * @brief Run compaction on data files and segment files in a single pass:
      * one `MakeCowRoot`, up to two rewrite passes (data pages, then segments),
      * one `UpdateMeta` flushing a single manifest record, and one
-     * `TriggerFileGC`.
+     * `RunFileGc`.
      *
      * This method is unconditional -- callers are responsible for deciding
      * that compaction is warranted. The pending-compact dispatch path is
@@ -35,8 +35,6 @@ public:
 
     KvError CreateArchive(std::string_view tag = {});
 
-    KvError RunLocalFileGc();
-
     KvError CreateBranch(std::string_view branch_name);
 
     KvError DeleteBranch(std::string_view branch_name);
@@ -47,14 +45,14 @@ private:
 
     /**
      * @brief Rewrite loop for under-utilized data files. Operates on
-     * `cow_meta_.mapper_`; does NOT call UpdateMeta or TriggerFileGC -- the
+     * `cow_meta_.mapper_`; does NOT call UpdateMeta or RunFileGc -- the
      * caller (`Compact`) batches the flush across both passes.
      */
     KvError DoCompactDataFile(MovingCachedPages &moving_cached);
 
     /**
      * @brief Rewrite loop for under-utilized segment files. Operates on
-     * `cow_meta_.segment_mapper_`; does NOT call UpdateMeta or TriggerFileGC
+     * `cow_meta_.segment_mapper_`; does NOT call UpdateMeta or RunFileGc
      * for the same reason as DoCompactDataFile.
      */
     KvError DoCompactSegmentFile();

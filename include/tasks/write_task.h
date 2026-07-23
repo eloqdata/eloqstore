@@ -75,6 +75,8 @@ public:
 
     KvError WaitWrite();
     KvError DeleteArchive(uint64_t term, std::string_view tag);
+    KvError RunFileGc() const;
+    KvError RunLocalFileGc() const;
     void ReleaseDirBusy();
     bool NeedWaitDirEviction() const
     {
@@ -116,8 +118,6 @@ protected:
     static bool MapperExceedsAmplification(const PageMapper *mapper,
                                            uint32_t amp_factor);
     void TriggerTTL();
-    void TriggerFileGC() const;
-    KvError TriggerLocalFileGC() const;
 
     // Cache-first read-only load (type 2): use when inspecting a data page
     // without modifying it.

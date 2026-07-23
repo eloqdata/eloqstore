@@ -2477,6 +2477,29 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
     return close_err;
 }
 
+KvError CloudStoreMgr::CloseFiles(std::span<LruFD::Ref> fds)
+{
+    std::vector<FileKey> file_keys;
+    file_keys.reserve(fds.size());
+    for (const LruFD::Ref &fd : fds)
+    {
+        LruFD *lru_fd = fd.Get();
+        if (lru_fd == nullptr || lru_fd->file_id_ == LruFD::kDirectory)
+        {
+            continue;
+        }
+        file_keys.emplace_back(BuildFileKey(*lru_fd));
+    }
+
+    KvError err = IouringMgr::CloseFiles(fds);
+    CHECK_KV_ERR(err);
+    for (FileKey &file_key : file_keys)
+    {
+        TrackClosedFile(std::move(file_key));
+    }
+    return KvError::NoError;
+}
+
 int IouringMgr::Fdatasync(FdIdx fd)
 {
     io_uring_sqe *sqe = GetSQE(UserDataType::KvTask, ThdTask());
@@ -5761,36 +5784,46 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
 
     if (file_id != LruFD::kDirectory)
     {
-        uint64_t term = fd.Get()->term_;
-        std::string_view branch = fd.Get()->branch_name_;
-        std::string filename;
-        if (file_id == LruFD::kManifest)
-        {
-            filename = BranchManifestFileName(branch, term);
-        }
-        else if (file_id.IsSegmentFile())
-        {
-            filename = SegmentFileName(file_id.ToFileId(), branch, term);
-        }
-        else
-        {
-            filename = BranchDataFileName(file_id.ToFileId(), branch, term);
-        }
-        file_key.emplace(*fd.Get()->tbl_->tbl_id_, filename);
+        file_key.emplace(BuildFileKey(*fd.Get()));
     }
 
     KvError err = IouringMgr::CloseFile(fd);
     CHECK_KV_ERR(err);
     if (file_key.has_value())
     {
-        EnqueClosedFile(*file_key);
-        if (pending_gc_cleanup_.contains(*file_key) &&
-            file_cleaner_.status_ == TaskStatus::Idle)
-        {
-            file_cleaner_.Resume();
-        }
+        TrackClosedFile(std::move(*file_key));
     }
     return KvError::NoError;
+}
+
+FileKey CloudStoreMgr::BuildFileKey(const LruFD &fd) const
+{
+    std::string filename;
+    if (fd.file_id_ == LruFD::kManifest)
+    {
+        filename = BranchManifestFileName(fd.branch_name_, fd.term_);
+    }
+    else if (fd.file_id_.IsSegmentFile())
+    {
+        filename =
+            SegmentFileName(fd.file_id_.ToFileId(), fd.branch_name_, fd.term_);
+    }
+    else
+    {
+        filename = BranchDataFileName(
+            fd.file_id_.ToFileId(), fd.branch_name_, fd.term_);
+    }
+    return FileKey(*fd.tbl_->tbl_id_, std::move(filename));
+}
+
+void CloudStoreMgr::TrackClosedFile(FileKey key)
+{
+    bool pending_gc_cleanup = pending_gc_cleanup_.contains(key);
+    EnqueClosedFile(std::move(key));
+    if (pending_gc_cleanup && file_cleaner_.status_ == TaskStatus::Idle)
+    {
+        file_cleaner_.Resume();
+    }
 }
 
 size_t CloudStoreMgr::EstimateFileSize(TypedFileId file_id) const

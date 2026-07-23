@@ -1,6 +1,8 @@
 #include <glog/logging.h>
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -8,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -138,6 +141,22 @@ TEST_CASE("drop table clears all partitions", "[persist][droptable]")
                 }
             }
 
+            if (!opts.cloud_store_path.empty())
+            {
+                for (uint32_t partition : partitions)
+                {
+                    const std::vector<std::string> files =
+                        ListCloudFiles(opts,
+                                       opts.cloud_store_path,
+                                       table_ident(partition).ToString());
+                    REQUIRE(std::any_of(
+                        files.begin(),
+                        files.end(),
+                        [](const std::string &file)
+                        { return file.find("data_") != std::string::npos; }));
+                }
+            }
+
             eloqstore::DropTableRequest drop_req;
             drop_req.SetArgs(tbl_name);
             store->ExecSync(&drop_req);
@@ -164,6 +183,35 @@ TEST_CASE("drop table clears all partitions", "[persist][droptable]")
                     store->ExecSync(&read_req);
                     REQUIRE(read_req.Error() == eloqstore::KvError::NotFound);
                 }
+            }
+
+            if (!opts.cloud_store_path.empty())
+            {
+                bool cloud_partitions_empty = false;
+                const auto deadline =
+                    std::chrono::steady_clock::now() + std::chrono::seconds(10);
+                do
+                {
+                    cloud_partitions_empty = true;
+                    for (uint32_t partition : partitions)
+                    {
+                        if (!ListCloudFiles(opts,
+                                            opts.cloud_store_path,
+                                            table_ident(partition).ToString())
+                                 .empty())
+                        {
+                            cloud_partitions_empty = false;
+                            break;
+                        }
+                    }
+                    if (!cloud_partitions_empty)
+                    {
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(50));
+                    }
+                } while (!cloud_partitions_empty &&
+                         std::chrono::steady_clock::now() < deadline);
+                REQUIRE(cloud_partitions_empty);
             }
         }
 
