@@ -510,6 +510,194 @@ TEST_CASE("write task abort rolls back branch file-id high-water (cloud)",
     REQUIRE(write(2, 64, 2) == eloqstore::KvError::NoError);
 }
 
+// A write whose merged data flush fails must not leak the cache page it is
+// holding. With enable_data_page_cache, each leaf data page is promoted into a
+// fresh MemCachedPage before being written (write_task.cpp WritePage). When a
+// subsequent page forces AppendWritePage to flush the buffered batch and that
+// flush fails, the buggy error return drops the current promote page's only
+// Handle -- which merely unpins a page that is detached (not on the free list
+// nor the active LRU), permanently orphaning that buffer-pool slot. Under a
+// tiny pool, repeated failures stuff every slot with orphans until no page can
+// be allocated at all, so a later healthy write can never rebuild its index and
+// fails with OutOfMem forever.
+//
+// The pool is sized to hold 8 cache pages (64KB * (1 - 0.5) / 4KB); one page
+// per data file (shift 0) makes every leaf after the first target a new file,
+// so each failing write flushes the prior leaf and leaks the current one. The
+// SubmitMergedWrite fail point forces exactly one flush failure per armed
+// write.
+TEST_CASE("failed merged write must not leak the held cache page",
+          "[persist][append][abort]")
+{
+    eloqstore::KvOptions options = append_opts;  // data_append_mode = true
+    options.pages_per_file_shift = 0;            // one 4K page per data file
+    options.enable_data_page_cache = true;  // promote leaves -> the leak site
+    options.data_page_size = 4 * eloqstore::KB;
+    // Write buffer holds 2 pages, so a buffered leaf does not auto-flush before
+    // the next (different-file) leaf forces the flush we want to fail.
+    options.write_buffer_size = 8 * eloqstore::KB;
+    options.write_buffer_ratio = 0.5;  // 32KB write buffers, 32KB cache
+    options.buffer_pool_size = 64 * eloqstore::KB;  // cache limit = 8 pages
+    options.auto_oom_retry_times = 0;  // let OutOfMem surface immediately
+
+    eloqstore::EloqStore *store = InitStore(options);
+    const eloqstore::TableIdent tbl_id{"merged-write-leak", 0};
+
+    auto write_batch = [&](uint64_t base, uint64_t count, uint64_t ts)
+    {
+        eloqstore::BatchWriteRequest req;
+        req.SetTableId(tbl_id);
+        for (uint64_t k = 0; k < count; ++k)
+        {
+            req.AddWrite(Key(base + k),
+                         Value(base + k, 512),
+                         ts,
+                         eloqstore::WriteOp::Upsert);
+        }
+        store->ExecSync(&req);
+        return req.Error();
+    };
+
+    // Each failing write spans several 4K leaf pages (>=2 files, shift 0): the
+    // first leaf is promoted and buffered, the second forces AppendWritePage to
+    // flush it, the injected failure aborts, and the buggy code leaks the
+    // second leaf's held promote page. After ~7 failures every cache slot but
+    // one is orphaned; from then on promotion just fails and the write degrades
+    // to the un-promoted path (no further leak), so the failures keep returning
+    // the injected error rather than OutOfMem.
+    for (int i = 0; i < 32; ++i)
+    {
+        eloqstore::FailPoint::GetInstance().ArmOnce("SubmitMergedWrite");
+        eloqstore::KvError err =
+            write_batch(/*base=*/i * 100000, /*count=*/40, /*ts=*/i + 1);
+        eloqstore::FailPoint::GetInstance().Disarm();
+        REQUIRE(err == eloqstore::KvError::Corrupted);
+    }
+
+    // A healthy write whose B-tree is deep enough to buffer more than one index
+    // page at once (Pop flushes the previous index page -- still pinned in the
+    // write buffer -- then allocates the next). On fixed code the intact pool
+    // absorbs this and the write commits; on buggy code the orphaned slots
+    // leave no page to allocate for the second index page and it fails with
+    // OutOfMem.
+    REQUIRE(write_batch(/*base=*/90000000, /*count=*/4000, /*ts=*/1000) ==
+            eloqstore::KvError::NoError);
+
+    store->Stop();
+}
+
+// Sibling of the above for the index-build path: when Pop's FinishIndexPage /
+// FlushIndexPage fails while prev_handle still holds the freshly allocated
+// index page, the buggy code drops that handle without freeing it, orphaning
+// the cache slot. The FlushIndexPage fail point forces exactly that: the data
+// leaves flush fine, then the root index page's flush fails with prev_handle
+// held. Each failure leaks one slot until the pool is exhausted and a later
+// healthy write can no longer allocate an index page.
+TEST_CASE("failed index-page flush must not leak the held cache page",
+          "[persist][append][abort]")
+{
+    eloqstore::KvOptions options = append_opts;  // data_append_mode = true
+    options.pages_per_file_shift = 0;            // one 4K page per data file
+    options.enable_data_page_cache = true;
+    options.data_page_size = 4 * eloqstore::KB;
+    options.write_buffer_size = 8 * eloqstore::KB;
+    options.write_buffer_ratio = 0.5;               // 32KB write buffers
+    options.buffer_pool_size = 64 * eloqstore::KB;  // cache limit = 8 pages
+    options.auto_oom_retry_times = 0;
+
+    eloqstore::EloqStore *store = InitStore(options);
+    const eloqstore::TableIdent tbl_id{"index-flush-leak", 0};
+
+    auto write_batch = [&](uint64_t base, uint64_t count, uint64_t ts)
+    {
+        eloqstore::BatchWriteRequest req;
+        req.SetTableId(tbl_id);
+        for (uint64_t k = 0; k < count; ++k)
+        {
+            req.AddWrite(Key(base + k),
+                         Value(base + k, 512),
+                         ts,
+                         eloqstore::WriteOp::Upsert);
+        }
+        store->ExecSync(&req);
+        return req.Error();
+    };
+
+    // Each armed write fails at the index-page flush while Pop holds the index
+    // page; on buggy code that page leaks. Once the pool fills the writes start
+    // failing earlier with OutOfMem instead, so assert only that they fail.
+    for (int i = 0; i < 32; ++i)
+    {
+        eloqstore::FailPoint::GetInstance().ArmOnce("FlushIndexPage");
+        eloqstore::KvError err =
+            write_batch(/*base=*/i * 100000, /*count=*/40, /*ts=*/i + 1);
+        eloqstore::FailPoint::GetInstance().Disarm();
+        REQUIRE(err != eloqstore::KvError::NoError);
+    }
+
+    // On fixed code no slot leaked, so this healthy write commits; on buggy
+    // code the orphaned slots leave no page for the index build and it
+    // OutOfMems.
+    REQUIRE(write_batch(/*base=*/90000000, /*count=*/40, /*ts=*/1000) ==
+            eloqstore::KvError::NoError);
+
+    store->Stop();
+}
+
+// Third leak site: the non-append write path (no write-buffer pool), where the
+// promoted page is moved into IouringMgr::WritePage and a synchronous failure
+// (modeled by the fail point, in reality an OpenOrCreateFD error) returned
+// before the page is submitted. IouringMgr::WritePage now takes the page by
+// reference and only consumes it on success, so WriteTask::WritePage can
+// release it on error; the buggy code dropped the moved-in page and leaked it.
+TEST_CASE("failed non-append write must not leak the held cache page",
+          "[persist][abort]")
+{
+    eloqstore::KvOptions options = default_opts;  // data_append_mode = false
+    options.enable_data_page_cache = true;        // promote leaves -> leak site
+    options.data_page_size = 4 * eloqstore::KB;
+    options.buffer_pool_size = 64 * eloqstore::KB;
+    options.auto_oom_retry_times = 0;
+
+    eloqstore::EloqStore *store = InitStore(options);
+    const eloqstore::TableIdent tbl_id{"non-append-leak", 0};
+
+    auto write_batch = [&](uint64_t base, uint64_t count, uint64_t ts)
+    {
+        eloqstore::BatchWriteRequest req;
+        req.SetTableId(tbl_id);
+        for (uint64_t k = 0; k < count; ++k)
+        {
+            req.AddWrite(Key(base + k),
+                         Value(base + k, 512),
+                         ts,
+                         eloqstore::WriteOp::Upsert);
+        }
+        store->ExecSync(&req);
+        return req.Error();
+    };
+
+    // Each armed write fails at the first page's WritePage while a promoted
+    // page is held; on buggy code that page leaks. Once the pool is full
+    // promotion stops (the write degrades to the un-promoted path), so no
+    // further leak.
+    for (int i = 0; i < 32; ++i)
+    {
+        eloqstore::FailPoint::GetInstance().ArmOnce("WritePageBeforeSubmit");
+        eloqstore::KvError err =
+            write_batch(/*base=*/i * 100000, /*count=*/40, /*ts=*/i + 1);
+        eloqstore::FailPoint::GetInstance().Disarm();
+        REQUIRE(err != eloqstore::KvError::NoError);
+    }
+
+    // On fixed code no slot leaked, so this healthy write commits; on buggy
+    // code the orphaned slots leave no page to allocate and it OutOfMems.
+    REQUIRE(write_batch(/*base=*/90000000, /*count=*/40, /*ts=*/1000) ==
+            eloqstore::KvError::NoError);
+
+    store->Stop();
+}
+
 TEST_CASE("append mode survives compression toggles across restarts",
           "[persist]")
 {

@@ -121,8 +121,11 @@ public:
                               std::span<FilePageId> page_ids,
                               std::vector<Page> &pages) = 0;
 
+    // Writes a single page. @p page is consumed (moved out) ONLY on success; on
+    // an error return it is left untouched so the caller still owns it and can
+    // release the cache page it holds (see WriteTask::WritePage).
     virtual KvError WritePage(const TableIdent &tbl_id,
-                              VarPage page,
+                              VarPage &page,
                               FilePageId file_page_id) = 0;
 
     virtual GlobalRegisteredMemory *GetGlobalRegisteredMemory() const
@@ -576,7 +579,7 @@ public:
                       std::vector<Page> &pages) override;
 
     KvError WritePage(const TableIdent &tbl_id,
-                      VarPage page,
+                      VarPage &page,
                       FilePageId file_page_id) override;
 
     KvError ReadSegments(const TableIdent &tbl_id,
@@ -1606,7 +1609,7 @@ public:
                       std::vector<Page> &pages) override;
 
     KvError WritePage(const TableIdent &tbl_id,
-                      VarPage page,
+                      VarPage &page,
                       FilePageId file_page_id) override;
     KvError SyncData(const TableIdent &tbl_id) override;
     KvError AbortWrite(const TableIdent &tbl_id) override;

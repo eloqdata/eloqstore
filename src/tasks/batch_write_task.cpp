@@ -11,6 +11,7 @@
 #include "async_io_manager.h"
 #include "coding.h"
 #include "compression.h"
+#include "fail_point.h"
 #include "storage/shard.h"
 #include "tasks/task.h"
 #include "utils.h"
@@ -896,6 +897,11 @@ std::pair<MemCachedPage::Handle, KvError> BatchWriteTask::Pop()
             KvError err = add_to_page(new_key, new_page_id);
             if (err != KvError::NoError)
             {
+                // prev_handle is empty only when FinishIndexPage OutOfMem'd at
+                // its own AllocPage (never assigned the page); any other error
+                // leaves it holding the page to free.
+                assert(prev_handle || err == KvError::OutOfMem);
+                ReleaseHeldPage(VarPage(std::move(prev_handle)));
                 return {MemCachedPage::Handle(), err};
             }
         }
@@ -922,6 +928,8 @@ std::pair<MemCachedPage::Handle, KvError> BatchWriteTask::Pop()
         KvError err = add_to_page(new_key, new_page_id);
         if (err != KvError::NoError)
         {
+            assert(prev_handle || err == KvError::OutOfMem);
+            ReleaseHeldPage(VarPage(std::move(prev_handle)));
             return {MemCachedPage::Handle(), err};
         }
         AdvanceIndexPageIter(base_page_iter, is_base_iter_valid);
@@ -936,6 +944,8 @@ std::pair<MemCachedPage::Handle, KvError> BatchWriteTask::Pop()
             KvError err = add_to_page(new_key, new_page);
             if (err != KvError::NoError)
             {
+                assert(prev_handle || err == KvError::OutOfMem);
+                ReleaseHeldPage(VarPage(std::move(prev_handle)));
                 return {MemCachedPage::Handle(), err};
             }
         }
@@ -961,12 +971,19 @@ std::pair<MemCachedPage::Handle, KvError> BatchWriteTask::Pop()
             prev_handle, prev_key, prev_page_id, std::move(curr_page_key));
         if (err != KvError::NoError)
         {
+            // Empty only when FinishIndexPage OutOfMem'd at its AllocPage.
+            assert(prev_handle || err == KvError::OutOfMem);
+            ReleaseHeldPage(VarPage(std::move(prev_handle)));
             return {MemCachedPage::Handle(), err};
         }
         err = FlushIndexPage(
             prev_handle, std::move(prev_key), prev_page_id, splited);
         if (err != KvError::NoError)
         {
+            // FinishIndexPage above succeeded, so prev_handle always holds a
+            // page here (FlushIndexPage never clears it on failure).
+            assert(prev_handle);
+            ReleaseHeldPage(VarPage(std::move(prev_handle)));
             return {MemCachedPage::Handle(), err};
         }
         if (!splited)
@@ -1023,6 +1040,10 @@ KvError BatchWriteTask::FlushIndexPage(MemCachedPage::Handle &idx_page,
                                        PageId page_id,
                                        bool split)
 {
+    // Test seam: fail the flush while Pop still holds prev_handle, so a test
+    // can drive Pop's error returns (which must release the held index page).
+    TEST_FAIL_POINT_RETURN("FlushIndexPage", KvError::Corrupted);
+
     // Flushes the built index page.
     idx_page->SetPageId(page_id);
     KvError err = WritePage(idx_page);

@@ -969,9 +969,13 @@ std::pair<ManifestFilePtr, KvError> IouringMgr::GetManifest(
 }
 
 KvError IouringMgr::WritePage(const TableIdent &tbl_id,
-                              VarPage page,
+                              VarPage &page,
                               FilePageId file_page_id)
 {
+    // Test seam: fail before `page` is consumed (models an OpenOrCreateFD
+    // failure) so a test can drive the caller's release of the held page.
+    TEST_FAIL_POINT_RETURN("WritePageBeforeSubmit", KvError::Corrupted);
+
     auto [file_id, offset] = ConvFilePageId(file_page_id);
     uint64_t term = ProcessTerm();
     std::string_view branch = GetActiveBranch();
@@ -1251,6 +1255,11 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
                                       std::vector<uint16_t> &release_indices,
                                       bool use_fixed)
 {
+    // Test seam: force the append-mode merged write to fail so a test can drive
+    // FlushAppendWrites's error path (which must free the pages it holds) while
+    // AppendWritePage is still holding the current cache page.
+    TEST_FAIL_POINT_RETURN("SubmitMergedWrite", KvError::Corrupted);
+
     const uint64_t term = ProcessTerm();
     const std::string_view branch = GetActiveBranch();
     // In append mode, offset 0 means this merged write targets a brand-new
@@ -7111,7 +7120,7 @@ std::pair<ManifestFilePtr, KvError> MemStoreMgr::GetManifest(
 }
 
 KvError MemStoreMgr::WritePage(const TableIdent &tbl_id,
-                               VarPage page,
+                               VarPage &page,
                                FilePageId file_page_id)
 {
     auto it = store_.find(tbl_id);
