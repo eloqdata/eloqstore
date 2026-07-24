@@ -175,7 +175,6 @@ KvError DeleteUnreferencedCloudSegmentFiles(
     const std::vector<std::string> &segment_files,
     const RetainedFiles &retained_segment_files,
     const BranchGuardMap &branch_guards,
-    std::vector<std::string> &deleted_filenames,
     CloudStoreMgr *cloud_mgr);
 }  // namespace FileGarbageCollector
 
