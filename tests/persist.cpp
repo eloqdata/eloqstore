@@ -1,6 +1,8 @@
 #include <glog/logging.h>
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -8,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -138,6 +141,22 @@ TEST_CASE("drop table clears all partitions", "[persist][droptable]")
                 }
             }
 
+            if (!opts.cloud_store_path.empty())
+            {
+                for (uint32_t partition : partitions)
+                {
+                    const std::vector<std::string> files =
+                        ListCloudFiles(opts,
+                                       opts.cloud_store_path,
+                                       table_ident(partition).ToString());
+                    REQUIRE(std::any_of(
+                        files.begin(),
+                        files.end(),
+                        [](const std::string &file)
+                        { return file.find("data_") != std::string::npos; }));
+                }
+            }
+
             eloqstore::DropTableRequest drop_req;
             drop_req.SetArgs(tbl_name);
             store->ExecSync(&drop_req);
@@ -165,6 +184,35 @@ TEST_CASE("drop table clears all partitions", "[persist][droptable]")
                     REQUIRE(read_req.Error() == eloqstore::KvError::NotFound);
                 }
             }
+
+            if (!opts.cloud_store_path.empty())
+            {
+                bool cloud_partitions_empty = false;
+                const auto deadline =
+                    std::chrono::steady_clock::now() + std::chrono::seconds(10);
+                do
+                {
+                    cloud_partitions_empty = true;
+                    for (uint32_t partition : partitions)
+                    {
+                        if (!ListCloudFiles(opts,
+                                            opts.cloud_store_path,
+                                            table_ident(partition).ToString())
+                                 .empty())
+                        {
+                            cloud_partitions_empty = false;
+                            break;
+                        }
+                    }
+                    if (!cloud_partitions_empty)
+                    {
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(50));
+                    }
+                } while (!cloud_partitions_empty &&
+                         std::chrono::steady_clock::now() < deadline);
+                REQUIRE(cloud_partitions_empty);
+            }
         }
 
         store->Stop();
@@ -173,6 +221,46 @@ TEST_CASE("drop table clears all partitions", "[persist][droptable]")
 
     run_drop_table_case(default_opts, "local");
     run_drop_table_case(cloud_options, "cloud");
+}
+
+TEST_CASE("drop table cloud list respects table name boundary",
+          "[persist][droptable][cloud]")
+{
+    eloqstore::EloqStore *store = InitStore(cloud_options);
+    const std::string key = test_util::Key(1);
+
+    auto write_table = [&](std::string_view table_name)
+    {
+        std::vector<eloqstore::WriteDataEntry> entries;
+        entries.emplace_back(
+            key, test_util::Value(1, 32), 1, eloqstore::WriteOp::Upsert);
+        eloqstore::BatchWriteRequest write_req;
+        write_req.SetArgs(eloqstore::TableIdent{std::string(table_name), 0},
+                          std::move(entries));
+        store->ExecSync(&write_req);
+        REQUIRE(write_req.Error() == eloqstore::KvError::NoError);
+    };
+
+    write_table("a");
+    write_table("aa");
+
+    eloqstore::DropTableRequest drop_req;
+    drop_req.SetArgs("a");
+    store->ExecSync(&drop_req);
+    REQUIRE(drop_req.Error() == eloqstore::KvError::NoError);
+
+    eloqstore::ReadRequest dropped_read;
+    dropped_read.SetArgs(eloqstore::TableIdent{"a", 0}, key);
+    store->ExecSync(&dropped_read);
+    REQUIRE(dropped_read.Error() == eloqstore::KvError::NotFound);
+
+    eloqstore::ReadRequest adjacent_read;
+    adjacent_read.SetArgs(eloqstore::TableIdent{"aa", 0}, key);
+    store->ExecSync(&adjacent_read);
+    REQUIRE(adjacent_read.Error() == eloqstore::KvError::NoError);
+
+    store->Stop();
+    CleanupStore(cloud_options);
 }
 
 TEST_CASE("simple LRU for opened fd", "[persist]")

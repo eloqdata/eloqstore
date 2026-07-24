@@ -289,6 +289,7 @@ struct KvOptions
      * @brief Storage path on cloud service.
      * Store all data locally if this is empty.
      * Example: mybucket/eloqstore
+     * EloqStore normalizes this path by removing trailing '/' characters.
      */
     std::string cloud_store_path;
     /**

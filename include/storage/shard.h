@@ -44,10 +44,10 @@ public:
 
     void AddPendingCompact(const TableIdent &tbl_id);
     bool HasPendingCompact(const TableIdent &tbl_id);
+    bool TryAddFileGc(const TableIdent &tbl_id);
     void AddPendingTTL(const TableIdent &tbl_id);
     bool HasPendingTTL(const TableIdent &tbl_id);
-    void AddPendingLocalGc(const TableIdent &tbl_id);
-    bool HasPendingLocalGc(const TableIdent &tbl_id);
+    bool TryAddLocalGc(const TableIdent &tbl_id);
 #ifdef ELOQ_MODULE_ENABLED
     enum class ShardStatus : uint8_t
     {
@@ -224,6 +224,7 @@ private:
 
         // Requests from internal
         CompactRequest compact_req_;
+        FileGcRequest file_gc_req_;
         LocalGcRequest local_gc_req_;
         CleanExpiredRequest expire_req_;
         bool running_{false};

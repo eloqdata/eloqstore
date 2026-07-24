@@ -964,10 +964,8 @@ void WriteTask::TriggerTTL()
     }
 }
 
-void WriteTask::TriggerFileGC() const
+KvError WriteTask::RunFileGc() const
 {
-    assert(Options()->data_append_mode);
-
     RetainedFiles retained_files;
     std::vector<MappingSnapshot::Ref> snapshot_array;
     KvError build_err = BuildRetainedFiles(
@@ -977,7 +975,7 @@ void WriteTask::TriggerFileGC() const
         LOG(ERROR) << "BuildRetainedFiles failed for table "
                    << tbl_ident_.ToString()
                    << " err=" << static_cast<int>(build_err);
-        return;
+        return build_err;
     }
 
     // Build retained_segment_files. Resolve each segment's owning (branch,
@@ -994,7 +992,7 @@ void WriteTask::TriggerFileGC() const
         LOG(ERROR) << "BuildRetainedFiles (segment) failed for table "
                    << tbl_ident_.ToString()
                    << " err=" << static_cast<int>(build_err);
-        return;
+        return build_err;
     }
 
     // Check if we're in cloud mode or local mode
@@ -1006,7 +1004,7 @@ void WriteTask::TriggerFileGC() const
         if (!cloud_mgr)
         {
             LOG(ERROR) << "CloudStoreMgr not available";
-            return;
+            return KvError::InvalidArgs;
         }
 
         KvError gc_err = FileGarbageCollector::ExecuteCloudGC(
@@ -1016,6 +1014,7 @@ void WriteTask::TriggerFileGC() const
         {
             LOG(ERROR) << "Cloud GC failed for table " << tbl_ident_.ToString();
         }
+        return gc_err;
     }
     else
     {
@@ -1029,10 +1028,11 @@ void WriteTask::TriggerFileGC() const
         {
             LOG(ERROR) << "Local GC failed for table " << tbl_ident_.ToString();
         }
+        return gc_err;
     }
 }
 
-KvError WriteTask::TriggerLocalFileGC() const
+KvError WriteTask::RunLocalFileGc() const
 {
     assert(Options()->data_append_mode);
     RetainedFiles retained_files;
@@ -1042,7 +1042,7 @@ KvError WriteTask::TriggerLocalFileGC() const
     CHECK_KV_ERR(build_err);
 
     // Build retained_segment_files from the live segment snapshots, same as
-    // TriggerFileGC: ExecuteLocalGC deletes unreferenced segment files too.
+    // RunFileGc: ExecuteLocalGC deletes unreferenced segment files too.
     RetainedFiles retained_segment_files;
     std::vector<MappingSnapshot::Ref> seg_snapshot_array;
     build_err = BuildRetainedFiles(tbl_ident_,

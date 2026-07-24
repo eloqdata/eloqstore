@@ -2321,8 +2321,14 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
+KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds,
+                               std::vector<LruFD::Ref> *failed_fds)
 {
+    if (failed_fds != nullptr)
+    {
+        failed_fds->clear();
+    }
+
     struct CloseReq : BaseReq
     {
         CloseReq(KvTask *task, LruFD::Ref fd)
@@ -2391,6 +2397,13 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
             SyncFiles(*tbl_id, std::span<LruFD::Ref>(refs.data(), refs.size()));
         if (err != KvError::NoError)
         {
+            if (failed_fds != nullptr)
+            {
+                for (const PendingClose &pending : pendings)
+                {
+                    failed_fds->emplace_back(*pending.fd_ref);
+                }
+            }
             unlock_pendings();
             return err;
         }
@@ -2426,7 +2439,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
             LruFD *lru_fd = pending.lru_fd;
             LruFD::Ref &fd_ref = *pending.fd_ref;
 
-            CloseReq &req = reqs.emplace_back(ThdTask(), std::move(fd_ref));
+            CloseReq &req = reqs.emplace_back(ThdTask(), fd_ref);
             io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, &req);
             if (lru_fd->reg_idx_ < 0)
             {
@@ -2463,6 +2476,10 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
                 {
                     close_err = ToKvError(req.res_);
                 }
+                if (failed_fds != nullptr)
+                {
+                    failed_fds->emplace_back(req.fd_ref_);
+                }
             }
             if (req.reg_idx_ >= 0)
             {
@@ -2475,6 +2492,38 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
         }
     }
     return close_err;
+}
+
+KvError CloudStoreMgr::CloseFiles(std::span<LruFD::Ref> fds,
+                                  std::vector<LruFD::Ref> *failed_fds)
+{
+    std::vector<LruFD::Ref> local_failed_fds;
+    std::vector<LruFD::Ref> *failures =
+        failed_fds == nullptr ? &local_failed_fds : failed_fds;
+    KvError err = IouringMgr::CloseFiles(fds, failures);
+    for (const LruFD::Ref &fd : fds)
+    {
+        LruFD *lru_fd = fd.Get();
+        if (lru_fd == nullptr || lru_fd->file_id_ == LruFD::kDirectory)
+        {
+            continue;
+        }
+        bool failed = false;
+        for (const LruFD::Ref &failed_fd : *failures)
+        {
+            if (failed_fd.Get() == lru_fd)
+            {
+                failed = true;
+                break;
+            }
+        }
+        if (failed)
+        {
+            continue;
+        }
+        RegisterClosedFileAndTryGc(BuildFileKey(*lru_fd));
+    }
+    return err;
 }
 
 int IouringMgr::Fdatasync(FdIdx fd)
@@ -4457,7 +4506,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     KvTask *current_task = ThdTask();
     do
     {
-        ObjectStore::ListTask list_task(remote_path, false);
+        ObjectStore::ListTask list_task(remote_path);
         // Manifest keys are flat under the prefix; list without a delimiter
         // so the response cannot carry directory-style CommonPrefixes
         // entries (see the parse-failure skip below).
@@ -4740,7 +4789,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
             KvTask *current_task = ThdTask();
             do
             {
-                ObjectStore::ListTask list_task(remote_path, false);
+                ObjectStore::ListTask list_task(remote_path);
                 // Flat manifest keys; no delimiter so the response cannot
                 // carry CommonPrefixes entries (see GetManifest).
                 list_task.SetRecursive(true);
@@ -5382,7 +5431,7 @@ KvError CloudStoreMgr::DeleteBranchFiles(const TableIdent &tbl_id,
         KvTask *list_task_owner = ThdTask();
         do
         {
-            ObjectStore::ListTask list_task(prefix, false);
+            ObjectStore::ListTask list_task(prefix);
             list_task.SetContinuationToken(continuation_token);
             list_task.SetRecursive(true);
             list_task.SetKvTask(list_task_owner);
@@ -5761,36 +5810,46 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
 
     if (file_id != LruFD::kDirectory)
     {
-        uint64_t term = fd.Get()->term_;
-        std::string_view branch = fd.Get()->branch_name_;
-        std::string filename;
-        if (file_id == LruFD::kManifest)
-        {
-            filename = BranchManifestFileName(branch, term);
-        }
-        else if (file_id.IsSegmentFile())
-        {
-            filename = SegmentFileName(file_id.ToFileId(), branch, term);
-        }
-        else
-        {
-            filename = BranchDataFileName(file_id.ToFileId(), branch, term);
-        }
-        file_key.emplace(*fd.Get()->tbl_->tbl_id_, filename);
+        file_key.emplace(BuildFileKey(*fd.Get()));
     }
 
     KvError err = IouringMgr::CloseFile(fd);
     CHECK_KV_ERR(err);
     if (file_key.has_value())
     {
-        EnqueClosedFile(*file_key);
-        if (pending_gc_cleanup_.contains(*file_key) &&
-            file_cleaner_.status_ == TaskStatus::Idle)
-        {
-            file_cleaner_.Resume();
-        }
+        RegisterClosedFileAndTryGc(std::move(*file_key));
     }
     return KvError::NoError;
+}
+
+FileKey CloudStoreMgr::BuildFileKey(const LruFD &fd) const
+{
+    std::string filename;
+    if (fd.file_id_ == LruFD::kManifest)
+    {
+        filename = BranchManifestFileName(fd.branch_name_, fd.term_);
+    }
+    else if (fd.file_id_.IsSegmentFile())
+    {
+        filename =
+            SegmentFileName(fd.file_id_.ToFileId(), fd.branch_name_, fd.term_);
+    }
+    else
+    {
+        filename = BranchDataFileName(
+            fd.file_id_.ToFileId(), fd.branch_name_, fd.term_);
+    }
+    return FileKey(*fd.tbl_->tbl_id_, std::move(filename));
+}
+
+void CloudStoreMgr::RegisterClosedFileAndTryGc(FileKey key)
+{
+    bool pending_gc_cleanup = pending_gc_cleanup_.contains(key);
+    EnqueClosedFile(std::move(key));
+    if (pending_gc_cleanup && file_cleaner_.status_ == TaskStatus::Idle)
+    {
+        file_cleaner_.Resume();
+    }
 }
 
 size_t CloudStoreMgr::EstimateFileSize(TypedFileId file_id) const

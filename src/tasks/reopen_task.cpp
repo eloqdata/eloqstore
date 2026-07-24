@@ -128,9 +128,9 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
     // accumulate across reopens. Restore unconditional local GC for
     // StoreMode::StandbyReplica, or add periodic cleanup of files outside the
     // retained set.
-    if (clear_local_state && !shard->HasPendingLocalGc(tbl_id))
+    if (clear_local_state)
     {
-        shard->AddPendingLocalGc(tbl_id);
+        shard->TryAddLocalGc(tbl_id);
     }
     return err;
 }

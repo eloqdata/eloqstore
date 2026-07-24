@@ -46,9 +46,12 @@ One write task per partition at a time (doc 04). `Apply()`:
    a fresh snapshot past `manifest_limit`; in cloud mode wait for uploads) →
    `PageManager::UpdateRoot` publishes the new root → old snapshot's freed
    file pages recycle when its last reader releases.
-6. `UpdateMeta(trigger_compact=true)` checks both mappers' space
-   amplification and flags the shard's pending-compact set; `TriggerTTL` /
-   `TriggerFileGC` similarly self-schedule maintenance.
+6. In append mode, `UpdateMeta(trigger_compact=true)` checks the data/segment
+   space amplification against their configured factors. It flags the shard's
+   pending-compact set only when a threshold is reached; the resulting
+   compaction runs file GC after it finishes. BatchWrite does not run
+   compaction or file GC unconditionally. `TriggerTTL` is scheduled
+   independently.
 
 Failure at any point: `Abort()` — the CoW state is discarded, `AbortWrite`
 cancels buffered file writes, the published tree is untouched.
@@ -60,19 +63,26 @@ relies on GC for files).
 ## Background maintenance (`BackgroundWrite`)
 
 All run through the same per-partition write queue, so they serialize with
-user writes. Scheduled via shard pending-sets (`AddPendingCompact/TTL/LocalGc`)
-which enqueue the embedded singleton requests in each `PendingWriteQueue`.
+user writes. Scheduled via shard pending-sets
+(`AddPendingCompact/TTL/FileGc/LocalGc`) which enqueue the embedded singleton
+requests in each `PendingWriteQueue`.
 
 - **Compaction** (`Compact()`, append mode only): one `MakeCowRoot`; rewrite
   pass over under-utilized data files (live pages re-written to the tail,
   per-file utilization re-checked against `file_amplify_factor`), then over
   segment files (`segment_file_amplify_factor`, yielding every
   `segment_compact_yield_every` segments to the low-priority queue); one
-  `UpdateMeta(false)`; one `TriggerFileGC`.
+  `UpdateMeta(false)`; one `RunFileGc`. The segment pass is also part of the
+  append-mode compaction pipeline; non-append segment compaction is not a
+  supported mode.
 - **TTL cleanup** (`CleanExpiredKeys`): when `RootMeta::next_expire_ts_` has
   passed, scan the TTL tree range `[0, now]`, delete expired keys from both
   trees.
-- **Local GC / file GC** — below.
+- **File GC** (append mode only) — `FileGcRequest` selects cloud or local
+  collection from the store mode. It runs after amplification-triggered
+  compaction and is queued after Drop only when `data_append_mode` is enabled.
+  `LocalGcRequest` is a separate local-only operation used when reopen must
+  discard cached state without deleting remote objects.
 - **CreateArchive / CreateBranch / DeleteBranch** — manifest-level operations
   (doc 06) executed under the write lock for the partition.
 
@@ -84,7 +94,8 @@ owned partitions at `archive_interval_secs`, bounded by `max_archive_tasks`.
 Deletes data/segment files no longer referenced by any manifest, archive, or
 in-flight write. Two drivers, same rules:
 
-- `ExecuteLocalGC` (local/standby modes) — lists the partition directory.
+- `ExecuteLocalGC` (local/standby modes, plus explicitly local-only cleanup in
+  cloud mode) — lists the partition directory.
 - `ExecuteCloudGC` (cloud mode) — lists the partition's objects; deletions
   propagate to the local cache (`ScheduleLocalFileCleanup`, then directory
   cleanup when the partition empties).
