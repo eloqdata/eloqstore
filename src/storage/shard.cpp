@@ -773,9 +773,7 @@ bool Shard::ProcessReq(KvRequest *req)
             }
             KvTask *current_task = ThdTask();
             auto list_object_req = static_cast<ListObjectRequest *>(req);
-            ObjectStore::ListTask list_task(
-                list_object_req->RemotePath(),
-                list_object_req->EnsureTrailingSlash());
+            ObjectStore::ListTask list_task(list_object_req->RemotePath());
             list_task.SetRecursive(list_object_req->Recursive());
             list_task.SetContinuationToken(
                 list_object_req->GetContinuationToken());

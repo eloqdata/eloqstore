@@ -193,10 +193,8 @@ public:
     class ListTask : public Task
     {
     public:
-        explicit ListTask(std::string_view remote_path,
-                          bool ensure_trailing_slash = true)
-            : ensure_trailing_slash_(ensure_trailing_slash),
-              remote_path_(remote_path)
+        explicit ListTask(std::string_view remote_path)
+            : remote_path_(remote_path)
         {
         }
         void SetRecursive(bool recurse)
@@ -220,10 +218,6 @@ public:
             return std::string("List(") + remote_path_ + ')';
         }
 
-        // Add trailing slash to remote path if ensure_trailing_slash_ is true
-        // and remote path does not end with '/'. This is used to ensure the
-        // remote path is a directory.
-        bool ensure_trailing_slash_{true};
         std::string remote_path_;
         bool recurse_{false};
         std::string continuation_token_;
@@ -329,8 +323,7 @@ private:
 
     std::string ComposeKey(const TableIdent *tbl_id,
                            std::string_view filename) const;
-    std::string ComposeKeyFromRemote(std::string_view remote_path,
-                                     bool ensure_trailing_slash) const;
+    std::string ComposeKeyFromRemote(std::string_view remote_path) const;
 };
 
 }  // namespace eloqstore

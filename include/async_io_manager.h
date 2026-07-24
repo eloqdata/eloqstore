@@ -1343,7 +1343,7 @@ public:
 private:
     void WaitForCloudTasksToDrain();
     FileKey BuildFileKey(const LruFD &fd) const;
-    void TrackClosedFile(FileKey key);
+    void RegisterClosedFileAndTryGc(FileKey key);
 
 private:
     int CreateFile(LruFD::Ref dir_fd,

@@ -291,6 +291,7 @@ void PrewarmService::PrewarmLoop()
             {
                 const TableIdent &table = prewarm_tables[i];
                 std::string remote_path = table.ToString();
+                remote_path.push_back('/');
                 PrewarmCloudCache(remote_path);
             }
         } while (sz == prewarm_tables.size());

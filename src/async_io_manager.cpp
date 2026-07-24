@@ -2495,7 +2495,7 @@ KvError CloudStoreMgr::CloseFiles(std::span<LruFD::Ref> fds)
     CHECK_KV_ERR(err);
     for (FileKey &file_key : file_keys)
     {
-        TrackClosedFile(std::move(file_key));
+        RegisterClosedFileAndTryGc(std::move(file_key));
     }
     return KvError::NoError;
 }
@@ -4480,7 +4480,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     KvTask *current_task = ThdTask();
     do
     {
-        ObjectStore::ListTask list_task(remote_path, false);
+        ObjectStore::ListTask list_task(remote_path);
         // Manifest keys are flat under the prefix; list without a delimiter
         // so the response cannot carry directory-style CommonPrefixes
         // entries (see the parse-failure skip below).
@@ -4763,7 +4763,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
             KvTask *current_task = ThdTask();
             do
             {
-                ObjectStore::ListTask list_task(remote_path, false);
+                ObjectStore::ListTask list_task(remote_path);
                 // Flat manifest keys; no delimiter so the response cannot
                 // carry CommonPrefixes entries (see GetManifest).
                 list_task.SetRecursive(true);
@@ -5405,7 +5405,7 @@ KvError CloudStoreMgr::DeleteBranchFiles(const TableIdent &tbl_id,
         KvTask *list_task_owner = ThdTask();
         do
         {
-            ObjectStore::ListTask list_task(prefix, false);
+            ObjectStore::ListTask list_task(prefix);
             list_task.SetContinuationToken(continuation_token);
             list_task.SetRecursive(true);
             list_task.SetKvTask(list_task_owner);
@@ -5791,7 +5791,7 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
     CHECK_KV_ERR(err);
     if (file_key.has_value())
     {
-        TrackClosedFile(std::move(*file_key));
+        RegisterClosedFileAndTryGc(std::move(*file_key));
     }
     return KvError::NoError;
 }
@@ -5816,7 +5816,7 @@ FileKey CloudStoreMgr::BuildFileKey(const LruFD &fd) const
     return FileKey(*fd.tbl_->tbl_id_, std::move(filename));
 }
 
-void CloudStoreMgr::TrackClosedFile(FileKey key)
+void CloudStoreMgr::RegisterClosedFileAndTryGc(FileKey key)
 {
     bool pending_gc_cleanup = pending_gc_cleanup_.contains(key);
     EnqueClosedFile(std::move(key));

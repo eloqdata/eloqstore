@@ -1189,7 +1189,6 @@ KvError EloqStore::CollectTablePartitions(
         // Partition object directories are named <table>.<partition>. Use a
         // raw prefix so DropTable does not paginate through the entire bucket.
         list_object_request.SetRemotePath(partition_prefix);
-        list_object_request.SetEnsureTrailingSlash(false);
         std::string partition_path = partition_prefix;
 
         bool has_more = false;
