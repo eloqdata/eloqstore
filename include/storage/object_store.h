@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -286,6 +287,15 @@ public:
         std::vector<std::string> *objects,
         std::vector<utils::CloudObjectInfo> *infos,
         std::string *next_continuation_token = nullptr) const;
+
+    // Parse the ETag value from a single HTTP response header line. The header
+    // name is matched case-insensitively -- HTTP header names are
+    // case-insensitive and HTTP/2 delivers them lowercased ("etag:"), so a
+    // byte-exact "ETag:" match would miss it on HTTP/2 endpoints (e.g. GCS).
+    // Returns the unquoted value, or nullopt if the line is not an ETag header
+    // or carries no value.
+    static std::optional<std::string> ParseETagHeader(
+        std::string_view header_line);
 
 private:
     void CleanupTaskResources(ObjectStore::Task *task);
