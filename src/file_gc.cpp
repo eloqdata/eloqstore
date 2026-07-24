@@ -165,14 +165,31 @@ void SeedActiveBranchGuardFromInMemory(const TableIdent &tbl_id,
 }
 
 bool ParseCloudCleanupFilename(std::string_view filename,
-                               FileId &file_id,
+                               TypedFileId &typed_id,
                                uint64_t &term)
 {
     auto [type, suffix] = ParseFileName(filename);
     if (type == FileNameData)
     {
+        FileId file_id = 0;
         std::string_view branch_name;
-        return ParseDataFileSuffix(suffix, file_id, branch_name, term);
+        if (!ParseDataFileSuffix(suffix, file_id, branch_name, term))
+        {
+            return false;
+        }
+        typed_id = DataFileKey(file_id);
+        return true;
+    }
+    if (type == FileNameSegment)
+    {
+        FileId file_id = 0;
+        std::string_view branch_name;
+        if (!ParseSegmentFileSuffix(suffix, file_id, branch_name, term))
+        {
+            return false;
+        }
+        typed_id = SegmentFileKey(file_id);
+        return true;
     }
     if (type == FileNameManifest)
     {
@@ -183,7 +200,7 @@ bool ParseCloudCleanupFilename(std::string_view filename,
         {
             return false;
         }
-        file_id = IouringMgr::LruFD::kManifest.value_;
+        typed_id = IouringMgr::LruFD::kManifest;
         return true;
     }
     return false;
@@ -199,17 +216,13 @@ void CollectLocalCleanupTargets(
     targets.reserve(deleted_filenames.size());
     for (const std::string &filename : deleted_filenames)
     {
-        FileId file_id = 0;
+        TypedFileId typed_id{0};
         uint64_t term = 0;
-        if (!ParseCloudCleanupFilename(filename, file_id, term))
+        if (!ParseCloudCleanupFilename(filename, typed_id, term))
         {
             continue;
         }
 
-        const TypedFileId typed_id =
-            file_id == IouringMgr::LruFD::kManifest.value_
-                ? IouringMgr::LruFD::kManifest
-                : DataFileKey(file_id);
         IouringMgr::LruFD::Ref fd_ref =
             cloud_mgr->GetOpenedFD(tbl_id, typed_id);
         if (fd_ref != nullptr && fd_ref.Get()->term_ == term)
@@ -1393,9 +1406,11 @@ KvError DeleteUnreferencedCloudSegmentFiles(
     const std::vector<std::string> &segment_files,
     const RetainedFiles &retained_segment_files,
     const BranchGuardMap &branch_guards,
+    std::vector<std::string> &deleted_filenames,
     CloudStoreMgr *cloud_mgr)
 {
     std::vector<std::string> files_to_delete;
+    std::vector<std::string> filenames_to_delete;
     const uint64_t process_term = cloud_mgr->ProcessTerm();
 
     uint64_t poll_i = 0;
@@ -1453,6 +1468,7 @@ KvError DeleteUnreferencedCloudSegmentFiles(
         }
 
         files_to_delete.emplace_back(tbl_id.ToString() + "/" + file_name);
+        filenames_to_delete.emplace_back(file_name);
     }
 
     if (files_to_delete.empty())
@@ -1475,17 +1491,24 @@ KvError DeleteUnreferencedCloudSegmentFiles(
 
     current_task->WaitIo();
 
-    for (const auto &task : delete_tasks)
+    KvError delete_err = KvError::NoError;
+    for (size_t idx = 0; idx < delete_tasks.size(); ++idx)
     {
+        const auto &task = delete_tasks[idx];
         if (task.error_ != KvError::NoError)
         {
             LOG(ERROR) << "Failed to delete segment file " << task.remote_path_
                        << ": " << ErrorString(task.error_);
-            return task.error_;
+            if (delete_err == KvError::NoError)
+            {
+                delete_err = task.error_;
+            }
+            continue;
         }
+        deleted_filenames.emplace_back(std::move(filenames_to_delete[idx]));
     }
 
-    return KvError::NoError;
+    return delete_err;
 }
 
 KvError ExecuteCloudGC(const TableIdent &tbl_id,
@@ -1607,6 +1630,16 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
         return err;
     }
 
+    // 5. delete unreferenced segment files. See the matching note in
+    // ExecuteLocalGC: archive-referenced segments are already in
+    // retained_segment_files via AugmentRetainedFilesFromBranchManifests.
+    err = DeleteUnreferencedCloudSegmentFiles(tbl_id,
+                                              segment_files,
+                                              retained_segment_files,
+                                              branch_guards,
+                                              deleted_filenames,
+                                              cloud_mgr);
+
     if (!deleted_filenames.empty())
     {
         std::vector<std::string> local_cleanup_targets;
@@ -1618,14 +1651,6 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
         }
     }
 
-    // 5. delete unreferenced segment files. See the matching note in
-    // ExecuteLocalGC: archive-referenced segments are already in
-    // retained_segment_files via AugmentRetainedFilesFromBranchManifests.
-    err = DeleteUnreferencedCloudSegmentFiles(tbl_id,
-                                              segment_files,
-                                              retained_segment_files,
-                                              branch_guards,
-                                              cloud_mgr);
     if (err != KvError::NoError)
     {
         return err;

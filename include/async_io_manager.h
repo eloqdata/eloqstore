@@ -918,6 +918,8 @@ public:
     virtual KvError SyncFiles(const TableIdent &tbl_id,
                               std::span<LruFD::Ref> fds);
     virtual KvError CloseFiles(std::span<LruFD::Ref> fds);
+    KvError CloseFilesImpl(std::span<LruFD::Ref> fds,
+                           std::vector<LruFD::Ref> *closed_fds);
     virtual KvError FdatasyncFiles(const TableIdent &tbl_id,
                                    std::span<LruFD::Ref> fds);
     virtual KvError CloseFile(LruFD::Ref fd_ref);

@@ -2323,6 +2323,12 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
 
 KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
 {
+    return CloseFilesImpl(fds, nullptr);
+}
+
+KvError IouringMgr::CloseFilesImpl(std::span<LruFD::Ref> fds,
+                                   std::vector<LruFD::Ref> *closed_fds)
+{
     struct CloseReq : BaseReq
     {
         CloseReq(KvTask *task, LruFD::Ref fd)
@@ -2471,6 +2477,10 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
             if (req.res_ == 0)
             {
                 lru_fd_count_--;
+                if (closed_fds != nullptr)
+                {
+                    closed_fds->emplace_back(req.fd_ref_);
+                }
             }
         }
     }
@@ -2479,25 +2489,19 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
 
 KvError CloudStoreMgr::CloseFiles(std::span<LruFD::Ref> fds)
 {
-    std::vector<FileKey> file_keys;
-    file_keys.reserve(fds.size());
-    for (const LruFD::Ref &fd : fds)
+    std::vector<LruFD::Ref> closed_fds;
+    closed_fds.reserve(fds.size());
+    KvError err = CloseFilesImpl(fds, &closed_fds);
+    for (const LruFD::Ref &fd : closed_fds)
     {
         LruFD *lru_fd = fd.Get();
         if (lru_fd == nullptr || lru_fd->file_id_ == LruFD::kDirectory)
         {
             continue;
         }
-        file_keys.emplace_back(BuildFileKey(*lru_fd));
+        RegisterClosedFileAndTryGc(BuildFileKey(*lru_fd));
     }
-
-    KvError err = IouringMgr::CloseFiles(fds);
-    CHECK_KV_ERR(err);
-    for (FileKey &file_key : file_keys)
-    {
-        RegisterClosedFileAndTryGc(std::move(file_key));
-    }
-    return KvError::NoError;
+    return err;
 }
 
 int IouringMgr::Fdatasync(FdIdx fd)
