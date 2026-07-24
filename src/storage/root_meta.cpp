@@ -442,6 +442,35 @@ KvError RootMetaMgr::EvictIfNeeded()
     return KvError::NoError;
 }
 
+#ifndef NDEBUG
+bool RootMetaMgr::ForceEvictForTest(const TableIdent &tbl_id)
+{
+    Entry *victim = Find(tbl_id);
+    // Only an unpinned entry that is currently on the LRU list (prev_ != null)
+    // can be evicted, matching the invariants EvictIfNeeded relies on.
+    if (victim == nullptr || victim->meta_.ref_cnt_ != 0 ||
+        victim->prev_ == nullptr)
+    {
+        return false;
+    }
+    if (!EvictRootForCache(victim))
+    {
+        return false;
+    }
+    Dequeue(victim);
+    if (used_bytes_ >= victim->bytes_)
+    {
+        used_bytes_ -= victim->bytes_;
+    }
+    else
+    {
+        used_bytes_ = 0;
+    }
+    entries_.erase(victim->tbl_id_);
+    return true;
+}
+#endif
+
 void RootMetaMgr::EnqueueFront(Entry *entry)
 {
     CHECK(entry->prev_ == nullptr && entry->next_ == nullptr)

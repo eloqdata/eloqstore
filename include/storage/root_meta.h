@@ -213,6 +213,14 @@ public:
 
     KvError EvictIfNeeded();
 
+#ifndef NDEBUG
+    // Test-only: force-evict a specific table's root meta entry, mimicking the
+    // LRU victim path of EvictIfNeeded (EvictRootForCache + Dequeue + erase).
+    // Used to deterministically reproduce the GC-holds-snapshot-across-eviction
+    // UAF. Returns true iff the entry existed, was unpinned, and was erased.
+    bool ForceEvictForTest(const TableIdent &tbl_id);
+#endif
+
 private:
     PageManager *owner_;
     void EnqueueFront(Entry *entry);
