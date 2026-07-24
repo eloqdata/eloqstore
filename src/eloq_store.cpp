@@ -114,6 +114,12 @@ KvError CollectLocalPartitions(const KvOptions &options,
 
 bool EloqStore::ValidateOptions(KvOptions &opts)
 {
+    while (!opts.cloud_store_path.empty() &&
+           opts.cloud_store_path.back() == '/')
+    {
+        opts.cloud_store_path.pop_back();
+    }
+
     std::string cloud_provider_lower = opts.cloud_provider;
     std::transform(cloud_provider_lower.begin(),
                    cloud_provider_lower.end(),
@@ -2328,6 +2334,7 @@ void EloqStore::InitializeMetrics(metrics::MetricsRegistry *metrics_registry,
                                         "archive",
                                         "compact",
                                         "local_gc",
+                                        "file_gc",
                                         "clean_expired",
                                         "create_branch",
                                         "delete_branch"}}});
@@ -2347,6 +2354,7 @@ void EloqStore::InitializeMetrics(metrics::MetricsRegistry *metrics_registry,
                                         "archive",
                                         "compact",
                                         "local_gc",
+                                        "file_gc",
                                         "clean_expired",
                                         "create_branch",
                                         "delete_branch"}}});

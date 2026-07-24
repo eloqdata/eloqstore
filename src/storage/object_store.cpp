@@ -849,6 +849,10 @@ bool AsyncHttpManager::SetupDeleteRequest(ObjectStore::DeleteTask *task,
 bool AsyncHttpManager::SetupListRequest(ObjectStore::ListTask *task, CURL *easy)
 {
     std::string strip_prefix = ComposeKeyFromRemote(task->remote_path_);
+    if (task->remote_path_.empty() && !strip_prefix.empty())
+    {
+        strip_prefix.push_back('/');
+    }
 
     task->json_data_ = strip_prefix;
 
