@@ -2041,6 +2041,7 @@ KvError BatchWriteTask::CleanExpiredKeys()
     const uint64_t now_ts_ms = utils::UnixTs<chrono::milliseconds>();
     const uint64_t now_ts_us = utils::UnixTs<chrono::microseconds>();
     uint64_t next_expire_ts = 0;
+    KvError scan_err = KvError::NoError;
     do
     {
         std::string_view ttl_key = iter.Key();
@@ -2054,7 +2055,18 @@ KvError BatchWriteTask::CleanExpiredKeys()
         std::string key(ttl_key.substr(8));
         data_batch.emplace_back(
             std::move(key), "", now_ts_us, WriteOp::Delete, expire_ts);
-    } while (iter.Next() == KvError::NoError);
+        scan_err = iter.Next();
+    } while (scan_err == KvError::NoError);
+
+    // Real IO error (not EndOfFile): only a prefix of the expired keys was
+    // scanned. Aborting leaves next_expire_ts_ armed so the next TriggerTTL
+    // retries; committing would set it to 0 below and silently disable TTL.
+    if (scan_err != KvError::NoError && scan_err != KvError::EndOfFile)
+    {
+        LOG(ERROR) << "clean expired keys interrupted by scan error: "
+                   << ErrorString(scan_err);
+        return scan_err;
+    }
 
     if (ttl_batch.empty())
     {
