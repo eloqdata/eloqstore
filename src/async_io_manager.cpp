@@ -2321,14 +2321,14 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
+KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds,
+                               std::vector<LruFD::Ref> *failed_fds)
 {
-    return CloseFilesImpl(fds, nullptr);
-}
+    if (failed_fds != nullptr)
+    {
+        failed_fds->clear();
+    }
 
-KvError IouringMgr::CloseFilesImpl(std::span<LruFD::Ref> fds,
-                                   std::vector<LruFD::Ref> *closed_fds)
-{
     struct CloseReq : BaseReq
     {
         CloseReq(KvTask *task, LruFD::Ref fd)
@@ -2397,6 +2397,13 @@ KvError IouringMgr::CloseFilesImpl(std::span<LruFD::Ref> fds,
             SyncFiles(*tbl_id, std::span<LruFD::Ref>(refs.data(), refs.size()));
         if (err != KvError::NoError)
         {
+            if (failed_fds != nullptr)
+            {
+                for (const PendingClose &pending : pendings)
+                {
+                    failed_fds->emplace_back(*pending.fd_ref);
+                }
+            }
             unlock_pendings();
             return err;
         }
@@ -2432,7 +2439,7 @@ KvError IouringMgr::CloseFilesImpl(std::span<LruFD::Ref> fds,
             LruFD *lru_fd = pending.lru_fd;
             LruFD::Ref &fd_ref = *pending.fd_ref;
 
-            CloseReq &req = reqs.emplace_back(ThdTask(), std::move(fd_ref));
+            CloseReq &req = reqs.emplace_back(ThdTask(), fd_ref);
             io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, &req);
             if (lru_fd->reg_idx_ < 0)
             {
@@ -2469,6 +2476,10 @@ KvError IouringMgr::CloseFilesImpl(std::span<LruFD::Ref> fds,
                 {
                     close_err = ToKvError(req.res_);
                 }
+                if (failed_fds != nullptr)
+                {
+                    failed_fds->emplace_back(req.fd_ref_);
+                }
             }
             if (req.reg_idx_ >= 0)
             {
@@ -2477,25 +2488,36 @@ KvError IouringMgr::CloseFilesImpl(std::span<LruFD::Ref> fds,
             if (req.res_ == 0)
             {
                 lru_fd_count_--;
-                if (closed_fds != nullptr)
-                {
-                    closed_fds->emplace_back(req.fd_ref_);
-                }
             }
         }
     }
     return close_err;
 }
 
-KvError CloudStoreMgr::CloseFiles(std::span<LruFD::Ref> fds)
+KvError CloudStoreMgr::CloseFiles(std::span<LruFD::Ref> fds,
+                                  std::vector<LruFD::Ref> *failed_fds)
 {
-    std::vector<LruFD::Ref> closed_fds;
-    closed_fds.reserve(fds.size());
-    KvError err = CloseFilesImpl(fds, &closed_fds);
-    for (const LruFD::Ref &fd : closed_fds)
+    std::vector<LruFD::Ref> local_failed_fds;
+    std::vector<LruFD::Ref> *failures =
+        failed_fds == nullptr ? &local_failed_fds : failed_fds;
+    KvError err = IouringMgr::CloseFiles(fds, failures);
+    for (const LruFD::Ref &fd : fds)
     {
         LruFD *lru_fd = fd.Get();
         if (lru_fd == nullptr || lru_fd->file_id_ == LruFD::kDirectory)
+        {
+            continue;
+        }
+        bool failed = false;
+        for (const LruFD::Ref &failed_fd : *failures)
+        {
+            if (failed_fd.Get() == lru_fd)
+            {
+                failed = true;
+                break;
+            }
+        }
+        if (failed)
         {
             continue;
         }

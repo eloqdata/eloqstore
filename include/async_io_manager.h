@@ -917,9 +917,9 @@ public:
     virtual KvError SyncFile(LruFD::Ref fd);
     virtual KvError SyncFiles(const TableIdent &tbl_id,
                               std::span<LruFD::Ref> fds);
-    virtual KvError CloseFiles(std::span<LruFD::Ref> fds);
-    KvError CloseFilesImpl(std::span<LruFD::Ref> fds,
-                           std::vector<LruFD::Ref> *closed_fds);
+    virtual KvError CloseFiles(
+        std::span<LruFD::Ref> fds,
+        std::vector<LruFD::Ref> *failed_fds = nullptr);
     virtual KvError FdatasyncFiles(const TableIdent &tbl_id,
                                    std::span<LruFD::Ref> fds);
     virtual KvError CloseFile(LruFD::Ref fd_ref);
@@ -1171,7 +1171,9 @@ public:
     CloudStoreMgr(const KvOptions *opts,
                   uint32_t fd_limit,
                   CloudStorageService *service);
-    KvError CloseFiles(std::span<LruFD::Ref> fds) override;
+    KvError CloseFiles(
+        std::span<LruFD::Ref> fds,
+        std::vector<LruFD::Ref> *failed_fds = nullptr) override;
     ~CloudStoreMgr() override;
     static constexpr TypedFileId ManifestFileId()
     {
