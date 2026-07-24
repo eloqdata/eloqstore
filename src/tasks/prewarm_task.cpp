@@ -291,7 +291,6 @@ void PrewarmService::PrewarmLoop()
             {
                 const TableIdent &table = prewarm_tables[i];
                 std::string remote_path = table.ToString();
-                remote_path.push_back('/');
                 PrewarmCloudCache(remote_path);
             }
         } while (sz == prewarm_tables.size());
@@ -411,6 +410,11 @@ void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
     const TableIdent scoped_tbl_id = TableIdent::FromString(remote_path);
     const bool scoped_to_single_partition =
         !remote_path.empty() && scoped_tbl_id.IsValid();
+    std::string list_prefix = remote_path;
+    if (!list_prefix.empty())
+    {
+        list_prefix.push_back('/');
+    }
     auto should_abort = [&]()
     {
         if (stop_requested_.load(std::memory_order_acquire))
@@ -444,7 +448,7 @@ void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
         std::string next_token;
 
         if (!ListCloudObjects(
-                remote_path, batch_infos, continuation_token, &next_token))
+                list_prefix, batch_infos, continuation_token, &next_token))
         {
             LOG(WARNING) << "Failed to list cloud objects after "
                          << api_call_count << " API calls, prewarm aborted. "
