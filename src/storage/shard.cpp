@@ -706,6 +706,13 @@ bool Shard::ProcessReq(KvRequest *req)
         auto lbd = [task, req]() -> KvError
         {
             auto floor_req = static_cast<FloorRequest *>(req);
+            // Floor's large_value_ is an IoStringBuffer; in pinned mode its
+            // fragments come from the unrecyclable shard-private GC pool, same
+            // as the Read IoStringBuffer arm rejected above.
+            if (!shard->store_->Options().pinned_memory_chunks.empty())
+            {
+                return KvError::InvalidArgs;
+            }
             KvError err = task->Floor(req->TableId(),
                                       floor_req->Key(),
                                       floor_req->floor_key_,
