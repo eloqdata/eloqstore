@@ -44,12 +44,10 @@ public:
 
     void AddPendingCompact(const TableIdent &tbl_id);
     bool HasPendingCompact(const TableIdent &tbl_id);
-    void AddPendingFileGc(const TableIdent &tbl_id);
-    bool HasPendingFileGc(const TableIdent &tbl_id);
+    bool TryAddFileGc(const TableIdent &tbl_id);
     void AddPendingTTL(const TableIdent &tbl_id);
     bool HasPendingTTL(const TableIdent &tbl_id);
-    void AddPendingLocalGc(const TableIdent &tbl_id);
-    bool HasPendingLocalGc(const TableIdent &tbl_id);
+    bool TryAddLocalGc(const TableIdent &tbl_id);
 #ifdef ELOQ_MODULE_ENABLED
     enum class ShardStatus : uint8_t
     {

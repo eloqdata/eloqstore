@@ -851,6 +851,8 @@ bool AsyncHttpManager::SetupListRequest(ObjectStore::ListTask *task, CURL *easy)
     std::string strip_prefix = ComposeKeyFromRemote(task->remote_path_);
     if (task->remote_path_.empty() && !strip_prefix.empty())
     {
+        // An empty remote path lists the configured store root. Preserve its
+        // boundary so a root such as "tenant" does not also match "tenant2".
         strip_prefix.push_back('/');
     }
 

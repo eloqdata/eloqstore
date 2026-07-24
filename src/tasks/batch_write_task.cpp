@@ -1909,9 +1909,9 @@ KvError BatchWriteTask::Drop()
 
     // 3. Schedule mode-aware GC. In cloud mode it removes orphaned objects
     //    before cleaning the local cache; other modes clean local files.
-    if (Options()->data_append_mode && !shard->HasPendingFileGc(tbl_ident_))
+    if (Options()->data_append_mode)
     {
-        shard->AddPendingFileGc(tbl_ident_);
+        shard->TryAddFileGc(tbl_ident_);
     }
 
     return KvError::NoError;

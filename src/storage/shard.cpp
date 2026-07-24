@@ -439,36 +439,32 @@ bool Shard::HasPendingCompact(const TableIdent &tbl_id)
 #endif
 }
 
-void Shard::AddPendingFileGc(const TableIdent &tbl_id)
+bool Shard::TryAddFileGc(const TableIdent &tbl_id)
 {
-    assert(!HasPendingFileGc(tbl_id));
     auto it = pending_queues_.find(tbl_id);
     assert(it != pending_queues_.end());
     PendingWriteQueue &pending_q = it->second;
     FileGcRequest &req = pending_q.file_gc_req_;
-    req.SetTableId(tbl_id);
 #ifdef ELOQ_MODULE_ENABLED
     {
         std::lock_guard<bthread::Mutex> lk(req.mutex_);
+        if (!req.done_)
+        {
+            return false;
+        }
         req.done_ = false;
     }
 #else
-    req.done_.store(false, std::memory_order_relaxed);
+    bool expected = true;
+    if (!req.done_.compare_exchange_strong(
+            expected, false, std::memory_order_relaxed))
+    {
+        return false;
+    }
 #endif
+    req.SetTableId(tbl_id);
     pending_q.PushBack(&req);
-}
-
-bool Shard::HasPendingFileGc(const TableIdent &tbl_id)
-{
-    auto it = pending_queues_.find(tbl_id);
-    assert(it != pending_queues_.end());
-    PendingWriteQueue &pending_q = it->second;
-#ifdef ELOQ_MODULE_ENABLED
-    std::lock_guard<bthread::Mutex> lk(pending_q.file_gc_req_.mutex_);
-    return !pending_q.file_gc_req_.done_;
-#else
-    return !pending_q.file_gc_req_.done_.load(std::memory_order_relaxed);
-#endif
+    return true;
 }
 
 void Shard::AddPendingTTL(const TableIdent &tbl_id)
@@ -504,36 +500,32 @@ bool Shard::HasPendingTTL(const TableIdent &tbl_id)
 #endif
 }
 
-void Shard::AddPendingLocalGc(const TableIdent &tbl_id)
+bool Shard::TryAddLocalGc(const TableIdent &tbl_id)
 {
-    assert(!HasPendingLocalGc(tbl_id));
     auto it = pending_queues_.find(tbl_id);
     assert(it != pending_queues_.end());
     PendingWriteQueue &pending_q = it->second;
     LocalGcRequest &req = pending_q.local_gc_req_;
-    req.SetTableId(tbl_id);
 #ifdef ELOQ_MODULE_ENABLED
     {
         std::lock_guard<bthread::Mutex> lk(req.mutex_);
+        if (!req.done_)
+        {
+            return false;
+        }
         req.done_ = false;
     }
 #else
-    req.done_.store(false, std::memory_order_relaxed);
+    bool expected = true;
+    if (!req.done_.compare_exchange_strong(
+            expected, false, std::memory_order_relaxed))
+    {
+        return false;
+    }
 #endif
+    req.SetTableId(tbl_id);
     pending_q.PushBack(&req);
-}
-
-bool Shard::HasPendingLocalGc(const TableIdent &tbl_id)
-{
-    auto it = pending_queues_.find(tbl_id);
-    assert(it != pending_queues_.end());
-    PendingWriteQueue &pending_q = it->second;
-#ifdef ELOQ_MODULE_ENABLED
-    std::lock_guard<bthread::Mutex> lk(pending_q.local_gc_req_.mutex_);
-    return !pending_q.local_gc_req_.done_;
-#else
-    return !pending_q.local_gc_req_.done_.load(std::memory_order_relaxed);
-#endif
+    return true;
 }
 
 #ifdef ELOQ_MODULE_ENABLED
