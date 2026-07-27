@@ -347,10 +347,10 @@ caps to make blocking paths hot:
     configuration. The retained run metadata did not record
     `ELOQ_IO_STATS`; the later timing cleanup is diagnostic-only, but this
     campaign was not repeated at that later commit.
-- **Outstanding no-regression guards**: pure-read throughput and pure-write
-  throughput within noise (±3%) of the pre-QoS baseline at default caps — the
-  hot-path cost is two counter checks per IO, so any regression indicates a
-  wake storm or false blocking.
+- **Outstanding no-regression guard**: pure-read throughput within noise (±3%)
+  of the pre-QoS baseline at default settings.
+- Pure-write throughput is not a release guard: all writes intentionally remain
+  within the background rate share, even when foreground is idle.
 - **Outstanding sweeps**: `max_inflight_read` ∈ {64, 128, 256, 512},
   `bg_read_ratio` ∈
   {10, 25, 50}, `max_inflight_write` ∈ {256, 512, 1024},
