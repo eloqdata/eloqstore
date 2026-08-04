@@ -116,23 +116,28 @@ TEST_CASE("rate budget: charges device IO and completes under a tiny rate",
 TEST_CASE("rate budget: foreground borrows background's idle surplus",
           "[io_qos]")
 {
-    // Reads run after all writes have completed, so the background class
-    // is idle and its share should be lent to foreground: with a rate low
-    // enough that foreground exhausts its own 75% share, some read
-    // admissions must be granted from the background bucket (borrowed),
-    // and every op must still be accounted to the borrower's class.
+    // Reads run after all writes complete, so the background class is idle
+    // and its share must be lent to foreground. A single 600KB overflow
+    // value read issues ~150 page reads concurrently (one ReadPages batch),
+    // so foreground demand instantaneously exceeds its whole burst of ops
+    // and the surplus must be granted from the idle background bucket —
+    // deterministic regardless of device speed (a rate-based sequential
+    // read stream is not: it can stay under the foreground share). Every
+    // borrowed op is still accounted to the foreground (borrower) class.
     eloqstore::KvOptions opts = default_opts;
     opts.disk_rate_limit_iops = 2000;
     opts.rate_limit_burst_ms = 4;
+    opts.overflow_pointers = 128;
     eloqstore::EloqStore *store = InitStore(opts);
 
     MapVerifier verify(test_tbl_id, store, false);
-    verify.SetValueSize(200);
-    verify.WriteRnd(0, 500, 0, 25);
-    for (int i = 0; i < 100; i++)
-    {
-        verify.Read(std::rand() % 500);
-    }
+    verify.SetValueSize(600 * 1024);
+    verify.Upsert(1);
+    verify.Upsert(2);
+    // Background is idle now; these foreground reads each fan out into a
+    // large concurrent page-read batch that outruns the foreground burst.
+    verify.Read(1);
+    verify.Read(2);
 
     eloqstore::IoQosStats stats = ShardStats(store);
     REQUIRE(stats.rate_.admitted_ops_ > 0);
@@ -365,13 +370,31 @@ TEST_CASE("io qos stats: concurrent sampling", "[io_qos][stats]")
     REQUIRE(stats.io_window_inflight_ == 0);
 }
 
+TEST_CASE("rate budget: write ops cost is ceil(bytes / io_unit)", "[io_qos]")
+{
+    // The write ops charge is the single WriteRateOps formula used by both
+    // WritePage and SubmitMergedWrite. At the 4KB default quantum a data
+    // page costs 1 op and a 1MB merged write costs 256; a finer 2KB unit
+    // doubles both. Locks the currency so the SubmitMergedWrite clamp
+    // regression (which floored the unit at data_page_size) cannot return.
+    using eloqstore::IouringMgr;
+    REQUIRE(IouringMgr::WriteRateOpsFor(4 * 1024, 4 * 1024) == 1);
+    REQUIRE(IouringMgr::WriteRateOpsFor(1u << 20, 4 * 1024) == 256);
+    REQUIRE(IouringMgr::WriteRateOpsFor(4 * 1024, 2 * 1024) == 2);
+    REQUIRE(IouringMgr::WriteRateOpsFor(1u << 20, 2 * 1024) == 512);
+    // Partial final unit rounds up.
+    REQUIRE(IouringMgr::WriteRateOpsFor(4 * 1024 + 1, 4 * 1024) == 2);
+}
+
 TEST_CASE("rate budget: bytes bucket alone paces merged writes", "[io_qos]")
 {
-    // Only the bytes bucket enabled (iops = 0): append-mode merged writes
-    // must charge bytes and complete. Exercises the ops-disabled branch of
-    // Positive() and the large-cost debt path (a merged write can exceed
-    // one burst of byte tokens).
+    // Only the bytes bucket enabled: append_opts inherits the nonzero
+    // default disk_rate_limit_iops, so it must be explicitly zeroed or this
+    // would enable both buckets and never exercise the ops-disabled branch
+    // of Positive() / the ops-not-debited path in Charge(). The tiny byte
+    // budget must actually block background writes.
     eloqstore::KvOptions opts = append_opts;
+    opts.disk_rate_limit_iops = 0;
     opts.disk_rate_limit_mbps = 8;
     opts.rate_limit_burst_ms = 4;
     eloqstore::EloqStore *store = InitStore(opts);
@@ -385,6 +408,10 @@ TEST_CASE("rate budget: bytes bucket alone paces merged writes", "[io_qos]")
     }
 
     eloqstore::IoQosStats stats = ShardStats(store);
-    REQUIRE(stats.rate_.admitted_bytes_ > 0);
     REQUIRE(stats.bg_rate_.admitted_bytes_ > 0);
+    // The small byte budget must have paced (blocked) background writes.
+    // (Ops are still counted in admitted_ops_ for observability even with
+    // the ops dimension disabled; only the ops *balance* is left untouched,
+    // which is what the overflow fix guards — not asserted here.)
+    REQUIRE(stats.bg_rate_.blocked_count_ > 0);
 }

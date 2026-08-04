@@ -135,21 +135,20 @@ struct KvOptions
      */
     uint32_t rate_limit_burst_ms = 2;
     /**
-     * @brief Ops-cost quantum for large IOs against the ops bucket (M4):
-     * a single submission of `len` bytes is charged
-     * ceil(len / rate_limit_io_unit) operations. This is the HYPERVISOR
-     * ACCOUNTING currency, not the kernel command split: on Azure local
-     * NVMe, written bytes cost two read units per 4KB (fio-fitted
-     * 2026-07-21/22, confirmed by the clean/throttled boundary and the
-     * engine currency ladder — 4KB units behaved identically to 2KB,
-     * >=16KB measurably re-exposed hypervisor throttling under write
-     * load). The 2KB default encodes that price. On platforms with
-     * different accounting it errs in the safe direction (overcharging
-     * writes paces background early instead of blowing the foreground
-     * tail); recalibrate with the fio boundary method in
-     * docs/design/io_qos.md if write throughput matters more.
+     * @brief Ops-cost quantum for writes against the ops bucket (M4): a
+     * write of `len` bytes is charged ceil(len / rate_limit_io_unit)
+     * operations (WriteRateOps), so a data-page write and a merged write
+     * are metered on one consistent scale. Defaults to the physical write
+     * quantum, one data page (4KB): a 4KB write costs 1 op, a 1MB merged
+     * write costs 256. Must be nonzero (a zero/malformed value is rejected
+     * at load and the default is kept). A finer unit (e.g. 2KB) charges
+     * writes more ops per byte and paces background harder; the tested
+     * Azure NVMe read-tail target was met at the 4KB default, so it is not
+     * enabled by default — recalibrate with the fio boundary method in
+     * docs/design/io_qos.md only if a device's write-accounting unit is
+     * measured smaller and write throttling needs it.
      */
-    uint32_t rate_limit_io_unit = 2 * KB;
+    uint32_t rate_limit_io_unit = 4 * KB;
     /**
      * @brief Background share of the device rate budget, percent (M4).
      * The rate budget is partitioned: background IO (background-task

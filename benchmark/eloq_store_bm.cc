@@ -773,6 +773,18 @@ void Benchmark::RunGet2(uint32_t client_threads,
               << ", p50->" << pct(0.50) << ", p90->" << pct(0.90) << ", p95->"
               << pct(0.95) << ", p99->" << pct(0.99) << ", p99.9->"
               << pct(0.999) << ", p99.99->" << pct(0.9999);
+
+    // A latency benchmark that reports percentiles over surviving samples
+    // must not exit success when requests were rejected/failed or nothing
+    // completed — otherwise a broken run reads as a fast one. main()
+    // turns this into a nonzero process exit.
+    if (read_failures != 0 || issue_failures != 0 || successes == 0)
+    {
+        failed_ = true;
+        LOG(ERROR) << "GET2 run FAILED: read_failures=" << read_failures
+                   << " issue_failures=" << issue_failures
+                   << " successes=" << successes;
+    }
 }
 
 void Benchmark::OnRead(::eloqstore::KvRequest *req)

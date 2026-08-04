@@ -68,10 +68,12 @@ user writes. Scheduled via shard pending-sets
 requests in each `PendingWriteQueue`.
 
 All of these run as background tasks (`KvTask::IsBackground()`), so their
-data-page reads — compaction move batches in particular — are charged
-against the read budget's background sub-budget (`bg_read_ratio`,
-doc 07 / `docs/design/io_qos.md` M2) and cannot crowd out foreground reads
-at the device; their page writes are bounded by `max_inflight_write`.
+data-page reads — compaction move batches in particular — and all their page
+writes are charged against the **background share** of the device rate budget
+(`rate_bg_ratio`, doc 07 / `docs/design/io_qos.md` M4) and cannot crowd out
+foreground reads at the device. A pure-write/compaction phase with no
+concurrent foreground reads therefore runs at `rate_bg_ratio` of the device
+rate by design (foreground does not lend to background).
 
 - **Compaction** (`Compact()`, append mode only): one `MakeCowRoot`; rewrite
   pass over under-utilized data files (live pages re-written to the tail,

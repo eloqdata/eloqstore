@@ -86,6 +86,7 @@ DEFINE_uint64(subcompactions,
 
 int main(int argc, char *argv[])
 {
+    int exit_code = 0;
     FLAGS_logtostderr = true;
     google::InitGoogleLogging("EloqStore_benchmark");
 
@@ -141,6 +142,10 @@ int main(int argc, char *argv[])
 
         // Run the test
         bench_mark.RunBenchmark();
+        if (bench_mark.Failed())
+        {
+            exit_code = 1;
+        }
 
         // Shutdown the eloq store
         bench_mark.CloseEloqStore();
@@ -196,5 +201,5 @@ int main(int argc, char *argv[])
     }
 
     google::ShutdownGoogleLogging();
-    return 0;
+    return exit_code;
 }

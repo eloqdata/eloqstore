@@ -180,13 +180,25 @@ int KvOptions::LoadFromIni(const char *path)
     }
     if (reader.HasValue(sec_run, "rate_limit_burst_ms"))
     {
-        rate_limit_burst_ms =
-            reader.GetUnsigned(sec_run, "rate_limit_burst_ms", 4);
+        // Fall back to the current (member-default) value, not a literal, so
+        // a malformed entry cannot silently change the policy.
+        rate_limit_burst_ms = reader.GetUnsigned(
+            sec_run, "rate_limit_burst_ms", rate_limit_burst_ms);
     }
     if (reader.HasValue(sec_run, "rate_limit_io_unit"))
     {
         std::string io_unit_str = reader.Get(sec_run, "rate_limit_io_unit", "");
-        rate_limit_io_unit = ParseSizeWithUnit(io_unit_str);
+        const uint64_t parsed = ParseSizeWithUnit(io_unit_str);
+        if (parsed == 0)
+        {
+            LOG(WARNING) << "rate_limit_io_unit '" << io_unit_str
+                         << "' is invalid; keeping default "
+                         << rate_limit_io_unit << " bytes";
+        }
+        else
+        {
+            rate_limit_io_unit = static_cast<uint32_t>(parsed);
+        }
     }
     if (reader.HasValue(sec_run, "rate_bg_ratio"))
     {

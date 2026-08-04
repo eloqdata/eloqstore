@@ -37,38 +37,32 @@ Responsibilities:
 - **Page I/O** — `ReadPage`/`ReadPages` (batched, into pool buffers, fixed
   reads when the buffer is registered), `WritePage`. `ConvFilePageId` splits a
   `FilePageId` into `(file_id, offset)` by `pages_per_file_shift`.
-- **In-flight page-IO budgets** (`IoBudget`, see `docs/design/io_qos.md`
-  M1/M2) — two per-shard counters in configured `data_page_size` units with
-  independent caps:
-  `read_budget_` (`max_inflight_read`; `ReadPage`/`ReadPages`, per-page
-  acquisition so a batch larger than the cap cannot deadlock) and
-  `write_budget_` (`max_inflight_write`; `WritePage` cost 1,
-  `SubmitMergedWrite` cost `ceil(bytes / data_page_size)`). Budget is acquired
-  immediately before SQE prep and released per CQE in `PollComplete`, which
-  distinguishes budgeted page reads from metadata ops via the
-  `KvTaskPageRead`/`BaseReqPageRead` user-data types. A cap of 0 disables a
-  budget; a single request costlier than the cap is admitted alone once the
-  budget drains. Metadata, manifest, bulk file/snapshot paths (`ReadFile`,
-  `ReadFilePrefix`, `WriteSnapshot`), `Fdatasync`, and segment IO are exempt.
-  With `enable_data_page_cache`, `max_inflight_write` also bounds cached-page
-  pins retained by write promotion until the corresponding IO completes.
-  The read budget carries a **background sub-budget** (`bg_read_ratio`
-  percent of `max_inflight_read`): budgeted page reads from `BatchWrite` and
-  `BackgroundWrite` (compaction) tasks are additionally bounded by it, so they
-  cannot crowd foreground point reads out of the device queue. `EvictFile` and
-  `Prewarm` are background task types, but local-GC `ReadFile` and
-  prewarm/download whole-file bulk IO remain exempt. Foreground may use the
-  entire read budget while background has no pending demand. Once a background
-  acquisition enters the wait path, its unused sub-budget stays reserved
-  through admission, including the wake-to-admit gap. Each class waits on its
-  own FIFO zone; release wakes background first and always wakes foreground.
-  The write budget has no split — all page writes come from write tasks, i.e.
-  background.
-  `GetIoQosStats()` (also surfaced as `EloqStore::GetIoQosStats(shard_id)`)
-  exposes in-flight/high-watermark/blocked counters (total read, bg-read slice,
-  write) plus write-path fdatasync count and latency. The blocked fields are
-  per admission class: `read_` counts foreground waits, `bg_read_` background
-  waits, and `write_` all write waits.
+- **Device rate budget** (`RateBudget`, see `docs/design/io_qos.md` M4) —
+  per-shard token buckets metering device **ops/sec** and **bytes/sec**,
+  refilled lazily from the shard TSC clock once per event-loop iteration
+  (`RefillAndWake` at the top of `Submit()`) and spent at the page-IO acquire
+  sites (`ReadPage`/`ReadPages` cost 1 op + one page of bytes; `WritePage` and
+  `SubmitMergedWrite` cost `WriteRateOps(bytes)` = `ceil(bytes /
+  rate_limit_io_unit)` ops + `bytes`; `fdatasync` 1 op). Admission is **debt**:
+  a task waits until the balance is positive, then subtracts its full cost
+  (may go negative), so the long-run rate is exact and an IO larger than the
+  bucket never deadlocks. There is **no completion-time release** — a rate
+  budget meters issuance, so tokens are spent by sending and only time (refill)
+  restores them. The budget is **partitioned by class**: foreground buckets
+  refill at `(100 − rate_bg_ratio)%`, background (background-task reads and all
+  write-path IO) at `rate_bg_ratio%`. Foreground may borrow background's idle
+  surplus (background never borrows); admission is peek-and-grant — the refill
+  charges the FIFO head's recorded cost before waking it. Per-disk limits
+  (`disk_rate_limit_iops`/`disk_rate_limit_mbps`, on by default) are divided
+  across shards (`× store paths / num_threads`). A separate optional
+  class-blind in-flight command window (`max_inflight_io`, off by default) is
+  the only occupancy-style cap and *does* release per CQE in `PollComplete`.
+  Metadata, manifest, bulk file/snapshot paths, and segment IO are exempt.
+  `GetIoQosStats()` (also `EloqStore::GetIoQosStats(shard_id)`) exposes the
+  per-class rate counters (blocked count/us, admitted ops/bytes, borrowed ops)
+  and the window's in-flight/high-water/blocked gauges.
+  The M1/M2 count budgets (`IoBudget`, `max_inflight_read`/`bg_read_ratio`)
+  are **retired**; `max_inflight_write` now only sizes the write request pools.
 - **FD cache** — `LruFD` per (partition, `TypedFileId`), doubly-linked LRU
   bounded by the shard's fd budget; `EvictFD` closes idle descriptors.
   Open/close exclusion per FD via a coroutine `Mutex`. Data files open with

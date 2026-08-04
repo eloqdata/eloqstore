@@ -22,18 +22,23 @@ device level. Reads were not budgeted at all; writes were budgeted only
 per-task. Yielding controlled when background IO was *issued*, not how much of
 it queued at the device once issued.
 
-This document defines three per-shard mechanisms. M1 and M2 are implemented;
-M3 remains a measurement-gated follow-up:
+**Current state (2026):** the shipped mechanism is **M4**, per-shard device
+rate limiting (`RateBudget`; see the M4 section below). M1/M2 (in-flight
+count budgets) and M3 (a separate background write bytes/sec limiter) were
+the original design and are documented below as design record, but M1/M2 are
+**retired** in the code and M3 is **subsumed** by M4's byte bucket. The
+historical mechanism sketch:
 
-- **M1**: per-shard caps on in-flight page IO, with **separate caps for
-  reads and writes** — they are different device resources and must be
-  tunable independently.
-- **M2**: foreground/background classification with a background sub-budget
-  on the read cap (all page writes come from write tasks, i.e. background,
-  so the write cap needs no split).
-- **M3**: a bytes/sec rate limiter on background writes (follow-up, driven by
-  measurement; complements the write cap, which bounds queue depth but not
-  sustained throughput).
+- **M1** *(retired)*: per-shard caps on in-flight page IO, separate for reads
+  and writes.
+- **M2** *(retired; the FG/BG class model survives in M4's `rate_bg_ratio`)*:
+  foreground/background classification with a background sub-budget on the
+  read cap.
+- **M3** *(subsumed by M4)*: a bytes/sec rate limiter on background writes.
+- **M4** *(current)*: per-shard token buckets metering device ops and bytes
+  per second, partitioned foreground/background, replacing M1/M2 — the tail
+  on rate-metered cloud disks is set by the hypervisor's rate limiter, which
+  a concurrency cap cannot address.
 
 All caps and limits in this document are **per shard**, consistent with the
 rest of EloqStore.
@@ -342,8 +347,19 @@ M2 class policy:
   (measured ~2M borrowed ops/shard per storm; foreground fell 183K → 116K
   QPS and p99.9 720 µs → 5.6 ms). Foreground's share is a guarantee
   against background and must hold regardless of how idle foreground
-  momentarily looks. Reverse lending (idle foreground donating to
-  background) would need genuine idle-hysteresis to be safe; deferred.
+  momentarily looks. **Accepted consequence (product decision):** because
+  all write-path IO is background and reverse lending is not implemented, a
+  pure-write workload (no concurrent foreground reads) runs at only
+  `rate_bg_ratio` of the device rate — 25% by default — even when the
+  device is otherwise idle. This is deliberate: the limiter is on by
+  default and read-tail protection takes priority; pure-write throughput is
+  no longer a ±3% no-regression guard. Deployments that need full-rate
+  ingest raise `rate_bg_ratio` (or disable the limiter for a load phase).
+  Reverse lending (idle foreground donating to background) would remove the
+  cap but needs genuine idle-hysteresis to stay safe — the instantaneous
+  "foreground idle?" test that works for foreground borrowing is unsafe in
+  reverse (a closed-loop foreground looks idle for microseconds between
+  completions); deferred.
   Each refill
   wakes each class's zone independently — no cross-class wake coupling,
   hence no starvation coupling either.
@@ -356,12 +372,13 @@ M2 class policy:
   There is no completion-driven release — spent tokens are gone; the refill
   is the only credit source.
 
-**Relation to M1/M2.** The count caps remain as burst-depth guards (a rate
-bucket alone would admit `burst_ms` worth of IO instantaneously after an idle
-gap). Their sizing pressure disappears: set them to `2 × shard_iops ×
-t_read(loaded)` and forget them; the rate budget is the binding control. M3
-(background write bytes/sec) becomes the BG class share of the byte bucket —
-no separate mechanism.
+**Relation to M1/M2.** The M1/M2 count budgets are **retired** (`IoBudget`
+deleted; `max_inflight_read`/`bg_read_ratio` are deprecated no-ops;
+`max_inflight_write` reverts to write request-pool sizing). Instantaneous
+burst-depth bounding, if a deployment wants it, is the single class-blind
+`max_inflight_io` window (off by default; measured inert on the rate-metered
+Azure disk). M3 (background write bytes/sec) is subsumed: background write
+pacing is the BG class share of the M4 byte bucket — no separate mechanism.
 
 **Recommended production configuration (validated 2026-07-22): the rate
 knobs alone — the count caps are retired.** With the partitioned buckets,
@@ -370,9 +387,10 @@ the tuned count caps changed storm p99.9 by nothing measurable (709 vs
 `disk_rate_limit_iops` (95% of the measured disk ceiling; default 275K —
 the measured Azure v2 local-NVMe ceiling — with rate limiting ON by
 default), `rate_bg_ratio` (the one policy choice), and
-`rate_limit_io_unit` (a platform constant — 2 KB on Azure local NVMe,
-i.e. written bytes cost twice read bytes per 4 KB; values ≥16 KB
-measurably leak hypervisor throttling, 4 KB is equivalent to 2 KB).
+`rate_limit_io_unit` (the physical write quantum, default 4 KB = one data
+page: a 4 KB write costs 1 op, a 1 MB merged write 256; a finer unit
+charges writes more ops and paces background harder — not needed at the
+tested Azure read-tail target, so left at 4 KB).
 `max_inflight_io` (single class-blind in-flight command window) exists as
 an off-by-default safety bound; measured inert on Azure — the rate-metered
 hypervisor does not penalize instantaneous depth at burst-window
@@ -399,14 +417,15 @@ uint32_t rate_limit_burst_ms  = 2;   // bucket capacity, ms of refill;
                                      // flattens the distribution (median
                                      // up, tail down), larger the reverse.
                                      // 1 ms for tail-first deployments.
-uint32_t rate_limit_io_unit   = 2048; // ops-cost quantum for large IOs:
-                                     // the hypervisor ACCOUNTING currency
-                                     // (Azure: a written 4KB costs two
-                                     // read units, fio-fitted and
-                                     // ladder-confirmed; >=16KB leaks
-                                     // throttling). Overcharges writes on
-                                     // platforms with cheaper accounting
-                                     // — the safe direction.
+uint32_t rate_limit_io_unit   = 4096; // write ops quantum: ceil(len/unit)
+                                     // ops per write (WriteRateOps, used by
+                                     // both WritePage and SubmitMergedWrite).
+                                     // Default = one data page: 4KB write =
+                                     // 1 op, 1MB merged = 256. Must be
+                                     // nonzero (validated at load). A finer
+                                     // unit paces background harder; not
+                                     // needed at the tested read-tail
+                                     // target.
 uint32_t rate_bg_ratio        = 25;  // background share of the rate, percent
 ```
 

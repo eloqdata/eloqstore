@@ -1399,6 +1399,25 @@ public:
     }
 
     /**
+     * @brief Rate-budget ops cost of a write of @p bytes, in
+     * rate_limit_io_unit-sized device-accounting operations
+     * (ceil(bytes / unit)). The single source of the write ops charge —
+     * both WritePage (one data page) and SubmitMergedWrite use it, so a
+     * page's cost and a merged write's cost are consistent by construction.
+     * The unit is the configured physical write quantum (default = data
+     * page size); it is validated nonzero at option load, so no clamp is
+     * needed here.
+     */
+    static uint32_t WriteRateOpsFor(size_t bytes, uint32_t unit)
+    {
+        return static_cast<uint32_t>((bytes + unit - 1) / unit);
+    }
+    uint32_t WriteRateOps(size_t bytes) const
+    {
+        return WriteRateOpsFor(bytes, options_->rate_limit_io_unit);
+    }
+
+    /**
      * @brief Pure-function form of BufIndexForAddress: searches @p chunks for
      * the one containing @p ptr and returns base_index + chunk_index, or
      * UINT16_MAX if not found. Exposed statically so the lookup can be unit-

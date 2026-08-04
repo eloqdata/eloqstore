@@ -226,6 +226,16 @@ public:
                  uint32_t per_shard_cap);
     static void OnReadV2(::eloqstore::KvRequest *req);
 
+    /**
+     * @brief True if the last run recorded request failures or produced no
+     * successful samples. main() propagates it to a nonzero process exit so
+     * a broken run cannot masquerade as a fast one.
+     */
+    bool Failed() const
+    {
+        return failed_;
+    }
+
 private:
     static void OnBatchWrite(::eloqstore::KvRequest *req);
 
@@ -260,6 +270,7 @@ private:
     mutable std::vector<object_generator> load_obj_gens_;
     uint64_t start_ts_{0};
     mutable BMResult result_;
+    bool failed_{false};  // set by RunGet2 on request failure / no samples
 
     friend BMResult;
     friend LoadPartitionsOperation;

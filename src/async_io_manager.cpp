@@ -167,19 +167,50 @@ bool AsyncIoManager::IsIdle()
     return true;
 }
 
+// Split a per-shard total rate into (foreground, background) shares. A
+// rate of 0 means "dimension disabled" and is preserved as such. For any
+// enabled dimension both shares are kept nonzero so integer truncation at
+// low totals cannot silently disable a class — a zero background rate
+// would leave background writes unbudgeted, a zero foreground rate would
+// drop read protection. The sum equals the total exactly for total >= 2;
+// a total of 1 cannot fund two integer shares, so both are set to 1 (a
+// one-unit overshoot at a degenerate rate) and logged.
+static void SplitRate(uint64_t total,
+                      uint32_t bg_ratio_pct,
+                      const char *dim,
+                      uint64_t &fg,
+                      uint64_t &bg)
+{
+    if (total == 0)
+    {
+        fg = 0;
+        bg = 0;
+        return;
+    }
+    if (total < 2)
+    {
+        LOG(WARNING) << "per-shard " << dim << " rate " << total
+                     << " too low to partition into foreground/background; "
+                        "using 1/1 to keep both classes nonzero";
+        fg = 1;
+        bg = 1;
+        return;
+    }
+    bg = std::clamp<uint64_t>(total * bg_ratio_pct / 100, 1, total - 1);
+    fg = total - bg;
+}
+
 void RateBudget::SetRates(uint64_t ops_per_sec,
                           uint64_t bytes_per_sec,
                           uint32_t burst_ms,
                           uint32_t bg_ratio_pct)
 {
     // Partition the total rate between the classes (see class comment):
-    // background gets ratio percent, foreground the rest. Clamped so both
-    // classes always have a nonzero share when the budget is enabled.
+    // background gets ratio percent, foreground the rest, both kept nonzero
+    // for any enabled dimension (see SplitRate).
     const uint32_t ratio = std::clamp<uint32_t>(bg_ratio_pct, 1, 99);
-    fg_ops_rate_ = ops_per_sec * (100 - ratio) / 100;
-    fg_bytes_rate_ = bytes_per_sec * (100 - ratio) / 100;
-    bg_ops_rate_ = ops_per_sec * ratio / 100;
-    bg_bytes_rate_ = bytes_per_sec * ratio / 100;
+    SplitRate(ops_per_sec, ratio, "ops", fg_ops_rate_, bg_ops_rate_);
+    SplitRate(bytes_per_sec, ratio, "bytes", fg_bytes_rate_, bg_bytes_rate_);
     burst_us_ = uint64_t{std::max<uint32_t>(burst_ms, 1)} * 1000;
 }
 
@@ -267,7 +298,10 @@ void RateBudget::Charge(uint32_t ops, uint64_t bytes, bool background)
 {
     // Debt semantics: subtract the full cost, letting the balance go
     // negative. Callers guarantee CanAdmit(background) held at the moment
-    // of the charge.
+    // of the charge. A balance is debited ONLY when its dimension is
+    // enabled (rate != 0): a disabled dimension is never refilled and
+    // never consulted by Positive(), so debiting it would drive it
+    // monotonically negative to int64 overflow on a long-lived shard.
     const int64_t ops_cost = int64_t{ops} * kScale;
     const int64_t bytes_cost = static_cast<int64_t>(bytes) * kScale;
     if (background)
@@ -277,8 +311,14 @@ void RateBudget::Charge(uint32_t ops, uint64_t bytes, bool background)
         // background buckets — the foreground debit is unreachable by
         // construction, not by luck.
         assert(Positive(true));
-        bg_ops_bal_ -= ops_cost;
-        bg_bytes_bal_ -= bytes_cost;
+        if (bg_ops_rate_ != 0)
+        {
+            bg_ops_bal_ -= ops_cost;
+        }
+        if (bg_bytes_rate_ != 0)
+        {
+            bg_bytes_bal_ -= bytes_cost;
+        }
         bg_admitted_ops_.fetch_add(ops, std::memory_order_relaxed);
         bg_admitted_bytes_.fetch_add(bytes, std::memory_order_relaxed);
         return;
@@ -289,13 +329,25 @@ void RateBudget::Charge(uint32_t ops, uint64_t bytes, bool background)
     const bool borrowed = !Positive(false);
     if (borrowed)
     {
-        bg_ops_bal_ -= ops_cost;
-        bg_bytes_bal_ -= bytes_cost;
+        if (bg_ops_rate_ != 0)
+        {
+            bg_ops_bal_ -= ops_cost;
+        }
+        if (bg_bytes_rate_ != 0)
+        {
+            bg_bytes_bal_ -= bytes_cost;
+        }
     }
     else
     {
-        fg_ops_bal_ -= ops_cost;
-        fg_bytes_bal_ -= bytes_cost;
+        if (fg_ops_rate_ != 0)
+        {
+            fg_ops_bal_ -= ops_cost;
+        }
+        if (fg_bytes_rate_ != 0)
+        {
+            fg_bytes_bal_ -= bytes_cost;
+        }
     }
     admitted_ops_.fetch_add(ops, std::memory_order_relaxed);
     admitted_bytes_.fetch_add(bytes, std::memory_order_relaxed);
@@ -1303,12 +1355,14 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
 
     auto [fd, registered] = fd_ref.FdPair();
     WriteReq *req = write_req_pool_->Alloc(std::move(fd_ref), std::move(page));
-    // Write-budget admission (io_qos.md M1): after every other blocking
-    // acquisition (FD, req pool), immediately before SQE prep. The rate
-    // budget (M4) is charged first; write tasks classify as background,
-    // so page writes draw from the background sub-bucket.
-    rate_budget_.Acquire(
-        1, options_->data_page_size, ThdTask()->IsBackground());
+    // Device admission (io_qos.md M4): after every other blocking
+    // acquisition (FD, req pool), immediately before SQE prep. Rate budget
+    // first; write tasks classify as background. The ops cost uses the same
+    // WriteRateOps helper as the merged-write path so a page and a merged
+    // write are charged on one consistent scale.
+    rate_budget_.Acquire(WriteRateOps(options_->data_page_size),
+                         options_->data_page_size,
+                         ThdTask()->IsBackground());
     AcquireIoWindow(1);
     io_uring_sqe *sqe = GetSQE(UserDataType::WriteReq, req);
     if (registered)
@@ -1615,18 +1669,12 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
             static_cast<uint32_t>(req->pages_.size() - 1);
     }
 
-    // Write-budget admission (io_qos.md M1): cost in 4KB-page units so the
-    // cap means the same thing in append and non-append mode. Must mirror
-    // the release cost computed from bytes_ in PollComplete.
-    // Rate budget (M4) first: ops cost mirrors the kernel's split of large
-    // IOs into device commands of at most rate_limit_io_unit bytes; the
+    // Device admission (io_qos.md M4). Rate budget first: ops cost is
+    // ceil(bytes / rate_limit_io_unit) via WriteRateOps (the same helper
+    // WritePage uses), charged against the configured write quantum; the
     // bytes bucket is charged the full length. Debt admission means this
     // single large acquisition never deadlocks against the bucket size.
-    const uint32_t io_unit = std::max<uint32_t>(options_->rate_limit_io_unit,
-                                                options_->data_page_size);
-    rate_budget_.Acquire(static_cast<uint32_t>((bytes + io_unit - 1) / io_unit),
-                         bytes,
-                         ThdTask()->IsBackground());
+    rate_budget_.Acquire(WriteRateOps(bytes), bytes, ThdTask()->IsBackground());
     AcquireIoWindow(DeviceCmdCost(bytes));
     io_uring_sqe *sqe = GetSQE(UserDataType::MergedWriteReq, req);
     auto [fd, registered] = req->fd_ref_.FdPair();

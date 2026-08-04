@@ -59,20 +59,21 @@ Scheduling primitives:
 - `WaitingZone` / `WaitingSeat` / `Mutex` — intra-shard wait lists (no real
   locks; they park/wake coroutines). Used for FD open/close exclusion, pool
   exhaustion waits, upload completion, etc.
-- IO-budget waits (`IoBudget::Acquire`, `async_io_manager.h`) — tasks park on
-  a budget's `WaitingZone` when admitting their page IO would exceed the
-  shard's in-flight read/write cap (`max_inflight_read` /
-  `max_inflight_write`); `PollComplete` releases per CQE and wakes waiters,
-  so release never depends on the blocked task being scheduled. Background
-  tasks (`KvTask::IsBackground()`: BatchWrite, BackgroundWrite, EvictFile,
-  Prewarm) are additionally confined to a read sub-budget (`bg_read_ratio`)
-  and wait on a separate FIFO zone. From a background acquisition's first wait
-  through admission (including the wake-to-admit gap), its unused sub-budget is
-  reserved from new foreground admissions. Release wakes background first and
-  always wakes foreground; both classes re-check admission, so neither can
-  starve the other. See `docs/design/io_qos.md` (M1/M2); the acquire order is
-  FD/mutex → pools/buffers → budget → SQE, with no voluntary yield after budget
-  admission and an equal-cost release per CQE.
+- Rate-budget waits (`RateBudget::Acquire`, `async_io_manager.h`) — tasks park
+  on a per-class `WaitingZone` when admitting their page IO would drive the
+  shard's device rate budget (`disk_rate_limit_iops`/`disk_rate_limit_mbps`,
+  M4) non-positive. Wakes are **refill-driven**, not completion-driven: the
+  once-per-loop `RefillAndWake` (peek-and-grant — it charges the FIFO head's
+  recorded cost before waking it) is the only wake source, so waiter progress
+  depends only on the shard loop running, never on another task completing.
+  Background tasks (`KvTask::IsBackground()`: BatchWrite, BackgroundWrite,
+  EvictFile, Prewarm) draw from the background class share (`rate_bg_ratio`)
+  on a separate FIFO zone; foreground may borrow background's idle surplus but
+  background never borrows foreground's, so foreground's share is a hard
+  guarantee. The optional `max_inflight_io` window is the only occupancy cap
+  that releases per CQE. See `docs/design/io_qos.md` (M4); the acquire order is
+  FD/mutex → pools/buffers → rate budget → window → SQE, with no voluntary
+  yield after admission. (The former `IoBudget` count budgets are retired.)
 
 `TaskManager` keeps one free-list pool per task type (`BatchWriteTask`,
 `BackgroundWrite`, `ReadTask`, `ScanTask`, `ListObjectTask`,

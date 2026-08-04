@@ -2371,13 +2371,12 @@ void EloqStore::InitializeMetrics(metrics::MetricsRegistry *metrics_registry,
                                      metrics::Type::Gauge);
         metrics_meters_[i]->Register(metrics::NAME_ELOQSTORE_LOCAL_SPACE_LIMIT,
                                      metrics::Type::Gauge);
-        metrics_meters_[i]->Register(
-            metrics::NAME_ELOQSTORE_INFLIGHT_READ_PAGES, metrics::Type::Gauge);
-        metrics_meters_[i]->Register(
-            metrics::NAME_ELOQSTORE_INFLIGHT_BG_READ_PAGES,
-            metrics::Type::Gauge);
-        metrics_meters_[i]->Register(
-            metrics::NAME_ELOQSTORE_INFLIGHT_WRITE_PAGES, metrics::Type::Gauge);
+        // The per-class in-flight page gauges (read / bg-read / write)
+        // measured the retired M1/M2 count budgets. The M4 rate budget has
+        // no per-class instantaneous page depth to report (it meters
+        // cumulative ops/bytes and a class-blind command window), so these
+        // gauges are not registered; dedicated rate-budget metrics are a
+        // follow-up (docs/design/io_qos.md).
     }
 
     enable_eloqstore_metrics_ = true;
