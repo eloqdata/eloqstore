@@ -154,30 +154,53 @@ private:
     // module worker (WorkOneRound), the sole consumer of requests_.
     void DrainPendingRequests();
 
+    /**
+     * @brief Create a task's coroutine SUSPENDED and admit it through
+     * ready_tasks_ instead of executing its first segment inline.
+     *
+     * The coroutine body yields straight back to the creator before running
+     * the request lambda, so callcc only pays the creation prologue here;
+     * the scheduler's ordinary resume in ExecuteReadyTasks runs the first
+     * segment. This makes ready_tasks_ the single scheduling point for new
+     * and in-flight work: previously each dequeued request executed its
+     * first segment inline during intake (up to 128 per loop iteration),
+     * ahead of tasks already resumed by IO completions or budget grants,
+     * which gradually starved mid-flight tasks under high load and inflated
+     * tail latency.
+     */
     template <typename F>
     void StartTask(KvTask *task, KvRequest *req, F lbd)
     {
         task->req_ = req;
         task->result_err_ = KvError::NoError;
         task->status_ = TaskStatus::Ongoing;
+#ifdef ELOQSTORE_WITH_TXSERVICE
+        // Captured at creation so the measured request duration includes the
+        // ready-queue wait (before the suspended-creation change, creation
+        // and first execution were the same instant).
+        metrics::TimePoint request_start{};
+        if (this->store_->EnableMetrics())
+        {
+            request_start = metrics::Clock::now();
+        }
+#endif
         running_ = task;
-        // Mark the resume start so a cooperative background loop measures this
-        // first segment from now, not from the previously resumed task's
-        // timestamp (see CurResumeElapsedUs / MaybeYield).
-        cur_resume_start_us_ = ReadTimeMicroseconds();
         task->coro_ = boost::context::callcc(
             std::allocator_arg,
             stack_allocator_,
-            [lbd, this](continuation &&sink)
-            {
+            [lbd,
+             this
 #ifdef ELOQSTORE_WITH_TXSERVICE
-                metrics::TimePoint request_start;
-                if (this->store_->EnableMetrics())
-                {
-                    request_start = metrics::Clock::now();
-                }
+             ,
+             request_start
 #endif
+        ](continuation &&sink)
+            {
                 shard->main_ = std::move(sink);
+                // Created suspended: hand control straight back to StartTask
+                // without running the request body; the scheduler's first
+                // resume() continues from here.
+                shard->main_ = shard->main_.resume();
                 KvError err = lbd();
                 KvTask *task = ThdTask();
                 task->result_err_ = err;
@@ -195,10 +218,10 @@ private:
                 return std::move(shard->main_);
             });
         running_ = nullptr;
-        if (task->status_ == TaskStatus::Finished)
-        {
-            OnTaskFinished(task);
-        }
+        // The prologue cannot finish the task; it is admitted like any
+        // resumed task, in arrival order relative to them.
+        assert(task->status_ == TaskStatus::Ongoing);
+        ready_tasks_.Enqueue(task);
     }
 
     moodycamel::BlockingConcurrentQueue<KvRequest *> requests_;
