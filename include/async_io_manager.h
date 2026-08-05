@@ -406,10 +406,25 @@ public:
     /**
      * @brief Drop a partition's manifest — delete it from local disk (and cloud
      *        storage in cloud mode). This does NOT check HasOtherFile, because
-     *        it is called from Drop / Reopen-clean paths where data files are
-     *        expected to still be present and will be cleaned by GC later.
+     *        it is called from the Drop path where data files are expected to
+     *        still be present and will be cleaned by GC later. Only the
+     *        partition owner's drop path may use this; reopen paths must use
+     *        DropLocalManifest.
      */
     virtual KvError DropManifest(const TableIdent &tbl_id) = 0;
+
+    /**
+     * @brief Drop only the LOCAL manifest state for @p tbl_id (file, caches,
+     *        space accounting) — never remote objects. Reopen and snapshot-
+     *        install paths adopt remote state; they consume the cloud
+     *        manifest and must not delete it, no matter what local cleanup
+     *        they perform. Defaults to DropManifest, which is local-only in
+     *        every backend except CloudStoreMgr (which overrides this).
+     */
+    virtual KvError DropLocalManifest(const TableIdent &tbl_id)
+    {
+        return DropManifest(tbl_id);
+    }
 
     virtual void RegisterDirBusy(const TableIdent &tbl_id)
     {
@@ -902,7 +917,8 @@ public:
     virtual KvError SyncFile(LruFD::Ref fd);
     virtual KvError SyncFiles(const TableIdent &tbl_id,
                               std::span<LruFD::Ref> fds);
-    KvError CloseFiles(std::span<LruFD::Ref> fds);
+    virtual KvError CloseFiles(std::span<LruFD::Ref> fds,
+                               std::vector<LruFD::Ref> *failed_fds = nullptr);
     virtual KvError FdatasyncFiles(const TableIdent &tbl_id,
                                    std::span<LruFD::Ref> fds);
     virtual KvError CloseFile(LruFD::Ref fd_ref);
@@ -1154,6 +1170,8 @@ public:
     CloudStoreMgr(const KvOptions *opts,
                   uint32_t fd_limit,
                   CloudStorageService *service);
+    KvError CloseFiles(std::span<LruFD::Ref> fds,
+                       std::vector<LruFD::Ref> *failed_fds = nullptr) override;
     ~CloudStoreMgr() override;
     static constexpr TypedFileId ManifestFileId()
     {
@@ -1183,6 +1201,7 @@ public:
                               uint64_t term) override;
     KvError AbortWrite(const TableIdent &tbl_id) override;
     KvError DropManifest(const TableIdent &tbl_id) override;
+    KvError DropLocalManifest(const TableIdent &tbl_id) override;
 
     ObjectStore &GetObjectStore()
     {
@@ -1325,6 +1344,8 @@ public:
 
 private:
     void WaitForCloudTasksToDrain();
+    FileKey BuildFileKey(const LruFD &fd) const;
+    void RegisterClosedFileAndTryGc(FileKey key);
 
 private:
     int CreateFile(LruFD::Ref dir_fd,

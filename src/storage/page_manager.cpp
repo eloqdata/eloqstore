@@ -551,7 +551,11 @@ KvError PageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
                       << "table " << tbl_ident << ", tag " << reopen_tag;
 
             // Delete any stale local manifest and clear in-memory state.
-            KvError drop_err = IoMgr()->DropManifest(tbl_ident);
+            // Local cleanup only: this path adopts remote state and must
+            // never delete remote objects — a spurious NotFound here (e.g.
+            // a lookup bug or transient listing gap) must not destroy the
+            // partition's cloud manifest.
+            KvError drop_err = IoMgr()->DropLocalManifest(tbl_ident);
             if (drop_err != KvError::NoError)
             {
                 LOG(WARNING) << "InstallExternalSnapshot DropManifest failed "
@@ -755,9 +759,8 @@ void PageManager::FreeMappingSnapshot(MappingSnapshot *mapping)
     {
         // If the input mapping is a segment mapping, removes it from the
         // segment mapping collection.
-        n = meta.segment_mapping_snapshots_.erase(mapping);
+        meta.segment_mapping_snapshots_.erase(mapping);
     }
-    CHECK(n == 1 || n == 0);
 }
 
 void PageManager::TryRecycleCachedPage(MemCachedPage *page)

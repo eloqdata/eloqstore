@@ -49,6 +49,7 @@ enum class RequestType : uint8_t
     DropTable,
     Archive,
     Compact,
+    FileGc,
     LocalGc,
     CleanExpired,
     GlobalArchive,
@@ -87,6 +88,8 @@ inline const char *RequestTypeToString(RequestType type)
         return "archive";
     case RequestType::Compact:
         return "compact";
+    case RequestType::FileGc:
+        return "file_gc";
     case RequestType::LocalGc:
         return "local_gc";
     case RequestType::CleanExpired:
@@ -364,6 +367,7 @@ public:
     {
         remote_path_ = std::move(remote_path);
     }
+
     void SetRecursive(bool recursive)
     {
         recursive_ = recursive;
@@ -481,6 +485,13 @@ public:
     {
         return clean_;
     }
+
+private:
+    // Internal to the shard's delayed reopen-waiter path: a non-zero pending
+    // time is only honored by Shard::EnqueueDelayedReopenRequest, which
+    // externally submitted requests never reach - they go straight to
+    // ProcessReq, whose PendingTime()==0 invariant would abort. Keep these
+    // unreachable from user code.
     void SetPendingTime(uint64_t us)
     {
         pending_time_us_ = us;
@@ -490,7 +501,6 @@ public:
         return pending_time_us_;
     }
 
-private:
     // Archive tag to reopen; empty means reopen the latest available snapshot.
     std::string tag_;
     bool clean_{false};
@@ -498,6 +508,7 @@ private:
 
     friend class EloqStore;
     friend class ReopenTask;
+    friend class Shard;
 };
 
 /**
@@ -749,6 +760,15 @@ public:
     RequestType Type() const override
     {
         return RequestType::Compact;
+    }
+};
+
+class FileGcRequest : public WriteRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::FileGc;
     }
 };
 

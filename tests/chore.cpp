@@ -1,7 +1,11 @@
 #include <glog/logging.h>
 
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "common.h"
@@ -138,4 +142,46 @@ TEST_CASE("file size tests - mixed page and file size combinations",
         // Validate
         REQUIRE(ValidateFileSizes(opts));
     }
+}
+
+TEST_CASE("failed external reopen completes pending reopen waiters",
+          "[chore][reopen_waiter]")
+{
+    KvOptions opts = default_opts;
+    // Keep the auto reopen delayed so the external reopen runs first.
+    opts.auto_reopen_pending_time_us = 2'000'000;
+
+    EloqStore *store = InitStore(opts);
+
+    // Heap-allocate the parked waiter; on failure the shard may still own it.
+    auto *waiter = new eloqstore::ReadRequest();
+    waiter->SetArgs(test_tbl_id, "k0");
+    waiter->SetReopen(true);
+    REQUIRE(store->ExecAsyn(waiter));
+
+    // In local mode, the external reopen becomes the driver and fails waiters
+    // with its own InvalidArgs result.
+    eloqstore::ReopenRequest external_reopen;
+    external_reopen.SetArgs(test_tbl_id);
+    store->ExecSync(&external_reopen);
+    const eloqstore::KvError external_err = external_reopen.Error();
+
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    while (!waiter->IsDone() && std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    const bool done = waiter->IsDone();
+    const eloqstore::KvError waiter_err =
+        done ? waiter->Error() : eloqstore::KvError::NoError;
+    if (done)
+    {
+        delete waiter;
+    }
+    // else: leak; the store may still reference it.
+
+    REQUIRE(external_err == eloqstore::KvError::InvalidArgs);
+    REQUIRE(done);
+    REQUIRE(waiter_err == eloqstore::KvError::InvalidArgs);
 }

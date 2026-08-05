@@ -978,3 +978,75 @@ TEST_CASE(
     store->Stop();
     CleanupStore(opts);
 }
+
+// ---------------------------------------------------------------------------
+// SeekFloor snapshots the floor entry's key/value/timestamp but not its
+// large_value_ flag, so the floor result inherits that flag from the
+// OVERSHOOT entry (the first key greater than the search key). A Floor
+// landing on a large (segment-backed) value whose in-region successor is a
+// small value then reports IsLargeValue()==false and skips loading the
+// segment payload — the floor returns without its large value.
+// ---------------------------------------------------------------------------
+TEST_CASE("floor of a large value loads it, not the next entry's flag",
+          "[large-value][floor]")
+{
+    Harness h(/*num_shards=*/1);
+    eloqstore::KvOptions opts = MakeOpts(h);
+    opts.data_page_restart_interval = 2;  // few keys span multiple regions
+    eloqstore::EloqStore *store = InitStore(opts);
+    h.BindStore(store);
+
+    eloqstore::TableIdent tbl{"lvc_floor", 0};
+    const size_t large_size = h.SegmentSize() * 2 + 7;  // 3 segments
+    const uint64_t seed = 0xC3C3C3C3ULL;
+
+    // Eight keys in one data page. key02 is a large (segment) value; the rest
+    // are small. Restart interval 2 puts restart points on key00/02/04/06, so
+    // the floor (key02) and its overshoot (key03, a small non-restart entry)
+    // share a restart region — the buggy SeekFloor branch. (When the overshoot
+    // is itself a restart point the scan stops before parsing it, so it must
+    // be a mid-region entry to leak.)
+    eloqstore::BatchWriteRequest wreq;
+    std::vector<eloqstore::WriteDataEntry> entries;
+    for (int i = 0; i < 8; ++i)
+    {
+        std::string key = "key0" + std::to_string(i);
+        if (i == 2)
+        {
+            entries.emplace_back(key,
+                                 h.MakeLargeValue(0, large_size, seed),
+                                 /*ts=*/10,
+                                 eloqstore::WriteOp::Upsert);
+        }
+        else
+        {
+            entries.emplace_back(key,
+                                 "small_" + key,
+                                 /*ts=*/10,
+                                 eloqstore::WriteOp::Upsert);
+        }
+    }
+    wreq.SetArgs(tbl, std::move(entries));
+    store->ExecSync(&wreq);
+    REQUIRE(wreq.Error() == eloqstore::KvError::NoError);
+    h.RecycleBatch(wreq, 0);
+
+    // "key02z" floors to key02 (the large value); the overshoot is key03
+    // (small). The floor must load key02's large value, not inherit key03's
+    // "not a large value" flag and skip it.
+    eloqstore::FloorRequest freq;
+    freq.SetArgs(tbl, std::string("key02z"));
+    store->ExecSync(&freq);
+    REQUIRE(freq.Error() == eloqstore::KvError::NoError);
+    REQUIRE(freq.floor_key_ == "key02");
+    REQUIRE(freq.large_value_.Size() == large_size);
+    REQUIRE(h.VerifyLargeValue(freq.large_value_, large_size, seed));
+
+    if (!freq.large_value_.Fragments().empty())
+    {
+        freq.large_value_.Recycle(h.Memory(0), h.RegBase(0));
+    }
+    store->Stop();
+    h.AssertPoolRestored();
+    CleanupStore(opts);
+}

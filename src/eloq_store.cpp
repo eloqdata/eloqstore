@@ -114,6 +114,12 @@ KvError CollectLocalPartitions(const KvOptions &options,
 
 bool EloqStore::ValidateOptions(KvOptions &opts)
 {
+    while (!opts.cloud_store_path.empty() &&
+           opts.cloud_store_path.back() == '/')
+    {
+        opts.cloud_store_path.pop_back();
+    }
+
     std::string cloud_provider_lower = opts.cloud_provider;
     std::transform(cloud_provider_lower.begin(),
                    cloud_provider_lower.end(),
@@ -1182,8 +1188,14 @@ KvError EloqStore::CollectTablePartitions(
     }
     else
     {
+        std::string partition_prefix = table_name;
+        partition_prefix.push_back(TableIdent::separator);
         std::vector<std::string> objects;
         ListObjectRequest list_object_request(&objects);
+        // Partition object directories are named <table>.<partition>. Use a
+        // raw prefix so DropTable does not paginate through the entire bucket.
+        list_object_request.SetRemotePath(partition_prefix);
+        std::string partition_path = partition_prefix;
 
         bool has_more = false;
         do
@@ -1214,7 +1226,9 @@ KvError EloqStore::CollectTablePartitions(
 
             for (auto &object_name : objects)
             {
-                TableIdent ident = TableIdent::FromString(object_name);
+                partition_path.resize(partition_prefix.size());
+                partition_path.append(object_name);
+                TableIdent ident = TableIdent::FromString(partition_path);
                 if (!ident.IsValid() || ident.tbl_name_ != table_name)
                 {
                     continue;
@@ -2320,6 +2334,7 @@ void EloqStore::InitializeMetrics(metrics::MetricsRegistry *metrics_registry,
                                         "archive",
                                         "compact",
                                         "local_gc",
+                                        "file_gc",
                                         "clean_expired",
                                         "create_branch",
                                         "delete_branch"}}});
@@ -2339,6 +2354,7 @@ void EloqStore::InitializeMetrics(metrics::MetricsRegistry *metrics_registry,
                                         "archive",
                                         "compact",
                                         "local_gc",
+                                        "file_gc",
                                         "clean_expired",
                                         "create_branch",
                                         "delete_branch"}}});

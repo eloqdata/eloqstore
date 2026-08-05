@@ -1026,7 +1026,21 @@ KvError BatchWriteTask::FlushIndexPage(MemCachedPage::Handle &idx_page,
     // Flushes the built index page.
     idx_page->SetPageId(page_id);
     KvError err = WritePage(idx_page);
-    CHECK_KV_ERR(err);
+    if (err != KvError::NoError)
+    {
+        // The write failed. WritePageCallback leaves a still-pinned page for
+        // the caller to reclaim (it cannot free a page the caller pins). Free
+        // it here, mirroring TruncateIndexPage: if the page was promoted into
+        // the active list on a successful sibling write it is no longer
+        // detached and must be left alone.
+        MemCachedPage *page = idx_page.Get();
+        idx_page.Reset();
+        if (page->IsDetached() && !page->IsPinned())
+        {
+            shard->IndexManager()->FreePage(page);
+        }
+        return err;
+    }
 
     // The parent node needs to be updated only when the index page splits and
     // the current page is either a newly generated page or the root page.
@@ -1907,12 +1921,11 @@ KvError BatchWriteTask::Drop()
         root_meta_mgr->UpdateBytes(entry, 0);
     }
 
-    // 3. Schedule async GC to clean up orphaned data files.  GC will find no
-    //    manifest, treat all data files as unreferenced, delete them, and
-    //    remove the now-empty partition directory.  GC requires append mode.
-    if (Options()->data_append_mode && !shard->HasPendingLocalGc(tbl_ident_))
+    // 3. Schedule mode-aware GC. In cloud mode it removes orphaned objects
+    //    before cleaning the local cache; other modes clean local files.
+    if (Options()->data_append_mode)
     {
-        shard->AddPendingLocalGc(tbl_ident_);
+        shard->TryAddFileGc(tbl_ident_);
     }
 
     return KvError::NoError;

@@ -271,10 +271,11 @@ void Shard::DrainPendingRequests()
         req->SetDone(KvError::NotRunning);
         ++drained;
     }
-    for (DelayedEntry &entry : delayed_requests_)
+    for (auto &[_, state] : pending_reopens_)
     {
-        entry.request->SetDone(KvError::NotRunning);
+        CompleteReopenWaiters(std::move(state.waiters_), KvError::NotRunning);
     }
+    pending_reopens_.clear();
     delayed_requests_.clear();
 #ifdef ELOQ_MODULE_ENABLED
     if (drained > 0)
@@ -308,7 +309,7 @@ bool Shard::AddKvRequest(KvRequest *req)
     return ret;
 }
 
-void Shard::EnqueueForAutoReopen(KvRequest *req)
+void Shard::EnqueueReopenWaiter(KvRequest *req)
 {
     CHECK(req->Type() != RequestType::Reopen);
     const TableIdent &tbl_id = req->TableId();
@@ -320,45 +321,35 @@ void Shard::EnqueueForAutoReopen(KvRequest *req)
         return;
     }
 
-    ReopenRequest *reopen_req = &state.request_;
+    ReopenRequest *reopen_req = state.DriverRequest();
     reopen_req->SetArgs(tbl_id);
     reopen_req->SetTag("");
     reopen_req->SetClean(false);
     reopen_req->SetPendingTime(store_->Options().auto_reopen_pending_time_us);
-    reopen_req->callback_ = [this, tbl_id](KvRequest *done_req)
-    {
-        KvError reopen_err = done_req->Error();
-        auto it = pending_reopens_.find(tbl_id);
-        CHECK(it != pending_reopens_.end());
-        auto &waiters = it->second.waiters_;
-        for (KvRequest *pending_req : waiters)
-        {
-            if (reopen_err != KvError::NoError)
-            {
-                pending_req->SetDone(reopen_err);
-            }
-            else if (!store_->SendRequest(pending_req))
-            {
-                pending_req->SetDone(KvError::NotRunning);
-            }
-        }
-    };
+    // The internal request bypasses ExecAsyn, which is where retry budgets are
+    // normally seeded; without this initialization an OutOfMem while reopening
+    // for waiters would fail every parked waiter instead of retrying.
+    reopen_req->oom_retry_remaining_ = store_->Options().auto_oom_retry_times;
     EnqueueDelayedReopenRequest(reopen_req);
 }
 
 void Shard::EnqueueDelayedReopenRequest(ReopenRequest *req)
 {
+    const TableIdent tbl_id = req->TableId();
     uint64_t delay_us = req->PendingTime();
     if (delay_us == 0)
     {
-        auto [it_q, _] = pending_queues_.try_emplace(req->TableId());
+        auto [it_q, _] = pending_queues_.try_emplace(tbl_id);
         it_q->second.PushFront(req);
-        TryStartPendingWrite(req->TableId());
+        TryStartPendingWrite(tbl_id);
         return;
     }
 
     const uint64_t execute_at = ReadTimeMicroseconds() + delay_us;
-    delayed_requests_.push_back({req, execute_at});
+    // Keep tbl_id independent of the request pointer: an external
+    // ReopenRequest may replace and destroy this internal driver before the
+    // delayed entry is promoted.
+    delayed_requests_.push_back({tbl_id, req, execute_at});
     std::push_heap(delayed_requests_.begin(),
                    delayed_requests_.end(),
                    std::greater<DelayedEntry>());
@@ -376,14 +367,42 @@ void Shard::PromoteReadyDelayedReopenRequests()
         DelayedEntry entry = std::move(delayed_requests_.back());
         delayed_requests_.pop_back();
 
+        auto it = pending_reopens_.find(entry.tbl_id);
+        if (it == pending_reopens_.end() ||
+            !it->second.IsCurrentInternalDriver(entry.request))
+        {
+            continue;
+        }
+
         // Clear pending time so the normal request path won't re-enqueue.
         entry.request->SetPendingTime(0);
-        auto [it_q, _] = pending_queues_.try_emplace(entry.request->TableId());
+        auto [it_q, _] = pending_queues_.try_emplace(entry.tbl_id);
         it_q->second.PushFront(entry.request);
         // The delayed heap no longer keeps the shard active after this pop, so
         // try to start the ready reopen immediately instead of leaving it only
         // in the per-table pending queue.
-        TryStartPendingWrite(entry.request->TableId());
+        TryStartPendingWrite(entry.tbl_id);
+    }
+}
+
+void Shard::CompleteReopenWaiters(std::vector<KvRequest *> waiters,
+                                  KvError reopen_err)
+{
+    if (reopen_err != KvError::NoError)
+    {
+        for (KvRequest *pending_req : waiters)
+        {
+            pending_req->SetDone(reopen_err);
+        }
+        return;
+    }
+
+    for (KvRequest *pending_req : waiters)
+    {
+        if (!store_->SendRequest(pending_req))
+        {
+            pending_req->SetDone(KvError::NotRunning);
+        }
     }
 }
 
@@ -420,6 +439,34 @@ bool Shard::HasPendingCompact(const TableIdent &tbl_id)
 #endif
 }
 
+bool Shard::TryAddFileGc(const TableIdent &tbl_id)
+{
+    auto it = pending_queues_.find(tbl_id);
+    assert(it != pending_queues_.end());
+    PendingWriteQueue &pending_q = it->second;
+    FileGcRequest &req = pending_q.file_gc_req_;
+#ifdef ELOQ_MODULE_ENABLED
+    {
+        std::lock_guard<bthread::Mutex> lk(req.mutex_);
+        if (!req.done_)
+        {
+            return false;
+        }
+        req.done_ = false;
+    }
+#else
+    bool expected = true;
+    if (!req.done_.compare_exchange_strong(
+            expected, false, std::memory_order_relaxed))
+    {
+        return false;
+    }
+#endif
+    req.SetTableId(tbl_id);
+    pending_q.PushBack(&req);
+    return true;
+}
+
 void Shard::AddPendingTTL(const TableIdent &tbl_id)
 {
     // Send CleanExpiredRequest from internal.
@@ -453,36 +500,32 @@ bool Shard::HasPendingTTL(const TableIdent &tbl_id)
 #endif
 }
 
-void Shard::AddPendingLocalGc(const TableIdent &tbl_id)
+bool Shard::TryAddLocalGc(const TableIdent &tbl_id)
 {
-    assert(!HasPendingLocalGc(tbl_id));
     auto it = pending_queues_.find(tbl_id);
     assert(it != pending_queues_.end());
     PendingWriteQueue &pending_q = it->second;
     LocalGcRequest &req = pending_q.local_gc_req_;
-    req.SetTableId(tbl_id);
 #ifdef ELOQ_MODULE_ENABLED
     {
         std::lock_guard<bthread::Mutex> lk(req.mutex_);
+        if (!req.done_)
+        {
+            return false;
+        }
         req.done_ = false;
     }
 #else
-    req.done_.store(false, std::memory_order_relaxed);
+    bool expected = true;
+    if (!req.done_.compare_exchange_strong(
+            expected, false, std::memory_order_relaxed))
+    {
+        return false;
+    }
 #endif
+    req.SetTableId(tbl_id);
     pending_q.PushBack(&req);
-}
-
-bool Shard::HasPendingLocalGc(const TableIdent &tbl_id)
-{
-    auto it = pending_queues_.find(tbl_id);
-    assert(it != pending_queues_.end());
-    PendingWriteQueue &pending_q = it->second;
-#ifdef ELOQ_MODULE_ENABLED
-    std::lock_guard<bthread::Mutex> lk(pending_q.local_gc_req_.mutex_);
-    return !pending_q.local_gc_req_.done_;
-#else
-    return !pending_q.local_gc_req_.done_.load(std::memory_order_relaxed);
-#endif
+    return true;
 }
 
 #ifdef ELOQ_MODULE_ENABLED
@@ -523,7 +566,15 @@ void Shard::OnReceivedReq(KvRequest *req)
     if (req->Reopen())
     {
         req->SetReopen(false);
-        EnqueueForAutoReopen(req);
+        if (req->Type() == RequestType::Reopen)
+        {
+            // A reopen request cannot itself be parked as a waiter behind
+            // another reopen; reject it instead of CHECK-aborting in
+            // EnqueueReopenWaiter (SetReopen is public API).
+            req->SetDone(KvError::InvalidArgs);
+            return;
+        }
+        EnqueueReopenWaiter(req);
         return;
     }
 
@@ -532,6 +583,9 @@ void Shard::OnReceivedReq(KvRequest *req)
         auto *wreq = reinterpret_cast<WriteRequest *>(req);
         auto [it, _] = pending_queues_.try_emplace(req->tbl_id_);
         it->second.PushBack(wreq);
+        // This only dispatches writes that have already been dequeued from the
+        // shard's request queue. Later read requests still sitting in
+        // requests_ are not being bypassed by this per-table pending queue.
         TryStartPendingWrite(req->tbl_id_);
         return;
     }
@@ -777,6 +831,17 @@ bool Shard::ProcessReq(KvRequest *req)
         auto *reopen_req = static_cast<ReopenRequest *>(req);
         CHECK_EQ(reopen_req->PendingTime(), 0);
         ReopenTask *task = task_mgr_.GetReopenTask(req->TableId());
+        auto [it, inserted] = pending_reopens_.try_emplace(req->TableId());
+        if (inserted || !it->second.IsCurrentInternalDriver(reopen_req))
+        {
+            // An external ReopenRequest becomes the pending-reopen driver even
+            // when there are no waiters yet. Waiters that hit ResourceMissing
+            // while this task yields will then attach to this running reopen
+            // instead of creating a delayed internal driver. If this request is
+            // the embedded internal driver, the state already exists and the
+            // pointer comparison above prevents replacing it.
+            it->second.SetExternalDriver(reopen_req);
+        }
         auto lbd = [task, req]() -> KvError
         { return task->Reopen(req->TableId()); };
         StartTask(task, req, lbd);
@@ -882,6 +947,17 @@ bool Shard::ProcessReq(KvRequest *req)
             return false;
         }
         auto lbd = [task]() -> KvError { return task->Compact(); };
+        StartTask(task, req, lbd);
+        return true;
+    }
+    case RequestType::FileGc:
+    {
+        BackgroundWrite *task = task_mgr_.GetBackgroundWrite(req->TableId());
+        if (task == nullptr)
+        {
+            return false;
+        }
+        auto lbd = [task]() -> KvError { return task->RunFileGc(); };
         StartTask(task, req, lbd);
         return true;
     }
@@ -1000,69 +1076,178 @@ finish:
     return busy;
 }
 
+void Shard::RetryOomRequest(KvRequest *req)
+{
+    // The aborted task released its pins; re-enqueue the request at the tail of
+    // this shard's queue so other in-flight tasks get a chance to release their
+    // pins before the next attempt.
+    req->err_ = KvError::NoError;
+#ifdef ELOQ_MODULE_ENABLED
+    {
+        std::lock_guard<bthread::Mutex> lk(req->mutex_);
+        req->done_ = false;
+    }
+#else
+    req->done_.store(false, std::memory_order_relaxed);
+#endif
+    // AddKvRequest refuses new work once the store is stopping; complete the
+    // retried request with NotRunning instead of dropping it.
+    if (!AddKvRequest(req))
+    {
+        req->SetDone(KvError::NotRunning);
+    }
+}
+
 void Shard::OnTaskFinished(KvTask *task)
 {
     KvRequest *req = task->req_;
-    const bool auto_reopen = task->needs_auto_reopen_;
-    const bool oom_retry = task->needs_oom_retry_;
+    const KvError err = task->result_err_;
     const TaskType task_type = task->Type();
-    task->req_ = nullptr;
-    task->needs_auto_reopen_ = false;
-    task->needs_oom_retry_ = false;
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    const RequestType request_type = req->Type();
+    const metrics::TimePoint request_start = finished_request_start_;
+#endif
+    bool oom_retry = false;
+    bool auto_reopen = false;
+    bool request_completed = true;
 
+    if (__builtin_expect(err == KvError::OutOfMem, 0))
+    {
+        if (req->oom_retry_remaining_ > 0)
+        {
+            --req->oom_retry_remaining_;
+            oom_retry = true;
+            request_completed = false;
+            LOG(WARNING) << "Task hit out of memory; retrying ("
+                         << static_cast<int>(req->oom_retry_remaining_)
+                         << " attempts left)";
+        }
+        else
+        {
+            LOG(ERROR) << "Task is aborted due to out of memory";
+        }
+    }
+    else if (__builtin_expect(err == KvError::ResourceMissing, 0))
+    {
+        const StoreMode mode = store_->Mode();
+        if (req->AutoReopenRetry() && req->reopen_retry_remaining_ > 0 &&
+            (mode == StoreMode::Cloud || mode == StoreMode::StandbyReplica))
+        {
+            CHECK(req->TableId().IsValid());
+            --req->reopen_retry_remaining_;
+            auto_reopen = true;
+            request_completed = false;
+        }
+    }
+
+    task->req_ = nullptr;
+    task->result_err_ = KvError::NoError;
+
+    KvRequest *done_req = request_completed ? req : nullptr;
+    bool dispatch_pending_writes = false;
+    bool complete_reopen_waiters = false;
+    std::vector<KvRequest *> reopen_waiters;
     if (!task->ReadOnly())
     {
         auto wtask = reinterpret_cast<WriteTask *>(task);
-        auto it = pending_queues_.find(wtask->TableId());
-        assert(it != pending_queues_.end());
-        PendingWriteQueue &pending_q = it->second;
+        auto pending_it = pending_queues_.find(wtask->TableId());
+        assert(pending_it != pending_queues_.end());
+        PendingWriteQueue &pending_q = pending_it->second;
         if (__builtin_expect(task_type == TaskType::Reopen && !oom_retry, 0))
         {
-            pending_reopens_.erase(wtask->TableId());
+            auto reopen_it = pending_reopens_.find(wtask->TableId());
+            if (reopen_it != pending_reopens_.end())
+            {
+                if (reopen_it->second.IsCurrentInternalDriver(
+                        static_cast<ReopenRequest *>(req)))
+                {
+                    // The embedded internal ReopenRequest is destroyed when
+                    // this state is erased; no external caller is waiting on
+                    // that request object, so do not SetDone it afterward.
+                    done_req = nullptr;
+                }
+                reopen_waiters = std::move(reopen_it->second.waiters_);
+                complete_reopen_waiters = true;
+                // Drop the completed reopen state before re-enqueueing
+                // waiters; a waiter may immediately re-enter this shard and
+                // must not attach to the old state.
+                pending_reopens_.erase(reopen_it);
+            }
         }
         pending_q.running_ = false;
-        task_mgr_.FreeTask(task);
         if (pending_q.Empty())
         {
-            // No more write requests, remove the pending queue.
-            pending_queues_.erase(it);
+            // The internal compact / file-gc / local-gc / clean-expired
+            // requests are embedded in this queue; erasing it destroys them.
+            // They have no external waiter or callback, so drop done_req when
+            // it points at one of them to avoid SetDone()-ing a freed request
+            // afterwards (mirrors the embedded internal reopen-driver handling
+            // above).
+            bool is_embedded = (req == &pending_q.compact_req_ ||
+                                req == &pending_q.file_gc_req_ ||
+                                req == &pending_q.local_gc_req_ ||
+                                req == &pending_q.expire_req_);
+            if (is_embedded)
+            {
+                done_req = nullptr;
+            }
+            // Do not erase the queue if an embedded request is being retried
+            // (e.g. OOM), as erasing it would destroy the request object.
+            if (!is_embedded || request_completed)
+            {
+                // No more write requests, remove the pending queue.
+                pending_queues_.erase(pending_it);
+            }
         }
+        dispatch_pending_writes = true;
+    }
+
+    task_mgr_.FreeTask(task);
+
+    if (__builtin_expect(oom_retry, 0))
+    {
+        RetryOomRequest(req);
+        return;
+    }
+
+    if (__builtin_expect(auto_reopen, 0))
+    {
+        EnqueueReopenWaiter(req);
+        return;
+    }
+
+    if (done_req != nullptr)
+    {
+        done_req->SetDone(err);
+        // SetDone can invoke the user callback or wake a waiter that destroys
+        // the request. Everything below uses only values captured above.
+        done_req = nullptr;
+    }
+
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    if (request_completed && store_->EnableMetrics())
+    {
+        metrics::Meter *meter = store_->GetMetricsMeter(shard_id_);
+        assert(meter != nullptr);
+        const char *request_type_str =
+            eloqstore::RequestTypeToString(request_type);
+        meter->CollectDuration(metrics::NAME_ELOQSTORE_REQUEST_LATENCY,
+                               request_start,
+                               request_type_str);
+        meter->Collect(
+            metrics::NAME_ELOQSTORE_REQUESTS_COMPLETED, 1.0, request_type_str);
+    }
+#endif
+
+    if (complete_reopen_waiters)
+    {
+        CompleteReopenWaiters(std::move(reopen_waiters), err);
+    }
+
+    if (dispatch_pending_writes)
+    {
         TryDispatchPendingWrites();
     }
-    else
-    {
-        task_mgr_.FreeTask(task);
-    }
-
-    if (oom_retry)
-    {
-        // The aborted task released its pins; re-enqueue the request at the
-        // tail of this shard's queue so other in-flight tasks get a chance
-        // to release their pins before the next attempt.
-        req->err_ = KvError::NoError;
-#ifdef ELOQ_MODULE_ENABLED
-        {
-            std::lock_guard<bthread::Mutex> lk(req->mutex_);
-            req->done_ = false;
-        }
-#else
-        req->done_.store(false, std::memory_order_relaxed);
-#endif
-        // AddKvRequest refuses new work once the store is stopping; complete
-        // the retried request with NotRunning instead of dropping it.
-        if (!AddKvRequest(req))
-        {
-            req->SetDone(KvError::NotRunning);
-        }
-        return;
-    }
-
-    if (__builtin_expect(!auto_reopen, 1))
-    {
-        return;
-    }
-
-    EnqueueForAutoReopen(req);
 }
 
 #ifdef ELOQ_MODULE_ENABLED

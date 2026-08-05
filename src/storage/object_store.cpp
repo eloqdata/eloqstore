@@ -679,7 +679,7 @@ std::string AsyncHttpManager::ComposeKey(const TableIdent *tbl_id,
 }
 
 std::string AsyncHttpManager::ComposeKeyFromRemote(
-    std::string_view remote_path, bool ensure_trailing_slash) const
+    std::string_view remote_path) const
 {
     std::string key;
     auto append_component = [&](std::string_view part)
@@ -702,16 +702,8 @@ std::string AsyncHttpManager::ComposeKeyFromRemote(
     {
         trimmed.remove_prefix(1);
     }
-    while (!trimmed.empty() && trimmed.back() == '/')
-    {
-        trimmed.remove_suffix(1);
-    }
     append_component(trimmed);
 
-    if (ensure_trailing_slash && !key.empty() && key.back() != '/')
-    {
-        key.push_back('/');
-    }
     return key;
 }
 
@@ -720,7 +712,7 @@ bool AsyncHttpManager::SetupDownloadRequest(ObjectStore::DownloadTask *task,
 {
     std::string key = task->tbl_id_ != nullptr
                           ? ComposeKey(task->tbl_id_, task->filename_)
-                          : ComposeKeyFromRemote(task->remote_path_, false);
+                          : ComposeKeyFromRemote(task->remote_path_);
     SignedRequestInfo request_info;
     if (!backend_->BuildObjectRequest(
             CloudHttpMethod::kGet, key, &request_info) ||
@@ -774,7 +766,7 @@ bool AsyncHttpManager::SetupUploadRequest(ObjectStore::UploadTask *task,
 
     std::string key = task->tbl_id_ != nullptr
                           ? ComposeKey(task->tbl_id_, filename)
-                          : ComposeKeyFromRemote(task->remote_path_, false);
+                          : ComposeKeyFromRemote(task->remote_path_);
     SignedRequestInfo request_info;
     if (!backend_->BuildObjectRequest(
             CloudHttpMethod::kPut, key, &request_info) ||
@@ -824,7 +816,7 @@ bool AsyncHttpManager::SetupUploadRequest(ObjectStore::UploadTask *task,
 bool AsyncHttpManager::SetupDeleteRequest(ObjectStore::DeleteTask *task,
                                           CURL *easy)
 {
-    std::string key = ComposeKeyFromRemote(task->remote_path_, false);
+    std::string key = ComposeKeyFromRemote(task->remote_path_);
     if (key.empty())
     {
         task->error_ = KvError::InvalidArgs;
@@ -856,8 +848,13 @@ bool AsyncHttpManager::SetupDeleteRequest(ObjectStore::DeleteTask *task,
 
 bool AsyncHttpManager::SetupListRequest(ObjectStore::ListTask *task, CURL *easy)
 {
-    std::string strip_prefix =
-        ComposeKeyFromRemote(task->remote_path_, task->ensure_trailing_slash_);
+    std::string strip_prefix = ComposeKeyFromRemote(task->remote_path_);
+    if (task->remote_path_.empty() && !strip_prefix.empty())
+    {
+        // An empty remote path lists the configured store root. Preserve its
+        // boundary so a root such as "tenant" does not also match "tenant2".
+        strip_prefix.push_back('/');
+    }
 
     task->json_data_ = strip_prefix;
 

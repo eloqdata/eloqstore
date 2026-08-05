@@ -111,9 +111,9 @@ KvError BackgroundWrite::Compact()
     // writer's CompactIfNeeded while the partition still had work) gets
     // dispatched *after* something else already wiped the partition --
     // typically an ArchiveRequest whose CreateArchive->needs_compact ran
-    // an inline Compact and TriggerFileGC, including rmdir'ing the
+    // an inline Compact and RunFileGc, including rmdir'ing the
     // partition directory. Without this guard the stale CompactRequest
-    // would call TriggerFileGC -> ExecuteLocalGC -> ListLocalFiles on
+    // would call RunFileGc -> ExecuteLocalGC -> ListLocalFiles on
     // the rmdir'd directory and SIGABRT from a filesystem_error.
     const bool data_clean =
         !opts->data_append_mode ||
@@ -157,7 +157,7 @@ KvError BackgroundWrite::Compact()
     err = UpdateMeta(/*trigger_compact=*/false);
     CHECK_KV_ERR(err);
     moving_cached.Finish();
-    TriggerFileGC();
+    RunFileGc();
     LOG(INFO) << "finish compaction on " << tbl_ident_;
     return KvError::NoError;
 }
@@ -190,13 +190,13 @@ KvError BackgroundWrite::DoCompactDataFile(MovingCachedPages &moving_cached)
     YieldToLowPQ();
     assert(fp_ids.size() == mapping_cnt);
 
-    // Empty mapping: forfeit the tail file too. The upcoming TriggerFileGC
+    // Empty mapping: forfeit the tail file too. The upcoming RunFileGc
     // will delete every data file on disk (retained_files is empty), so
     // advance min_file_id past the tail and let UpdateStat snap max_fp_id_
     // up to that boundary. Without this, SpaceSize stays at the partial
     // tail (max_fp_id mod pages_per_file), MapperExceedsAmplification keeps
     // firing on mapping_cnt==0 && space_size>0, and the next archive tick
-    // would re-enter Compact -> TriggerFileGC on a rmdir'd partition.
+    // would re-enter Compact -> RunFileGc on a rmdir'd partition.
     if (fp_ids.empty())
     {
         if (allocator->SpaceSize() > 0)
@@ -376,7 +376,7 @@ KvError BackgroundWrite::DoCompactSegmentFile()
     // Empty segment mapping: forfeit the tail segment file too. See the
     // matching note in DoCompactDataFile — without rounding up, SpaceSize
     // stays at the partial tail and the empty-wipe partition keeps
-    // re-entering Compact -> TriggerFileGC on every archive tick.
+    // re-entering Compact -> RunFileGc on every archive tick.
     if (fp_ids.empty())
     {
         if (seg_allocator->SpaceSize() > 0)
@@ -726,11 +726,6 @@ KvError BackgroundWrite::DeleteBranch(std::string_view branch_name)
 
     LOG(INFO) << "Successfully deleted branch " << normalized_branch;
     return KvError::NoError;
-}
-
-KvError BackgroundWrite::RunLocalFileGc()
-{
-    return TriggerLocalFileGC();
 }
 
 }  // namespace eloqstore

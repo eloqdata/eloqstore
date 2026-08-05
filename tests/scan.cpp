@@ -1,7 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <string>
+#include <utility>
+#include <vector>
 
 #include "common.h"
 #include "test_utils.h"
@@ -127,4 +131,56 @@ TEST_CASE("read floor", "[read]")
     {
         verify.Floor(Key(i));
     }
+}
+
+// SeekFloor's linear-scan branch snapshots the floor entry's key/value/
+// timestamp but not its large_value_/expire_ts_ flags, so the floor result
+// keeps those two fields from the OVERSHOOT entry (the first key greater than
+// the search key). A Floor query landing strictly between two keys within a
+// restart region then reports the neighbor's expire timestamp.
+TEST_CASE("floor reports its own expire_ts, not the next entry's",
+          "[scan][floor]")
+{
+    eloqstore::KvOptions opts = default_opts;
+    // Small restart interval so few keys span multiple restart regions and
+    // the floor lands inside one (the buggy linear-scan branch).
+    opts.data_page_restart_interval = 2;
+
+    eloqstore::EloqStore *store = InitStore(opts);
+    eloqstore::TableIdent tbl{"floor_expire", 0};
+
+    constexpr uint64_t kFuture = 9'000'000'000'000ULL;  // far-future expire ms
+    // Eight keys; every key never expires except "key03", the overshoot for a
+    // "key02z" floor query. With restart interval 2 the restart points fall on
+    // key00/key02/key04/key06, so the floor (key02) and the overshoot (key03,
+    // a non-restart entry the linear scan parses before breaking) lie in the
+    // same restart region — exactly the buggy branch. (When the overshoot is
+    // itself a restart point the scan stops before parsing it, so it must be a
+    // mid-region entry to leak.)
+    std::vector<eloqstore::WriteDataEntry> entries;
+    for (int i = 0; i < 8; ++i)
+    {
+        char key[8];
+        std::snprintf(key, sizeof(key), "key%02d", i);
+        uint64_t expire = (i == 3) ? kFuture : 0;
+        entries.emplace_back(std::string(key),
+                             std::string("v") + key,
+                             /*ts=*/10,
+                             eloqstore::WriteOp::Upsert,
+                             expire);
+    }
+    eloqstore::BatchWriteRequest wreq;
+    wreq.SetArgs(tbl, std::move(entries));
+    store->ExecSync(&wreq);
+    REQUIRE(wreq.Error() == eloqstore::KvError::NoError);
+
+    // "key02z" floors to key02 (never-expires); the overshoot is key03
+    // (expire=kFuture). The reported expire_ts_ must be key02's, i.e. 0.
+    eloqstore::FloorRequest freq;
+    freq.SetArgs(tbl, std::string("key02z"));
+    store->ExecSync(&freq);
+    REQUIRE(freq.Error() == eloqstore::KvError::NoError);
+    REQUIRE(freq.floor_key_ == "key02");
+    REQUIRE(freq.value_ == "vkey02");
+    REQUIRE(freq.expire_ts_ == 0);
 }

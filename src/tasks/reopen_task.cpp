@@ -67,12 +67,14 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
     {
         // Remote partition no longer exists: delete local manifest and
         // clear in-memory state instead of writing an empty snapshot.
-        err = shard->IoManager()->DropManifest(tbl_id);
+        // Local cleanup only — reopen adopts remote state and must never
+        // delete remote objects.
+        err = shard->IoManager()->DropLocalManifest(tbl_id);
         if (err != KvError::NoError)
         {
-            LOG(ERROR) << "Reopen " << tbl_id << " DropManifest failed, tag "
-                       << request->Tag() << ", error "
-                       << static_cast<uint32_t>(err);
+            LOG(ERROR) << "Reopen " << tbl_id
+                       << " DropLocalManifest failed, tag " << request->Tag()
+                       << ", error " << static_cast<uint32_t>(err);
             return err;
         }
         RootMetaMgr *root_meta_mgr = shard->IndexManager()->RootMetaManager();
@@ -119,9 +121,16 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
         prewarm_service->Prewarm(tbl_id);
     }
 
-    if (clear_local_state && !shard->HasPendingLocalGc(tbl_id))
+    // TODO(standby): for a non-cloud standby replica, nothing else removes
+    // local data files the master has GC'd. It does not have object-storage
+    // LRU/space-limit eviction, and the rsync pull runs without --delete, so
+    // gating local GC on clear_local_state lets orphaned data_* files
+    // accumulate across reopens. Restore unconditional local GC for
+    // StoreMode::StandbyReplica, or add periodic cleanup of files outside the
+    // retained set.
+    if (clear_local_state)
     {
-        shard->AddPendingLocalGc(tbl_id);
+        shard->TryAddLocalGc(tbl_id);
     }
     return err;
 }

@@ -7,6 +7,7 @@
 #include <memory>
 #include <unordered_map>
 #include <utility>  // NOLINT(build/include_order)
+#include <variant>
 #include <vector>
 
 #include "circular_queue.h"
@@ -43,10 +44,10 @@ public:
 
     void AddPendingCompact(const TableIdent &tbl_id);
     bool HasPendingCompact(const TableIdent &tbl_id);
+    bool TryAddFileGc(const TableIdent &tbl_id);
     void AddPendingTTL(const TableIdent &tbl_id);
     bool HasPendingTTL(const TableIdent &tbl_id);
-    void AddPendingLocalGc(const TableIdent &tbl_id);
-    bool HasPendingLocalGc(const TableIdent &tbl_id);
+    bool TryAddLocalGc(const TableIdent &tbl_id);
 #ifdef ELOQ_MODULE_ENABLED
     enum class ShardStatus : uint8_t
     {
@@ -98,11 +99,18 @@ private:
     void InitIoMgrAndPagePool();
     bool ExecuteReadyTasks();
     void OnTaskFinished(KvTask *task);
+    void RetryOomRequest(KvRequest *req);
     void OnReceivedReq(KvRequest *req);
     bool ProcessReq(KvRequest *req);
-    void EnqueueForAutoReopen(KvRequest *req);
+    void EnqueueReopenWaiter(KvRequest *req);
     void EnqueueDelayedReopenRequest(ReopenRequest *req);
     void PromoteReadyDelayedReopenRequests();
+    // Called when the reopen driver for parked waiters reaches a final result.
+    // Successful reopen resubmits the waiters so they retry their original
+    // requests; failed reopen completes every waiter with the reopen error.
+    // Transient Reopen OOM retries happen before this function is called.
+    void CompleteReopenWaiters(std::vector<KvRequest *> waiters,
+                               KvError reopen_err);
     bool HasPendingDelayedRequests() const
     {
         return !delayed_requests_.empty();
@@ -144,9 +152,8 @@ private:
     void StartTask(KvTask *task, KvRequest *req, F lbd)
     {
         task->req_ = req;
+        task->result_err_ = KvError::NoError;
         task->status_ = TaskStatus::Ongoing;
-        task->needs_auto_reopen_ = false;
-        task->needs_oom_retry_ = false;
         running_ = task;
         // Mark the resume start so a cooperative background loop measures this
         // first segment from now, not from the previously resumed task's
@@ -158,135 +165,33 @@ private:
             [lbd, this](continuation &&sink)
             {
 #ifdef ELOQSTORE_WITH_TXSERVICE
-                // Metrics collection: record start time for latency measurement
                 metrics::TimePoint request_start;
-                metrics::Meter *meter = nullptr;
                 if (this->store_->EnableMetrics())
                 {
                     request_start = metrics::Clock::now();
-                    meter = this->store_->GetMetricsMeter(shard_id_);
-                    assert(meter != nullptr);
                 }
 #endif
                 shard->main_ = std::move(sink);
                 KvError err = lbd();
                 KvTask *task = ThdTask();
+                task->result_err_ = err;
                 if (err != KvError::NoError)
                 {
                     task->Abort();
-                    if (err == KvError::OutOfMem)
-                    {
-                        if (task->req_->oom_retry_remaining_ > 0)
-                        {
-                            --task->req_->oom_retry_remaining_;
-                            task->needs_oom_retry_ = true;
-                            LOG(WARNING)
-                                << "Task hit out of memory; retrying ("
-                                << static_cast<int>(
-                                       task->req_->oom_retry_remaining_)
-                                << " attempts left)";
-                        }
-                        else
-                        {
-                            LOG(ERROR)
-                                << "Task is aborted due to out of memory";
-                        }
-                    }
                 }
-
 #ifdef ELOQSTORE_WITH_TXSERVICE
-                // Save request type before SetDone
-                RequestType request_type = task->req_->Type();
+                if (this->store_->EnableMetrics())
+                {
+                    shard->finished_request_start_ = request_start;
+                }
 #endif
-                KvRequest *req = task->req_;
-                bool request_completed = true;
-                if (task->needs_oom_retry_)
-                {
-                    request_completed = false;
-                }
-                else if (__builtin_expect(err != KvError::ResourceMissing, 1))
-                {
-                    req->SetDone(err);
-                }
-                else
-                {
-                    const StoreMode mode = shard->store_->Mode();
-                    if (req->AutoReopenRetry() &&
-                        req->reopen_retry_remaining_ > 0 &&
-                        (mode == StoreMode::Cloud ||
-                         mode == StoreMode::StandbyReplica))
-                    {
-                        CHECK(req->TableId().IsValid());
-                        --req->reopen_retry_remaining_;
-                        task->needs_auto_reopen_ = true;
-                    }
-                    request_completed = !task->needs_auto_reopen_;
-                    if (request_completed)
-                    {
-                        req->SetDone(err);
-                    }
-                }
                 task->status_ = TaskStatus::Finished;
-
-#ifdef ELOQSTORE_WITH_TXSERVICE
-                // Collect latency metric when request completes
-                if (request_completed && this->store_->EnableMetrics())
-                {
-                    const char *request_type_str =
-                        RequestTypeToString(request_type);
-                    meter->CollectDuration(
-                        metrics::NAME_ELOQSTORE_REQUEST_LATENCY,
-                        request_start,
-                        request_type_str);
-                    // Increment request completion counter
-                    meter->Collect(metrics::NAME_ELOQSTORE_REQUESTS_COMPLETED,
-                                   1.0,
-                                   request_type_str);
-                }
-#endif
                 return std::move(shard->main_);
             });
         running_ = nullptr;
         if (task->status_ == TaskStatus::Finished)
         {
             OnTaskFinished(task);
-        }
-    }
-
-    static const char *RequestTypeToString(RequestType type)
-    {
-        switch (type)
-        {
-        case RequestType::Read:
-            return "read";
-        case RequestType::Floor:
-            return "floor";
-        case RequestType::Scan:
-            return "scan";
-        case RequestType::ListObject:
-            return "list_object";
-        case RequestType::ListStandbyPartition:
-            return "list_standby_partition";
-        case RequestType::Reopen:
-            return "reopen";
-        case RequestType::BatchWrite:
-            return "batch_write";
-        case RequestType::Truncate:
-            return "truncate";
-        case RequestType::Drop:
-            return "drop";
-        case RequestType::DropTable:
-            return "drop_table";
-        case RequestType::Archive:
-            return "archive";
-        case RequestType::Compact:
-            return "compact";
-        case RequestType::LocalGc:
-            return "local_gc";
-        case RequestType::CleanExpired:
-            return "clean_expired";
-        default:
-            return "unknown";
         }
     }
 
@@ -304,6 +209,9 @@ private:
     std::unique_ptr<AsyncIoManager> io_mgr_;
     GlobalRegisteredMemory *global_reg_mem_{nullptr};
     PageManager index_mgr_;
+#ifdef ELOQSTORE_WITH_TXSERVICE
+    metrics::TimePoint finished_request_start_{};
+#endif
 
     class PendingWriteQueue
     {
@@ -316,6 +224,7 @@ private:
 
         // Requests from internal
         CompactRequest compact_req_;
+        FileGcRequest file_gc_req_;
         LocalGcRequest local_gc_req_;
         CleanExpiredRequest expire_req_;
         bool running_{false};
@@ -328,13 +237,36 @@ private:
 
     struct PendingReopenState
     {
+        using Driver = std::variant<ReopenRequest, ReopenRequest *>;
+
+        ReopenRequest *DriverRequest()
+        {
+            if (auto *internal = std::get_if<ReopenRequest>(&driver_))
+            {
+                return internal;
+            }
+            return std::get<ReopenRequest *>(driver_);
+        }
+
+        bool IsCurrentInternalDriver(ReopenRequest *req) const
+        {
+            const auto *internal = std::get_if<ReopenRequest>(&driver_);
+            return internal != nullptr && internal == req;
+        }
+
+        void SetExternalDriver(ReopenRequest *req)
+        {
+            driver_ = req;
+        }
+
         std::vector<KvRequest *> waiters_;
-        ReopenRequest request_;
+        Driver driver_;
     };
     std::unordered_map<TableIdent, PendingReopenState> pending_reopens_;
 
     struct DelayedEntry
     {
+        TableIdent tbl_id;
         ReopenRequest *request;
         uint64_t execute_at_us;
 

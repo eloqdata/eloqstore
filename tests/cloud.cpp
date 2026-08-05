@@ -7,6 +7,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <string>
 #include <thread>
 #include <unordered_set>
 #include <vector>
@@ -2221,4 +2222,55 @@ TEST_CASE("archive triggers with cloud-only partitions", "[cloud][archive]")
 
     store->Stop();
     CleanupStore(options);
+}
+
+TEST_CASE("successful external reopen drives pending reopen waiters",
+          "[cloud][reopen_waiter]")
+{
+    eloqstore::KvOptions opts = cloud_options;
+    // Keep the auto reopen delayed so the external reopen runs first.
+    opts.auto_reopen_pending_time_us = 8'000'000;
+
+    eloqstore::EloqStore *store = InitStore(opts);
+
+    // Seed a cloud manifest for the reopen.
+    MapVerifier tester(test_tbl_id, store, false);
+    tester.Upsert(0, 10);
+
+    // Heap-allocate the parked waiter; on failure the shard may still own it.
+    auto *waiter = new eloqstore::ReadRequest();
+    waiter->SetArgs(test_tbl_id, test_util::Key(1, 7));
+    waiter->SetReopen(true);
+    REQUIRE(store->ExecAsyn(waiter));
+
+    // The external reopen takes over the parked waiter immediately.
+    eloqstore::ReopenRequest external_reopen;
+    external_reopen.SetArgs(test_tbl_id);
+    store->ExecSync(&external_reopen);
+    const eloqstore::KvError external_err = external_reopen.Error();
+
+    const auto deadline =
+        std::chrono::steady_clock::now() + std::chrono::seconds(4);
+    while (!waiter->IsDone() && std::chrono::steady_clock::now() < deadline)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+    const bool done = waiter->IsDone();
+    const eloqstore::KvError waiter_err =
+        done ? waiter->Error() : eloqstore::KvError::NoError;
+    const std::string waiter_value = done ? waiter->value_ : "";
+    if (done)
+    {
+        delete waiter;
+    }
+    // else: leak; the store may still reference it.
+
+    REQUIRE(external_err == eloqstore::KvError::NoError);
+    REQUIRE(done);
+    REQUIRE(waiter_err == eloqstore::KvError::NoError);
+    REQUIRE_FALSE(waiter_value.empty());
+
+    tester.SetAutoClean(false);
+    store->Stop();
+    CleanupStore(opts);
 }

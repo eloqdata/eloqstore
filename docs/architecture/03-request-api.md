@@ -37,7 +37,7 @@ changes read/write classification** — keep all read-only types before
 |----------|----------|-------|
 | Point/range reads | `ReadRequest`, `FloorRequest`, `ScanRequest` | `ReadRequest.large_value_dest_` variant selects metadata-only / zero-copy IoStringBuffer / pinned-memory destination (doc 09). `ScanRequest` is iterative: `HasRemaining()` ⇒ resubmit with begin = previous end; pagination via `SetPagination`; prefetch clamped to `max_read_pages_batch`. Scans reject very-large values with `LargeValueUnsupported`. |
 | Remote listing | `ListObjectRequest`, `ListStandbyPartitionRequest` | Synchronous helpers bridging to cloud/standby services; `ListObjectRequest` paginates via continuation tokens. |
-| Partition-scoped writes (`WriteRequest` subclasses) | `BatchWriteRequest`, `ReopenRequest`, `TruncateRequest`, `DropRequest`, `ArchiveRequest`, `CompactRequest`, `LocalGcRequest`, `CleanExpiredRequest`, `CreateBranchRequest`, `DeleteBranchRequest` | Serialized per partition through the shard's pending-write queue (doc 04). `WriteRequest::next_` is an intrusive link used both by that queue and by callers managing free lists. |
+| Partition-scoped writes (`WriteRequest` subclasses) | `BatchWriteRequest`, `ReopenRequest`, `TruncateRequest`, `DropRequest`, `ArchiveRequest`, `CompactRequest`, `FileGcRequest`, `LocalGcRequest`, `CleanExpiredRequest`, `CreateBranchRequest`, `DeleteBranchRequest` | Serialized per partition through the shard's pending-write queue (doc 04). `FileGcRequest` selects cloud or local GC from the store mode; `LocalGcRequest` never deletes remote state. `WriteRequest::next_` is an intrusive link used both by that queue and by callers managing free lists. |
 | Store-level fanout | `DropTableRequest`, `GlobalArchiveRequest`, `GlobalReopenRequest`, `GlobalListArchiveTagsRequest`, `GlobalCreateBranchRequest` | Handled in `EloqStore::SendRequest` *before* shard dispatch: they discover the affected partitions, materialize per-partition subrequests, fan them out (throttled by `max_global_request_batch` / `max_archive_tasks`), keep the first error, and complete when all subrequests do. |
 
 Semantics worth knowing:
@@ -80,11 +80,20 @@ Two retry loops live *inside* the engine (`Shard::StartTask` epilogue +
 
 - **Auto-reopen retry** — if a task fails with `KvError::ResourceMissing` in
   Cloud/StandbyReplica mode and the request type opts in
-  (`AutoReopenRetry()`: Read/Floor/Scan), the shard enqueues an internal
-  `ReopenRequest` for the partition and re-runs the original request after the
-  reopen completes, up to `auto_reopen_retry_times`. This is how readers
-  transparently follow a primary that has advanced the partition's term.
-  Only then is `SetDone` deferred; otherwise the error surfaces directly.
+  (`AutoReopenRetry()`: Read/Floor/Scan), the shard parks the request in a
+  per-table `PendingReopenState` and arms an internal `ReopenRequest` that
+  executes after `auto_reopen_pending_time_us` (a delayed heap absorbs
+  request storms into one reopen); parked requests are re-run after the
+  reopen completes, up to `auto_reopen_retry_times` each. This is how
+  readers transparently follow a primary that has advanced the partition's
+  term. Only then is `SetDone` deferred; otherwise the error surfaces
+  directly. The internal request's pending time is shard-private
+  (`ReopenRequest::SetPendingTime` is not public API), and only the
+  internal reopen request's own completion tears the state down unless an
+  external `ReopenRequest` for the same table reaches the write slot first. In
+  that case the external reopen replaces the internal driver in
+  `PendingReopenState`; the stale delayed entry is skipped later, and the
+  parked requests are completed from the external reopen result.
 - **OOM retry** — a task aborted by `KvError::OutOfMem` (e.g. buffer pool
   exhaustion from pinned pages) is re-enqueued at the back of the shard queue
   up to `auto_oom_retry_times`, giving other tasks a chance to release pins.

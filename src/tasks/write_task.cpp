@@ -13,6 +13,7 @@
 #include "absl/container/flat_hash_set.h"
 #include "async_io_manager.h"
 #include "error.h"
+#include "fail_point.h"
 #include "file_gc.h"
 #include "storage/data_page.h"
 #include "storage/mem_cached_page.h"
@@ -456,6 +457,17 @@ KvError WriteTask::WaitPendingUploads()
 
 void WriteTask::WritePageCallback(VarPage page, KvError err)
 {
+#ifndef NDEBUG
+    // Test hook: fail the completion of one index-page (MemCachedPage) write so
+    // tests can drive the disk-error branch below while the submitting task
+    // still holds a pin on the page.
+    if (err == KvError::NoError &&
+        VarPageType(page.index()) == VarPageType::MemCachedPage &&
+        FailPoint::GetInstance().ShouldFail("IndexPageWriteFail"))
+    {
+        err = KvError::IoFail;
+    }
+#endif
     if (err != KvError::NoError)
     {
         write_err_ = err;
@@ -474,11 +486,19 @@ void WriteTask::WritePageCallback(VarPage page, KvError err)
         }
         else
         {
-            // Only free if it's still detached (i.e., not in active list).
-            if (idx_page->IsDetached())
+            // WritePage() adds a temporary IO pin on top of the submitting
+            // task's handle, so that task may still legitimately pin this page
+            // when the failed write completes: the completion runs from the
+            // shard loop while the WriteTask coroutine is suspended in
+            // WaitWrite holding its handle (e.g. FlushIndexPage /
+            // TruncateIndexPage). Drop only our IO pin here and reclaim the
+            // page just once, when it is detached and nothing else references
+            // it. If the caller still holds a pin, it frees the page after it
+            // observes the error; CHECK-aborting on the caller's legitimate
+            // pin was a bug.
+            handle.Reset();
+            if (idx_page->IsDetached() && !idx_page->IsPinned())
             {
-                handle.Reset();
-                CHECK(!idx_page->IsPinned());
                 shard->IndexManager()->FreePage(idx_page);
             }
         }
@@ -944,10 +964,8 @@ void WriteTask::TriggerTTL()
     }
 }
 
-void WriteTask::TriggerFileGC() const
+KvError WriteTask::RunFileGc() const
 {
-    assert(Options()->data_append_mode);
-
     RetainedFiles retained_files;
     std::vector<MappingSnapshot::Ref> snapshot_array;
     KvError build_err = BuildRetainedFiles(
@@ -957,7 +975,7 @@ void WriteTask::TriggerFileGC() const
         LOG(ERROR) << "BuildRetainedFiles failed for table "
                    << tbl_ident_.ToString()
                    << " err=" << static_cast<int>(build_err);
-        return;
+        return build_err;
     }
 
     // Build retained_segment_files. Resolve each segment's owning (branch,
@@ -974,7 +992,7 @@ void WriteTask::TriggerFileGC() const
         LOG(ERROR) << "BuildRetainedFiles (segment) failed for table "
                    << tbl_ident_.ToString()
                    << " err=" << static_cast<int>(build_err);
-        return;
+        return build_err;
     }
 
     // Check if we're in cloud mode or local mode
@@ -986,7 +1004,7 @@ void WriteTask::TriggerFileGC() const
         if (!cloud_mgr)
         {
             LOG(ERROR) << "CloudStoreMgr not available";
-            return;
+            return KvError::InvalidArgs;
         }
 
         KvError gc_err = FileGarbageCollector::ExecuteCloudGC(
@@ -996,6 +1014,7 @@ void WriteTask::TriggerFileGC() const
         {
             LOG(ERROR) << "Cloud GC failed for table " << tbl_ident_.ToString();
         }
+        return gc_err;
     }
     else
     {
@@ -1009,10 +1028,11 @@ void WriteTask::TriggerFileGC() const
         {
             LOG(ERROR) << "Local GC failed for table " << tbl_ident_.ToString();
         }
+        return gc_err;
     }
 }
 
-KvError WriteTask::TriggerLocalFileGC() const
+KvError WriteTask::RunLocalFileGc() const
 {
     assert(Options()->data_append_mode);
     RetainedFiles retained_files;
@@ -1022,7 +1042,7 @@ KvError WriteTask::TriggerLocalFileGC() const
     CHECK_KV_ERR(build_err);
 
     // Build retained_segment_files from the live segment snapshots, same as
-    // TriggerFileGC: ExecuteLocalGC deletes unreferenced segment files too.
+    // RunFileGc: ExecuteLocalGC deletes unreferenced segment files too.
     RetainedFiles retained_segment_files;
     std::vector<MappingSnapshot::Ref> seg_snapshot_array;
     build_err = BuildRetainedFiles(tbl_ident_,

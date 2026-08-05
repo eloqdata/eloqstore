@@ -2321,8 +2321,14 @@ KvError IouringMgr::SyncFiles(const TableIdent &tbl_id,
     return KvError::NoError;
 }
 
-KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
+KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds,
+                               std::vector<LruFD::Ref> *failed_fds)
 {
+    if (failed_fds != nullptr)
+    {
+        failed_fds->clear();
+    }
+
     struct CloseReq : BaseReq
     {
         CloseReq(KvTask *task, LruFD::Ref fd)
@@ -2391,6 +2397,13 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
             SyncFiles(*tbl_id, std::span<LruFD::Ref>(refs.data(), refs.size()));
         if (err != KvError::NoError)
         {
+            if (failed_fds != nullptr)
+            {
+                for (const PendingClose &pending : pendings)
+                {
+                    failed_fds->emplace_back(*pending.fd_ref);
+                }
+            }
             unlock_pendings();
             return err;
         }
@@ -2426,7 +2439,7 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
             LruFD *lru_fd = pending.lru_fd;
             LruFD::Ref &fd_ref = *pending.fd_ref;
 
-            CloseReq &req = reqs.emplace_back(ThdTask(), std::move(fd_ref));
+            CloseReq &req = reqs.emplace_back(ThdTask(), fd_ref);
             io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, &req);
             if (lru_fd->reg_idx_ < 0)
             {
@@ -2463,6 +2476,10 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
                 {
                     close_err = ToKvError(req.res_);
                 }
+                if (failed_fds != nullptr)
+                {
+                    failed_fds->emplace_back(req.fd_ref_);
+                }
             }
             if (req.reg_idx_ >= 0)
             {
@@ -2475,6 +2492,38 @@ KvError IouringMgr::CloseFiles(std::span<LruFD::Ref> fds)
         }
     }
     return close_err;
+}
+
+KvError CloudStoreMgr::CloseFiles(std::span<LruFD::Ref> fds,
+                                  std::vector<LruFD::Ref> *failed_fds)
+{
+    std::vector<LruFD::Ref> local_failed_fds;
+    std::vector<LruFD::Ref> *failures =
+        failed_fds == nullptr ? &local_failed_fds : failed_fds;
+    KvError err = IouringMgr::CloseFiles(fds, failures);
+    for (const LruFD::Ref &fd : fds)
+    {
+        LruFD *lru_fd = fd.Get();
+        if (lru_fd == nullptr || lru_fd->file_id_ == LruFD::kDirectory)
+        {
+            continue;
+        }
+        bool failed = false;
+        for (const LruFD::Ref &failed_fd : *failures)
+        {
+            if (failed_fd.Get() == lru_fd)
+            {
+                failed = true;
+                break;
+            }
+        }
+        if (failed)
+        {
+            continue;
+        }
+        RegisterClosedFileAndTryGc(BuildFileKey(*lru_fd));
+    }
+    return err;
 }
 
 int IouringMgr::Fdatasync(FdIdx fd)
@@ -4457,7 +4506,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     KvTask *current_task = ThdTask();
     do
     {
-        ObjectStore::ListTask list_task(remote_path, false);
+        ObjectStore::ListTask list_task(remote_path);
         // Manifest keys are flat under the prefix; list without a delimiter
         // so the response cannot carry directory-style CommonPrefixes
         // entries (see the parse-failure skip below).
@@ -4740,7 +4789,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
             KvTask *current_task = ThdTask();
             do
             {
-                ObjectStore::ListTask list_task(remote_path, false);
+                ObjectStore::ListTask list_task(remote_path);
                 // Flat manifest keys; no delimiter so the response cannot
                 // carry CommonPrefixes entries (see GetManifest).
                 list_task.SetRecursive(true);
@@ -5200,7 +5249,7 @@ KvError IouringMgr::DropManifest(const TableIdent &tbl_id)
     return KvError::NoError;
 }
 
-KvError CloudStoreMgr::DropManifest(const TableIdent &tbl_id)
+KvError CloudStoreMgr::DropLocalManifest(const TableIdent &tbl_id)
 {
     // 1. Delete local manifest file.
     KvError err = IouringMgr::DropManifest(tbl_id);
@@ -5209,10 +5258,9 @@ KvError CloudStoreMgr::DropManifest(const TableIdent &tbl_id)
         return err;
     }
 
+    // 2. Remove from FileCleaner's closed-file tracking.
     const std::string manifest_name =
         BranchManifestFileName(GetActiveBranch(), ProcessTerm());
-
-    // 2. Remove from FileCleaner's closed-file tracking.
     if (DequeClosedFile(FileKey(tbl_id, manifest_name)))
     {
         const size_t manifest_size = options_->manifest_limit;
@@ -5221,7 +5269,23 @@ KvError CloudStoreMgr::DropManifest(const TableIdent &tbl_id)
                                 : 0;
     }
 
-    // 3. Delete the manifest from cloud object storage.
+    return KvError::NoError;
+}
+
+KvError CloudStoreMgr::DropManifest(const TableIdent &tbl_id)
+{
+    KvError err = DropLocalManifest(tbl_id);
+    if (err != KvError::NoError)
+    {
+        return err;
+    }
+
+    // Delete the manifest from cloud object storage. Only the partition
+    // owner's Drop path may reach this; reopen / snapshot-install paths go
+    // through DropLocalManifest and must never delete the cloud object they
+    // are adopting state from.
+    const std::string manifest_name =
+        BranchManifestFileName(GetActiveBranch(), ProcessTerm());
     std::string remote_path = tbl_id.ToString() + "/" + manifest_name;
     KvTask *current_task = ThdTask();
     ObjectStore::DeleteTask delete_task(remote_path);
@@ -5367,7 +5431,7 @@ KvError CloudStoreMgr::DeleteBranchFiles(const TableIdent &tbl_id,
         KvTask *list_task_owner = ThdTask();
         do
         {
-            ObjectStore::ListTask list_task(prefix, false);
+            ObjectStore::ListTask list_task(prefix);
             list_task.SetContinuationToken(continuation_token);
             list_task.SetRecursive(true);
             list_task.SetKvTask(list_task_owner);
@@ -5746,36 +5810,46 @@ KvError CloudStoreMgr::CloseFile(LruFD::Ref fd)
 
     if (file_id != LruFD::kDirectory)
     {
-        uint64_t term = fd.Get()->term_;
-        std::string_view branch = fd.Get()->branch_name_;
-        std::string filename;
-        if (file_id == LruFD::kManifest)
-        {
-            filename = BranchManifestFileName(branch, term);
-        }
-        else if (file_id.IsSegmentFile())
-        {
-            filename = SegmentFileName(file_id.ToFileId(), branch, term);
-        }
-        else
-        {
-            filename = BranchDataFileName(file_id.ToFileId(), branch, term);
-        }
-        file_key.emplace(*fd.Get()->tbl_->tbl_id_, filename);
+        file_key.emplace(BuildFileKey(*fd.Get()));
     }
 
     KvError err = IouringMgr::CloseFile(fd);
     CHECK_KV_ERR(err);
     if (file_key.has_value())
     {
-        EnqueClosedFile(*file_key);
-        if (pending_gc_cleanup_.contains(*file_key) &&
-            file_cleaner_.status_ == TaskStatus::Idle)
-        {
-            file_cleaner_.Resume();
-        }
+        RegisterClosedFileAndTryGc(std::move(*file_key));
     }
     return KvError::NoError;
+}
+
+FileKey CloudStoreMgr::BuildFileKey(const LruFD &fd) const
+{
+    std::string filename;
+    if (fd.file_id_ == LruFD::kManifest)
+    {
+        filename = BranchManifestFileName(fd.branch_name_, fd.term_);
+    }
+    else if (fd.file_id_.IsSegmentFile())
+    {
+        filename =
+            SegmentFileName(fd.file_id_.ToFileId(), fd.branch_name_, fd.term_);
+    }
+    else
+    {
+        filename = BranchDataFileName(
+            fd.file_id_.ToFileId(), fd.branch_name_, fd.term_);
+    }
+    return FileKey(*fd.tbl_->tbl_id_, std::move(filename));
+}
+
+void CloudStoreMgr::RegisterClosedFileAndTryGc(FileKey key)
+{
+    bool pending_gc_cleanup = pending_gc_cleanup_.contains(key);
+    EnqueClosedFile(std::move(key));
+    if (pending_gc_cleanup && file_cleaner_.status_ == TaskStatus::Idle)
+    {
+        file_cleaner_.Resume();
+    }
 }
 
 size_t CloudStoreMgr::EstimateFileSize(TypedFileId file_id) const
@@ -6005,6 +6079,8 @@ int CloudStoreMgr::ReserveCacheSpace(size_t size)
             LOG(WARNING) << "Cannot reserve " << size
                          << " bytes: used=" << used_local_space_
                          << " limit=" << shard_local_space_limit_
+                         << " open_fds=" << lru_fd_count_ << "/" << fd_limit_
+                         << " closed_files=" << closed_files_.size()
                          << " no evictable files" << " task=" << current_task;
             return -ENOSPC;
         }
@@ -6903,16 +6979,17 @@ void CloudStoreMgr::FileCleaner::Run()
                 it = io_mgr_->pending_gc_cleanup_.erase(it);
                 made_progress = true;
 
+                // Collect only: do NOT call GetSQE here. GetSQE can suspend
+                // (SQ ring full), and while suspended another same-shard
+                // coroutine can insert into pending_gc_cleanup_ (rehash) or
+                // erase from it, invalidating `it` -> use-after-free on the
+                // next iteration. The SQEs are submitted in a single pass below
+                // once no set iterator is held. StartEvictingKey (above) keeps
+                // req.file_ alive across that later suspension.
                 UnlinkReq &req = unlink_reqs[req_count++];
                 req.file_ = file;
                 req.path_ = file->key_->tbl_id_.ToString();
                 req.path_ /= file->key_->filename_;
-
-                io_uring_sqe *sqe =
-                    io_mgr_->GetSQE(UserDataType::BaseReq, &req);
-                int root_fd = io_mgr_->GetRootFD(file->key_->tbl_id_).first;
-                DLOG(INFO) << "FileCleaner GC:" << req.path_;
-                io_uring_prep_unlinkat(sqe, root_fd, req.path_.c_str(), 0);
             }
         }
 
@@ -6940,18 +7017,30 @@ void CloudStoreMgr::FileCleaner::Run()
                     continue;
                 }
 
+                // Collect only, same as the pending-GC loop above: GetSQE must
+                // not run while the intrusive lru_file_ list pointer `file` is
+                // held, since a suspension there could let another coroutine
+                // evict/free the node -> dangling `file`/`file->prev_`.
                 UnlinkReq &req = unlink_reqs[req_count++];
                 req.file_ = file;
                 req.path_ = file->key_->tbl_id_.ToString();
                 req.path_ /= file->key_->filename_;
-
-                io_uring_sqe *sqe =
-                    io_mgr_->GetSQE(UserDataType::BaseReq, &req);
-                int root_fd =
-                    io_mgr_->GetRootFD(req.file_->key_->tbl_id_).first;
-                DLOG(INFO) << "FileCleaner eviction:" << req.path_;
-                io_uring_prep_unlinkat(sqe, root_fd, req.path_.c_str(), 0);
             }
+        }
+
+        // Submit pass: no pending_gc_cleanup_ iterator or lru_file_ list
+        // pointer is held here, so GetSQE()/GetRootFD() may safely suspend when
+        // the SQ ring is full. Each req.file_ was pinned via StartEvictingKey
+        // during collection, so it stays valid (unordered_map element pointers
+        // survive rehash; an evicting key is not erased until the completion
+        // pass below).
+        for (uint16_t i = 0; i < req_count; i++)
+        {
+            UnlinkReq &req = unlink_reqs[i];
+            io_uring_sqe *sqe = io_mgr_->GetSQE(UserDataType::BaseReq, &req);
+            int root_fd = io_mgr_->GetRootFD(req.file_->key_->tbl_id_).first;
+            DLOG(INFO) << "FileCleaner unlink:" << req.path_;
+            io_uring_prep_unlinkat(sqe, root_fd, req.path_.c_str(), 0);
         }
 
         if (req_count == 0)

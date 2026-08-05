@@ -1,6 +1,8 @@
 #include <glog/logging.h>
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
@@ -8,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -138,6 +141,22 @@ TEST_CASE("drop table clears all partitions", "[persist][droptable]")
                 }
             }
 
+            if (!opts.cloud_store_path.empty())
+            {
+                for (uint32_t partition : partitions)
+                {
+                    const std::vector<std::string> files =
+                        ListCloudFiles(opts,
+                                       opts.cloud_store_path,
+                                       table_ident(partition).ToString());
+                    REQUIRE(std::any_of(
+                        files.begin(),
+                        files.end(),
+                        [](const std::string &file)
+                        { return file.find("data_") != std::string::npos; }));
+                }
+            }
+
             eloqstore::DropTableRequest drop_req;
             drop_req.SetArgs(tbl_name);
             store->ExecSync(&drop_req);
@@ -165,6 +184,35 @@ TEST_CASE("drop table clears all partitions", "[persist][droptable]")
                     REQUIRE(read_req.Error() == eloqstore::KvError::NotFound);
                 }
             }
+
+            if (!opts.cloud_store_path.empty())
+            {
+                bool cloud_partitions_empty = false;
+                const auto deadline =
+                    std::chrono::steady_clock::now() + std::chrono::seconds(10);
+                do
+                {
+                    cloud_partitions_empty = true;
+                    for (uint32_t partition : partitions)
+                    {
+                        if (!ListCloudFiles(opts,
+                                            opts.cloud_store_path,
+                                            table_ident(partition).ToString())
+                                 .empty())
+                        {
+                            cloud_partitions_empty = false;
+                            break;
+                        }
+                    }
+                    if (!cloud_partitions_empty)
+                    {
+                        std::this_thread::sleep_for(
+                            std::chrono::milliseconds(50));
+                    }
+                } while (!cloud_partitions_empty &&
+                         std::chrono::steady_clock::now() < deadline);
+                REQUIRE(cloud_partitions_empty);
+            }
         }
 
         store->Stop();
@@ -173,6 +221,46 @@ TEST_CASE("drop table clears all partitions", "[persist][droptable]")
 
     run_drop_table_case(default_opts, "local");
     run_drop_table_case(cloud_options, "cloud");
+}
+
+TEST_CASE("drop table cloud list respects table name boundary",
+          "[persist][droptable][cloud]")
+{
+    eloqstore::EloqStore *store = InitStore(cloud_options);
+    const std::string key = test_util::Key(1);
+
+    auto write_table = [&](std::string_view table_name)
+    {
+        std::vector<eloqstore::WriteDataEntry> entries;
+        entries.emplace_back(
+            key, test_util::Value(1, 32), 1, eloqstore::WriteOp::Upsert);
+        eloqstore::BatchWriteRequest write_req;
+        write_req.SetArgs(eloqstore::TableIdent{std::string(table_name), 0},
+                          std::move(entries));
+        store->ExecSync(&write_req);
+        REQUIRE(write_req.Error() == eloqstore::KvError::NoError);
+    };
+
+    write_table("a");
+    write_table("aa");
+
+    eloqstore::DropTableRequest drop_req;
+    drop_req.SetArgs("a");
+    store->ExecSync(&drop_req);
+    REQUIRE(drop_req.Error() == eloqstore::KvError::NoError);
+
+    eloqstore::ReadRequest dropped_read;
+    dropped_read.SetArgs(eloqstore::TableIdent{"a", 0}, key);
+    store->ExecSync(&dropped_read);
+    REQUIRE(dropped_read.Error() == eloqstore::KvError::NotFound);
+
+    eloqstore::ReadRequest adjacent_read;
+    adjacent_read.SetArgs(eloqstore::TableIdent{"aa", 0}, key);
+    store->ExecSync(&adjacent_read);
+    REQUIRE(adjacent_read.Error() == eloqstore::KvError::NoError);
+
+    store->Stop();
+    CleanupStore(cloud_options);
 }
 
 TEST_CASE("simple LRU for opened fd", "[persist]")
@@ -508,6 +596,59 @@ TEST_CASE("write task abort rolls back branch file-id high-water (cloud)",
     // The next write must succeed: Abort rolled the high-water back to its
     // pre-task value. Without the rollback it regresses and aborts the process.
     REQUIRE(write(2, 64, 2) == eloqstore::KvError::NoError);
+}
+
+// A failed index-page (MemCachedPage) write must not
+// CHECK-abort the process. WritePage() takes a temporary IO pin on top of the
+// submitting task's handle, and the completion runs from the shard loop while
+// the WriteTask coroutine is suspended in WaitWrite holding that handle (via
+// FlushIndexPage). The error branch of WritePageCallback used to
+// CHECK(!IsPinned()) on the caller's legitimate pin -> SIGABRT. It must instead
+// surface the error to the client and leave the store usable.
+//
+// Keep this case before the append-mode one below: that test drives its own
+// EloqStore instances, which clears the global eloq_store pointer while the
+// static InitStore store keeps running, so a later InitStore teardown of that
+// store crashes in code reading the global (e.g. Prewarmer::Shutdown).
+TEST_CASE("failed index-page write surfaces error without aborting",
+          "[persist][writepage_fail]")
+{
+    eloqstore::KvOptions opts = default_opts;
+    // Force WaitWrite() after every submitted page so the failed completion is
+    // driven while the caller still holds its pin.
+    opts.max_write_batch_pages = 1;
+    eloqstore::EloqStore *store = InitStore(opts);
+    eloqstore::TableIdent tbl_id = {"writepage-fail", 0};
+
+    // Enough keys to split into several leaves => at least one internal index
+    // page flushed through FinishIndexPage/FlushIndexPage.
+    std::vector<eloqstore::WriteDataEntry> entries;
+    entries.reserve(4000);
+    for (uint64_t i = 0; i < 4000; ++i)
+    {
+        entries.emplace_back(
+            Key(i), std::string(24, 'v'), 1, eloqstore::WriteOp::Upsert);
+    }
+    eloqstore::BatchWriteRequest req;
+    req.SetArgs(tbl_id, std::move(entries));
+
+    eloqstore::FailPoint::GetInstance().ArmOnce("IndexPageWriteFail");
+    store->ExecSync(&req);  // must not SIGABRT
+    // Disarm before REQUIRE so an unfired point can't leak into later tests.
+    eloqstore::FailPoint::GetInstance().Disarm();
+    REQUIRE(req.Error() != eloqstore::KvError::NoError);
+
+    // The store is still usable after the injected disk error.
+    {
+        std::vector<eloqstore::WriteDataEntry> ok_entries;
+        ok_entries.emplace_back(
+            Key(0), std::string("ok"), 2, eloqstore::WriteOp::Upsert);
+        eloqstore::BatchWriteRequest ok_req;
+        ok_req.SetArgs(eloqstore::TableIdent{"writepage-fail", 1},
+                       std::move(ok_entries));
+        store->ExecSync(&ok_req);
+        REQUIRE(ok_req.Error() == eloqstore::KvError::NoError);
+    }
 }
 
 TEST_CASE("append mode survives compression toggles across restarts",

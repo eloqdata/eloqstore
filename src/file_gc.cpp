@@ -420,6 +420,7 @@ KvError ListCloudFiles(const TableIdent &tbl_id,
                        CloudStoreMgr *cloud_mgr)
 {
     std::string table_path = tbl_id.ToString();
+    table_path.push_back('/');
     KvTask *current_task = ThdTask();
 
     ObjectStore &object_store = cloud_mgr->GetObjectStore();
