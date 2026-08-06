@@ -55,8 +55,14 @@ shard thread: `TaskManager::Shutdown()` → `PageManager::Shutdown()` →
 `io_mgr_->Stop()` (tasks may hold page pins, so task state dies first).
 
 In the module build (`ELOQ_MODULE_ENABLED`, doc 10) the same logic is exposed
-as `WorkOneRound()` and an external runtime drives it; `IsIdle()` tells the
-runtime whether the shard needs another round.
+as `WorkOneRound()` (driven by `EloqStoreModule::Process`) and an external
+runtime drives it; `IsIdle()` tells the runtime whether the shard needs
+another round. It runs the **same step order**, which matters most there: the
+gap between rounds is an external scheduling decision rather than a few
+microseconds, so both a delayed flush and mis-ordered admission cost a full
+quantum. The only structural difference is that the request *dequeue* happens
+first because the idle-round test depends on its count; admission
+(`OnReceivedReq`) still runs at step 4, after `PollComplete`.
 
 ## Tasks are pooled coroutines
 

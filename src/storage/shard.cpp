@@ -1400,6 +1400,17 @@ void Shard::WorkOneRound()
 #endif
     }
 
+    io_mgr_->Submit();
+
+    io_mgr_->PollComplete();
+    PromoteReadyDelayedReopenRequests();
+
+    // Admit new requests only after PollComplete and Promote, matching
+    // WorkLoop: everything already in flight is enqueued on ready_tasks_
+    // ahead of this round's arrivals, so a burst of new requests cannot
+    // take precedence over tasks the shard has already started. The
+    // dequeue itself stays above (is_idle_round depends on nreqs); only
+    // admission moves.
     for (size_t i = 0; i < nreqs; ++i)
     {
         OnReceivedReq(reqs[i]);
@@ -1407,10 +1418,6 @@ void Shard::WorkOneRound()
 
     req_queue_size_.fetch_sub(nreqs, std::memory_order_relaxed);
 
-    io_mgr_->Submit();
-
-    io_mgr_->PollComplete();
-    PromoteReadyDelayedReopenRequests();
     if (DurationMicroseconds(ts_) < FLAGS_max_processing_time_microseconds)
     {
         ExecuteReadyTasks();
