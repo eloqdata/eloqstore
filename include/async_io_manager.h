@@ -245,8 +245,27 @@ public:
     {
         return store_stopping_.load(std::memory_order_acquire);
     }
+    /**
+     * @brief Top-of-round kernel entry: refill the device rate budget (its
+     * only wake source) and drive io_uring submission / task_work.
+     */
     virtual void Submit() = 0;
     virtual void PollComplete() = 0;
+    /**
+     * @brief End-of-round flush: push SQEs prepared by ExecuteReadyTasks to
+     * the kernel in the same round instead of leaving them for the next
+     * round's Submit.
+     *
+     * Splitting this out of Submit keeps the rate-budget refill at exactly
+     * one per round while removing the round-boundary delay between
+     * preparing an IO and issuing it — which in module mode (an embedding
+     * runtime driving Process/HasTask) is a full external scheduling
+     * quantum of dead device time per IO hop. No-op when the round prepared
+     * nothing.
+     */
+    virtual void FlushSubmit()
+    {
+    }
     virtual bool NeedPrewarm() const
     {
         return false;
@@ -698,6 +717,7 @@ public:
     ~IouringMgr() override;
     KvError Init(Shard *shard) override;
     void Submit() override;
+    void FlushSubmit() override;
     /**
      * @brief A shard must not idle-block while this ring has prepared or
      * submitted-but-unreaped IO: CQE delivery under DEFER_TASKRUN

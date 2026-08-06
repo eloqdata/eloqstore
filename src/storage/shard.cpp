@@ -220,7 +220,6 @@ void Shard::WorkLoop()
             io_mgr_->Submit();
             io_mgr_->PollComplete();
             PromoteReadyDelayedReopenRequests();
-            ExecuteReadyTasks();
             int nreqs = dequeue_requests();
             if (nreqs < 0)
             {
@@ -230,6 +229,8 @@ void Shard::WorkLoop()
             {
                 OnReceivedReq(reqs[i]);
             }
+            ExecuteReadyTasks();
+            io_mgr_->FlushSubmit();
         }
         else
         {
@@ -244,8 +245,6 @@ void Shard::WorkLoop()
             const uint64_t t2 = ReadTimeMicroseconds();
             PromoteReadyDelayedReopenRequests();
             const uint64_t t3 = ReadTimeMicroseconds();
-            ExecuteReadyTasks();
-            const uint64_t t4 = ReadTimeMicroseconds();
             uint64_t queue_wait_us = 0;
             int nreqs = dequeue_requests(&queue_wait_us);
             if (nreqs < 0)
@@ -256,8 +255,12 @@ void Shard::WorkLoop()
             {
                 OnReceivedReq(reqs[i]);
             }
+            const uint64_t t4 = ReadTimeMicroseconds();
+            ExecuteReadyTasks();
             const uint64_t t5 = ReadTimeMicroseconds();
-            const uint64_t total_us = t5 - t0;
+            io_mgr_->FlushSubmit();
+            const uint64_t t6 = ReadTimeMicroseconds();
+            const uint64_t total_us = t6 - t0;
             const uint64_t active_us = total_us - queue_wait_us;
             if (active_us > 1000)
             {
@@ -269,8 +272,9 @@ void Shard::WorkLoop()
                 LOG(INFO) << "SLOWROUND total=" << total_us
                           << "us active=" << active_us << "us cpu=" << cpu_us
                           << "us submit=" << t1 - t0 << " poll=" << t2 - t1
-                          << " promote=" << t3 - t2 << " execute=" << t4 - t3
-                          << " intake=" << t5 - t4 - queue_wait_us
+                          << " promote=" << t3 - t2
+                          << " intake=" << t4 - t3 - queue_wait_us
+                          << " execute=" << t5 - t4 << " flush=" << t6 - t5
                           << " queue_wait=" << queue_wait_us
                           << " nreqs=" << nreqs;
             }
@@ -1411,6 +1415,11 @@ void Shard::WorkOneRound()
     {
         ExecuteReadyTasks();
     }
+    // Issue what this round prepared before handing the thread back to the
+    // embedding runtime: the next round is an external scheduling decision
+    // and may be far away, so leaving SQEs for it would idle the device for
+    // a whole quantum on every IO hop.
+    io_mgr_->FlushSubmit();
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: end of round
     if (store_->EnableMetrics() && !is_idle_round)

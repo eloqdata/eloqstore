@@ -23,16 +23,32 @@ shard context without parameter plumbing.
 
 `Shard::WorkLoop()` (normal build) repeats:
 
-1. `io_mgr_->Submit()` — flush prepared io_uring SQEs.
-2. `io_mgr_->PollComplete()` — reap CQEs; each completion either finishes a
-   blocked task's I/O (`FinishIo`) or processes a background write request.
-   Cloud/standby ready-queues are drained here too.
-3. `ExecuteReadyTasks()` — resume coroutines from `ready_tasks_`, then (when
-   the normal queue is empty) `low_priority_ready_tasks_` (background
-   compaction/GC yield here to protect foreground latency).
+1. `io_mgr_->Submit()` — refill the device rate budget (`RefillAndWake`, its
+   only wake source) and enter the kernel. The ring uses
+   `IORING_SETUP_DEFER_TASKRUN`, so this entry is also what delivers CQEs.
+2. `io_mgr_->PollComplete()` — reap CQEs (pure user space: `peek_cqe` +
+   `for_each_cqe`); each completion either finishes a blocked task's I/O
+   (`FinishIo`) or processes a background write request. Cloud/standby
+   ready-queues are drained here too.
+3. `PromoteReadyDelayedReopenRequests()`.
 4. Dequeue up to 128 new `KvRequest`s from the MPSC `requests_` queue
    (blocking with 100 ms timeout only when fully idle) and feed each to
    `OnReceivedReq`.
+5. `ExecuteReadyTasks()` — resume coroutines from `ready_tasks_`, then (when
+   the normal queue is empty) `low_priority_ready_tasks_` (background
+   compaction/GC yield here to protect foreground latency).
+6. `io_mgr_->FlushSubmit()` — issue the SQEs this round prepared.
+
+**The order is load-bearing.** Four producers feed `ready_tasks_` — rate-budget
+grants (step 1), I/O completions (step 2), delayed reopens (step 3), and new
+requests (step 4) — and all of them are placed before the single
+`ExecuteReadyTasks`, so work admitted in a round runs in that same round.
+`FlushSubmit` then closes the loop on the output side: without it, SQEs
+prepared in step 5 would wait for the *next* round's `Submit`, which in module
+mode is a full external scheduling quantum of dead device time on every I/O
+hop. `FlushSubmit` deliberately does not touch `consecutive_skipped_submits_`
+(the DEFER_TASKRUN forced-enter safety net stays owned by `Submit`) and is a
+no-op when the round prepared nothing.
 
 Exit: when the store is stopping and the shard is idle. Teardown runs on the
 shard thread: `TaskManager::Shutdown()` → `PageManager::Shutdown()` →

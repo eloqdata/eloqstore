@@ -2401,6 +2401,29 @@ void IouringMgr::Submit()
     }
 }
 
+void IouringMgr::FlushSubmit()
+{
+    if (prepared_sqe_ == 0)
+    {
+        // Nothing was prepared after the round's Submit. Kernel re-entry
+        // (and with it the DEFER_TASKRUN forced-enter safety net) is
+        // Submit's job at the top of the next round, so deliberately do
+        // not touch consecutive_skipped_submits_ here: this call must not
+        // perturb that cadence.
+        return;
+    }
+    // A round that prepared SQEs is entering the kernel now, so the skip
+    // counter restarts exactly as it would in Submit.
+    consecutive_skipped_submits_ = 0;
+    int ret = io_uring_submit(&ring_);
+    if (__builtin_expect(ret < 0, 0))
+    {
+        LOG(ERROR) << "iouring flush submit failed " << ret;
+        return;
+    }
+    prepared_sqe_ -= ret;
+}
+
 void IouringMgr::PollComplete()
 {
     if (io_stats_enabled_)
