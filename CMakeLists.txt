@@ -166,7 +166,7 @@ target_include_directories(eloqstore PRIVATE ${LIBZMQ_INCLUDE_DIRS})
 # PUBLIC: engine public headers (async_io_manager.h, kill_point.h) include
 # glog/logging.h.
 target_link_libraries(eloqstore PUBLIC glog::glog)
-target_link_libraries(eloqstore PRIVATE ${URING_LIB} absl::flat_hash_map ${BOOST_CONTEXT_TARGET} ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} aws-cpp-sdk-core OpenSSL::Crypto ${LIBZMQ_LIBRARIES})
+target_link_libraries(eloqstore PRIVATE ${URING_LIB} absl::base absl::flat_hash_map ${BOOST_CONTEXT_TARGET} ${CURL_LIBRARIES} jsoncpp_lib ${ZSTD_LIBRARY} aws-cpp-sdk-core OpenSSL::Crypto ${LIBZMQ_LIBRARIES})
 
 set(ELOQ_STORE_CAPI_INCLUDE
         ${ELOQ_STORE_INCLUDE}
