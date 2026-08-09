@@ -1431,11 +1431,7 @@ void Shard::InitializeTscFrequency()
         tsc_frequency_initialized_,
         []()
         {
-            // sleep_for() may oversleep when the initializing thread is
-            // descheduled. Dividing the elapsed TSC ticks by the requested
-            // sleep duration then overestimates the frequency and makes all
-            // work-loop budgets run long. Abseil calibrates the raw TSC
-            // against the actual elapsed monotonic time instead.
+            // This frequency uses the same raw TSC scale as __rdtsc().
             const double frequency_hz =
                 absl::base_internal::NominalCPUFrequency();
             const uint64_t cycles_per_microsecond = std::max<uint64_t>(
