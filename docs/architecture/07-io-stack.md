@@ -56,8 +56,11 @@ Responsibilities:
   (`disk_rate_limit_iops`/`disk_rate_limit_mbps`, on by default) are divided
   across shards (`× store paths / num_threads`). A separate optional
   class-blind in-flight command window (`max_inflight_io`, off by default) is
-  the only occupancy-style cap and *does* release per CQE in `PollComplete`.
-  Metadata, manifest, bulk file/snapshot paths, and segment IO are exempt.
+  the only occupancy-style cap and *does* release per CQE in `PollComplete`;
+  it charges 1 per page IO, `ceil(len / 256KB)` per merged write, and 1 per
+  batch fsync (`FdatasyncFiles`, tagged `BaseReqFsync` so the release can
+  tell them from exempt metadata ops). Other metadata, manifest, bulk
+  file/snapshot paths, and segment IO are exempt from both mechanisms.
   `GetIoQosStats()` (also `EloqStore::GetIoQosStats(shard_id)`) exposes the
   per-class rate counters (blocked count/us, admitted ops/bytes, borrowed ops)
   and the window's in-flight/high-water/blocked gauges.

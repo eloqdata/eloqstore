@@ -319,6 +319,42 @@ TEST_CASE("io window: negative MergedWriteReq CQE releases and recovers",
     REQUIRE(ShardStats(store).io_window_inflight_ == 0);
 }
 
+TEST_CASE("io window: negative fsync CQE releases and recovers", "[io_qos]")
+{
+    // FdatasyncFiles charges one window command per fsync SQE
+    // (BaseReqFsync) so a checkpoint's flush batch cannot bypass
+    // max_inflight_io. Acquire and release must stay symmetric on the
+    // error path: the failed CQE still releases its command (in Debug the
+    // ReleaseIoWindow underflow assert would fire if the acquire were
+    // missing), the failure surfaces on the write request, and the store
+    // keeps serving afterwards.
+    eloqstore::KvOptions opts = default_opts;
+    opts.disk_rate_limit_iops = 0;
+    opts.max_inflight_io = 2;
+    eloqstore::EloqStore *store = InitStore(opts);
+    const eloqstore::TableIdent tbl_id{"qos-fsync-cqe", 0};
+    const uint64_t ts = utils::UnixTs<std::chrono::milliseconds>();
+
+    eloqstore::BatchWriteRequest failed;
+    failed.SetTableId(tbl_id);
+    failed.AddWrite("fsync-key", "value", ts, eloqstore::WriteOp::Upsert);
+    eloqstore::FailPoint::GetInstance().ArmOnce("BaseReqFsyncCqe");
+    store->ExecSync(&failed);
+    eloqstore::FailPoint::GetInstance().Disarm();
+
+    REQUIRE(failed.Error() == eloqstore::KvError::IoFail);
+    eloqstore::IoQosStats stats = ShardStats(store);
+    REQUIRE(stats.fdatasync_count_ > 0);
+    REQUIRE(stats.io_window_inflight_ == 0);
+
+    eloqstore::BatchWriteRequest recovery;
+    recovery.SetTableId(tbl_id);
+    recovery.AddWrite("recovery", "value", ts + 1, eloqstore::WriteOp::Upsert);
+    store->ExecSync(&recovery);
+    REQUIRE(recovery.Error() == eloqstore::KvError::NoError);
+    REQUIRE(ShardStats(store).io_window_inflight_ == 0);
+}
+
 TEST_CASE("io qos stats: concurrent sampling", "[io_qos][stats]")
 {
     // IoQosStats must be safely sampleable from another thread while the

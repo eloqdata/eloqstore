@@ -77,6 +77,32 @@ TEST_CASE("KvOptions parses QoS knobs and preserves malformed defaults",
     REQUIRE(options.LoadFromIni(ini_path.c_str()) == 0);
     REQUIRE(options.max_inflight_write ==
             eloqstore::KvOptions{}.max_inflight_write);
+
+    // rate_limit_io_unit: a valid size within [4KB, UINT32_MAX] is taken;
+    // below the 4KB minimum or above uint32 range ("4GB" is nonzero as
+    // uint64_t but would truncate to 0) keeps the default.
+    {
+        std::ofstream ini(ini_path);
+        REQUIRE(ini.is_open());
+        ini << "[run]\nrate_limit_io_unit = 8KB\n"
+               "[permanent]\nstore_path = /tmp/unused\n";
+    }
+    options = eloqstore::KvOptions{};
+    REQUIRE(options.LoadFromIni(ini_path.c_str()) == 0);
+    REQUIRE(options.rate_limit_io_unit == 8 * 1024);
+    for (const char *bad : {"2KB", "4GB", "0"})
+    {
+        {
+            std::ofstream ini(ini_path);
+            REQUIRE(ini.is_open());
+            ini << "[run]\nrate_limit_io_unit = " << bad
+                << "\n[permanent]\nstore_path = /tmp/unused\n";
+        }
+        options = eloqstore::KvOptions{};
+        REQUIRE(options.LoadFromIni(ini_path.c_str()) == 0);
+        REQUIRE(options.rate_limit_io_unit ==
+                eloqstore::KvOptions{}.rate_limit_io_unit);
+    }
     CleanupTestDir(test_dir);
 }
 
@@ -91,6 +117,18 @@ TEST_CASE("EloqStore ValidateOptions validates all parameters", "[eloq_store]")
     // Write budget 0 is not a disable switch: every write must be bounded.
     options.max_inflight_write = 0;
     REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
+    options = CreateValidOptions(test_dir);  // restore valid value
+
+    // rate_limit_io_unit floors at 4KB. WriteRateOps divides by it on
+    // every write — even with the rate limiter disabled — so zero and
+    // sub-page quanta must be rejected for programmatically constructed
+    // options, not just on the INI path.
+    options.rate_limit_io_unit = 0;
+    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
+    options.rate_limit_io_unit = 2 * 1024;
+    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == false);
+    options.rate_limit_io_unit = 8 * 1024;
+    REQUIRE(eloqstore::EloqStore::ValidateOptions(options) == true);
     options = CreateValidOptions(test_dir);  // restore valid value
 
     // Test data_page_size that is not page-aligned

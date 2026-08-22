@@ -964,8 +964,13 @@ public:
         // KvTask / BaseReq types, plus a read-budget release. The distinct
         // types exist so PollComplete can tell budgeted data-page reads
         // apart from metadata ops that share the plain payload types.
-        KvTaskPageRead,  // ReadPage (single page), payload = KvTask*
-        BaseReqPageRead  // ReadPages (one page of a batch), payload = BaseReq*
+        KvTaskPageRead,   // ReadPage (single page), payload = KvTask*
+        BaseReqPageRead,  // ReadPages (one page of a batch), payload = BaseReq*
+        // Batch fsyncs charged against the io window (FdatasyncFiles),
+        // payload = BaseReq*. Distinct from BaseReq so PollComplete can
+        // release the window command without touching the metadata ops
+        // (open, close, unlink, ...) that stay window-exempt.
+        BaseReqFsync
     };
 
     struct BaseReq
@@ -1396,8 +1401,9 @@ public:
      * rate governs allocation per second with class policy; this bounds
      * the instantaneous outstanding window toward the device, smoothing
      * the rate bucket's burst release. Cost is device commands: 1 per page
-     * IO, ceil(len / kDeviceCmdBytes) per merged write. Oversized-request
-     * escape: a cost above the cap admits alone once the
+     * IO, ceil(len / kDeviceCmdBytes) per merged write, 1 per batch fsync
+     * (FdatasyncFiles — a flush occupies a queue slot like any command).
+     * Oversized-request escape: a cost above the cap admits alone once the
      * window drains. Completion-driven wake in PollComplete.
      */
     void AcquireIoWindow(uint32_t cost);
@@ -1425,8 +1431,9 @@ public:
      * both WritePage (one data page) and SubmitMergedWrite use it, so a
      * page's cost and a merged write's cost are consistent by construction.
      * The unit is the configured physical write quantum (default = data
-     * page size); it is validated nonzero at option load, so no clamp is
-     * needed here.
+     * page size); EloqStore::ValidateOptions rejects units below 4KB —
+     * covering programmatic KvOptions, not just the INI path — so the
+     * divisor is never zero and no clamp is needed here.
      */
     static uint32_t WriteRateOpsFor(size_t bytes, uint32_t unit)
     {

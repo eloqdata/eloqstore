@@ -140,13 +140,13 @@ struct KvOptions
      * operations (WriteRateOps), so a data-page write and a merged write
      * are metered on one consistent scale. Defaults to the physical write
      * quantum, one data page (4KB): a 4KB write costs 1 op, a 1MB merged
-     * write costs 256. Must be nonzero (a zero/malformed value is rejected
-     * at load and the default is kept). A finer unit (e.g. 2KB) charges
-     * writes more ops per byte and paces background harder; the tested
-     * Azure NVMe read-tail target was met at the 4KB default, so it is not
-     * enabled by default — recalibrate with the fio boundary method in
-     * docs/design/io_qos.md only if a device's write-accounting unit is
-     * measured smaller and write throttling needs it.
+     * write costs 256. Minimum 4KB (= the default): ValidateOptions
+     * rejects smaller values — the divisor must never be zero, and a
+     * sub-page quantum would overcharge writes — and LoadFromIni keeps
+     * the default on a malformed or out-of-uint32-range entry. The tested
+     * Azure NVMe read-tail target was met at the 4KB default; coarsen
+     * (recalibrating with the fio boundary method in docs/design/io_qos.md)
+     * only if a device's write-accounting unit is measured larger.
      */
     uint32_t rate_limit_io_unit = 4 * KB;
     /**

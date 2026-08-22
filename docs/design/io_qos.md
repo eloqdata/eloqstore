@@ -421,11 +421,12 @@ uint32_t rate_limit_io_unit   = 4096; // write ops quantum: ceil(len/unit)
                                      // ops per write (WriteRateOps, used by
                                      // both WritePage and SubmitMergedWrite).
                                      // Default = one data page: 4KB write =
-                                     // 1 op, 1MB merged = 256. Must be
-                                     // nonzero (validated at load). A finer
-                                     // unit paces background harder; not
-                                     // needed at the tested read-tail
-                                     // target.
+                                     // 1 op, 1MB merged = 256. Minimum 4KB
+                                     // (= default; ValidateOptions rejects
+                                     // smaller, the INI loader keeps the
+                                     // default on malformed/out-of-range
+                                     // values). Coarsen only if the device
+                                     // accounts in larger units.
 uint32_t rate_bg_ratio        = 25;  // background share of the rate, percent
 ```
 

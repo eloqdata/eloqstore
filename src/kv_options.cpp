@@ -189,10 +189,14 @@ int KvOptions::LoadFromIni(const char *path)
     {
         std::string io_unit_str = reader.Get(sec_run, "rate_limit_io_unit", "");
         const uint64_t parsed = ParseSizeWithUnit(io_unit_str);
-        if (parsed == 0)
+        // Range check on the wide type before narrowing: e.g. "4GB" is
+        // nonzero as uint64_t but truncates to uint32_t(0), which would
+        // reach WriteRateOps' division. Minimum is 4KB (see kv_options.h).
+        if (parsed < static_cast<uint64_t>(4 * KB) ||
+            parsed > std::numeric_limits<uint32_t>::max())
         {
             LOG(WARNING) << "rate_limit_io_unit '" << io_unit_str
-                         << "' is invalid; keeping default "
+                         << "' is invalid (minimum 4KB); keeping default "
                          << rate_limit_io_unit << " bytes";
         }
         else

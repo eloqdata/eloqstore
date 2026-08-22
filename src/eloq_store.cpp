@@ -148,6 +148,14 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
         LOG(ERROR) << "Option max_global_request_batch cannot be zero";
         return false;
     }
+    // WriteRateOps divides by this on every write, even with the rate
+    // limiter disabled; a sub-page quantum would also overcharge writes.
+    if (opts.rate_limit_io_unit < 4 * KB)
+    {
+        LOG(ERROR) << "Option rate_limit_io_unit (" << opts.rate_limit_io_unit
+                   << ") must be at least 4KB";
+        return false;
+    }
     if ((opts.data_page_size & (page_align - 1)) != 0)
     {
         LOG(ERROR) << "Option data_page_size is not page aligned";

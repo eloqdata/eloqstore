@@ -114,7 +114,7 @@ state:
   /`disk_rate_limit_mbps` (per-disk device rate limit, on by default,
   divided across shards), `rate_bg_ratio` (background share of the rate —
   the tail-predictability policy knob), `rate_limit_burst_ms`,
-  `rate_limit_io_unit` (write ops quantum), and `max_inflight_io` (optional
+  `rate_limit_io_unit` (write ops quantum, minimum 4KB), and `max_inflight_io` (optional
   class-blind in-flight command window). The former count budgets
   `max_inflight_read`/`bg_read_ratio` are deprecated no-ops.
 - **Cloud**: `cloud_provider/endpoint/region/keys`, `local_space_limit` +

@@ -2458,12 +2458,20 @@ void IouringMgr::PollComplete()
             task->io_flags_ = cqe->flags;
             break;
         case UserDataType::BaseReqPageRead:
+        case UserDataType::BaseReqFsync:
         case UserDataType::BaseReq:
         {
             BaseReq *req = static_cast<BaseReq *>(ptr);
             if (type == UserDataType::BaseReqPageRead)
             {
                 TEST_FAIL_POINT_ACTION("BaseReqPageReadCqe", cqe->res = -EIO);
+                ReleaseIoWindow(1);
+            }
+            else if (type == UserDataType::BaseReqFsync)
+            {
+                TEST_FAIL_POINT_ACTION("BaseReqFsyncCqe", cqe->res = -EIO);
+                // Mirrors the per-SQE acquire in FdatasyncFiles;
+                // unconditional so failed CQEs release their command too.
                 ReleaseIoWindow(1);
             }
             req->res_ = cqe->res;
@@ -2802,7 +2810,13 @@ KvError IouringMgr::FdatasyncFiles(const TableIdent &tbl_id,
         // enough space for this vector so that it will never reallocate.
         const FsyncReq &req = reqs.emplace_back(ThdTask(), fd_ref);
         auto [fd, registered] = req.fd_ref_.FdPair();
-        io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, &req);
+        // Window admission (M2): a flush occupies a device queue slot like
+        // any command, so a checkpoint's batch must not bypass the cap.
+        // Per-SQE acquire, like the page-read paths; a mid-loop wait lets
+        // the shard loop submit the already-charged SQEs. Released once
+        // per BaseReqFsync CQE in PollComplete.
+        AcquireIoWindow(1);
+        io_uring_sqe *sqe = GetSQE(UserDataType::BaseReqFsync, &req);
         if (registered)
         {
             sqe->flags |= IOSQE_FIXED_FILE;
