@@ -4,6 +4,11 @@
 #include <fcntl.h>
 #include <glog/logging.h>
 #include <liburing.h>
+#include <sys/sysmacros.h>
+
+#include <fstream>
+#include <mutex>
+#include <set>
 #include <liburing/io_uring.h>
 #include <linux/openat2.h>
 #include <signal.h>
@@ -198,6 +203,56 @@ static void SplitRate(uint64_t total,
     }
     bg = std::clamp<uint64_t>(total * bg_ratio_pct / 100, 1, total - 1);
     fg = total - bg;
+}
+
+void WritePacer::Acquire(uint64_t bytes)
+{
+    if (!Enabled())
+    {
+        return;
+    }
+    const int64_t cost = static_cast<int64_t>(bytes) * kScale;
+    if (waiting_.Empty() && balance_ >= cost)
+    {
+        balance_ -= cost;
+        return;
+    }
+    KvTask *task = ThdTask();
+    task->rate_wait_ops_ = 0;
+    task->rate_wait_bytes_ = bytes;
+    // Woken only after RefillAndWake charged the cost on our behalf.
+    waiting_.Wait(task);
+}
+
+void WritePacer::RefillAndWake(uint64_t now_us)
+{
+    if (!Enabled())
+    {
+        return;
+    }
+    if (last_us_ != 0 && now_us > last_us_)
+    {
+        const int64_t add = static_cast<int64_t>(rate_) *
+                            static_cast<int64_t>(now_us - last_us_);
+        balance_ = balance_ + add > bank_ ? bank_ : balance_ + add;
+    }
+    last_us_ = now_us;
+    while (true)
+    {
+        KvTask *head = waiting_.Head();
+        if (head == nullptr)
+        {
+            break;
+        }
+        const int64_t cost =
+            static_cast<int64_t>(head->rate_wait_bytes_) * kScale;
+        if (balance_ < cost)
+        {
+            break;
+        }
+        balance_ -= cost;
+        waiting_.WakeOne();
+    }
 }
 
 void RateBudget::SetRates(uint64_t ops_per_sec,
@@ -485,6 +540,32 @@ IouringMgr::IouringMgr(const KvOptions *opts, uint32_t fd_limit)
                   << options_->disk_rate_limit_iops << " iops x " << num_disks
                   << " disks / " << shards << " shards)";
     }
+    stall_park_us_ = options_->io_stall_park_us;
+    if (stall_park_us_ != 0)
+    {
+        LOG(INFO) << "IO stall parking enabled: " << stall_park_us_ << " us";
+    }
+    if (options_->disk_write_limit_mbps != 0)
+    {
+        const uint64_t num_disks =
+            std::max<uint64_t>(1, options_->store_path.size());
+        const uint64_t shards = std::max<uint16_t>(1, options_->num_threads);
+        const uint64_t shard_wbytes = options_->disk_write_limit_mbps *
+                                      num_disks * (uint64_t{1} << 20) / shards;
+        uint64_t max_single = options_->write_buffer_size;
+        if (options_->segment_size > max_single)
+        {
+            max_single = options_->segment_size;
+        }
+        if (options_->non_page_io_batch_size > max_single)
+        {
+            max_single = options_->non_page_io_batch_size;
+        }
+        write_pacer_.SetRate(shard_wbytes, max_single);
+        LOG(INFO) << "Write pacer: " << (shard_wbytes >> 20)
+                  << " MB/s per shard, 1ms bank, max single write "
+                  << max_single;
+    }
 }
 
 IouringMgr::~IouringMgr()
@@ -536,6 +617,7 @@ KvError IouringMgr::BootstrapRing(Shard *shard, GlobalMemoryConfig config)
         return KvError::IoFail;
     }
     ring_inited_ = true;
+    PinToQueueTargetCore(shard->shard_id_);
 
     if (fd_limit_ > 0)
     {
@@ -1360,6 +1442,7 @@ KvError IouringMgr::WritePage(const TableIdent &tbl_id,
     // first; write tasks classify as background. The ops cost uses the same
     // WriteRateOps helper as the merged-write path so a page and a merged
     // write are charged on one consistent scale.
+    write_pacer_.Acquire(options_->data_page_size);
     rate_budget_.Acquire(WriteRateOps(options_->data_page_size),
                          options_->data_page_size,
                          ThdTask()->IsBackground());
@@ -1571,6 +1654,7 @@ KvError IouringMgr::WriteSegments(const TableIdent &tbl_id,
     auto send_req = [this, seg_size](SegWriteReq *req)
     {
         auto [fd, registered] = req->fd_ref_.FdPair();
+        write_pacer_.Acquire(seg_size);
         io_uring_sqe *sqe = GetSQE(UserDataType::BaseReq, req);
         if (registered)
         {
@@ -1674,6 +1758,7 @@ KvError IouringMgr::SubmitMergedWrite(const TableIdent &tbl_id,
     // WritePage uses), charged against the configured write quantum; the
     // bytes bucket is charged the full length. Debt admission means this
     // single large acquisition never deadlocks against the bucket size.
+    write_pacer_.Acquire(bytes);
     rate_budget_.Acquire(WriteRateOps(bytes), bytes, ThdTask()->IsBackground());
     AcquireIoWindow(DeviceCmdCost(bytes));
     io_uring_sqe *sqe = GetSQE(UserDataType::MergedWriteReq, req);
@@ -2326,6 +2411,152 @@ std::pair<FileId, uint32_t> IouringMgr::ConvFileSegmentId(
     return {file_id, offset};
 }
 
+// Process-global count of shards currently parked on an overdue CQE.
+// Non-stalled shards co-park while this is nonzero (cooperative vCPU halt).
+static std::atomic<int> g_io_stall_parks{0};
+
+namespace
+{
+/**
+ * @brief The block device backing @p path, as "nvme2n1", or empty.
+ */
+std::string BackingDeviceName(const std::string &path)
+{
+    struct stat st;
+    if (::stat(path.c_str(), &st) != 0)
+    {
+        return {};
+    }
+    const std::string sys = "/sys/dev/block/" +
+                            std::to_string(major(st.st_dev)) + ":" +
+                            std::to_string(minor(st.st_dev));
+    char buf[PATH_MAX];
+    const ssize_t n = ::readlink(sys.c_str(), buf, sizeof(buf) - 1);
+    if (n <= 0)
+    {
+        return {};
+    }
+    buf[n] = 0;
+    std::string_view link(buf);
+    const size_t slash = link.rfind('/');
+    return std::string(slash == std::string_view::npos
+                           ? link
+                           : link.substr(slash + 1));
+}
+
+/**
+ * @brief First CPU listed in @p path (formats: "3", "3-5", "3,7").
+ */
+int FirstCpuInFile(const std::string &path)
+{
+    std::ifstream f(path);
+    std::string s;
+    if (!f || !std::getline(f, s) || s.empty())
+    {
+        return -1;
+    }
+    return std::atoi(s.c_str());
+}
+
+/**
+ * @brief Completion-interrupt target CPUs of @p dev's hardware queues.
+ *
+ * blk-mq selects a device's hardware queue by submitting CPU, and each
+ * queue's MSI-X vector has a fixed (kernel-managed) target CPU. A thread
+ * pinned to one of those target CPUs therefore submits into a queue whose
+ * completions interrupt its own CPU.
+ */
+std::vector<int> QueueTargetCpus(const std::string &dev)
+{
+    std::vector<int> cpus;
+    const std::string prefix = dev.substr(0, dev.find('n', 4)) + "q";
+    std::ifstream irqs("/proc/interrupts");
+    std::string line;
+    while (std::getline(irqs, line))
+    {
+        if (line.find(prefix) == std::string::npos)
+        {
+            continue;
+        }
+        const size_t colon = line.find(':');
+        if (colon == std::string::npos)
+        {
+            continue;
+        }
+        std::string num = line.substr(0, colon);
+        num.erase(0, num.find_first_not_of(" \t"));
+        const int cpu = FirstCpuInFile("/proc/irq/" + num +
+                                       "/effective_affinity_list");
+        if (cpu >= 0)
+        {
+            cpus.push_back(cpu);
+        }
+    }
+    return cpus;
+}
+
+// Target CPUs already claimed by earlier shards in this process.
+std::mutex g_pin_mutex;
+std::set<int> g_pinned_cpus;
+}  // namespace
+
+bool IouringMgr::SelfCqeOverdue() const
+{
+    return inflight_ios_ > 0 &&
+           Shard::ReadTimeMicroseconds() - last_cqe_progress_us_ >=
+               stall_park_us_;
+}
+
+void IouringMgr::PinToQueueTargetCore(size_t shard_id)
+{
+    if (!options_->pin_shard_to_queue_target || options_->store_path.empty())
+    {
+        return;
+    }
+    // Shards are mapped to store paths by id (see TableIdent::StorePathIndex).
+    const std::string &path =
+        options_->store_path[shard_id % options_->store_path.size()];
+    const std::string dev = BackingDeviceName(path);
+    if (dev.empty())
+    {
+        LOG(WARNING) << "shard " << shard_id << ": no block device for "
+                     << path << "; not pinning";
+        return;
+    }
+    const std::vector<int> targets = QueueTargetCpus(dev);
+    int core = -1;
+    {
+        std::lock_guard<std::mutex> lk(g_pin_mutex);
+        for (int cpu : targets)
+        {
+            if (g_pinned_cpus.insert(cpu).second)
+            {
+                core = cpu;
+                break;
+            }
+        }
+    }
+    if (core < 0)
+    {
+        LOG(WARNING) << "shard " << shard_id << " (" << dev
+                     << "): no free queue-target CPU; not pinning";
+        return;
+    }
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(core, &set);
+    if (pthread_setaffinity_np(pthread_self(), sizeof(set), &set) != 0)
+    {
+        LOG(WARNING) << "shard " << shard_id << ": setaffinity failed";
+        return;
+    }
+    // Punted writes run on io-wq workers; without this they submit from
+    // arbitrary CPUs, i.e. into queues whose interrupts target someone else.
+    const int ret = io_uring_register_iowq_aff(&ring_, sizeof(set), &set);
+    LOG(INFO) << "shard " << shard_id << " (" << dev << ") pinned to cpu "
+              << core << (ret == 0 ? "" : " (io-wq affinity unsupported)");
+}
+
 void IouringMgr::Submit()
 {
     // Refill the device rate budget once per loop iteration (M4). Must run
@@ -2335,7 +2566,69 @@ void IouringMgr::Submit()
     {
         rate_budget_.RefillAndWake(Shard::ReadTimeMicroseconds());
     }
+    if (write_pacer_.Enabled())
+    {
+        write_pacer_.RefillAndWake(Shard::ReadTimeMicroseconds());
+    }
 
+    if (stall_park_us_ != 0)
+    {
+        // Platform mitigation (docs/design/io_stall_parking.md): on some
+        // virtualised NVMe backends a device stops posting completions --
+        // for ALL its queues, reads included -- until the vCPU that the
+        // frozen queue's completion interrupt targets leaves guest mode.
+        // A busy-polling shard never leaves, so the freeze persists for
+        // milliseconds and shows up as a foreground read tail.
+        //
+        // Two cooperating rules recover it:
+        //   owner park -- a shard whose own CQE is overdue blocks in
+        //     io_uring_enter (halting its vCPU), which covers every queue
+        //     this shard submits to (see PinToQueueTargetCore).
+        //   co-park -- while ANY shard is parked, the others halt too.
+        //     The triggering write may have been submitted by a kernel
+        //     thread on an unknown CPU, so the vCPU that must halt cannot
+        //     be identified; halting all candidates is what guarantees it.
+        // Both waits are bounded so a slow recovery cannot cascade into a
+        // process-wide stall.
+        if (g_io_stall_parks.load(std::memory_order_relaxed) > 0 &&
+            !SelfCqeOverdue())
+        {
+            const uint64_t copark_start = Shard::ReadTimeMicroseconds();
+            while (g_io_stall_parks.load(std::memory_order_relaxed) > 0)
+            {
+                timespec nap{0, kCoParkNapNs};
+                nanosleep(&nap, nullptr);
+                if (SelfCqeOverdue())
+                {
+                    break;  // our own IO is overdue now: take the owner path
+                }
+                if (Shard::ReadTimeMicroseconds() - copark_start >=
+                    kCoParkMaxUs)
+                {
+                    break;  // bound the blast radius of one slow recovery
+                }
+            }
+        }
+
+        if (SelfCqeOverdue())
+        {
+            ++park_count_;
+            __kernel_timespec ts{0, static_cast<long long>(kOwnerParkMaxUs) *
+                                       1000};
+            io_uring_cqe *unused = nullptr;
+            g_io_stall_parks.fetch_add(1, std::memory_order_relaxed);
+            int wret = io_uring_submit_and_wait_timeout(
+                &ring_, &unused, 1, &ts, nullptr);
+            g_io_stall_parks.fetch_sub(1, std::memory_order_relaxed);
+            if (wret > 0 && prepared_sqe_ >= static_cast<uint32_t>(wret))
+            {
+                prepared_sqe_ -= static_cast<uint32_t>(wret);
+            }
+            last_cqe_progress_us_ = Shard::ReadTimeMicroseconds();
+            consecutive_skipped_submits_ = 0;
+            return;
+        }
+    }
     const uint32_t prepared_before = prepared_sqe_;
     const uint32_t sq_flags = ring_.sq.kflags == nullptr ? 0 : *ring_.sq.kflags;
     const bool need_taskrun = (sq_flags & IORING_SQ_TASKRUN) != 0;
@@ -2544,6 +2837,10 @@ void IouringMgr::PollComplete()
     waiting_sqe_.WakeN(cnt);
     CHECK_GE(inflight_ios_, cnt);
     inflight_ios_ -= cnt;
+    if (cnt > 0)
+    {
+        last_cqe_progress_us_ = Shard::ReadTimeMicroseconds();
+    }
 
     if (io_stats_enabled_)
     {
@@ -3343,6 +3640,7 @@ KvError IouringMgr::AppendManifest(const TableIdent &tbl_id,
     while (remaining > 0)
     {
         size_t batch = std::min(write_batch_size, remaining);
+        write_pacer_.Acquire(batch);
         int wres = Write(fd_idx, log.data() + written, batch, offset + written);
         if (wres < 0)
         {
@@ -3410,6 +3708,7 @@ int IouringMgr::WriteSnapshot(LruFD::Ref dir_fd,
     while (remaining > 0)
     {
         size_t batch = std::min(write_batch_size, remaining);
+        write_pacer_.Acquire(batch);
         int res = Write(tmp_fd_idx, write_ptr + written, batch, written);
         if (res < 0)
         {
@@ -3667,6 +3966,10 @@ io_uring_sqe *IouringMgr::GetSQE(UserDataType type, const void *user_ptr)
     // state does not leak to non-fixed operations.
     sqe->flags = 0;
     ThdTask()->inflight_io_++;
+    if (inflight_ios_ == 0)
+    {
+        last_cqe_progress_us_ = Shard::ReadTimeMicroseconds();
+    }
     ++inflight_ios_;
     prepared_sqe_++;
     return sqe;

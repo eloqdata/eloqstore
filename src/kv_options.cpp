@@ -459,6 +459,9 @@ bool KvOptions::operator==(const KvOptions &other) const
            max_inflight_read == other.max_inflight_read &&
            bg_read_ratio == other.bg_read_ratio &&
            disk_rate_limit_iops == other.disk_rate_limit_iops &&
+           disk_write_limit_mbps == other.disk_write_limit_mbps &&
+           io_stall_park_us == other.io_stall_park_us &&
+           pin_shard_to_queue_target == other.pin_shard_to_queue_target &&
            disk_rate_limit_mbps == other.disk_rate_limit_mbps &&
            rate_limit_burst_ms == other.rate_limit_burst_ms &&
            rate_limit_io_unit == other.rate_limit_io_unit &&

@@ -102,6 +102,51 @@ public:
  * Balances are stored scaled by kScale (1 token = kScale units) so refill
  * arithmetic (rate/sec x elapsed microseconds) stays in integers.
  */
+/**
+ * @brief BENCH EXPERIMENT: strict per-shard pacer for device WRITE bytes.
+ *
+ * Measured device law (Azure NVMe Direct Disk v2): stalls begin once more
+ * than ~0.7-1MB of writes are ISSUED to one disk within ~1-2ms, regardless
+ * of concurrency or longer-window throughput. This bucket bounds
+ * bytes-issued-per-millisecond: bank = rate x 1ms (floored at the largest
+ * single write so every request can admit), strict admission (wait until
+ * the balance covers the FULL cost -- no debt, no borrowing, no classes:
+ * every eloqstore write is background). Reads are never charged here.
+ * FIFO waiter handshake mirrors RateBudget: RefillAndWake charges the
+ * head's recorded cost on its behalf before waking it.
+ */
+class WritePacer
+{
+public:
+    void SetRate(uint64_t bytes_per_sec, uint64_t max_single_write)
+    {
+        rate_ = bytes_per_sec;
+        bank_ = static_cast<int64_t>(rate_) * 1000;  // 1ms of refill, scaled
+        const int64_t floor_bank =
+            static_cast<int64_t>(max_single_write) * kScale;
+        if (bank_ < floor_bank)
+        {
+            bank_ = floor_bank;
+        }
+        balance_ = bank_;
+    }
+    bool Enabled() const
+    {
+        return rate_ != 0;
+    }
+    void Acquire(uint64_t bytes);
+    void RefillAndWake(uint64_t now_us);
+
+private:
+    // 1 byte = kScale units; refill per microsecond is then exactly rate_.
+    static constexpr int64_t kScale = 1'000'000;
+    uint64_t rate_{0};  // bytes per second
+    int64_t balance_{0};
+    int64_t bank_{0};
+    uint64_t last_us_{0};
+    WaitingZone waiting_;
+};
+
 class RateBudget
 {
 public:
@@ -1230,6 +1275,31 @@ public:
     uint32_t prepared_sqe_{0};
 
     RateBudget rate_budget_;
+    WritePacer write_pacer_;
+    // Adaptive vCPU parking (io_stall_park_us): last time a CQE was reaped
+    // (or in-flight went 0 -> 1). If now - this >= threshold with IO
+    // outstanding, Submit() blocks instead of polling.
+    uint32_t stall_park_us_{0};
+    uint64_t last_cqe_progress_us_{0};
+    uint64_t park_count_{0};
+    // Co-park polls this often and gives up after this long; the owner's
+    // blocking wait is bounded too, so one slow recovery cannot stall the
+    // whole process (a genuinely frozen device re-arms on the next round).
+    static constexpr long kCoParkNapNs = 100'000;
+    static constexpr uint64_t kCoParkMaxUs = 5'000;
+    static constexpr uint64_t kOwnerParkMaxUs = 2'000;
+    /**
+     * @brief Whether this shard has IO outstanding whose completion is
+     * overdue by io_stall_park_us -- the signature of a device freeze.
+     */
+    bool SelfCqeOverdue() const;
+    /**
+     * @brief Pin this shard's thread and its ring's io-wq to the CPU that
+     * is the completion-interrupt target of the NVMe queue this CPU maps
+     * to, so every submission -- inline or punted -- rides a queue whose
+     * interrupt lands on our own vCPU and the owner park can free it.
+     */
+    void PinToQueueTargetCore(size_t shard_id);
     // Single class-blind in-flight device-command window (max_inflight_io;
     // see AcquireIoWindow). 0 cap = disabled. The shard thread is the only
     // writer; atomics (relaxed) allow cross-thread stats sampling.

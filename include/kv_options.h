@@ -122,6 +122,31 @@ struct KvOptions
      */
     uint64_t disk_rate_limit_mbps = 0;
     /**
+     * @brief BENCH EXPERIMENT: per-disk WRITE byte-rate limit in MB/s,
+     * enforced at 1ms granularity with strict (no-debt) admission. Bounds
+     * write bytes ISSUED per disk per millisecond -- the measured stall
+     * trigger on Azure NVMe Direct Disk v2. 0 disables. Reads unaffected.
+     */
+    uint64_t disk_write_limit_mbps = 0;
+    /**
+     * @brief BENCH EXPERIMENT: adaptive vCPU parking. When a submitted IO
+     * has produced no CQE for this many microseconds, the shard loop's
+     * Submit() blocks in io_uring_submit_and_wait(ring, 1) -- halting the
+     * vCPU -- instead of polling. On Azure NVMe Direct Disk v2, completion
+     * delivery to a busy vCPU is delayed in multi-ms batches; parking the
+     * vCPU releases it immediately. 0 disables (default). The block also
+     * stalls the owning brpc worker (all its modules) until a CQE arrives.
+     */
+    uint32_t io_stall_park_us = 0;
+    /**
+     * @brief Pin each shard thread (and its ring's io-wq) to a CPU that is
+     * the completion-interrupt target of one of its store path's NVMe
+     * queues. Keeps a shard's completions on its own vCPU, which is what
+     * lets io_stall_park_us recover a freeze locally. Requires
+     * io_stall_park_us to be useful; harmless elsewhere.
+     */
+    bool pin_shard_to_queue_target = false;
+    /**
      * @brief Rate-bucket capacity, in milliseconds of refill (M4). Bounds
      * how much unspent credit can bank while a shard is idle and thus the
      * largest instantaneous burst admitted after a gap; equivalently, the
