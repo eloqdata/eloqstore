@@ -23,24 +23,46 @@ shard context without parameter plumbing.
 
 `Shard::WorkLoop()` (normal build) repeats:
 
-1. `io_mgr_->Submit()` — flush prepared io_uring SQEs.
-2. `io_mgr_->PollComplete()` — reap CQEs; each completion either finishes a
-   blocked task's I/O (`FinishIo`) or processes a background write request.
-   Cloud/standby ready-queues are drained here too.
-3. `ExecuteReadyTasks()` — resume coroutines from `ready_tasks_`, then (when
-   the normal queue is empty) `low_priority_ready_tasks_` (background
-   compaction/GC yield here to protect foreground latency).
+1. `io_mgr_->Submit()` — refill the device rate budget (`RefillAndWake`, its
+   only wake source) and enter the kernel. The ring uses
+   `IORING_SETUP_DEFER_TASKRUN`, so this entry is also what delivers CQEs.
+2. `io_mgr_->PollComplete()` — reap CQEs (pure user space: `peek_cqe` +
+   `for_each_cqe`); each completion either finishes a blocked task's I/O
+   (`FinishIo`) or processes a background write request. Cloud/standby
+   ready-queues are drained here too.
+3. `PromoteReadyDelayedReopenRequests()`.
 4. Dequeue up to 128 new `KvRequest`s from the MPSC `requests_` queue
    (blocking with 100 ms timeout only when fully idle) and feed each to
    `OnReceivedReq`.
+5. `ExecuteReadyTasks()` — resume coroutines from `ready_tasks_`, then (when
+   the normal queue is empty) `low_priority_ready_tasks_` (background
+   compaction/GC yield here to protect foreground latency).
+6. `io_mgr_->FlushSubmit()` — issue the SQEs this round prepared.
+
+**The order is load-bearing.** Four producers feed `ready_tasks_` — rate-budget
+grants (step 1), I/O completions (step 2), delayed reopens (step 3), and new
+requests (step 4) — and all of them are placed before the single
+`ExecuteReadyTasks`, so work admitted in a round runs in that same round.
+`FlushSubmit` then closes the loop on the output side: without it, SQEs
+prepared in step 5 would wait for the *next* round's `Submit`, which in module
+mode is a full external scheduling quantum of dead device time on every I/O
+hop. `FlushSubmit` deliberately does not touch `consecutive_skipped_submits_`
+(the DEFER_TASKRUN forced-enter safety net stays owned by `Submit`) and is a
+no-op when the round prepared nothing.
 
 Exit: when the store is stopping and the shard is idle. Teardown runs on the
 shard thread: `TaskManager::Shutdown()` → `PageManager::Shutdown()` →
 `io_mgr_->Stop()` (tasks may hold page pins, so task state dies first).
 
 In the module build (`ELOQ_MODULE_ENABLED`, doc 10) the same logic is exposed
-as `WorkOneRound()` and an external runtime drives it; `IsIdle()` tells the
-runtime whether the shard needs another round.
+as `WorkOneRound()` (driven by `EloqStoreModule::Process`) and an external
+runtime drives it; `IsIdle()` tells the runtime whether the shard needs
+another round. It runs the **same step order**, which matters most there: the
+gap between rounds is an external scheduling decision rather than a few
+microseconds, so both a delayed flush and mis-ordered admission cost a full
+quantum. The only structural difference is that the request *dequeue* happens
+first because the idle-round test depends on its count; admission
+(`OnReceivedReq`) still runs at step 4, after `PollComplete`.
 
 ## Tasks are pooled coroutines
 
@@ -59,6 +81,21 @@ Scheduling primitives:
 - `WaitingZone` / `WaitingSeat` / `Mutex` — intra-shard wait lists (no real
   locks; they park/wake coroutines). Used for FD open/close exclusion, pool
   exhaustion waits, upload completion, etc.
+- Rate-budget waits (`RateBudget::Acquire`, `async_io_manager.h`) — tasks park
+  on a per-class `WaitingZone` when admitting their page IO would drive the
+  shard's device rate budget (`disk_rate_limit_iops`/`disk_rate_limit_mbps`,
+  M4) non-positive. Wakes are **refill-driven**, not completion-driven: the
+  once-per-loop `RefillAndWake` (peek-and-grant — it charges the FIFO head's
+  recorded cost before waking it) is the only wake source, so waiter progress
+  depends only on the shard loop running, never on another task completing.
+  Background tasks (`KvTask::IsBackground()`: BatchWrite, BackgroundWrite,
+  EvictFile, Prewarm) draw from the background class share (`rate_bg_ratio`)
+  on a separate FIFO zone; foreground may borrow background's idle surplus but
+  background never borrows foreground's, so foreground's share is a hard
+  guarantee. The optional `max_inflight_io` window is the only occupancy cap
+  that releases per CQE. See `docs/design/io_qos.md` (M4); the acquire order is
+  FD/mutex → pools/buffers → rate budget → window → SQE, with no voluntary
+  yield after admission. (The former `IoBudget` count budgets are retired.)
 
 `TaskManager` keeps one free-list pool per task type (`BatchWriteTask`,
 `BackgroundWrite`, `ReadTask`, `ScanTask`, `ListObjectTask`,

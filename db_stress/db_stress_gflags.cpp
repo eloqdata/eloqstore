@@ -92,7 +92,9 @@ DEFINE_uint32(pages_per_file_shift, 11, "nums of filepage shift");
 DEFINE_uint32(max_inflight_write,
               4096,
               "Max amount of inflight write IO per thread");
-DEFINE_uint32(max_write_batch_pages, 64, "max pages per write batch");
+DEFINE_uint32(max_write_batch_pages,
+              64,
+              "Deprecated compatibility option; ignored");
 DEFINE_uint32(num_retained_archives, 0, "limit number of retained archives");
 DEFINE_uint32(archive_interval_secs, 86400, "archive time interval in secs");
 DEFINE_uint32(max_archive_tasks, 256, "max running archive tasks");

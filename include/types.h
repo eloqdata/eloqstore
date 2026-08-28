@@ -27,6 +27,38 @@ enum class StoreMode
     Cloud
 };
 
+/**
+ * @brief Plain snapshot of one shard's IO QoS statistics.
+ *
+ * The backing counters are single-writer relaxed atomics. Sampling them is
+ * race-free but not coherent across fields while the shard is live; values
+ * are exact once the shard is quiesced. See docs/design/io_qos.md.
+ */
+struct IoQosStats
+{
+    // Device rate budget (M4). rate_ is the foreground class; bg_rate_ is
+    // background (background-task reads and all write-path IO), paced by
+    // its partitioned share.
+    struct Rate
+    {
+        uint64_t blocked_count_{0};   // acquisitions that had to wait
+        uint64_t blocked_us_{0};      // cumulative wait time
+        uint64_t admitted_ops_{0};    // cumulative device-op cost admitted
+        uint64_t admitted_bytes_{0};  // cumulative bytes admitted
+        // Of admitted_ops_, the ops granted from the OTHER class's idle
+        // surplus (borrow-when-idle; see RateBudget).
+        uint64_t borrowed_ops_{0};
+    };
+    Rate rate_;
+    Rate bg_rate_;
+    // Single class-blind in-flight device-command window (max_inflight_io).
+    uint32_t io_window_inflight_{0};
+    uint32_t io_window_hwm_{0};
+    uint64_t io_window_blocked_{0};
+    uint64_t fdatasync_count_{0};  // write-path fdatasync ops (FdatasyncFiles)
+    uint64_t fdatasync_us_{0};     // cumulative batch wall time
+};
+
 using PageId = uint32_t;
 constexpr PageId MaxPageId = UINT32_MAX;
 

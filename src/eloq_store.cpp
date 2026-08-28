@@ -148,6 +148,14 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
         LOG(ERROR) << "Option max_global_request_batch cannot be zero";
         return false;
     }
+    // WriteRateOps divides by this on every write, even with the rate
+    // limiter disabled; a sub-page quantum would also overcharge writes.
+    if (opts.rate_limit_io_unit < 4 * KB)
+    {
+        LOG(ERROR) << "Option rate_limit_io_unit (" << opts.rate_limit_io_unit
+                   << ") must be at least 4KB";
+        return false;
+    }
     if ((opts.data_page_size & (page_align - 1)) != 0)
     {
         LOG(ERROR) << "Option data_page_size is not page aligned";
@@ -195,11 +203,6 @@ bool EloqStore::ValidateOptions(KvOptions &opts)
         opts.overflow_pointers > max_overflow_pointers)
     {
         LOG(ERROR) << "Invalid option overflow_pointers";
-        return false;
-    }
-    if (opts.max_write_batch_pages == 0)
-    {
-        LOG(ERROR) << "Invalid option max_write_batch_pages";
         return false;
     }
     if (!opts.cloud_store_path.empty())
@@ -2196,6 +2199,10 @@ bool EloqStore::SendRequest(KvRequest *req)
     }
 
     req->err_ = KvError::NoError;
+    if (IoStatsEnabled())
+    {
+        req->dbg_enqueue_us_ = Shard::ReadTimeMicroseconds();
+    }
 #ifdef ELOQ_MODULE_ENABLED
     {
         std::lock_guard<bthread::Mutex> lk(req->mutex_);
@@ -2372,6 +2379,12 @@ void EloqStore::InitializeMetrics(metrics::MetricsRegistry *metrics_registry,
                                      metrics::Type::Gauge);
         metrics_meters_[i]->Register(metrics::NAME_ELOQSTORE_LOCAL_SPACE_LIMIT,
                                      metrics::Type::Gauge);
+        // The per-class in-flight page gauges (read / bg-read / write)
+        // measured the retired M1/M2 count budgets. The M4 rate budget has
+        // no per-class instantaneous page depth to report (it meters
+        // cumulative ops/bytes and a class-blind command window), so these
+        // gauges are not registered; dedicated rate-budget metrics are a
+        // follow-up (docs/design/io_qos.md).
     }
 
     enable_eloqstore_metrics_ = true;
@@ -2449,6 +2462,16 @@ size_t EloqStore::TailScratchAcquireCount(size_t shard_id) const
     }
     AsyncIoManager *io_mgr = shards_[shard_id]->IoManager();
     return io_mgr == nullptr ? 0 : io_mgr->TailScratchAcquireCount();
+}
+
+IoQosStats EloqStore::GetIoQosStats(size_t shard_id) const
+{
+    if (shard_id >= shards_.size() || shards_[shard_id] == nullptr)
+    {
+        return {};
+    }
+    AsyncIoManager *io_mgr = shards_[shard_id]->IoManager();
+    return io_mgr == nullptr ? IoQosStats{} : io_mgr->GetIoQosStats();
 }
 
 bool EloqStore::IsStopped() const

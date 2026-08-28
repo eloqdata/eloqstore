@@ -14,6 +14,16 @@ namespace eloqstore
 {
 namespace
 {
+void BeginReadIoTiming()
+{
+    if (IoStatsEnabled())
+    {
+        KvTask *task = ThdTask();
+        task->op_cqe_us_ = 0;
+        task->op_start_us_ = Shard::ReadTimeMicroseconds();
+    }
+}
+
 // Common path shared by all three Read() overloads: descend through the index
 // tree to the leaf data page that should contain @p search_key, load it, and
 // position @p iter at the matching entry. Returns KvError::NotFound when the
@@ -35,6 +45,7 @@ KvError LocateAndProcess(const TableIdent &tbl_id,
                          uint64_t &expire_ts,
                          Handler &&handler)
 {
+    BeginReadIoTiming();
     auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_id);
     CHECK_KV_ERR(err);
     RootMeta *meta = root_handle.Get();
@@ -198,6 +209,7 @@ KvError ReadTask::Floor(const TableIdent &tbl_id,
                         uint64_t &expire_ts,
                         IoStringBuffer *large_value)
 {
+    BeginReadIoTiming();
     auto [root_handle, err] = shard->IndexManager()->FindRoot(tbl_id);
     CHECK_KV_ERR(err);
     RootMeta *meta = root_handle.Get();
