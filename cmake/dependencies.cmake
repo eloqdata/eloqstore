@@ -50,7 +50,7 @@ FetchContent_Declare(glog
 # seeds its glog/liburing discovery variables before making it available.
 FetchContent_Declare(brpc
         GIT_REPOSITORY https://github.com/eloqdata/brpc.git
-        GIT_TAG 6d56abecbb9ce6c6b862a1bb6389f5bd920b34aa
+        GIT_TAG 34e0e01d5a528bc9fc91a8abe32b701313791a4b
         GIT_PROGRESS TRUE)
 
 # Catch2 (tests only)
