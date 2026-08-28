@@ -19,6 +19,11 @@ public:
     }
     ~EloqStoreModule() = default;
 
+    eloq::ModuleType Type() const override
+    {
+        return eloq::ModuleType::kEloqStore;
+    }
+
     void ExtThdStart(int thd_id) override;
     void ExtThdEnd(int thd_id) override;
     void Process(int thd_id) override;
