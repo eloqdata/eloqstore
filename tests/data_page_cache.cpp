@@ -178,6 +178,13 @@ TEST_CASE("data page cache: OOM retry under concurrent writes",
     opts.store_path = {"/tmp/eloqstore"};
     opts.num_threads = 1;
     opts.buffer_pool_size = 128 * 4096;  // ~512 KB; comfortably fits one task
+    // The pool above is too small for a write-buffer pool, so these appends
+    // take the non-append WritePage path, where write-promotion pins on
+    // cached pages persist until the write IO completes. Bound the shard's
+    // in-flight writes so concurrent tasks' pins can't crowd the 128-slot
+    // pool past what 5 OOM retries can absorb (the deprecated per-task
+    // max_write_batch_pages drain used to provide this bound implicitly).
+    opts.max_inflight_write = 32;
 
     eloqstore::EloqStore *store = InitStore(opts);
 
@@ -237,7 +244,11 @@ TEST_CASE("data page cache: OOM abort releases pinned pages",
     // Two slots: just enough for a small steady state, but the OOM batch
     // below intentionally exceeds it.
     opts.buffer_pool_size = 2 * 4096;
-    opts.max_write_batch_pages = 4;
+    // Keep at most one write in flight so the first batch's write-promotion
+    // pins release before the next allocation needs a slot. (This test was
+    // originally tuned to the deprecated max_write_batch_pages drain; the
+    // write budget expresses the same bound without the drain-to-zero.)
+    opts.max_inflight_write = 1;
     opts.auto_oom_retry_times = 0;
 
     auto build_entries =

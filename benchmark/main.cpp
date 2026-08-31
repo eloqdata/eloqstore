@@ -36,6 +36,14 @@ DEFINE_uint32(batch_size,
               64,
               "The batch size of one write request (MB) (default: 64).");
 DEFINE_string(storage, "eloqstore", "The storage used to store the data.");
+DEFINE_uint32(client_threads, 4, "GET2: number of client threads.");
+DEFINE_uint32(inflight_per_client,
+              125,
+              "GET2: async requests each client keeps in flight.");
+DEFINE_uint32(per_shard_cap,
+              0,
+              "GET2: max outstanding per shard per client (0 = unlimited); "
+              "bounds the blast radius of a stalled shard.");
 DEFINE_uint32(request_cnt,
               32,
               "The number of concurrent read requests (default: 32)");
@@ -78,6 +86,7 @@ DEFINE_uint64(subcompactions,
 
 int main(int argc, char *argv[])
 {
+    int exit_code = 0;
     FLAGS_logtostderr = true;
     google::InitGoogleLogging("EloqStore_benchmark");
 
@@ -133,6 +142,10 @@ int main(int argc, char *argv[])
 
         // Run the test
         bench_mark.RunBenchmark();
+        if (bench_mark.Failed())
+        {
+            exit_code = 1;
+        }
 
         // Shutdown the eloq store
         bench_mark.CloseEloqStore();
@@ -188,5 +201,5 @@ int main(int argc, char *argv[])
     }
 
     google::ShutdownGoogleLogging();
-    return 0;
+    return exit_code;
 }

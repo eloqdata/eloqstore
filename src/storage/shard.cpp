@@ -7,6 +7,7 @@
 #include <cassert>
 #include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <functional>
 #include <memory>
 #include <string>
@@ -121,6 +122,33 @@ void Shard::InitIoMgrAndPagePool()
     io_mgr_and_page_pool_inited_.store(true, std::memory_order_release);
 }
 
+#ifdef ELOQSTORE_WITH_TXSERVICE
+void Shard::CollectPeriodicGauges(metrics::Meter *meter)
+{
+    if (++gauge_collection_round_count_ %
+            metrics::ELOQSTORE_GAUGE_COLLECTION_INTERVAL !=
+        0)
+    {
+        return;
+    }
+
+    meter->Collect(metrics::NAME_ELOQSTORE_INDEX_BUFFER_POOL_USED,
+                   static_cast<double>(index_mgr_.GetBufferPoolUsed()));
+    meter->Collect(metrics::NAME_ELOQSTORE_OPEN_FILE_COUNT,
+                   static_cast<double>(io_mgr_->GetOpenFileCount()));
+    meter->Collect(metrics::NAME_ELOQSTORE_LOCAL_SPACE_USED,
+                   static_cast<double>(io_mgr_->GetLocalSpaceUsed()));
+
+    // The per-class in-flight page gauges belonged to the retired M1/M2
+    // count budgets; the M4 rate budget exposes no equivalent per-class
+    // instantaneous depth, so nothing is collected for them here (they are
+    // no longer registered). Reporting the class-blind command window under
+    // a "read pages" name would mislabel writes as reads and read zero
+    // whenever the window is disabled, so it is deliberately not done.
+    // Dedicated rate-budget metrics are a follow-up (docs/design/io_qos.md).
+}
+#endif
+
 void Shard::WorkLoop()
 {
     shard = this;
@@ -130,7 +158,8 @@ void Shard::WorkLoop()
     // and no active tasks.
     // This allows the thread to exit gracefully when the store is stopped.
     std::array<KvRequest *, 128> reqs;
-    auto dequeue_requests = [this, &reqs]() -> int
+    auto dequeue_requests = [this,
+                             &reqs](uint64_t *queue_wait_us = nullptr) -> int
     {
         size_t nreqs = requests_.try_dequeue_bulk(reqs.data(), reqs.size());
         // Idle state, wait for new requests or exit.
@@ -150,8 +179,14 @@ void Shard::WorkLoop()
                 return 0;
             }
             const auto timeout = std::chrono::milliseconds(100);
+            const uint64_t wait_start =
+                queue_wait_us == nullptr ? 0 : ReadTimeMicroseconds();
             nreqs = requests_.wait_dequeue_bulk_timed(
                 reqs.data(), reqs.size(), timeout);
+            if (queue_wait_us != nullptr)
+            {
+                *queue_wait_us += ReadTimeMicroseconds() - wait_start;
+            }
         }
 
         return nreqs;
@@ -180,21 +215,69 @@ void Shard::WorkLoop()
         }
 #endif
 
-        io_mgr_->Submit();
-
-        io_mgr_->PollComplete();
-        PromoteReadyDelayedReopenRequests();
-        ExecuteReadyTasks();
-
-        int nreqs = dequeue_requests();
-        if (nreqs < 0)
+        if (!IoStatsEnabled())
         {
-            // Exit.
-            break;
+            io_mgr_->Submit();
+            io_mgr_->PollComplete();
+            PromoteReadyDelayedReopenRequests();
+            int nreqs = dequeue_requests();
+            if (nreqs < 0)
+            {
+                break;
+            }
+            for (int i = 0; i < nreqs; i++)
+            {
+                OnReceivedReq(reqs[i]);
+            }
+            ExecuteReadyTasks();
+            io_mgr_->FlushSubmit();
         }
-        for (int i = 0; i < nreqs; i++)
+        else
         {
-            OnReceivedReq(reqs[i]);
+            // Stats mode: time each loop phase; report any round > 1ms
+            // with its phase breakdown to locate rare multi-ms stalls.
+            timespec cpu0;
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu0);
+            const uint64_t t0 = ReadTimeMicroseconds();
+            io_mgr_->Submit();
+            const uint64_t t1 = ReadTimeMicroseconds();
+            io_mgr_->PollComplete();
+            const uint64_t t2 = ReadTimeMicroseconds();
+            PromoteReadyDelayedReopenRequests();
+            const uint64_t t3 = ReadTimeMicroseconds();
+            uint64_t queue_wait_us = 0;
+            int nreqs = dequeue_requests(&queue_wait_us);
+            if (nreqs < 0)
+            {
+                break;
+            }
+            for (int i = 0; i < nreqs; i++)
+            {
+                OnReceivedReq(reqs[i]);
+            }
+            const uint64_t t4 = ReadTimeMicroseconds();
+            ExecuteReadyTasks();
+            const uint64_t t5 = ReadTimeMicroseconds();
+            io_mgr_->FlushSubmit();
+            const uint64_t t6 = ReadTimeMicroseconds();
+            const uint64_t total_us = t6 - t0;
+            const uint64_t active_us = total_us - queue_wait_us;
+            if (active_us > 1000)
+            {
+                timespec cpu1;
+                clock_gettime(CLOCK_THREAD_CPUTIME_ID, &cpu1);
+                const uint64_t cpu_us =
+                    (cpu1.tv_sec - cpu0.tv_sec) * 1000000ULL +
+                    (cpu1.tv_nsec - cpu0.tv_nsec) / 1000;
+                LOG(INFO) << "SLOWROUND total=" << total_us
+                          << "us active=" << active_us << "us cpu=" << cpu_us
+                          << "us submit=" << t1 - t0 << " poll=" << t2 - t1
+                          << " promote=" << t3 - t2
+                          << " intake=" << t4 - t3 - queue_wait_us
+                          << " execute=" << t5 - t4 << " flush=" << t6 - t5
+                          << " queue_wait=" << queue_wait_us
+                          << " nreqs=" << nreqs;
+            }
         }
 
 #ifdef ELOQSTORE_WITH_TXSERVICE
@@ -205,6 +288,7 @@ void Shard::WorkLoop()
                 metrics::NAME_ELOQSTORE_WORK_ONE_ROUND_DURATION, round_start);
             meter->Collect(metrics::NAME_ELOQSTORE_TASK_MANAGER_ACTIVE_TASKS,
                            static_cast<double>(task_mgr_.NumActive()));
+            CollectPeriodicGauges(meter);
         }
 #endif
     }
@@ -563,6 +647,10 @@ GlobalRegisteredMemory *Shard::GlobalRegMem()
 
 void Shard::OnReceivedReq(KvRequest *req)
 {
+    if (IoStatsEnabled())
+    {
+        req->dbg_dequeue_us_ = ReadTimeMicroseconds();
+    }
     if (req->Reopen())
     {
         req->SetReopen(false);
@@ -1090,6 +1178,10 @@ void Shard::RetryOomRequest(KvRequest *req)
 #else
     req->done_.store(false, std::memory_order_relaxed);
 #endif
+    if (IoStatsEnabled())
+    {
+        req->dbg_enqueue_us_ = ReadTimeMicroseconds();
+    }
     // AddKvRequest refuses new work once the store is stopping; complete the
     // retried request with NotRunning instead of dropping it.
     if (!AddKvRequest(req))
@@ -1308,6 +1400,17 @@ void Shard::WorkOneRound()
 #endif
     }
 
+    io_mgr_->Submit();
+
+    io_mgr_->PollComplete();
+    PromoteReadyDelayedReopenRequests();
+
+    // Admit new requests only after PollComplete and Promote, matching
+    // WorkLoop: everything already in flight is enqueued on ready_tasks_
+    // ahead of this round's arrivals, so a burst of new requests cannot
+    // take precedence over tasks the shard has already started. The
+    // dequeue itself stays above (is_idle_round depends on nreqs); only
+    // admission moves.
     for (size_t i = 0; i < nreqs; ++i)
     {
         OnReceivedReq(reqs[i]);
@@ -1315,14 +1418,15 @@ void Shard::WorkOneRound()
 
     req_queue_size_.fetch_sub(nreqs, std::memory_order_relaxed);
 
-    io_mgr_->Submit();
-
-    io_mgr_->PollComplete();
-    PromoteReadyDelayedReopenRequests();
     if (DurationMicroseconds(ts_) < FLAGS_max_processing_time_microseconds)
     {
         ExecuteReadyTasks();
     }
+    // Issue what this round prepared before handing the thread back to the
+    // embedding runtime: the next round is an external scheduling decision
+    // and may be far away, so leaving SQEs for it would idle the device for
+    // a whole quantum on every IO hop.
+    io_mgr_->FlushSubmit();
 #ifdef ELOQSTORE_WITH_TXSERVICE
     // Metrics collection: end of round
     if (store_->EnableMetrics() && !is_idle_round)
@@ -1332,32 +1436,7 @@ void Shard::WorkOneRound()
                                round_start);
         meter->Collect(metrics::NAME_ELOQSTORE_TASK_MANAGER_ACTIVE_TASKS,
                        static_cast<double>(task_mgr_.NumActive()));
-
-        // Increment round counter for frequency-controlled metric collection
-        work_one_round_count_++;
-        bool should_collect_gauges =
-            (work_one_round_count_ %
-             metrics::ELOQSTORE_GAUGE_COLLECTION_INTERVAL) == 0;
-
-        // Collect used/count metrics (frequency-controlled)
-        // Note: limit metrics are collected once at initialization in Start()
-        if (should_collect_gauges)
-        {
-            // Collect index buffer pool used
-            size_t index_used = index_mgr_.GetBufferPoolUsed();
-            meter->Collect(metrics::NAME_ELOQSTORE_INDEX_BUFFER_POOL_USED,
-                           static_cast<double>(index_used));
-
-            // Collect open file count
-            size_t open_file_count = io_mgr_->GetOpenFileCount();
-            meter->Collect(metrics::NAME_ELOQSTORE_OPEN_FILE_COUNT,
-                           static_cast<double>(open_file_count));
-
-            // Collect local space used
-            size_t local_space_used = io_mgr_->GetLocalSpaceUsed();
-            meter->Collect(metrics::NAME_ELOQSTORE_LOCAL_SPACE_USED,
-                           static_cast<double>(local_space_used));
-        }
+        CollectPeriodicGauges(meter);
     }
 #endif
 }
@@ -1448,13 +1527,30 @@ void Shard::InitializeTscFrequency()
 
             while (total_slept < MAX_TOTAL_MICROSECONDS)
             {
+                // Divide by the MEASURED elapsed wall time, not the
+                // requested sleep: sleep_for() reliably oversleeps by
+                // scheduler latency (~60us for a 1ms request), and dividing
+                // by the nominal duration inflated cycles-per-us by ~6% —
+                // making every TSC-derived duration (and the M4 rate
+                // budget's refill) run ~6% slow. The overshoot is
+                // systematic, so the stability check below cannot catch it.
+                timespec mono_start, mono_end;
+                clock_gettime(CLOCK_MONOTONIC, &mono_start);
                 uint64_t start_cycles = __rdtsc();
                 std::this_thread::sleep_for(
                     std::chrono::microseconds(SLEEP_MICROSECONDS));
                 uint64_t end_cycles = __rdtsc();
+                clock_gettime(CLOCK_MONOTONIC, &mono_end);
                 uint64_t elapsed_cycles = end_cycles - start_cycles;
-                uint64_t freq = elapsed_cycles /
-                                SLEEP_MICROSECONDS;  // cycles per microsecond
+                const int64_t elapsed_ns =
+                    (mono_end.tv_sec - mono_start.tv_sec) * 1'000'000'000LL +
+                    (mono_end.tv_nsec - mono_start.tv_nsec);
+                const uint64_t elapsed_us =
+                    static_cast<uint64_t>(std::max<int64_t>(elapsed_ns, 0)) /
+                    1000;
+                uint64_t freq =
+                    elapsed_cycles /
+                    std::max<uint64_t>(elapsed_us, 1);  // cycles per us
 
                 total_slept += SLEEP_MICROSECONDS;
 

@@ -194,6 +194,26 @@ public:
     {
         return Type() < TaskType::BatchWrite;
     }
+    /**
+     * @brief Background tasks' page reads are charged against the background
+     * sub-budget of the read IO budget (docs/design/io_qos.md M2), so they
+     * cannot crowd out foreground point reads at the device. Deliberately
+     * not derived from ReadOnly(): EvictFile and Prewarm are read-only but
+     * background.
+     */
+    bool IsBackground() const
+    {
+        switch (Type())
+        {
+        case TaskType::BatchWrite:
+        case TaskType::BackgroundWrite:
+        case TaskType::EvictFile:
+        case TaskType::Prewarm:
+            return true;
+        default:
+            return false;
+        }
+    }
     void Yield();
     void YieldToLowPQ();
     /**
@@ -211,6 +231,17 @@ public:
     int io_res_{0};
     uint32_t io_flags_{0};
     KvError result_err_{KvError::NoError};
+    // Rate-budget waiter handshake (RateBudget::Acquire / RefillAndWake):
+    // the acquisition cost is recorded here at enqueue so the waker can
+    // peek the FIFO head and charge on its behalf before waking it.
+    uint32_t rate_wait_ops_{0};
+    uint64_t rate_wait_bytes_{0};
+    // Loop-time (us) when this task's latest page-read CQE was reaped;
+    // stage-timing instrumentation only (ELOQ_IO_STATS=1).
+    uint64_t op_cqe_us_{0};
+    // Stage-timing (ELOQ_IO_STATS=1): when this task began executing its
+    // read; consumed (zeroed) by the first instrumented page read.
+    uint64_t op_start_us_{0};
 
     TaskStatus status_{TaskStatus::Idle};
     KvRequest *req_{nullptr};
@@ -224,9 +255,23 @@ public:
     WaitingZone() = default;
     void Wait(KvTask *task);
     void WakeOne();
-    void WakeN(size_t n);
+    /**
+     * @brief Wake up to n waiters in FIFO order.
+     * @return The number actually woken (< n when the zone drains), so the
+     * caller can forward unused wake credits to another zone.
+     */
+    size_t WakeN(size_t n);
     void WakeAll();
     bool Empty() const;
+    /**
+     * @brief The next waiter in FIFO order without waking it, or nullptr.
+     * Lets a waker peek the head's recorded cost and debit on its behalf
+     * before waking (see RateBudget::RefillAndWake).
+     */
+    KvTask *Head() const
+    {
+        return head_;
+    }
 
 private:
     void PushBack(KvTask *task);

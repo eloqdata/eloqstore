@@ -141,6 +141,10 @@ public:
     void SetTableId(TableIdent tbl_id);
     const TableIdent &TableId() const;
     uint64_t UserData() const;
+    // Stage-timing instrumentation only (ELOQ_IO_STATS=1): microsecond
+    // timestamp when the current attempt was enqueued to its shard.
+    uint64_t dbg_enqueue_us_{0};
+    uint64_t dbg_dequeue_us_{0};
 
     /**
      * @brief Test if this request is done.
@@ -978,6 +982,15 @@ public:
      * or invalid shard IDs. See `IouringMgr::AcquireTailScratch`.
      */
     size_t TailScratchAcquireCount(size_t shard_id) const;
+
+    /**
+     * @brief Per-shard IO QoS statistics (in-flight page-IO budgets,
+     * fdatasync accounting; see docs/design/io_qos.md). Backing counters use
+     * single-writer relaxed atomics; the returned plain value is a race-free
+     * but non-coherent live snapshot and is exact once the shard is quiesced.
+     * Returns zeros for invalid shard IDs or managers without budgets.
+     */
+    IoQosStats GetIoQosStats(size_t shard_id) const;
 
     bool ExecAsyn(KvRequest *req);
     void ExecSync(KvRequest *req);

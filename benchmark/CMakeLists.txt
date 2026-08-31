@@ -62,6 +62,10 @@ target_link_libraries(load_bench eloqstore ${BRPC_LIB} ${GFLAGS_LIBRARY})
 add_executable(simple_bench simple_bench.cpp)
 target_link_libraries(simple_bench eloqstore ${BRPC_LIB} ${GFLAGS_LIBRARY})
 
+# IO QoS interference benchmark (docs/design/io_qos.md, plan commit 3).
+add_executable(interference_bench interference_bench.cpp)
+target_link_libraries(interference_bench eloqstore ${GFLAGS_LIBRARY})
+
 add_executable(simple_test simple_test.cpp)
 target_link_libraries(simple_test eloqstore ${BRPC_LIB} ${GFLAGS_LIBRARY})
 

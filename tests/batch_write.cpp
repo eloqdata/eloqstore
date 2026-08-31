@@ -129,7 +129,6 @@ TEST_CASE("batch write abort releases pinned index pages",
     opts.num_threads = 1;
     opts.data_page_size = 4096;
     opts.buffer_pool_size = 4096;  // Allow only a single MemCachedPage.
-    opts.max_write_batch_pages = 4;
     opts.auto_oom_retry_times = 0;
 
     auto build_entries =
@@ -190,7 +189,6 @@ TEST_CASE("batch write task pool handles many partitions concurrently",
     opts.store_path = {test_path};
     opts.num_threads = 1;                // single shard, many partitions
     opts.buffer_pool_size = 4096 * 400;  // enough for many pages
-    opts.max_write_batch_pages = 8;
 
     auto make_entries = [](uint32_t base, uint32_t count)
     {
