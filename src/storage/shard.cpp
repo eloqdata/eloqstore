@@ -14,6 +14,7 @@
 #include <vector>
 
 #if defined(__x86_64__) || defined(_M_X64)
+#include <absl/base/internal/sysinfo.h>
 #include <x86intrin.h>  // For __rdtsc()
 #endif
 
@@ -1422,12 +1423,7 @@ bool Shard::HasPendingRequests() const
     return requests_.size_approx() > 0;
 }
 
-/** @brief
- * Measure TSC frequency by sleeping for 1ms and measuring cycles.
- * Retries until stable (within 1% difference) or up to 16ms total.
- * Should be called once during data substrate initialization.
- * This function is thread-safe and will only execute once.
- */
+/** @brief Initialize the hardware-counter frequency once. */
 void Shard::InitializeTscFrequency()
 {
 #if defined(__x86_64__) || defined(_M_X64)
@@ -1435,72 +1431,14 @@ void Shard::InitializeTscFrequency()
         tsc_frequency_initialized_,
         []()
         {
-            constexpr uint64_t SLEEP_MICROSECONDS = 1000;       // 1ms
-            constexpr uint64_t MAX_TOTAL_MICROSECONDS = 16000;  // 16ms max
-            constexpr double STABILITY_THRESHOLD =
-                0.01;  // 1% difference for stability
-
-            uint64_t prev_freq = 0;
-            uint64_t total_slept = 0;
-            int stable_count = 0;
-            constexpr int REQUIRED_STABLE_COUNT =
-                2;  // Need 2 consecutive stable measurements
-
-            while (total_slept < MAX_TOTAL_MICROSECONDS)
-            {
-                uint64_t start_cycles = __rdtsc();
-                std::this_thread::sleep_for(
-                    std::chrono::microseconds(SLEEP_MICROSECONDS));
-                uint64_t end_cycles = __rdtsc();
-                uint64_t elapsed_cycles = end_cycles - start_cycles;
-                uint64_t freq = elapsed_cycles /
-                                SLEEP_MICROSECONDS;  // cycles per microsecond
-
-                total_slept += SLEEP_MICROSECONDS;
-
-                // Check if frequency is stable (within 1% of previous
-                // measurement)
-                if (prev_freq > 0)
-                {
-                    double diff_ratio =
-                        (freq > prev_freq)
-                            ? static_cast<double>(freq - prev_freq) / prev_freq
-                            : static_cast<double>(prev_freq - freq) / prev_freq;
-                    if (diff_ratio <= STABILITY_THRESHOLD)
-                    {
-                        stable_count++;
-                        if (stable_count >= REQUIRED_STABLE_COUNT)
-                        {
-                            // Frequency is stable, use the average
-                            tsc_cycles_per_microsecond_.store(
-                                (prev_freq + freq) / 2,
-                                std::memory_order_release);
-                            return;
-                        }
-                    }
-                    else
-                    {
-                        stable_count = 0;  // Reset stability counter
-                    }
-                }
-
-                prev_freq = freq;
-            }
-
-            // If we couldn't get stable measurement, use the last measured
-            // value
-            if (prev_freq > 0)
-            {
-                tsc_cycles_per_microsecond_.store(prev_freq,
-                                                  std::memory_order_release);
-            }
-            else
-            {
-                // Fallback to approximate value if measurement failed
-                tsc_cycles_per_microsecond_.store(2000,
-                                                  std::memory_order_release);
-            }
-        });  // End of lambda passed to std::call_once
+            // This frequency uses the same raw TSC scale as __rdtsc().
+            const double frequency_hz =
+                absl::base_internal::NominalCPUFrequency();
+            const uint64_t cycles_per_microsecond = std::max<uint64_t>(
+                1, static_cast<uint64_t>(frequency_hz / 1'000'000.0));
+            tsc_cycles_per_microsecond_.store(cycles_per_microsecond,
+                                              std::memory_order_release);
+        });
 #elif defined(__aarch64__)
     std::call_once(tsc_frequency_initialized_,
                    []()
