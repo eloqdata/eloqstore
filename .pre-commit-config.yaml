@@ -1,0 +1,13 @@
+exclude: |
+  (?x)^(
+    external/|
+    rust/eloqstore-sys/vendor/
+  )
+
+repos:
+  - repo: https://github.com/pre-commit/mirrors-clang-format
+    rev: v18.1.8
+    hooks:
+      - id: clang-format
+        files: \.(c|cc|cpp|cxx|h|hh|hpp|hxx)$
+        args: [--style=file, --fallback-style=none]
