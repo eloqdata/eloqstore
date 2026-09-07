@@ -55,9 +55,17 @@ SDK tests (also run in CI): `python3 -m build --wheel` + pytest in `python/`; in
 
 ## Formatting
 
-`bash scripts/format.sh` — installs clang-format 18.1.8 on first run and formats the tree. Style is Google-based with Allman braces, 4-space indent, right pointer alignment (see `.clang-format`).
+Install the Git hook once with `pre-commit install`. The hook uses an isolated,
+pinned clang-format 18.1.8 environment, so no system clang-format installation
+is needed. Style is Google-based with Allman braces, 4-space indent, and right
+pointer alignment (see `.clang-format`). Third-party sources under `external/`
+and the Rust vendor-link tree are excluded by `.pre-commit-config.yaml`.
 
-**Always run `bash scripts/format.sh` and commit any changes it makes before opening (or updating) a PR.** The main branch has a format check in CI that will fail the PR otherwise — hand-written code that looks fine often still gets re-wrapped by clang-format (e.g. a call that now fits on one line). Don't rely on writing conforming code by hand; run the script.
+**Always run `pre-commit run --all-files` and commit any changes it makes before
+opening (or updating) a PR.** The main branch runs the same command in CI and
+will fail the PR otherwise — hand-written code that looks fine often still gets
+re-wrapped by clang-format (e.g. a call that now fits on one line). Don't rely on
+writing conforming code by hand; run the hook.
 
 ## Architecture
 

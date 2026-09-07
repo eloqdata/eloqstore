@@ -219,30 +219,26 @@ ctest --test-dir build/tests/
 ./build/benchmark/simple_bench --kvoptions=./benchmark/opts_append.ini --workload=write-read --kv_size=1024 --batch_size=20000 --max_key=10000000 --read_per_part=4 --partitions=1
 ```
 
-### Install git hooks
+### Install pre-commit
 
 ```shell
-git config core.hooksPath .githooks
+python3 -m pip install pre-commit
+pre-commit install
 ```
 
-The pre-commit hook auto-syncs `pyproject.toml` / `Cargo.toml` versions from `VERSION`.
-Run once after cloning. Bypass with `git commit --no-verify`.
+Run these commands once after cloning. The hook downloads and caches its own
+clang-format 18.1.8 environment; it does not install clang-format system-wide.
+Bypass the hook with `git commit --no-verify` only when necessary.
 
-### Install Format Tool
+### Format C/C++ code
 
-```shell 
-bash scripts/format.sh
+```shell
+pre-commit run --all-files
 ```
 
-This script will execute when necessary:
-- Install code format tools
-- Format the code
-
-The first time this script is executed, it will install:
-- libtinfo5
-- clang-format(18.1.8)
-
-**Note**: The main branch has code format checks; please run this script before committing the MR.
+Only tracked C/C++ files are formatted. Third-party code under `external/` and
+the Rust vendor-link tree are excluded. The main branch runs the same command;
+please run it before opening or updating a PR.
 
 ## 🤝 Contributing
 
