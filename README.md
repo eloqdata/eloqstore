@@ -188,23 +188,24 @@ See [rust/eloqstore/examples/](rust/eloqstore/examples/) for more usage examples
 
 ### Run Unit Tests
 
-Cloud-mode tests require an S3-compatible object storage backend. The full CI
-build and test job runs inside `eloqdata/ubuntu-dev:24.04` on amd64 and arm64,
-using its preinstalled RustFS 1.0.0 binary. For local testing outside that image,
-you can run just the storage service with Docker as shown below.
+Cloud-mode tests require an S3-compatible object storage backend. CI downloads
+RustFS 1.0.0 directly on the Ubuntu amd64/arm64 runners and verifies its SHA256.
+The same script can set up RustFS locally after installing the dependencies
+above (`curl`, `unzip`, and `sha256sum` are required).
 
-**1. Start RustFS:**
+**1. Download and start RustFS:**
 
 ```shell
+RUSTFS_RUN_DIR=$(mktemp -d /tmp/eloqstore-rustfs.XXXXXX)
+bash scripts/download_rustfs.sh "$RUSTFS_RUN_DIR"
+mkdir -p "$RUSTFS_RUN_DIR/data"
+
 # These credentials match EloqStore's existing test defaults.
-docker run --detach --name eloqstore-rustfs \
-  --publish 127.0.0.1:9900:9900 \
-  --env RUSTFS_ADDRESS=0.0.0.0:9900 \
-  --env RUSTFS_ACCESS_KEY=minioadmin \
-  --env RUSTFS_SECRET_KEY=minioadmin \
-  --env RUSTFS_CONSOLE_ENABLE=false \
-  --entrypoint /bin/sh \
-  eloqdata/ubuntu-dev:24.04 -c 'mkdir -p /tmp/rustfs-data && exec /usr/local/bin/rustfs server /tmp/rustfs-data'
+RUSTFS_ADDRESS=127.0.0.1:9900 \
+  RUSTFS_ACCESS_KEY=minioadmin RUSTFS_SECRET_KEY=minioadmin \
+  RUSTFS_CONSOLE_ENABLE=false \
+  "$RUSTFS_RUN_DIR/rustfs" server "$RUSTFS_RUN_DIR/data" > "$RUSTFS_RUN_DIR/rustfs.log" 2>&1 &
+RUSTFS_PID=$!
 
 # Wait for this check to succeed before running tests.
 curl --fail --noproxy '*' http://127.0.0.1:9900/health/ready
@@ -216,11 +217,13 @@ curl --fail --noproxy '*' http://127.0.0.1:9900/health/ready
 ctest --test-dir build/tests/
 ```
 
-The tests connect to `127.0.0.1:9900` by default. When finished, remove the
-container and its disposable test data:
+The tests connect to `127.0.0.1:9900` by default. When finished, stop RustFS and
+remove its disposable test data in the same shell:
 
 ```shell
-docker rm --force --volumes eloqstore-rustfs
+kill "$RUSTFS_PID"
+wait "$RUSTFS_PID" || true
+rm -rf "$RUSTFS_RUN_DIR"
 ```
 
 ### Benchmark

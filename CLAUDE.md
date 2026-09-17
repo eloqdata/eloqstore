@@ -27,19 +27,10 @@ CMake configure runs `git submodule update --init --recursive` automatically (su
 
 ## Tests
 
-Cloud-mode tests need RustFS running on `127.0.0.1:9900` first. The shared
-`ubuntu-dev` image includes the binary; see README.md for readiness and cleanup:
-
-```bash
-docker run --detach --name eloqstore-rustfs \
-  --publish 127.0.0.1:9900:9900 \
-  --env RUSTFS_ADDRESS=0.0.0.0:9900 \
-  --env RUSTFS_ACCESS_KEY=minioadmin \
-  --env RUSTFS_SECRET_KEY=minioadmin \
-  --env RUSTFS_CONSOLE_ENABLE=false \
-  --entrypoint /bin/sh \
-  eloqdata/ubuntu-dev:24.04 -c 'mkdir -p /tmp/rustfs-data && exec /usr/local/bin/rustfs server /tmp/rustfs-data'
-```
+Cloud-mode tests need RustFS running on `127.0.0.1:9900` first. Follow the
+README.md testing steps to download the pinned binary with
+`scripts/download_rustfs.sh`, start it with the default test credentials, and
+clean up afterward.
 
 ```bash
 # All tests
@@ -54,7 +45,7 @@ ctest --test-dir build/tests/ --output-on-failure
 ctest --test-dir build/tests/ -R "complex scan"
 ```
 
-The `large_value_*` and `segment_compact` tests register io_uring fixed buffers and need RLIMIT_MEMLOCK ≥ 2GB. Their custom main (`tests/large_value_main.cpp`) bumps the limit best-effort; CI runs with `--ulimit memlock=-1:-1`. Under WSL2 use `systemd-run --user --pipe --wait --property=LimitMEMLOCK=2G ./build/tests/large_value_e2e`.
+The `large_value_*` and `segment_compact` tests register io_uring fixed buffers and need RLIMIT_MEMLOCK ≥ 2GB. Their custom main (`tests/large_value_main.cpp`) bumps the limit best-effort; CI raises the limit with `prlimit` before running C++ tests. Under WSL2 use `systemd-run --user --pipe --wait --property=LimitMEMLOCK=2G ./build/tests/large_value_e2e`.
 
 Test fixtures: `tests/common.h` defines the canonical `KvOptions` presets (`default_opts`, `append_opts`, `cloud_options`, ...) plus S3 helpers; local data goes under `/tmp/eloqstore` or `/tmp/test-data`, and `CleanupStore()` wipes both local and S3 state.
 
@@ -86,4 +77,4 @@ Full subsystem documentation lives in `docs/architecture/` (see above). The load
 
 ## CI notes
 
-CI (`.github/workflows/ci.yml`) runs the complete C++/Python/Rust build and test job inside `eloqdata/ubuntu-dev:24.04` on native amd64 and arm64 runners. The container enables io_uring and unlimited memlock for fixed-buffer tests. The dependency installer adds EloqStore-specific packages to the image's toolchain. CI builds Debug with `SKIP_CREATE_BUCKET=ON`, starts the preinstalled RustFS binary, runs C++ tests, then builds/tests the Python wheel and Rust SDK. RustFS is stopped and its temporary data removed after testing, including on failure. Build caches use an `ubuntu-dev` scope.
+CI (`.github/workflows/ci.yml`) runs directly on native Ubuntu amd64 and arm64 runners. It builds Debug with `SKIP_CREATE_BUCKET=ON`, downloads and verifies RustFS 1.0.0 using `scripts/download_rustfs.sh`, runs C++ tests, then builds/tests the Python wheel and Rust SDK. RustFS is stopped and its temporary data removed after testing, including on failure.

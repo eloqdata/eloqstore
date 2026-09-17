@@ -15,13 +15,6 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.pull_request.draft == false }}
     name: test (${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
-    container:
-      image: eloqdata/ubuntu-dev:24.04
-      # io_uring and fixed-buffer tests need unrestricted syscalls and memlock.
-      options: --user root --init --privileged --security-opt seccomp=unconfined --ulimit memlock=-1:-1
-    defaults:
-      run:
-        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -35,7 +28,6 @@ jobs:
     env:
       CCACHE_DIR: /home/runner/.cache/ccache
       CCACHE_MAXSIZE: 2G
-      PIP_CACHE_DIR: /home/runner/.cache/pip
       # Shared FetchContent pool: the C++ build, the Python wheel build and the
       # Rust vendor build all resolve pinned deps from here instead of each
       # downloading and compiling their own copy.
@@ -58,12 +50,10 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /home/runner/.cache/eloq-fetchcontent
-          key: ${{ runner.os }}-${{ matrix.arch }}-ubuntu-dev-fetchcontent-${{ hashFiles('cmake/dependencies.cmake') }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-fetchcontent-${{ hashFiles('cmake/dependencies.cmake') }}
 
       - name: Install dependencies
         run: |
-          # apt reuses the image's packages and adds EloqStore-specific ones
-          # such as libprotoc-dev, libzmq3-dev, and cppzmq-dev.
           cd "$RUNNER_TEMP"
           bash "$GITHUB_WORKSPACE/scripts/install_dependency_ubuntu2404.sh"
 
@@ -78,18 +68,18 @@ jobs:
       - name: Build C++ engine
         run: cmake --build build -j$(nproc)
 
-      - name: Start RustFS
+      - name: Download and start RustFS
         run: |
-          command -v rustfs
-          rustfs --version
           RUSTFS_RUN_DIR=$(mktemp -d "$RUNNER_TEMP/eloqstore-rustfs.XXXXXX")
           echo "RUSTFS_RUN_DIR=$RUSTFS_RUN_DIR" >> "$GITHUB_ENV"
+          bash scripts/download_rustfs.sh "$RUSTFS_RUN_DIR"
+          "$RUSTFS_RUN_DIR/rustfs" --version
           mkdir -p "$RUSTFS_RUN_DIR/data"
           # Match KvOptions' existing test credentials without changing defaults.
           RUSTFS_ADDRESS=127.0.0.1:9900 \
             RUSTFS_ACCESS_KEY=minioadmin RUSTFS_SECRET_KEY=minioadmin \
             RUSTFS_CONSOLE_ENABLE=false \
-            rustfs server "$RUSTFS_RUN_DIR/data" > "$RUSTFS_RUN_DIR/rustfs.log" 2>&1 &
+            "$RUSTFS_RUN_DIR/rustfs" server "$RUSTFS_RUN_DIR/data" > "$RUSTFS_RUN_DIR/rustfs.log" 2>&1 &
           RUSTFS_PID=$!
           echo "RUSTFS_PID=$RUSTFS_PID" >> "$GITHUB_ENV"
           for i in {1..60}; do
@@ -123,17 +113,17 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /home/runner/.cache/pip
-          key: ${{ runner.os }}-${{ matrix.arch }}-ubuntu-dev-pip-${{ hashFiles('python/pyproject.toml') }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-ci-pip-${{ hashFiles('python/pyproject.toml') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-ubuntu-dev-pip-
+            ${{ runner.os }}-${{ matrix.arch }}-ci-pip-
 
       - name: Cache ccache
         uses: actions/cache@v4
         with:
           path: /home/runner/.cache/ccache
-          key: ${{ runner.os }}-${{ matrix.arch }}-ubuntu-dev-ccache-${{ hashFiles('CMakeLists.txt', 'ffi/**', 'include/**', 'src/**', 'rust/eloqstore-sys/**', 'python/build_hooks.py') }}
+          key: ${{ runner.os }}-${{ matrix.arch }}-ci-ccache-${{ hashFiles('CMakeLists.txt', 'ffi/**', 'include/**', 'src/**', 'rust/eloqstore-sys/**', 'python/build_hooks.py') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.arch }}-ubuntu-dev-ccache-
+            ${{ runner.os }}-${{ matrix.arch }}-ci-ccache-
 
       - name: Reset ccache stats
         run: ccache --zero-stats || true
@@ -171,7 +161,6 @@ jobs:
       - name: Cache Rust build
         uses: Swatinem/rust-cache@v2
         with:
-          shared-key: ubuntu-dev
           workspaces: |
             rust -> target
 

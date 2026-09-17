@@ -149,7 +149,7 @@ fn main() -> Result<(), eloqstore::KvError> {
 
     println!("\nExample completed successfully!");
     println!("Note: To run this example with actual cloud storage:");
-    println!("1. Start RustFS using the Docker command in README.md and wait for readiness");
+    println!("1. Download and start RustFS using README.md and wait for readiness");
     println!("2. Create bucket 'eloqstore' using an S3 client at http://127.0.0.1:9900");
     println!("3. Use credentials minioadmin/minioadmin to match the test defaults");
 
