@@ -188,17 +188,27 @@ See [rust/eloqstore/examples/](rust/eloqstore/examples/) for more usage examples
 
 ### Run Unit Tests
 
-EloqStore requires an S3-compatible object storage backend for testing. MinIO is recommended for local development and testing.
+Cloud-mode tests require an S3-compatible object storage backend. CI downloads
+RustFS 1.0.0 directly on the Ubuntu amd64/arm64 runners and verifies its SHA256.
+The same script can set up RustFS locally after installing the dependencies
+above (`curl`, `unzip`, and `sha256sum` are required).
 
-**1. Download and start MinIO:**
+**1. Download and start RustFS:**
 
 ```shell
-# Download MinIO
-wget https://dl.min.io/server/minio/release/linux-amd64/minio
-chmod +x minio
+RUSTFS_RUN_DIR=$(mktemp -d /tmp/eloqstore-rustfs.XXXXXX)
+bash scripts/download_rustfs.sh "$RUSTFS_RUN_DIR"
+mkdir -p "$RUSTFS_RUN_DIR/data"
 
-# Start MinIO server (runs on port 9000 by default)
-./minio server /tmp/minio-data --address :9900 --console-address :9901
+# These credentials match EloqStore's existing test defaults.
+RUSTFS_ADDRESS=127.0.0.1:9900 \
+  RUSTFS_ACCESS_KEY=minioadmin RUSTFS_SECRET_KEY=minioadmin \
+  RUSTFS_CONSOLE_ENABLE=false \
+  "$RUSTFS_RUN_DIR/rustfs" server "$RUSTFS_RUN_DIR/data" > "$RUSTFS_RUN_DIR/rustfs.log" 2>&1 &
+RUSTFS_PID=$!
+
+# Wait for this check to succeed before running tests.
+curl --fail --noproxy '*' http://127.0.0.1:9900/health/ready
 ```
 
 **2. Run unit tests:**
@@ -207,7 +217,14 @@ chmod +x minio
 ctest --test-dir build/tests/
 ```
 
-**Note**: Ensure MinIO is running before executing the tests. The tests will connect to MinIO running on `127.0.0.1:9900` by default.
+The tests connect to `127.0.0.1:9900` by default. When finished, stop RustFS and
+remove its disposable test data in the same shell:
+
+```shell
+kill "$RUSTFS_PID"
+wait "$RUSTFS_PID" || true
+rm -rf "$RUSTFS_RUN_DIR"
+```
 
 ### Benchmark
 
