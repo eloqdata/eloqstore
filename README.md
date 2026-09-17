@@ -188,17 +188,25 @@ See [rust/eloqstore/examples/](rust/eloqstore/examples/) for more usage examples
 
 ### Run Unit Tests
 
-EloqStore requires an S3-compatible object storage backend for testing. MinIO is recommended for local development and testing.
+Cloud-mode tests require an S3-compatible object storage backend. CI uses RustFS
+1.0.0 preinstalled in `eloqdata/ubuntu-dev:24.04`, available for amd64 and arm64.
+You can run the same service locally with Docker.
 
-**1. Download and start MinIO:**
+**1. Start RustFS:**
 
 ```shell
-# Download MinIO
-wget https://dl.min.io/server/minio/release/linux-amd64/minio
-chmod +x minio
+# These credentials match EloqStore's existing test defaults.
+docker run --detach --name eloqstore-rustfs \
+  --publish 127.0.0.1:9900:9900 \
+  --env RUSTFS_ADDRESS=0.0.0.0:9900 \
+  --env RUSTFS_ACCESS_KEY=minioadmin \
+  --env RUSTFS_SECRET_KEY=minioadmin \
+  --env RUSTFS_CONSOLE_ENABLE=false \
+  --entrypoint /bin/sh \
+  eloqdata/ubuntu-dev:24.04 -c 'mkdir -p /tmp/rustfs-data && exec /usr/local/bin/rustfs server /tmp/rustfs-data'
 
-# Start MinIO server (runs on port 9000 by default)
-./minio server /tmp/minio-data --address :9900 --console-address :9901
+# Wait for this check to succeed before running tests.
+curl --fail --noproxy '*' http://127.0.0.1:9900/health/ready
 ```
 
 **2. Run unit tests:**
@@ -207,7 +215,12 @@ chmod +x minio
 ctest --test-dir build/tests/
 ```
 
-**Note**: Ensure MinIO is running before executing the tests. The tests will connect to MinIO running on `127.0.0.1:9900` by default.
+The tests connect to `127.0.0.1:9900` by default. When finished, remove the
+container and its disposable test data:
+
+```shell
+docker rm --force --volumes eloqstore-rustfs
+```
 
 ### Benchmark
 

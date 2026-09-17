@@ -20,9 +20,9 @@ fn main() -> Result<(), eloqstore::KvError> {
     println!("===============================\n");
 
     // ============================================================
-    // Configuration for MinIO (local S3-compatible storage)
+    // Configuration for RustFS (local S3-compatible storage)
     // ============================================================
-    println!("Configuring EloqStore with MinIO...");
+    println!("Configuring EloqStore with RustFS...");
 
     let mut opts = Options::new()?;
 
@@ -45,7 +45,7 @@ fn main() -> Result<(), eloqstore::KvError> {
     opts.set_cloud_verify_ssl(false);
 
     // Note: The following cloud options are not yet exposed in the C API:
-    // - cloud_endpoint: "http://localhost:9000" (MinIO endpoint)
+    // - cloud_endpoint: "http://127.0.0.1:9900" (default local S3 endpoint)
     // - max_cloud_concurrency: 20
     // - cloud_request_threads: 2
     // - prewarm_cloud_cache: true
@@ -149,9 +149,9 @@ fn main() -> Result<(), eloqstore::KvError> {
 
     println!("\nExample completed successfully!");
     println!("Note: To run this example with actual cloud storage:");
-    println!("1. Start MinIO: ./minio server /tmp/minio-data");
-    println!("2. Create bucket: mc mb myminio/eloqstore");
-    println!("3. Update cloud_store_path to 'eloqstore/test-bucket'");
+    println!("1. Start RustFS using the Docker command in README.md and wait for readiness");
+    println!("2. Create bucket 'eloqstore' using an S3 client at http://127.0.0.1:9900");
+    println!("3. Use credentials minioadmin/minioadmin to match the test defaults");
 
     Ok(())
 }
