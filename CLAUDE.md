@@ -86,4 +86,4 @@ Full subsystem documentation lives in `docs/architecture/` (see above). The load
 
 ## CI notes
 
-CI (`.github/workflows/ci.yml`) builds Debug with `SKIP_CREATE_BUCKET=ON` on Ubuntu runners, starts RustFS from `eloqdata/ubuntu-dev:24.04`, runs C++ tests, then builds/tests the Python wheel and Rust SDK. The RustFS container is removed after testing, including on failure.
+CI (`.github/workflows/ci.yml`) runs the complete C++/Python/Rust build and test job inside `eloqdata/ubuntu-dev:24.04` on native amd64 and arm64 runners. The container enables io_uring and unlimited memlock for fixed-buffer tests. The dependency installer adds EloqStore-specific packages to the image's toolchain. CI builds Debug with `SKIP_CREATE_BUCKET=ON`, starts the preinstalled RustFS binary, runs C++ tests, then builds/tests the Python wheel and Rust SDK. RustFS is stopped and its temporary data removed after testing, including on failure. Build caches use an `ubuntu-dev` scope.

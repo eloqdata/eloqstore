@@ -188,9 +188,10 @@ See [rust/eloqstore/examples/](rust/eloqstore/examples/) for more usage examples
 
 ### Run Unit Tests
 
-Cloud-mode tests require an S3-compatible object storage backend. CI uses RustFS
-1.0.0 preinstalled in `eloqdata/ubuntu-dev:24.04`, available for amd64 and arm64.
-You can run the same service locally with Docker.
+Cloud-mode tests require an S3-compatible object storage backend. The full CI
+build and test job runs inside `eloqdata/ubuntu-dev:24.04` on amd64 and arm64,
+using its preinstalled RustFS 1.0.0 binary. For local testing outside that image,
+you can run just the storage service with Docker as shown below.
 
 **1. Start RustFS:**
 
