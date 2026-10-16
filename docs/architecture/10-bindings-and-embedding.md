@@ -57,7 +57,11 @@ only when the embedding runtime (EloqKV's tx service, with bthread) defines
 
 - `EloqStoreModule : eloq::EloqModule` exposes `ExtThdStart/ExtThdEnd`
   (bind/unbind the thread-local `shard`), `Process(thd_id)` (run
-  `Shard::WorkOneRound`), and `HasTask(thd_id)`.
+  `Shard::WorkOneRound`), and `HasTask(thd_id)`. One module serves every
+  store in the process, registered with brpc once: worker `thd_id` runs shard
+  `thd_id` of each running store in turn, binding that shard and its store
+  first. Stores join at `Start` (`AddStore`) and leave after their shards
+  stop (`RemoveStore`, which waits for workers still inside one of them).
 - Shards own no threads; the host's workers drive shard progress. Shard
   count must match the host's worker topology (`thd_id` ↔ `shard_id`).
 - Request sync waits switch from `std::atomic` wait to bthread

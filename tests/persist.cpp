@@ -606,10 +606,11 @@ TEST_CASE("write task abort rolls back branch file-id high-water (cloud)",
 // CHECK(!IsPinned()) on the caller's legitimate pin -> SIGABRT. It must instead
 // surface the error to the client and leave the store usable.
 //
-// Keep this case before the append-mode one below: that test drives its own
-// EloqStore instances, which clears the global eloq_store pointer while the
-// static InitStore store keeps running, so a later InitStore teardown of that
-// store crashes in code reading the global (e.g. Prewarmer::Shutdown).
+// This case ran before the append-mode one below while eloq_store was a
+// process-global pointer: that test drives its own EloqStore instances, whose
+// Stop cleared the global while the static InitStore store kept running. The
+// binding is now per thread and Stop restores it, so the order no longer
+// matters.
 TEST_CASE("failed index-page write surfaces error without aborting",
           "[persist][writepage_fail]")
 {

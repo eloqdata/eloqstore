@@ -26,8 +26,45 @@ class MappingSnapshot;
 class Shard;
 class EloqStore;
 
-inline EloqStore *eloq_store;
+/**
+ * @brief The store whose work this thread is doing.
+ *
+ * A process may run several stores (a data store service runs one per data
+ * shard it leads), so this is bound per thread, as shard is: on a shard's own
+ * thread, on a brpc worker each time a module runs one of its shards
+ * (EloqStoreModule::Process), and on the calling thread for the duration of
+ * EloqStore::Start and EloqStore::Stop (ScopedStoreBinding).
+ */
+inline thread_local EloqStore *eloq_store;
+/** @brief The shard whose work this thread is doing (bound with eloq_store). */
 inline thread_local Shard *shard;
+
+/**
+ * @brief Binds eloq_store to a store on this thread for a scope, then restores
+ * the binding it found.
+ */
+class ScopedStoreBinding
+{
+public:
+    /**
+     * @brief Binds eloq_store to the store.
+     * @param store The store whose work the scope does.
+     */
+    explicit ScopedStoreBinding(EloqStore *store) : prev_(eloq_store)
+    {
+        eloq_store = store;
+    }
+    ScopedStoreBinding(const ScopedStoreBinding &) = delete;
+    ScopedStoreBinding &operator=(const ScopedStoreBinding &) = delete;
+    /** @brief Restores the binding found at construction. */
+    ~ScopedStoreBinding()
+    {
+        eloq_store = prev_;
+    }
+
+private:
+    EloqStore *prev_;  ///< The binding to restore.
+};
 KvTask *ThdTask();
 AsyncIoManager *IoMgr();
 const KvOptions *Options();

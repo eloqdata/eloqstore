@@ -124,6 +124,7 @@ void Shard::InitIoMgrAndPagePool()
 void Shard::WorkLoop()
 {
     shard = this;
+    eloq_store = store_;
     InitIoMgrAndPagePool();
 
     // Get new requests from the queue, only blocked when there are no requests

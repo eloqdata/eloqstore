@@ -1050,12 +1050,14 @@ private:
     std::unique_ptr<PrewarmService> prewarm_service_{nullptr};
     std::unique_ptr<StandbyService> standby_service_{nullptr};
 #ifdef ELOQ_MODULE_ENABLED
-    std::unique_ptr<EloqStoreModule> module_{nullptr};
+    /** @brief Whether the process's EloqStoreModule runs this store. */
+    bool in_module_{false};
 #endif
 
     bool enable_eloqstore_metrics_{false};
     std::atomic<StoreMode> store_mode_{StoreMode::Local};
 
+    friend class EloqStoreModule;
     friend class Shard;
     friend class KvRequest;
     friend class AsyncIoManager;
