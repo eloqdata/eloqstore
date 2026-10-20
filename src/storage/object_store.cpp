@@ -793,6 +793,10 @@ bool AsyncHttpManager::SetupUploadRequest(ObjectStore::UploadTask *task,
         "Content-Length: " + std::to_string(task->file_size_);
     task->headers_ = curl_slist_append(task->headers_, content_length.c_str());
     task->headers_ = curl_slist_append(task->headers_, "Expect:");
+    // Suppress libcurl's default form-urlencoded Content-Type. It is not
+    // covered by the presigned-URL signature (SignedHeaders=host), and strict
+    // validators (e.g. s3proxy) reject the request when it is present.
+    task->headers_ = curl_slist_append(task->headers_, "Content-Type:");
 
     // Add conditional headers if provided
     if (!task->if_match_.empty())

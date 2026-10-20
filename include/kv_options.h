@@ -73,12 +73,112 @@ struct KvOptions
      */
     uint32_t io_queue_size = 4096;
     /**
-     * @brief Max amount of inflight write IO per shard.
-     * Only take effect in non-append write mode.
+     * @brief Write request-pool sizing (WriteReqPool / MergedWriteReqPool
+     * elements per shard). Cannot be zero. Historically this also acted as
+     * an in-flight page-write QoS cap (docs/design/io_qos.md M1); that
+     * role is retired — device admission control is the rate budget
+     * (disk_rate_limit_iops, M4) plus the optional class-blind window
+     * (max_inflight_io) — and the count-based cap could not bind below
+     * one merged write buffer anyway (256 pages at the 1MB default).
      */
-    uint32_t max_inflight_write = 32 << 10;
+    uint32_t max_inflight_write = 32768;
     /**
-     * @brief The maximum number of pages per batch for the write task.
+     * @brief DEPRECATED — no effect. Formerly the per-shard in-flight
+     * page-read cap (docs/design/io_qos.md M1). Superseded by the device
+     * rate budget (disk_rate_limit_iops, M4), which controls the correct
+     * dimension on rate-metered disks, and by max_inflight_io for
+     * instantaneous depth bounding. Parsed with a warning for
+     * compatibility; scheduled for removal one release after deprecation.
+     */
+    uint32_t max_inflight_read = 0;
+    /**
+     * @brief DEPRECATED — no effect. Formerly the background share of
+     * max_inflight_read (M2). Class policy lives in the rate budget's
+     * rate_bg_ratio, which covers background reads and all writes.
+     * Parsed with a warning for compatibility; scheduled for removal one
+     * release after deprecation.
+     */
+    uint32_t bg_read_ratio = 25;
+    /**
+     * @brief Per-disk (per store_path) device rate limit in operations per
+     * second (docs/design/io_qos.md M4). 0 disables the ops bucket. Each
+     * shard's budget is disk_rate_limit_iops * store_path.size() /
+     * num_threads (multiple store paths are assumed to be identical
+     * devices). Set to ~90-95% of the disk's enforced ceiling (cloud disks
+     * are provisioned rate limits; measure with deep-queue fio or read the
+     * provider's documented figure) so that IO waits in the shard's
+     * admission queue — FIFO, foreground-first — instead of in the
+     * hypervisor's limiter, which holds overflow IOs in quantized multi-ms
+     * delays. The default is a reasonable starting point for current
+     * cloud-local NVMe (the measured Azure v2 direct disk ceiling);
+     * devices faster than ~290K IOPS are under-used until it is raised or
+     * disabled, and slower disks should be measured and set accordingly.
+     */
+    uint64_t disk_rate_limit_iops = 275'000;
+    /**
+     * @brief Per-disk (per store_path) device rate limit in MB/s
+     * (docs/design/io_qos.md M4). 0 disables the bytes bucket. Divided
+     * across shards like disk_rate_limit_iops.
+     */
+    uint64_t disk_rate_limit_mbps = 0;
+    /**
+     * @brief Rate-bucket capacity, in milliseconds of refill (M4). Bounds
+     * how much unspent credit can bank while a shard is idle and thus the
+     * largest instantaneous burst admitted after a gap; equivalently, the
+     * worst-case transient queueing an idle-to-busy edge adds. The window
+     * only reshapes the latency distribution (the mean is fixed by
+     * throughput): smaller = flatter (higher median, lower tail), larger =
+     * burstier (lower median, fatter tail). Measured 2026-07-22 at deep
+     * queue: 1/2/4 ms cost no throughput (within 0.5%); storm p99.9 was
+     * 2463/2619/2808 us and p50 382/243/133 us. Default 2 ms balances the
+     * two; use 1 ms when tails matter most.
+     */
+    uint32_t rate_limit_burst_ms = 2;
+    /**
+     * @brief Ops-cost quantum for writes against the ops bucket (M4): a
+     * write of `len` bytes is charged ceil(len / rate_limit_io_unit)
+     * operations (WriteRateOps), so a data-page write and a merged write
+     * are metered on one consistent scale. Defaults to the physical write
+     * quantum, one data page (4KB): a 4KB write costs 1 op, a 1MB merged
+     * write costs 256. Must be nonzero (a zero/malformed value is rejected
+     * at load and the default is kept). A finer unit (e.g. 2KB) charges
+     * writes more ops per byte and paces background harder; the tested
+     * Azure NVMe read-tail target was met at the 4KB default, so it is not
+     * enabled by default — recalibrate with the fio boundary method in
+     * docs/design/io_qos.md only if a device's write-accounting unit is
+     * measured smaller and write throttling needs it.
+     */
+    uint32_t rate_limit_io_unit = 4 * KB;
+    /**
+     * @brief Background share of the device rate budget, percent (M4).
+     * The rate budget is partitioned: background IO (background-task
+     * reads and all write-path IO) refills at this share, foreground
+     * reads at the remainder; covers writes as well, not only reads
+     * (unlike the retired count-era bg_read_ratio). Clamped to [1, 99].
+     */
+    uint32_t rate_bg_ratio = 25;
+    /**
+     * @brief Single class-blind cap on in-flight device commands per shard
+     * (M4 companion). 0 = off. Smooths the rate bucket's burst release
+     * toward the device: the rate budget governs allocation per second
+     * (with class policy), this bounds the instantaneous outstanding
+     * window. Deliberately does not distinguish reads/writes or
+     * foreground/background — by admission time the rate budget has
+     * already applied policy, and the device queue this replaces is
+     * class-blind anyway. Charged 1 per page read, ceil(len / 256KB) per
+     * merged write (the kernel's device-command split). Size a little
+     * above the throttled rate's bandwidth-delay product per shard
+     * (rate_per_shard x t_read, ~2x headroom).
+     */
+    uint32_t max_inflight_io = 0;
+    /**
+     * @brief DEPRECATED — no effect. Formerly the per-write-task in-flight
+     * page cap (the task drained to zero via WaitWrite once it had this
+     * many writes outstanding). Superseded by the shard-wide write budget
+     * `max_inflight_write` (docs/design/io_qos.md, plan commit 4), which
+     * bounds in-flight write pages across all tasks without the
+     * drain-to-zero sawtooth. Parsed for compatibility and otherwise ignored;
+     * scheduled for removal one release after deprecation.
      */
     uint32_t max_write_batch_pages = 32;
     /**

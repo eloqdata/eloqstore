@@ -1,10 +1,23 @@
 #include "eloq_store_bm.h"
 
+#include <gflags/gflags.h>
+
+#include <algorithm>
+#include <atomic>
 #include <cassert>
+#include <chrono>
 #include <iomanip>
 #include <numeric>
+#include <thread>
 
+// https://github.com/cameron314/concurrentqueue/issues/280
+#undef BLOCK_SIZE
+#include "../external/concurrentqueue/blockingconcurrentqueue.h"
 #include "kv_options.h"
+
+DECLARE_uint32(client_threads);
+DECLARE_uint32(inflight_per_client);
+DECLARE_uint32(per_shard_cap);
 
 namespace EloqStoreBM
 {
@@ -530,6 +543,250 @@ void Benchmark::GenBatchRecord(const Benchmark &bm,
 #endif
 }
 
+namespace
+{
+struct Get2Client
+{
+    moodycamel::BlockingConcurrentQueue<EloqStoreBM::ReadOperation *> done_;
+    std::vector<uint64_t> lat_us_;
+    uint64_t outstanding_{0};
+    uint64_t read_failed_{0};
+    uint64_t issue_failed_{0};
+};
+
+uint64_t Get2NowUs()
+{
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+}  // namespace
+
+void Benchmark::OnReadV2(::eloqstore::KvRequest *req)
+{
+    auto *op = reinterpret_cast<ReadOperation *>(req->UserData());
+    CHECK(static_cast<Get2Client *>(op->client_)->done_.enqueue(op))
+        << "GET2 completion queue allocation failed";
+}
+
+void Benchmark::RunGet2(uint32_t client_threads,
+                        uint32_t inflight,
+                        uint32_t per_shard_cap)
+{
+    CHECK_GT(client_threads, 0U) << "GET2 client_threads must be positive";
+    CHECK_GT(inflight, 0U) << "GET2 inflight_per_client must be positive";
+    CHECK_GT(partition_count_, 0U) << "GET2 partition_count must be positive";
+    CHECK_GE(key_maximum_, key_minimum_)
+        << "GET2 key_maximum must not be less than key_minimum";
+    CHECK(per_shard_cap == 0 ||
+          key_maximum_ - key_minimum_ >= partition_count_ - 1);
+
+    const uint16_t nshards = worker_cnt_;
+    std::vector<uint16_t> partition_shards(partition_count_);
+    std::vector<bool> reachable_shards(nshards, false);
+    for (uint32_t part = 0; part < partition_count_; ++part)
+    {
+        const ::eloqstore::TableIdent table_id(table_name_str, part);
+        partition_shards[part] = table_id.ShardIndex(nshards);
+        reachable_shards[partition_shards[part]] = true;
+    }
+    const uint64_t reachable_count =
+        std::count(reachable_shards.begin(), reachable_shards.end(), true);
+    const uint64_t cap_capacity = reachable_count * per_shard_cap;
+    CHECK(per_shard_cap == 0 || inflight <= cap_capacity)
+        << "GET2 inflight_per_client=" << inflight
+        << " exceeds reachable per-shard capacity=" << cap_capacity;
+
+    std::atomic<bool> stop{false};
+    std::vector<Get2Client> clients(client_threads);
+    std::vector<std::thread> thds;
+    const uint64_t bench_start = Get2NowUs();
+
+    for (uint32_t c = 0; c < client_threads; ++c)
+    {
+        thds.emplace_back(
+            [this,
+             c,
+             inflight,
+             per_shard_cap,
+             nshards,
+             &partition_shards,
+             &clients,
+             &stop]()
+            {
+                Get2Client &me = clients[c];
+                object_generator gen;
+                gen.set_random_data(true);
+                gen.set_random_seed(20260711 + c * 7919);
+                gen.set_key_size(key_byte_size_);
+                gen.set_data_size_fixed(value_byte_size_);
+                gen.set_key_prefix(key_prefix_.data());
+                gen.set_key_range(key_minimum_, key_maximum_);
+
+                std::vector<ReadOperation> ops;
+                ops.reserve(inflight);
+                for (uint32_t i = 0; i < inflight; ++i)
+                {
+                    ops.emplace_back(this);
+                    ops.back().client_ = &me;
+                }
+                std::vector<uint32_t> shard_out(nshards, 0);
+
+                auto issue = [&](ReadOperation *op)
+                {
+                    uint64_t key_index =
+                        gen.get_key_index(OBJECT_GENERATOR_KEY_RANDOM);
+                    uint32_t part = key_index % partition_count_;
+                    if (per_shard_cap > 0)
+                    {
+                        uint32_t forward = 0;
+                        for (; forward < partition_count_; ++forward)
+                        {
+                            const uint32_t candidate =
+                                (static_cast<uint64_t>(part) + forward) %
+                                partition_count_;
+                            if (shard_out[partition_shards[candidate]] <
+                                per_shard_cap)
+                            {
+                                part = candidate;
+                                break;
+                            }
+                        }
+                        CHECK_LT(forward, partition_count_)
+                            << "GET2 per-shard cap accounting lost capacity";
+                        if (forward != 0)
+                        {
+                            key_index += forward;
+                            if (key_index > key_maximum_)
+                            {
+                                key_index -= partition_count_;
+                            }
+                        }
+                    }
+                    CHECK_GE(key_index, key_minimum_);
+                    CHECK_LE(key_index, key_maximum_);
+                    CHECK_EQ(key_index % partition_count_, part);
+                    op->shard_ = partition_shards[part];
+                    op->key_.clear();
+                    gen.generate_key(key_index, op->key_);
+                    op->req_->SetArgs(
+                        ::eloqstore::TableIdent(table_name_str, part),
+                        op->key_);
+                    op->start_ts_ = Get2NowUs();
+                    if (!eloq_store_->ExecAsyn(op->req_.get(),
+                                               reinterpret_cast<uint64_t>(op),
+                                               OnReadV2))
+                    {
+                        ++me.issue_failed_;
+                        return;
+                    }
+                    ++shard_out[op->shard_];
+                    ++me.outstanding_;
+                };
+
+                auto complete = [&](ReadOperation *op)
+                {
+                    CHECK_GT(me.outstanding_, 0U);
+                    CHECK_GT(shard_out[op->shard_], 0U);
+                    --me.outstanding_;
+                    --shard_out[op->shard_];
+                    if (op->req_->Error() != ::eloqstore::KvError::NoError)
+                    {
+                        ++me.read_failed_;
+                        return;
+                    }
+                    me.lat_us_.push_back(Get2NowUs() - op->start_ts_);
+                };
+
+                for (auto &op : ops)
+                {
+                    if (stop.load(std::memory_order_acquire))
+                    {
+                        break;
+                    }
+                    issue(&op);
+                }
+                ReadOperation *done_op = nullptr;
+                while (!stop.load(std::memory_order_acquire))
+                {
+                    if (!me.done_.wait_dequeue_timed(done_op, 10000))
+                    {
+                        continue;
+                    }
+                    complete(done_op);
+                    if (!stop.load(std::memory_order_acquire))
+                    {
+                        issue(done_op);
+                    }
+                }
+                // The callbacks reference `ops` and `me`; keep both alive
+                // until every accepted request has completed.
+                while (me.outstanding_ > 0)
+                {
+                    me.done_.wait_dequeue(done_op);
+                    complete(done_op);
+                }
+            });
+    }
+
+    std::this_thread::sleep_for(std::chrono::seconds(total_test_time_sec_));
+    stop.store(true, std::memory_order_release);
+    for (auto &t : thds)
+    {
+        t.join();
+    }
+    const double dur_sec = (Get2NowUs() - bench_start) / 1e6;
+
+    std::vector<uint64_t> all;
+    uint64_t read_failures = 0;
+    uint64_t issue_failures = 0;
+    for (auto &cl : clients)
+    {
+        read_failures += cl.read_failed_;
+        issue_failures += cl.issue_failed_;
+        all.insert(all.end(), cl.lat_us_.begin(), cl.lat_us_.end());
+    }
+    const uint64_t successes = all.size();
+    std::sort(all.begin(), all.end());
+    auto pct = [&](double p) -> uint64_t
+    {
+        if (all.empty())
+        {
+            return 0;
+        }
+        const size_t idx =
+            static_cast<size_t>(p * static_cast<double>(all.size() - 1));
+        return all[idx];
+    };
+    LOG(INFO) << "GET2 finished: clients=" << client_threads
+              << " inflight=" << inflight << " per_shard_cap=" << per_shard_cap
+              << " successes=" << successes
+              << " read_failures=" << read_failures
+              << " issue_failures=" << issue_failures << " duration=" << dur_sec
+              << "s QPS:" << std::fixed << std::setprecision(2)
+              << successes / dur_sec;
+    LOG(INFO) << "Latency: Min->" << (all.empty() ? 0 : all.front())
+              << ", Max->" << (all.empty() ? 0 : all.back()) << ", Mean->"
+              << (all.empty() ? 0
+                              : std::accumulate(all.begin(), all.end(), 0ULL) /
+                                    all.size())
+              << ", p50->" << pct(0.50) << ", p90->" << pct(0.90) << ", p95->"
+              << pct(0.95) << ", p99->" << pct(0.99) << ", p99.9->"
+              << pct(0.999) << ", p99.99->" << pct(0.9999);
+
+    // A latency benchmark that reports percentiles over surviving samples
+    // must not exit success when requests were rejected/failed or nothing
+    // completed — otherwise a broken run reads as a fast one. main()
+    // turns this into a nonzero process exit.
+    if (read_failures != 0 || issue_failures != 0 || successes == 0)
+    {
+        failed_ = true;
+        LOG(ERROR) << "GET2 run FAILED: read_failures=" << read_failures
+                   << " issue_failures=" << issue_failures
+                   << " successes=" << successes;
+    }
+}
+
 void Benchmark::OnRead(::eloqstore::KvRequest *req)
 {
     ::eloqstore::ReadRequest *read_req =
@@ -611,6 +868,7 @@ void Benchmark::OnRead(::eloqstore::KvRequest *req)
     // get next key randomly.
     int8_t iter = obj_iter_type(read_op->bm_->key_pattern_, GET_CMD_IDX);
     uint64_t key_index = read_obj_gen.get_key_index(iter);
+
     read_op->key_.clear();
     read_obj_gen.generate_key(key_index, read_op->key_);
 
@@ -725,6 +983,7 @@ Benchmark::Benchmark(std::string &command,
       key_pattern_(key_pattern),
       result_(worker_cnt, this)
 {
+    worker_cnt_ = worker_cnt;
 }
 
 bool Benchmark::OpenEloqStore(const eloqstore::KvOptions &kv_options)
@@ -847,6 +1106,13 @@ void Benchmark::RunBenchmark()
                 return;
             }
         }
+    }
+    else if (command_ == "GET2")
+    {
+        RunGet2(FLAGS_client_threads,
+                FLAGS_inflight_per_client,
+                FLAGS_per_shard_cap);
+        return;
     }
     else
     {

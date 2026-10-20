@@ -144,7 +144,8 @@ def randomize_dynamic_params():
         "fd_limit": random.choice([5000, 10000, 15000]),
         "io_queue_size": random.choice([2048, 4096, 8192]),
         "max_inflight_write": random.choice([2048, 4096, 8192]),
-        "max_write_batch_pages": random.choice([32, 64, 128]),
+        # Deprecated and ignored; keep a fixed value for CLI compatibility.
+        "max_write_batch_pages": 64,
         # "coroutine_stack_size": lambda: random.choice([1<<13, 1<<14, 1<<15]),
         "file_amplify_factor": random.choice([2]),
         "reserve_space_ratio": random.choice([50, 100, 150, 200]),

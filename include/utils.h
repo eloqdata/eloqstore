@@ -215,6 +215,17 @@ inline std::string BuildStorePathListWithWeights(
     return oss.str();
 }
 
+// Runtime gate for the IO stage-timing instrumentation (ELOQ_IO_STATS=1).
+inline bool IoStatsEnabled()
+{
+    static const bool enabled = []
+    {
+        const char *e = getenv("ELOQ_IO_STATS");
+        return e != nullptr && e[0] == '1';
+    }();
+    return enabled;
+}
+
 inline std::vector<uint32_t> ComputeStorePathLut(
     const std::vector<uint64_t> &weights,
     size_t max_entries = kDefaultStorePathLutEntries)

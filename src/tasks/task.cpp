@@ -505,9 +505,10 @@ void WaitingZone::WakeOne()
     }
 }
 
-void WaitingZone::WakeN(size_t n)
+size_t WaitingZone::WakeN(size_t n)
 {
-    for (size_t i = 0; i < n; i++)
+    size_t woken = 0;
+    while (woken < n)
     {
         KvTask *task = PopFront();
         if (task == nullptr)
@@ -516,7 +517,9 @@ void WaitingZone::WakeN(size_t n)
         }
         assert(task->status_ == TaskStatus::Blocked);
         task->Resume();
+        woken++;
     }
+    return woken;
 }
 
 void WaitingZone::WakeAll()

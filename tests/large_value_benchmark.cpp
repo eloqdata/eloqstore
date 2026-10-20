@@ -1,7 +1,9 @@
 // tests/large_value_benchmark.cpp
 //
 // Informational benchmarks for the zero-copy large-value read/write paths.
-// Excluded from the normal (non-benchmark) test run.
+// Excluded from the normal test run via the Catch2 hidden tag "[.]": not
+// discovered by ctest/CI and skipped on a bare binary run; select the tag
+// explicitly to execute.
 //
 // Run with:
 //   sudo prlimit --memlock=unlimited ./large_value_benchmark -t '[benchmark]'
@@ -477,7 +479,7 @@ constexpr ConcurrencyConfig kConcurrencyConfigs[] = {
 // inference server with multiple in-flight requests) would see.
 // ============================================================================
 TEST_CASE("Benchmark: concurrent random reads (large-value vs overflow-page)",
-          "[benchmark][read-latency]")
+          "[.][benchmark][read-latency]")
 {
     constexpr size_t kTargetDataset = 256ULL * 1024 * 1024;
     constexpr int kMinKeys = 256;
@@ -661,7 +663,7 @@ TEST_CASE("Benchmark: concurrent random reads (large-value vs overflow-page)",
 // std::string path writes overflow pages via regular io_uring writes.
 // ============================================================================
 TEST_CASE("Benchmark: batch-write throughput IoStringBuffer vs std::string",
-          "[benchmark][write-throughput]")
+          "[.][benchmark][write-throughput]")
 {
     BenchHarness h;
     eloqstore::KvOptions opts = MakeBenchOpts(h);
@@ -834,7 +836,7 @@ TEST_CASE("Benchmark: batch-write throughput IoStringBuffer vs std::string",
 // Expected: smaller yield_every → more frequent yields → lower p99 overhead.
 // ============================================================================
 TEST_CASE("Benchmark: foreground read p99 during segment compaction",
-          "[benchmark][compact-overhead]")
+          "[.][benchmark][compact-overhead]")
 {
     const uint32_t yield_values[] = {1, 8, 32};
 
@@ -1222,7 +1224,7 @@ std::vector<int64_t> TimePinnedReadsOverloadC(eloqstore::EloqStore *store,
 // throughput; the kernel just reads the same source range M times.
 // ============================================================================
 TEST_CASE("Benchmark: pinned-mode batch-write throughput",
-          "[benchmark][write-throughput][pinned]")
+          "[.][benchmark][write-throughput][pinned]")
 {
     struct SizeCase
     {
@@ -1429,7 +1431,7 @@ TEST_CASE("Benchmark: pinned-mode batch-write throughput",
 // scratch acquire/release.
 // ============================================================================
 TEST_CASE("Benchmark: pinned-write tail-scratch overhead",
-          "[benchmark][write-latency][pinned][tail-scratch]")
+          "[.][benchmark][write-latency][pinned][tail-scratch]")
 {
     struct SizeCase
     {
@@ -1545,7 +1547,7 @@ TEST_CASE("Benchmark: pinned-write tail-scratch overhead",
 // aggregate MB/s (total bytes / wall time).
 // ============================================================================
 TEST_CASE("Benchmark: pinned-mode concurrent random reads",
-          "[benchmark][read-latency][pinned]")
+          "[.][benchmark][read-latency][pinned]")
 {
     constexpr size_t kTargetDataset = 256ULL * 1024 * 1024;
     constexpr int kMinKeys = 256;
@@ -1677,7 +1679,7 @@ TEST_CASE("Benchmark: pinned-mode concurrent random reads",
 // window saves the index navigation on the (W-1)/W subsequent reads.
 // ============================================================================
 TEST_CASE("Benchmark: pinned-mode concurrent windowed-locality reads",
-          "[benchmark][read-latency][pinned]")
+          "[.][benchmark][read-latency][pinned]")
 {
     constexpr size_t kTargetDataset = 256ULL * 1024 * 1024;
     constexpr int kMinKeys = 256;

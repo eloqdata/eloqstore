@@ -151,13 +151,71 @@ int KvOptions::LoadFromIni(const char *path)
     }
     if (reader.HasValue(sec_run, "max_inflight_write"))
     {
-        max_inflight_write =
-            reader.GetUnsigned(sec_run, "max_inflight_write", 4096);
+        max_inflight_write = reader.GetUnsigned(
+            sec_run, "max_inflight_write", max_inflight_write);
+    }
+    if (reader.HasValue(sec_run, "max_inflight_read"))
+    {
+        max_inflight_read = reader.GetUnsigned(sec_run, "max_inflight_read", 0);
+        LOG(WARNING) << "max_inflight_read is deprecated and has no effect; "
+                        "device admission control is disk_rate_limit_iops "
+                        "(with rate_bg_ratio) and max_inflight_io";
+    }
+    if (reader.HasValue(sec_run, "bg_read_ratio"))
+    {
+        bg_read_ratio = reader.GetUnsigned(sec_run, "bg_read_ratio", 25);
+        LOG(WARNING) << "bg_read_ratio is deprecated and has no effect; "
+                        "the background share of the device rate budget is "
+                        "rate_bg_ratio";
+    }
+    if (reader.HasValue(sec_run, "disk_rate_limit_iops"))
+    {
+        disk_rate_limit_iops =
+            reader.GetUnsigned64(sec_run, "disk_rate_limit_iops", 275'000);
+    }
+    if (reader.HasValue(sec_run, "disk_rate_limit_mbps"))
+    {
+        disk_rate_limit_mbps =
+            reader.GetUnsigned64(sec_run, "disk_rate_limit_mbps", 0);
+    }
+    if (reader.HasValue(sec_run, "rate_limit_burst_ms"))
+    {
+        // Fall back to the current (member-default) value, not a literal, so
+        // a malformed entry cannot silently change the policy.
+        rate_limit_burst_ms = reader.GetUnsigned(
+            sec_run, "rate_limit_burst_ms", rate_limit_burst_ms);
+    }
+    if (reader.HasValue(sec_run, "rate_limit_io_unit"))
+    {
+        std::string io_unit_str = reader.Get(sec_run, "rate_limit_io_unit", "");
+        const uint64_t parsed = ParseSizeWithUnit(io_unit_str);
+        if (parsed == 0)
+        {
+            LOG(WARNING) << "rate_limit_io_unit '" << io_unit_str
+                         << "' is invalid; keeping default "
+                         << rate_limit_io_unit << " bytes";
+        }
+        else
+        {
+            rate_limit_io_unit = static_cast<uint32_t>(parsed);
+        }
+    }
+    if (reader.HasValue(sec_run, "rate_bg_ratio"))
+    {
+        rate_bg_ratio = reader.GetUnsigned(sec_run, "rate_bg_ratio", 25);
+    }
+    if (reader.HasValue(sec_run, "max_inflight_io"))
+    {
+        max_inflight_io = reader.GetUnsigned(sec_run, "max_inflight_io", 0);
     }
     if (reader.HasValue(sec_run, "max_write_batch_pages"))
     {
         max_write_batch_pages =
             reader.GetUnsigned(sec_run, "max_write_batch_pages", 64);
+        LOG(WARNING)
+            << "Option max_write_batch_pages is deprecated and has no "
+               "effect; device write admission is paced by the rate budget "
+               "(disk_rate_limit_iops, see docs/design/io_qos.md)";
     }
     if (reader.HasValue(sec_run, "coroutine_stack_size"))
     {
@@ -398,6 +456,14 @@ bool KvOptions::operator==(const KvOptions &other) const
            manifest_limit == other.manifest_limit &&
            fd_limit == other.fd_limit && io_queue_size == other.io_queue_size &&
            max_inflight_write == other.max_inflight_write &&
+           max_inflight_read == other.max_inflight_read &&
+           bg_read_ratio == other.bg_read_ratio &&
+           disk_rate_limit_iops == other.disk_rate_limit_iops &&
+           disk_rate_limit_mbps == other.disk_rate_limit_mbps &&
+           rate_limit_burst_ms == other.rate_limit_burst_ms &&
+           rate_limit_io_unit == other.rate_limit_io_unit &&
+           rate_bg_ratio == other.rate_bg_ratio &&
+           max_inflight_io == other.max_inflight_io &&
            max_write_batch_pages == other.max_write_batch_pages &&
            coroutine_stack_size == other.coroutine_stack_size &&
            num_retained_archives == other.num_retained_archives &&

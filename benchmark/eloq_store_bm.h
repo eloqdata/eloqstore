@@ -133,17 +133,15 @@ struct ReadOperation
     explicit ReadOperation(const Benchmark *bm);
 
     ReadOperation(const ReadOperation &rhs) = delete;
-    ReadOperation(ReadOperation &&rhs)
-        : req_(std::move(rhs.req_)),
-          key_(std::move(rhs.key_)),
-          start_ts_(rhs.start_ts_)
-    {
-    }
+    ReadOperation(ReadOperation &&rhs) noexcept = default;
 
     req_uptr req_;
     std::string key_;
     uint64_t start_ts_{0};
     const Benchmark *bm_{nullptr};
+    // GET2 mode: owning client and target shard of the in-flight request.
+    void *client_{nullptr};
+    uint32_t shard_{0};
 };
 
 class BMResult
@@ -220,6 +218,23 @@ public:
     void CloseEloqStore();
 
     void RunBenchmark();
+    // GET2: dedicated client threads, each keeping `inflight` async reads
+    // outstanding; optional per-shard outstanding cap bounds the blast
+    // radius of a stalled shard.
+    void RunGet2(uint32_t client_threads,
+                 uint32_t inflight,
+                 uint32_t per_shard_cap);
+    static void OnReadV2(::eloqstore::KvRequest *req);
+
+    /**
+     * @brief True if the last run recorded request failures or produced no
+     * successful samples. main() propagates it to a nonzero process exit so
+     * a broken run cannot masquerade as a fast one.
+     */
+    bool Failed() const
+    {
+        return failed_;
+    }
 
 private:
     static void OnBatchWrite(::eloqstore::KvRequest *req);
@@ -239,6 +254,7 @@ private:
     std::string command_;
     size_t total_data_size_{0};
     const uint32_t partition_count_{0};
+    uint32_t worker_cnt_{0};  // num shard threads (for same-shard mode)
     uint32_t key_byte_size_{0};
     uint32_t value_byte_size_{0};
     std::string key_prefix_;
@@ -254,6 +270,7 @@ private:
     mutable std::vector<object_generator> load_obj_gens_;
     uint64_t start_ts_{0};
     mutable BMResult result_;
+    bool failed_{false};  // set by RunGet2 on request failure / no samples
 
     friend BMResult;
     friend LoadPartitionsOperation;
