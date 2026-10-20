@@ -355,6 +355,61 @@ TEST_CASE("EloqStore handles multiple stop calls", "[eloq_store]")
     CleanupTestDir(test_dir);
 }
 
+// Several stores may run in one process (a data store service runs one per
+// data shard it leads). Each must keep working whatever the others do: when the
+// store was reached through a process-global pointer, stopping the store
+// started last cleared it, and the next write on the other store crashed.
+TEST_CASE("EloqStore runs alongside another store in the process",
+          "[eloq_store]")
+{
+    auto first_dir = CreateTestDir("_two_stores_first");
+    auto second_dir = CreateTestDir("_two_stores_second");
+    // Unlike the other cases here, this one runs tasks: CreateValidOptions'
+    // 8 KB coroutine stacks are too small for a write in a Debug build.
+    auto options = [](const fs::path &dir)
+    {
+        eloqstore::KvOptions opts = CreateValidOptions(dir);
+        opts.coroutine_stack_size = eloqstore::KvOptions{}.coroutine_stack_size;
+        return opts;
+    };
+    eloqstore::EloqStore first(options(first_dir));
+    eloqstore::EloqStore second(options(second_dir));
+    REQUIRE(first.Start("main", 0) == eloqstore::KvError::NoError);
+    REQUIRE(second.Start("main", 0) == eloqstore::KvError::NoError);
+
+    auto write = [](eloqstore::EloqStore &store, std::string value)
+    {
+        std::vector<eloqstore::WriteDataEntry> entries;
+        entries.emplace_back(
+            "key", std::move(value), 1, eloqstore::WriteOp::Upsert);
+        eloqstore::BatchWriteRequest req;
+        req.SetArgs(eloqstore::TableIdent("two_stores", 0), std::move(entries));
+        store.ExecSync(&req);
+        return req.Error();
+    };
+    auto read = [](eloqstore::EloqStore &store)
+    {
+        eloqstore::ReadRequest req;
+        req.SetArgs(eloqstore::TableIdent("two_stores", 0), "key");
+        store.ExecSync(&req);
+        REQUIRE(req.Error() == eloqstore::KvError::NoError);
+        return req.value_;
+    };
+    REQUIRE(write(first, "first") == eloqstore::KvError::NoError);
+    REQUIRE(write(second, "second") == eloqstore::KvError::NoError);
+    REQUIRE(read(first) == "first");
+    REQUIRE(read(second) == "second");
+
+    second.Stop();
+    REQUIRE(second.IsStopped());
+    REQUIRE(write(first, "first again") == eloqstore::KvError::NoError);
+    REQUIRE(read(first) == "first again");
+
+    first.Stop();
+    CleanupTestDir(first_dir);
+    CleanupTestDir(second_dir);
+}
+
 TEST_CASE("EloqStore handles requests when stopped", "[eloq_store]")
 {
     auto test_dir = CreateTestDir("_stopped_requests");

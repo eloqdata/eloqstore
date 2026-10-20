@@ -583,7 +583,7 @@ void EloqStore::CleanupRuntime(size_t started_shards)
         archive_crond_->Stop();
     }
 #ifdef ELOQ_MODULE_ENABLED
-    if (module_ != nullptr)
+    if (in_module_)
     {
         for (size_t i = 0; i < shard_count; ++i)
         {
@@ -614,7 +614,9 @@ void EloqStore::CleanupRuntime(size_t started_shards)
             }
             bthread_usleep(1000);
         }
-        eloq::unregister_module(module_.get());
+        // Stopped: the workers no longer need to run the shards.
+        EloqStoreModule::Instance().RemoveStore(this);
+        in_module_ = false;
     }
 #endif
 
@@ -648,10 +650,6 @@ void EloqStore::CleanupRuntime(size_t started_shards)
     if (cloud_service_)
     {
         cloud_service_->Stop();
-    }
-    if (eloq_store == this)
-    {
-        eloq_store = nullptr;
     }
 }
 
@@ -750,7 +748,6 @@ KvError EloqStore::Start(std::string_view branch,
         standby_service_.reset();
     }
 
-    eloq_store = this;
     // Initialize
     if (!options_.store_path.empty())
     {
@@ -868,8 +865,8 @@ KvError EloqStore::Start(std::string_view branch,
     }
 
 #ifdef ELOQ_MODULE_ENABLED
-    module_ = std::make_unique<EloqStoreModule>(&shards_);
-    eloq::register_module(module_.get());
+    EloqStoreModule::Instance().AddStore(this);
+    in_module_ = true;
     for (auto &shard : shards_)
     {
         eloq::EloqModule::NotifyWorker(static_cast<int>(shard->shard_id_));

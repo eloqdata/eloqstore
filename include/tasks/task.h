@@ -26,8 +26,22 @@ class MappingSnapshot;
 class Shard;
 class EloqStore;
 
-inline EloqStore *eloq_store;
+/**
+ * @brief The store whose work this thread is doing.
+ *
+ * A process may run several stores (a data store service runs one per data
+ * shard it leads), so this is bound per thread, as shard is, and only by a
+ * thread doing a shard's work: a shard's own thread, and a brpc worker each
+ * time a module runs one of its shards (EloqStoreModule::Process).
+ *
+ * @note Code that runs on any other thread, such as EloqStore::Start and
+ * EloqStore::Stop, reaches the store explicitly and must not read this: the
+ * caller may be a bthread, which can resume on another pthread after a wait.
+ */
+inline thread_local EloqStore *eloq_store;
+/** @brief The shard whose work this thread is doing (bound with eloq_store). */
 inline thread_local Shard *shard;
+
 KvTask *ThdTask();
 AsyncIoManager *IoMgr();
 const KvOptions *Options();

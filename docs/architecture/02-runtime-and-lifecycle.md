@@ -29,11 +29,18 @@ A comment in `eloq_store.h` records one non-obvious ordering constraint:
 `cloud_service_` is declared before `shards_` because shard teardown triggers
 async HTTP cleanup that calls back into `CloudStorageService`.
 
-There is also a process-global `inline EloqStore *eloq_store` and a
-thread-local `inline thread_local Shard *shard` (`include/tasks/task.h`).
-Task code reaches its shard, options, and io manager through these — which is
-why **one process hosts at most one running EloqStore** and why task code must
-run on a shard thread.
+Task code reaches its store, shard, options, and io manager through two
+thread-locals, `eloq_store` and `shard` (`include/tasks/task.h`), which is why
+task code must run on a shard thread. They are bound per thread, so one process
+may run several stores (a data store service runs one per data shard it
+leads): a shard's thread binds its shard and store when its loop starts; under
+`ELOQ_MODULE_ENABLED` one module serves every store in the process, and worker
+`thd_id` runs shard `thd_id` of each store in turn, so
+`EloqStoreModule::Process` binds the shard it runs each time. Only a thread
+doing a shard's work binds them. `Start` and `Stop` bind nothing: they run on
+the caller's thread (in an embedding, often a bthread, which can resume on
+another worker after a wait) and reach the store through `this`. `Start` adds
+the store to the module, and `Stop` removes it once its shards have stopped.
 
 ## Status state machine
 
@@ -66,7 +73,8 @@ the order is load-bearing; later steps assume earlier ones:
    object; a stale term fails the whole `Start`). Or `StandbyService::Start()`.
 8. `Shard::Start()` for each shard — spawns worker threads (normal build) or
    marks shards runnable (module build).
-9. Module build only: register `EloqStoreModule` and notify workers.
+9. Module build only: join the process's `EloqStoreModule` (`AddStore`; the
+   first store to join registers the module with brpc) and notify workers.
 10. Start `ArchiveCrond` if `data_append_mode && num_retained_archives > 0 &&
     archive_interval_secs > 0`.
 11. Start `PrewarmService` if `prewarm_cloud_cache` and mode is Cloud.
@@ -85,7 +93,9 @@ state:
 2. Stop `PrewarmService`, then `ArchiveCrond` (background request *sources*
    stop before request *executors*).
 3. Module build: flag shards `Stopping`, wait until each reports `Stopped`,
-   unregister the module.
+   then leave the module (`RemoveStore`, which waits until no worker is still
+   running one of the store's shards). The module stays registered for the
+   process's other stores.
 4. `Shard::Stop()` for each shard — joins the worker thread; the thread's exit
    path runs `TaskManager::Shutdown()` then `PageManager::Shutdown()` then
    `io_mgr_->Stop()` *on the shard thread* (these structures assume

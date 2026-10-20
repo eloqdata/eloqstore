@@ -128,9 +128,14 @@ private:
                task_mgr_.NumActive() == 0 && io_mgr_->IsIdle() &&
                !io_mgr_->NeedPrewarm() && delayed_requests_.empty();
     }
+    /**
+     * @brief Binds this shard and its store to the calling thread (shard,
+     * eloq_store), for a brpc worker that runs it.
+     */
     void BindExtThd()
     {
         shard = this;
+        eloq_store = store_;
     }
 #endif
 

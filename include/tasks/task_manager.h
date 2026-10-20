@@ -2,8 +2,10 @@
 #pragma once
 
 #include <cassert>
+#include <deque>
 #include <limits>
 #include <memory>
+#include <type_traits>
 #include <vector>
 
 #include "tasks/background_write.h"
@@ -52,16 +54,28 @@ private:
     class TaskPool
     {
     public:
-        TaskPool(uint32_t size, bool allow_growth = true)
-            : init_pool_size_(size), allow_growth_(allow_growth)
+        /**
+         * @brief Builds the pool's initial tasks.
+         * @param size Number of tasks built now.
+         * @param allow_growth Whether GetTask builds another task when none is
+         * free.
+         * @param opts The store's options, given to the task types built with
+         * them (see MakeTask).
+         */
+        TaskPool(uint32_t size, bool allow_growth, const KvOptions *opts)
+            : opts_(opts), allow_growth_(allow_growth)
         {
-            if (size > 0)
+            for (uint32_t i = 0; i < size; i++)
             {
-                init_pool_ = std::make_unique<T[]>(size);
-                for (uint32_t i = 0; i < size; i++)
+                if constexpr (std::is_constructible_v<T, const KvOptions *>)
                 {
-                    FreeTask(&init_pool_[i]);
+                    init_pool_.emplace_back(opts_);
                 }
+                else
+                {
+                    init_pool_.emplace_back();
+                }
+                FreeTask(&init_pool_.back());
             }
         };
 
@@ -80,7 +94,7 @@ private:
             {
                 return nullptr;
             }
-            auto &task = ext_pool_.emplace_back(std::make_unique<T>());
+            auto &task = ext_pool_.emplace_back(MakeTask());
             return task.get();
         }
 
@@ -94,9 +108,9 @@ private:
         template <typename F>
         void ForEachTask(F &&visitor)
         {
-            for (uint32_t i = 0; i < init_pool_size_; ++i)
+            for (T &task : init_pool_)
             {
-                visitor(&init_pool_[i]);
+                visitor(&task);
             }
             for (auto &task : ext_pool_)
             {
@@ -108,14 +122,33 @@ private:
         {
             free_head_ = nullptr;
             ext_pool_.clear();
-            init_pool_.reset();
+            init_pool_.clear();
         }
 
     private:
-        std::unique_ptr<T[]> init_pool_{nullptr};
+        /**
+         * @brief Builds one task, with the store's options if its type takes
+         * them.
+         * @return The new task.
+         */
+        std::unique_ptr<T> MakeTask() const
+        {
+            if constexpr (std::is_constructible_v<T, const KvOptions *>)
+            {
+                return std::make_unique<T>(opts_);
+            }
+            else
+            {
+                return std::make_unique<T>();
+            }
+        }
+
+        const KvOptions *opts_;  ///< The store's options, for MakeTask.
+        /// The tasks built up front; a deque, so building one never moves
+        /// those already handed out.
+        std::deque<T> init_pool_;
         std::vector<std::unique_ptr<T>> ext_pool_;
         T *free_head_{nullptr};
-        uint32_t init_pool_size_{0};
         bool allow_growth_{true};
     };
 

@@ -15,7 +15,13 @@ namespace eloqstore
 class BatchWriteTask : public WriteTask
 {
 public:
-    BatchWriteTask();
+    /**
+     * @brief Builds an idle task.
+     * @param opts The store's options. Given rather than read through the
+     * thread's store binding: a shard builds its pooled tasks when it is
+     * constructed, on EloqStore::Start's caller, which binds no store.
+     */
+    explicit BatchWriteTask(const KvOptions *opts);
     TaskType Type() const override
     {
         return TaskType::BatchWrite;
