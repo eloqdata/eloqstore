@@ -12,10 +12,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: DoozyX/clang-format-lint-action@v0.18
+      - uses: actions/setup-python@v5
         with:
-          source: '.'
-          exclude: './external'
-          extensions: 'h,cpp,cc'
-          clangFormatVersion: 18 # default is 18.1.8
-          style: file
+          python-version: '3.x'
+
+      - name: Install pre-commit
+        run: python -m pip install pre-commit
+
+      - name: Check formatting
+        run: pre-commit run --all-files --show-diff-on-failure
