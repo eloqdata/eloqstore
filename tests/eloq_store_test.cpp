@@ -364,8 +364,16 @@ TEST_CASE("EloqStore runs alongside another store in the process",
 {
     auto first_dir = CreateTestDir("_two_stores_first");
     auto second_dir = CreateTestDir("_two_stores_second");
-    eloqstore::EloqStore first(CreateValidOptions(first_dir));
-    eloqstore::EloqStore second(CreateValidOptions(second_dir));
+    // Unlike the other cases here, this one runs tasks: CreateValidOptions'
+    // 8 KB coroutine stacks are too small for a write in a Debug build.
+    auto options = [](const fs::path &dir)
+    {
+        eloqstore::KvOptions opts = CreateValidOptions(dir);
+        opts.coroutine_stack_size = eloqstore::KvOptions{}.coroutine_stack_size;
+        return opts;
+    };
+    eloqstore::EloqStore first(options(first_dir));
+    eloqstore::EloqStore second(options(second_dir));
     REQUIRE(first.Start("main", 0) == eloqstore::KvError::NoError);
     REQUIRE(second.Start("main", 0) == eloqstore::KvError::NoError);
 
