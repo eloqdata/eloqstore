@@ -36,10 +36,11 @@ may run several stores (a data store service runs one per data shard it
 leads): a shard's thread binds its shard and store when its loop starts; under
 `ELOQ_MODULE_ENABLED` one module serves every store in the process, and worker
 `thd_id` runs shard `thd_id` of each store in turn, so
-`EloqStoreModule::Process` binds the shard it runs each time; and
-`Start` and `Stop` bind their store on the calling thread for their duration
-(`ScopedStoreBinding`), for the shard and io manager setup and teardown they
-run there.
+`EloqStoreModule::Process` binds the shard it runs each time. Only a thread
+doing a shard's work binds them. `Start` and `Stop` bind nothing: they run on
+the caller's thread (in an embedding, often a bthread, which can resume on
+another worker after a wait) and reach the store through `this`. `Start` adds
+the store to the module, and `Stop` removes it once its shards have stopped.
 
 ## Status state machine
 

@@ -224,7 +224,8 @@ void Shard::WorkLoop()
 void Shard::Start()
 {
 #ifdef ELOQ_MODULE_ENABLED
-    shard = this;
+    // No binding here: this runs on EloqStore::Start's caller, and a worker
+    // binds the shard each time it runs it (EloqStoreModule::Process).
     running_status_.store(ShardStatus::Running, std::memory_order_release);
 #else
     thd_ = std::thread([this] { WorkLoop(); });

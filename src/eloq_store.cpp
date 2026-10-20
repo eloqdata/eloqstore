@@ -658,9 +658,6 @@ KvError EloqStore::Start(std::string_view branch,
                          PartitonGroupId partition_group_id)
 {
     LOG(INFO) << "===Start eloqstore, branch: " << branch << ", term: " << term;
-    // Code reached from here (shard and io manager setup) reads this store
-    // through the thread's binding.
-    ScopedStoreBinding store_binding(this);
     if (!ValidateOptions(options_))
     {
         return KvError::InvalidArgs;
@@ -2258,9 +2255,6 @@ void EloqStore::ExecSyncOnAnyShard(KvRequest *req) const
 void EloqStore::Stop()
 {
     LOG(INFO) << "EloqStore stopping.";
-    // Teardown reached from here reads this store through the thread's
-    // binding.
-    ScopedStoreBinding store_binding(this);
     while (true)
     {
         Status current = status_.load(std::memory_order_acquire);

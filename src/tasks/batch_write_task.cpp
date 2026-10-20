@@ -18,10 +18,10 @@
 
 namespace eloqstore
 {
-BatchWriteTask::BatchWriteTask()
-    : idx_page_builder_(Options()), data_page_builder_(Options())
+BatchWriteTask::BatchWriteTask(const KvOptions *opts)
+    : idx_page_builder_(opts), data_page_builder_(opts)
 {
-    overflow_ptrs_.reserve(Options()->overflow_pointers * 4);
+    overflow_ptrs_.reserve(opts->overflow_pointers * 4);
 }
 
 KvError BatchWriteTask::SeekStack(std::string_view search_key)
