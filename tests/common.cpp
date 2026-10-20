@@ -31,7 +31,7 @@ eloqstore::EloqStore *InitStore(const eloqstore::KvOptions &opts)
 
     // EloqStore::Start() counts the *process-wide* `/proc/self/fd` and
     // subtracts it from `fd_limit`. When multiple test cases run in the
-    // same binary, glog log fds, minio HTTP sockets, catch2 internals, and
+    // same binary, glog log fds, S3 HTTP sockets, catch2 internals, and
     // any fd that hasn't fully drained from a prior store all accumulate
     // in /proc/self/fd. Tests that pick a tight `fd_limit` to exercise
     // LRU-eviction (e.g. persist's "simple/complex LRU for opened fd" with
