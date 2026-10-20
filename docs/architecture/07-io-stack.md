@@ -12,7 +12,7 @@ Source: `include/async_io_manager.h`, `src/async_io_manager.cpp`,
 `AsyncIoManager` is the shard-facing storage interface. One instance per
 shard, chosen by `AsyncIoManager::Instance` from the store mode:
 
-```
+```text
 AsyncIoManager (abstract: ReadPage/WritePage/ReadSegments/Manifest ops/...)
 ├── MemStoreMgr        store_path empty — pages and manifests in RAM (tests)
 └── IouringMgr         local filesystem over io_uring — the substrate
@@ -37,6 +37,35 @@ Responsibilities:
 - **Page I/O** — `ReadPage`/`ReadPages` (batched, into pool buffers, fixed
   reads when the buffer is registered), `WritePage`. `ConvFilePageId` splits a
   `FilePageId` into `(file_id, offset)` by `pages_per_file_shift`.
+- **Device rate budget** (`RateBudget`, see `docs/design/io_qos.md` M4) —
+  per-shard token buckets metering device **ops/sec** and **bytes/sec**,
+  refilled lazily from the shard TSC clock once per event-loop iteration
+  (`RefillAndWake` at the top of `Submit()`) and spent at the page-IO acquire
+  sites (`ReadPage`/`ReadPages` cost 1 op + one page of bytes; `WritePage` and
+  `SubmitMergedWrite` cost `WriteRateOps(bytes)` = `ceil(bytes /
+  rate_limit_io_unit)` ops + `bytes`; `fdatasync` 1 op). Admission is **debt**:
+  a task waits until the balance is positive, then subtracts its full cost
+  (may go negative), so the long-run rate is exact and an IO larger than the
+  bucket never deadlocks. There is **no completion-time release** — a rate
+  budget meters issuance, so tokens are spent by sending and only time (refill)
+  restores them. The budget is **partitioned by class**: foreground buckets
+  refill at `(100 − rate_bg_ratio)%`, background (background-task reads and all
+  write-path IO) at `rate_bg_ratio%`. Foreground may borrow background's idle
+  surplus (background never borrows); admission is peek-and-grant — the refill
+  charges the FIFO head's recorded cost before waking it. Per-disk limits
+  (`disk_rate_limit_iops`/`disk_rate_limit_mbps`, on by default) are divided
+  across shards (`× store paths / num_threads`). A separate optional
+  class-blind in-flight command window (`max_inflight_io`, off by default) is
+  the only occupancy-style cap and *does* release per CQE in `PollComplete`;
+  it charges 1 per page IO, `ceil(len / 256KB)` per merged write, and 1 per
+  batch fsync (`FdatasyncFiles`, tagged `BaseReqFsync` so the release can
+  tell them from exempt metadata ops). Other metadata, manifest, bulk
+  file/snapshot paths, and segment IO are exempt from both mechanisms.
+  `GetIoQosStats()` (also `EloqStore::GetIoQosStats(shard_id)`) exposes the
+  per-class rate counters (blocked count/us, admitted ops/bytes, borrowed ops)
+  and the window's in-flight/high-water/blocked gauges.
+  The M1/M2 count budgets (`IoBudget`, `max_inflight_read`/`bg_read_ratio`)
+  are **retired**; `max_inflight_write` now only sizes the write request pools.
 - **FD cache** — `LruFD` per (partition, `TypedFileId`), doubly-linked LRU
   bounded by the shard's fd budget; `EvictFD` closes idle descriptors.
   Open/close exclusion per FD via a coroutine `Mutex`. Data files open with

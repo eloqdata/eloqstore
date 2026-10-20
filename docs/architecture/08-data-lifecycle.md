@@ -67,6 +67,14 @@ user writes. Scheduled via shard pending-sets
 (`AddPendingCompact/TTL/FileGc/LocalGc`) which enqueue the embedded singleton
 requests in each `PendingWriteQueue`.
 
+All of these run as background tasks (`KvTask::IsBackground()`), so their
+data-page reads — compaction move batches in particular — and all their page
+writes are charged against the **background share** of the device rate budget
+(`rate_bg_ratio`, doc 07 / `docs/design/io_qos.md` M4) and cannot crowd out
+foreground reads at the device. A pure-write/compaction phase with no
+concurrent foreground reads therefore runs at `rate_bg_ratio` of the device
+rate by design (foreground does not lend to background).
+
 - **Compaction** (`Compact()`, append mode only): one `MakeCowRoot`; rewrite
   pass over under-utilized data files (live pages re-written to the tail,
   per-file utilization re-checked against `file_amplify_factor`), then over

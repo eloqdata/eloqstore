@@ -447,12 +447,10 @@ TEST_CASE("cloud reuse cache enforces budgets across restarts",
 
     CleanupStore(options);
 
-    auto store = std::make_unique<eloqstore::EloqStore>(options);
-    REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
-            eloqstore::KvError::NoError);
+    eloqstore::EloqStore *store = InitStore(options, /*cleanup=*/false);
 
     eloqstore::TableIdent tbl_id{"reuse-cache", 0};
-    MapVerifier writer(tbl_id, store.get());
+    MapVerifier writer(tbl_id, store);
     writer.SetAutoClean(false);
     writer.SetAutoValidate(false);
     writer.SetValueSize(64 << 10);
@@ -475,7 +473,7 @@ TEST_CASE("cloud reuse cache enforces budgets across restarts",
     store->Stop();
     REQUIRE(store->Start(eloqstore::MainBranchName, 0) ==
             eloqstore::KvError::NoError);
-    writer.SetStore(store.get());
+    writer.SetStore(store);
 
     WriteBatches(writer, next_key, entries_per_batch, batches_per_phase);
 
@@ -489,11 +487,11 @@ TEST_CASE("cloud reuse cache enforces budgets across restarts",
     store->Stop();
 
     // Tighten the budget to 20MB and verify restore trims/existing files and
-    // future writes respect the new limit.
+    // future writes respect the new limit. InitStore (cleanup=false) replaces
+    // the previous instance while keeping the cached files on disk.
     options.local_space_limit = 20ULL << 20;
-    auto trimmed_store = std::make_unique<eloqstore::EloqStore>(options);
-    REQUIRE(trimmed_store->Start("main", 0) == eloqstore::KvError::NoError);
-    writer.SetStore(trimmed_store.get());
+    eloqstore::EloqStore *trimmed_store = InitStore(options, /*cleanup=*/false);
+    writer.SetStore(trimmed_store);
 
     WriteBatches(writer, next_key, entries_per_batch, batches_per_phase / 2);
 
@@ -580,8 +578,7 @@ TEST_CASE("cloud startup restore removes empty idle partition directories",
 
     CleanupStore(options);
 
-    auto store = std::make_unique<eloqstore::EloqStore>(options);
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    eloqstore::EloqStore *store = InitStore(options, /*cleanup=*/false);
     store->Stop();
 
     const eloqstore::TableIdent tbl_id{"reuse_empty_idle", 0};
@@ -617,8 +614,7 @@ TEST_CASE("cloud startup restore removes partitions cleaned to empty",
 
     CleanupStore(options);
 
-    auto store = std::make_unique<eloqstore::EloqStore>(options);
-    REQUIRE(store->Start() == eloqstore::KvError::NoError);
+    eloqstore::EloqStore *store = InitStore(options, /*cleanup=*/false);
     store->Stop();
 
     const eloqstore::TableIdent tbl_id{"reuse_cleanup_idle", 0};

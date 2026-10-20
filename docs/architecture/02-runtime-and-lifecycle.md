@@ -105,9 +105,18 @@ state:
 - **Topology**: `num_threads` (shards), `fd_limit`, `io_queue_size`,
   `buffer_pool_size` (index-page cache per shard; data pages share it only if
   `enable_data_page_cache`), `root_meta_cache_size` (global RootMeta LRU).
-- **Write shaping**: `max_write_batch_pages`, `max_write_concurrency`,
+- **Write shaping**: `max_write_concurrency`,
   `write_buffer_size`/`write_buffer_ratio` (append-mode aggregation),
-  `manifest_limit` (snapshot-rotation threshold).
+  `manifest_limit` (snapshot-rotation threshold), `max_inflight_write`
+  (write request-pool sizing).
+  (`max_write_batch_pages` is deprecated and ignored.)
+- **IO QoS** (doc 07, `docs/design/io_qos.md` M4): `disk_rate_limit_iops`
+  /`disk_rate_limit_mbps` (per-disk device rate limit, on by default,
+  divided across shards), `rate_bg_ratio` (background share of the rate —
+  the tail-predictability policy knob), `rate_limit_burst_ms`,
+  `rate_limit_io_unit` (write ops quantum, minimum 4KB), and `max_inflight_io` (optional
+  class-blind in-flight command window). The former count budgets
+  `max_inflight_read`/`bg_read_ratio` are deprecated no-ops.
 - **Cloud**: `cloud_provider/endpoint/region/keys`, `local_space_limit` +
   `reserve_space_ratio` (cache budget), `max_cloud_concurrency`,
   `cloud_request_threads`, `allow_reuse_local_caches`, `prewarm_cloud_cache`.
