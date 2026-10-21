@@ -181,15 +181,15 @@ std::pair<RootMetaMgr::Handle, KvError> PageManager::FindRoot(
 
         meta->root_id_ = replayer.root_;
         meta->ttl_root_id_ = replayer.ttl_root_;
-        auto mapper = replayer.GetMapper(
-            this, &entry_tbl, IoMgr()->ProcessTerm(entry_tbl));
+        auto mapper =
+            replayer.GetMapper(this, &entry_tbl, IoMgr()->ProcessTerm());
         MappingSnapshot *mapping = mapper->GetMapping();
         meta->first_unflushed_fp_id_ =
             mapper->FilePgAllocator()->MaxFilePageId();
         meta->mapper_ = std::move(mapper);
         meta->mapping_snapshots_.insert(mapping);
-        auto seg_mapper = replayer.GetSegmentMapper(
-            this, &entry_tbl, IoMgr()->ProcessTerm(entry_tbl));
+        auto seg_mapper =
+            replayer.GetSegmentMapper(this, &entry_tbl, IoMgr()->ProcessTerm());
         if (seg_mapper != nullptr)
         {
             MappingSnapshot *seg_mapping = seg_mapper->GetMapping();
@@ -441,7 +441,7 @@ KvError PageManager::InstallEmptySnapshot(const TableIdent &tbl_ident,
 
     BranchManifestMetadata branch_metadata;
     branch_metadata.branch_name = IoMgr()->GetActiveBranch();
-    branch_metadata.term = IoMgr()->ProcessTerm(tbl_ident);
+    branch_metadata.term = IoMgr()->ProcessTerm();
     branch_metadata.file_ranges = {};
 
     ManifestBuilder manifest_builder;
@@ -508,7 +508,7 @@ KvError PageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
                         tbl_ident, DataFileKey(max_file_id), branch_name, term))
                 {
                     branch_name = IoMgr()->GetActiveBranch();
-                    term = IoMgr()->ProcessTerm(tbl_ident);
+                    term = IoMgr()->ProcessTerm();
                 }
                 KvError sync_err =
                     cloud_mgr->DownloadFile(tbl_ident,
@@ -601,8 +601,8 @@ KvError PageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
 
     auto [entry, inserted] = root_meta_mgr_.GetOrCreate(tbl_ident);
     RootMeta &meta = entry->meta_;
-    auto mapper = replayer.GetMapper(
-        this, &entry->tbl_id_, IoMgr()->ProcessTerm(tbl_ident));
+    auto mapper =
+        replayer.GetMapper(this, &entry->tbl_id_, IoMgr()->ProcessTerm());
     MappingSnapshot *mapping = mapper->GetMapping();
     meta.mapping_snapshots_.insert(mapping);
 
@@ -626,7 +626,7 @@ KvError PageManager::InstallExternalSnapshot(const TableIdent &tbl_ident,
     // persisted segment mapping (very-large values). Mirrors the load_meta
     // path in FindRoot.
     auto seg_mapper = replayer.GetSegmentMapper(
-        this, &entry->tbl_id_, IoMgr()->ProcessTerm(tbl_ident));
+        this, &entry->tbl_id_, IoMgr()->ProcessTerm());
 
     cow_meta = CowRootMeta();
     cow_meta.root_id_ = replayer.root_;

@@ -129,25 +129,17 @@ private:
      */
     bool AdmitRequest(KvRequest *req);
     /**
-     * @brief Gives a request that names no data store shard the shard its
-     * partition is bound to, so that the internal requests a shard creates for
-     * a partition (compaction, GC, reopen drivers) are counted and gated like
-     * the external ones.
-     * @param req The request.
-     */
-    void ResolveDsShard(KvRequest *req);
-    /**
-     * @brief Fails every request queued for a data store shard's partitions
-     * that has not started: pending writes, parked reopen waiters and delayed
-     * reopen drivers. Running tasks are left to finish.
+     * @brief Fails every request queued for a data store shard that has not
+     * started: pending writes, parked reopen waiters and delayed reopen
+     * drivers. Each request names its shard. Running tasks are left to finish.
      * @param ds_shard_id The shard.
      */
     void FailPendingRequestsOf(DsShardId ds_shard_id);
     /**
      * @brief Drops what this worker shard holds for a data store shard once
-     * no task runs on its partitions: in-memory root metas and cached pages,
-     * open files, local manifests, pending queues and the partition bindings.
-     * Runs in the detach task.
+     * no task runs for it: the root metas (with their index pages and
+     * mappers) and open files created by its tasks, their local manifests in
+     * cloud mode, and their pending queues. Runs in the detach task.
      * @param ds_shard_id The shard.
      * @return NoError, or the first error met; the state is dropped either way.
      */
@@ -189,22 +181,48 @@ private:
 
     uint64_t DurationMicroseconds(uint64_t start_us);
 
+    /**
+     * @brief Makes a task the running one: records it, publishes its data
+     * store shard and term to the thread (thd_ds_shard_id, thd_term) and
+     * marks the resume start for CurResumeElapsedUs. Every switch to a task
+     * goes through here, so the code the task runs reads the shard and term
+     * from the thread instead of looking them up.
+     * @param task The task about to run.
+     */
+    void SwitchToTask(KvTask *task)
+    {
+        running_ = task;
+        thd_ds_shard_id = task->ds_shard_id_;
+        thd_term = task->term_;
+        // Mark the resume start so a cooperative background loop measures this
+        // segment from now, not from the previously resumed task's timestamp
+        // (see CurResumeElapsedUs / MaybeYield).
+        cur_resume_start_us_ = ReadTimeMicroseconds();
+    }
+    /** @brief No task runs: clears what SwitchToTask published. */
+    void LeaveTask()
+    {
+        running_ = nullptr;
+        thd_ds_shard_id = kUnsetDsShard;
+        thd_term = 0;
+    }
+
     template <typename F>
     void StartTask(KvTask *task, KvRequest *req, F lbd)
     {
         task->req_ = req;
         task->result_err_ = KvError::NoError;
         task->status_ = TaskStatus::Ongoing;
-        if (req->DsShard() != kUnsetDsShard &&
-            req->Type() != RequestType::DetachShard)
+        // The request named its data store shard; the task takes the shard's
+        // term now, once, and carries both from here on.
+        task->ds_shard_id_ = req->DsShard();
+        task->term_ = store_->ShardTerm(task->ds_shard_id_);
+        if (task->ds_shard_id_ != kUnsetDsShard &&
+            task->Type() != TaskType::DetachShard)
         {
-            ++active_tasks_by_shard_[req->DsShard()];
+            ++active_tasks_by_shard_[task->ds_shard_id_];
         }
-        running_ = task;
-        // Mark the resume start so a cooperative background loop measures this
-        // first segment from now, not from the previously resumed task's
-        // timestamp (see CurResumeElapsedUs / MaybeYield).
-        cur_resume_start_us_ = ReadTimeMicroseconds();
+        SwitchToTask(task);
         task->coro_ = boost::context::callcc(
             std::allocator_arg,
             stack_allocator_,
@@ -234,7 +252,7 @@ private:
                 task->status_ = TaskStatus::Finished;
                 return std::move(shard->main_);
             });
-        running_ = nullptr;
+        LeaveTask();
         if (task->status_ == TaskStatus::Finished)
         {
             OnTaskFinished(task);
@@ -324,8 +342,9 @@ private:
     std::vector<DelayedEntry> delayed_requests_;
 
     /**
-     * Tasks running per data store shard, kept by StartTask and
-     * OnTaskFinished. A detach task waits for its shard's count to reach 0.
+     * Tasks running per data store shard (KvTask::ds_shard_id_), kept by
+     * StartTask and OnTaskFinished. A detach task waits for its shard's count
+     * to reach 0.
      */
     std::unordered_map<DsShardId, uint32_t> active_tasks_by_shard_;
     /**

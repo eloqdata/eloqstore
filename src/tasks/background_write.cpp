@@ -526,8 +526,7 @@ KvError BackgroundWrite::CreateArchive(std::string_view tag)
         // Partitions without manifest files (e.g., only term files) are
         // normal, archive is considered complete.
         DLOG(INFO) << "CreateArchive is skipped, table=" << tbl_ident_
-                   << ", term=" << IoMgr()->ProcessTerm(tbl_ident_)
-                   << ", tag=" << tag;
+                   << ", term=" << IoMgr()->ProcessTerm() << ", tag=" << tag;
         return KvError::NoError;
     }
     CHECK_KV_ERR(err);
@@ -565,7 +564,7 @@ KvError BackgroundWrite::CreateArchive(std::string_view tag)
     // Archive snapshot carries BranchManifestMetadata and the segment mapping.
     BranchManifestMetadata branch_metadata;
     branch_metadata.branch_name = std::string(IoMgr()->GetActiveBranch());
-    branch_metadata.term = IoMgr()->ProcessTerm(tbl_ident_);
+    branch_metadata.term = IoMgr()->ProcessTerm();
     branch_metadata.file_ranges = IoMgr()->GetBranchFileMapping(tbl_ident_);
 
     MappingSnapshot *seg_mapping =
@@ -593,9 +592,9 @@ KvError BackgroundWrite::CreateArchive(std::string_view tag)
     }
 
     DLOG(INFO) << "CreateArchive begin, table=" << tbl_ident_
-               << ", term=" << IoMgr()->ProcessTerm(tbl_ident_)
-               << ", tag=" << tag << ", root=" << root
-               << ", ttl_root=" << ttl_root << ", max_fp_id=" << max_fp_id
+               << ", term=" << IoMgr()->ProcessTerm() << ", tag=" << tag
+               << ", root=" << root << ", ttl_root=" << ttl_root
+               << ", max_fp_id=" << max_fp_id
                << ", snapshot_bytes=" << snapshot.size();
     err = IoMgr()->CreateArchive(tbl_ident_,
                                  branch_metadata.branch_name,
@@ -604,8 +603,7 @@ KvError BackgroundWrite::CreateArchive(std::string_view tag)
                                  tag);
     CHECK_KV_ERR(err);
     DLOG(INFO) << "CreateArchive done, table=" << tbl_ident_
-               << ", term=" << IoMgr()->ProcessTerm(tbl_ident_)
-               << ", tag=" << tag;
+               << ", term=" << IoMgr()->ProcessTerm() << ", tag=" << tag;
 
     LOG(INFO) << "created archive for partition " << tbl_ident_ << " with tag "
               << tag;

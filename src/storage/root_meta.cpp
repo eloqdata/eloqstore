@@ -224,9 +224,22 @@ std::pair<RootMetaMgr::Entry *, bool> RootMetaMgr::GetOrCreate(
         entry->prev_ = nullptr;
         entry->next_ = nullptr;
         entry->bytes_ = 0;
+        entry->ds_shard_id_ = ThdDsShard();
         EnqueueFront(entry);
     }
     return {entry, inserted};
+}
+
+void RootMetaMgr::CollectTablesOf(DsShardId ds_shard_id,
+                                  std::vector<TableIdent> &tables) const
+{
+    for (const auto &[tbl_id, entry] : entries_)
+    {
+        if (entry.ds_shard_id_ == ds_shard_id)
+        {
+            tables.push_back(tbl_id);
+        }
+    }
 }
 
 RootMetaMgr::Entry *RootMetaMgr::FindNoErase(const TableIdent &tbl_id)

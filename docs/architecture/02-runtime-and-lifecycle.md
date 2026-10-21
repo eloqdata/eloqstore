@@ -63,13 +63,18 @@ disk has one owner.
   shard is Attached; an Expired shard fails it with `ExpiredTerm`, any other
   state refuses it (`NotRunning`). The worker shard checks again when it
   dequeues the request (`Shard::AdmitRequest`), so a detach that started in
-  between still refuses it, and binds the request's partition to the shard
-  (`AsyncIoManager::BindPartition`).
-- **Terms are per partition.** Every site that names a file or fences a
-  manifest asks `AsyncIoManager::ProcessTerm(tbl_id)`: the term of the data
-  store shard the partition is bound to, read from the table. Background
-  work on a partition (compaction, GC, internal reopen drivers) inherits the
-  shard through the binding (`Shard::ResolveDsShard`).
+  between still refuses it.
+- **Terms travel with the task.** When a task starts (`Shard::StartTask`) it
+  copies the request's shard id and reads the shard's term from the table
+  once (`KvTask::ds_shard_id_`, `KvTask::term_`). Every switch to a task
+  (`Shard::SwitchToTask`) publishes both to the thread (`thd_ds_shard_id`,
+  `thd_term`), and `AsyncIoManager::ProcessTerm()` returns the thread's term:
+  no lookup by partition anywhere. The internal requests a task queues for
+  its partition (compaction, file GC, local GC, TTL cleaning, the reopen
+  driver behind parked waiters) are stamped with the task's shard, so they
+  are gated and counted like external ones and run in the same term. The fd
+  syncs that a file eviction runs from another shard's task name a manifest
+  by the fd's own term, as data files always were.
 - **`AttachShard(id, term)`** (cloud mode): raises the shard's term file
   `CURRENT_TERM_<branch>_<id>` with a compare-and-swap
   (`CloudStorageService::UpsertTermFile`, run on the first request thread and
@@ -85,9 +90,13 @@ disk has one owner.
   queued for the shard's partitions (pending writes, parked reopen waiters,
   delayed reopen drivers), blocks until no task runs on them (the task that
   brings `active_tasks_by_shard_` to 0 resumes it), then `EvictDsShard` drops
-  their root metas and cached pages, closes their files, drops their local
-  manifests (cloud mode) and forgets their bindings. The cached copies of
-  sealed data files stay: they never change, and a later attach reuses them.
+  their root metas and cached pages, closes their files and drops their local
+  manifests (cloud mode). It finds the partitions without a lookup table:
+  a root meta (`RootMetaMgr::Entry`) and a partition's open-file table
+  (`IouringMgr::PartitionFiles`) record the shard of the task that created
+  them, and the detach walks both. The cached copies of data files stay:
+  a later term starts a new file, so no file of an older term changes, and a
+  later attach reuses them.
 - **`Stop()`** drops everything wholesale and resets the table.
 - **`Start(branch, term, id)`** is `StartInstance(branch)` followed by
   `AttachShard(id, term)`, for embedders that host one shard; a failed attach

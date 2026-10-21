@@ -513,61 +513,15 @@ public:
     }
 
     /**
-     * @brief The term a partition's files are written in: the term of the
-     * data store shard the partition is bound to (BindPartition), read from
-     * the store's shard table. 0 in local mode and for an unbound partition
-     * when no shard is attached.
-     *
-     * @param tbl_id The partition.
+     * @brief The term new files and manifests are named with and manifests
+     * are fenced against: the term of the running task's data store shard,
+     * read from the thread (thd_term), which the worker shard sets at every
+     * switch to a task. 0 in local mode and outside a task.
      * @return The term.
      */
-    uint64_t ProcessTerm(const TableIdent &tbl_id) const;
-
-    /**
-     * @brief Records which data store shard a partition is served for. Set by
-     * the worker shard for every request's partition before the request runs,
-     * so the partition's later work (background writes, GC) finds its term.
-     *
-     * @param tbl_id The partition.
-     * @param ds_shard_id The data store shard.
-     */
-    void BindPartition(const TableIdent &tbl_id, DsShardId ds_shard_id)
+    uint64_t ProcessTerm() const
     {
-        // On every request: a lookup, and a write only when the binding
-        // changes (first request, or the partition's shard changed).
-        auto [it, inserted] =
-            partition_shards_.try_emplace(tbl_id, ds_shard_id);
-        if (!inserted && it->second != ds_shard_id)
-        {
-            it->second = ds_shard_id;
-        }
-    }
-    /**
-     * @param tbl_id The partition.
-     * @return The data store shard the partition is bound to, or the store's
-     * default shard (kUnsetDsShard if none) when it is unbound.
-     */
-    DsShardId DsShardOf(const TableIdent &tbl_id) const;
-    /**
-     * @brief Forgets what the manager keeps in memory for a partition its
-     * data store shard let go: the shard binding, and in managers that keep
-     * one, the partition's branch file mapping. Files are closed separately
-     * (CloseTableFiles).
-     * @param tbl_id The partition.
-     */
-    virtual void ForgetPartition(const TableIdent &tbl_id)
-    {
-        partition_shards_.erase(tbl_id);
-    }
-    /**
-     * @param ds_shard_id The data store shard.
-     * @return The partitions bound to it on this worker shard.
-     */
-    std::vector<TableIdent> PartitionsOf(DsShardId ds_shard_id) const;
-    /** @brief Lets the manager read the store's shard table. */
-    void SetStore(const EloqStore *store)
-    {
-        store_ = store;
+        return ThdTerm();
     }
 
     virtual std::string_view GetActiveBranch() const
@@ -576,13 +530,6 @@ public:
     }
 
     std::atomic<bool> store_stopping_{false};
-    /** The store this manager serves; set by Instance. */
-    const EloqStore *store_{nullptr};
-    /**
-     * Which data store shard each partition this worker shard has served is
-     * bound to. Read on the worker shard only.
-     */
-    absl::flat_hash_map<TableIdent, DsShardId> partition_shards_;
 
     virtual void SetActiveBranch(std::string_view branch)
     {
@@ -732,11 +679,14 @@ public:
      * @return NoError, or the first close error.
      */
     KvError CloseTableFiles(const TableIdent &tbl_id);
-    void ForgetPartition(const TableIdent &tbl_id) override
-    {
-        branch_file_mapping_.erase(tbl_id);
-        AsyncIoManager::ForgetPartition(tbl_id);
-    }
+    /**
+     * @brief Appends the partitions with a file open for a data store shard
+     * (PartitionFiles::ds_shard_id_), for the shard's detach.
+     * @param ds_shard_id The data store shard.
+     * @param[out] tables Receives the partitions.
+     */
+    void CollectTablesOf(DsShardId ds_shard_id,
+                         std::vector<TableIdent> &tables) const;
 
     /**
      * @brief Get the number of currently open file descriptors.
@@ -876,6 +826,13 @@ public:
     public:
         const TableIdent *tbl_id_ = nullptr;
         std::unordered_map<TypedFileId, LruFD> fds_;
+        /**
+         * The data store shard the files are open for: taken from the first
+         * task with a shard that opens one of them (a prewarm opens files for
+         * no shard). A detach of that shard closes them. The entry goes with
+         * its last file, so a later owner of the partition starts afresh.
+         */
+        DsShardId ds_shard_id_{kUnsetDsShard};
     };
 
     class Manifest : public ManifestFile
@@ -1022,6 +979,18 @@ public:
         uint64_t term,
         bool skip_cloud_lookup = false);
     bool EvictFD();
+    /**
+     * @brief Gives a partition's open files to the running task's data store
+     * shard if they belong to none yet (see PartitionFiles::ds_shard_id_).
+     * @param tbl The partition's files.
+     */
+    static void ClaimTable(PartitionFiles &tbl)
+    {
+        if (tbl.ds_shard_id_ == kUnsetDsShard)
+        {
+            tbl.ds_shard_id_ = ThdDsShard();
+        }
+    }
 
     class WriteReqPool
     {

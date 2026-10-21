@@ -10,6 +10,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -83,8 +84,8 @@ Shard::Shard(EloqStore *store, size_t shard_id, uint32_t fd_limit)
 KvError Shard::Init()
 {
     // Inject the active branch into the IO manager before any file operation.
-    // Terms are per data store shard: the manager reads them from the store's
-    // shard table for the partition at hand (AsyncIoManager::ProcessTerm).
+    // Terms are per data store shard: each task carries its shard's term and
+    // the manager reads the running task's (AsyncIoManager::ProcessTerm).
     if (io_mgr_ != nullptr)
     {
         std::string_view branch =
@@ -312,6 +313,9 @@ void Shard::EnqueueReopenWaiter(KvRequest *req)
 
     ReopenRequest *reopen_req = state.DriverRequest();
     reopen_req->SetArgs(tbl_id);
+    // The driver works for the waiter's data store shard, so it is counted
+    // and gated like the waiter.
+    reopen_req->SetDsShard(req->DsShard());
     reopen_req->SetTag("");
     reopen_req->SetClean(false);
     reopen_req->SetPendingTime(store_->Options().auto_reopen_pending_time_us);
@@ -404,6 +408,8 @@ void Shard::AddPendingCompact(const TableIdent &tbl_id)
     PendingWriteQueue &pending_q = it->second;
     CompactRequest &req = pending_q.compact_req_;
     req.SetTableId(tbl_id);
+    // Queued by a task of the partition's data store shard: work for it too.
+    req.SetDsShard(ThdDsShard());
 #ifdef ELOQ_MODULE_ENABLED
     {
         std::lock_guard<bthread::Mutex> lk(req.mutex_);
@@ -452,6 +458,7 @@ bool Shard::TryAddFileGc(const TableIdent &tbl_id)
     }
 #endif
     req.SetTableId(tbl_id);
+    req.SetDsShard(ThdDsShard());
     pending_q.PushBack(&req);
     return true;
 }
@@ -465,6 +472,7 @@ void Shard::AddPendingTTL(const TableIdent &tbl_id)
     PendingWriteQueue &pending_q = it->second;
     CleanExpiredRequest &req = pending_q.expire_req_;
     req.SetTableId(tbl_id);
+    req.SetDsShard(ThdDsShard());
 #ifdef ELOQ_MODULE_ENABLED
     {
         std::lock_guard<bthread::Mutex> lk(req.mutex_);
@@ -513,6 +521,7 @@ bool Shard::TryAddLocalGc(const TableIdent &tbl_id)
     }
 #endif
     req.SetTableId(tbl_id);
+    req.SetDsShard(ThdDsShard());
     pending_q.PushBack(&req);
     return true;
 }
@@ -559,16 +568,9 @@ void Shard::OnReceivedReq(KvRequest *req)
         (void) ProcessReq(req);
         return;
     }
-    ResolveDsShard(req);
     if (!AdmitRequest(req))
     {
         return;
-    }
-    if (req->DsShard() != kUnsetDsShard && req->TableId().IsValid())
-    {
-        // The partition's later work (background writes, GC, the term its
-        // files are named with) finds its data store shard through this.
-        io_mgr_->BindPartition(req->TableId(), req->DsShard());
     }
 
     if (req->Reopen())
@@ -616,7 +618,6 @@ void Shard::TryStartPendingWrite(const TableIdent &tbl_id)
         // A request queued for a partition whose data store shard has been
         // detached or has expired since is failed here, and the next one is
         // tried. The embedded internal requests just become done again.
-        ResolveDsShard(req);
         if (!AdmitRequest(req))
         {
             continue;
@@ -679,21 +680,17 @@ bool Shard::AdmitRequest(KvRequest *req)
     return false;
 }
 
-void Shard::ResolveDsShard(KvRequest *req)
-{
-    if (req->DsShard() == kUnsetDsShard && req->TableId().IsValid())
-    {
-        req->SetDsShard(io_mgr_->DsShardOf(req->TableId()));
-    }
-}
-
 void Shard::FailPendingRequestsOf(DsShardId ds_shard_id)
 {
-    // Pending writes, including the embedded internal requests.
+    // Pending writes, including the embedded internal requests. A partition
+    // has one owner at a time, so its queue holds one shard's requests: the
+    // front one tells. A queue with a running task is left to that task's
+    // OnTaskFinished, whose dispatch refuses the rest.
     std::vector<TableIdent> tables;
-    for (const auto &[tbl_id, _] : pending_queues_)
+    for (auto &[tbl_id, pending_q] : pending_queues_)
     {
-        if (io_mgr_->DsShardOf(tbl_id) == ds_shard_id)
+        if (!pending_q.running_ && !pending_q.Empty() &&
+            pending_q.Front()->DsShard() == ds_shard_id)
         {
             tables.push_back(tbl_id);
         }
@@ -701,7 +698,7 @@ void Shard::FailPendingRequestsOf(DsShardId ds_shard_id)
     for (const TableIdent &tbl_id : tables)
     {
         // TryStartPendingWrite refuses every queued request (AdmitRequest)
-        // and erases the queue unless a task still runs on the partition.
+        // and erases the emptied queue.
         TryStartPendingWrite(tbl_id);
     }
 
@@ -710,7 +707,7 @@ void Shard::FailPendingRequestsOf(DsShardId ds_shard_id)
     // fails the waiters then (the resubmission is refused by the gate).
     for (auto it = pending_reopens_.begin(); it != pending_reopens_.end();)
     {
-        if (io_mgr_->DsShardOf(it->first) != ds_shard_id)
+        if (it->second.DriverRequest()->DsShard() != ds_shard_id)
         {
             ++it;
             continue;
@@ -734,7 +731,7 @@ void Shard::FailPendingRequestsOf(DsShardId ds_shard_id)
     const size_t before = delayed_requests_.size();
     std::erase_if(delayed_requests_,
                   [&](const DelayedEntry &entry)
-                  { return io_mgr_->DsShardOf(entry.tbl_id) == ds_shard_id; });
+                  { return entry.request->DsShard() == ds_shard_id; });
     if (delayed_requests_.size() != before)
     {
         std::make_heap(delayed_requests_.begin(),
@@ -757,9 +754,25 @@ KvError Shard::EvictDsShard(DsShardId ds_shard_id)
             first_err = err;
         }
     };
+    // The partitions this worker shard holds state for: those with a root
+    // meta or an open file created by one of the shard's tasks (each records
+    // the shard at creation). The root meta may have been evicted while files
+    // stayed open, or the other way round, so both are walked.
+    std::vector<TableIdent> partitions;
+    index_mgr_.RootMetaManager()->CollectTablesOf(ds_shard_id, partitions);
     const bool has_files = !store_->Options().store_path.empty();
-    for (const TableIdent &tbl_id : io_mgr_->PartitionsOf(ds_shard_id))
+    if (has_files)
     {
+        static_cast<IouringMgr *>(io_mgr_.get())
+            ->CollectTablesOf(ds_shard_id, partitions);
+    }
+    std::unordered_set<TableIdent> seen;
+    for (const TableIdent &tbl_id : partitions)
+    {
+        if (!seen.insert(tbl_id).second)
+        {
+            continue;
+        }
         auto reopen_it = pending_reopens_.find(tbl_id);
         if (reopen_it != pending_reopens_.end())
         {
@@ -795,7 +808,6 @@ KvError Shard::EvictDsShard(DsShardId ds_shard_id)
         }
         // No task runs on the partition, so no root meta is pinned.
         index_mgr_.RootMetaManager()->Erase(tbl_id);
-        io_mgr_->ForgetPartition(tbl_id);
     }
     return first_err;
 }
@@ -1236,10 +1248,7 @@ bool Shard::ExecuteReadyTasks()
         KvTask *task = ready_tasks_.Peek();
         ready_tasks_.Dequeue();
         assert(task->status_ == TaskStatus::Ongoing);
-        running_ = task;
-        // Mark the resume start so cooperative background loops can measure how
-        // long they have held the worker via CurResumeElapsedUs().
-        cur_resume_start_us_ = ReadTimeMicroseconds();
+        SwitchToTask(task);
         task->coro_ = task->coro_.resume();
         if (task->status_ == TaskStatus::Finished)
         {
@@ -1257,8 +1266,7 @@ bool Shard::ExecuteReadyTasks()
         KvTask *task = low_priority_ready_tasks_.Peek();
         low_priority_ready_tasks_.Dequeue();
         task->status_ = TaskStatus::Ongoing;
-        running_ = task;
-        cur_resume_start_us_ = ReadTimeMicroseconds();
+        SwitchToTask(task);
         task->coro_ = task->coro_.resume();
         if (task->status_ == TaskStatus::Finished)
         {
@@ -1271,7 +1279,7 @@ bool Shard::ExecuteReadyTasks()
     }
 
 finish:
-    running_ = nullptr;
+    LeaveTask();
     return busy;
 }
 
@@ -1339,8 +1347,8 @@ void Shard::OnTaskFinished(KvTask *task)
         }
     }
 
-    const DsShardId req_shard = req->DsShard();
-    if (req_shard != kUnsetDsShard && req->Type() != RequestType::DetachShard)
+    const DsShardId req_shard = task->ds_shard_id_;
+    if (req_shard != kUnsetDsShard && task_type != TaskType::DetachShard)
     {
         auto active_it = active_tasks_by_shard_.find(req_shard);
         CHECK(active_it != active_tasks_by_shard_.end() &&
