@@ -336,7 +336,18 @@ int KvOptions::LoadFromIni(const char *path)
         std::string value_str =
             reader.Get(sec_permanent, "data_page_size", "4KB");
         uint64_t parsed_size = ParseSizeWithUnit(value_str);
-        data_page_size = (parsed_size > 0) ? parsed_size : (1 << 12);
+        // data_page_size is a uint16 field, so anything at/above 64KB would
+        // silently truncate: 64KB -> 0 (SIGFPE on the divisions below and in
+        // PageManager), 68KB -> 4KB. Reject out-of-range values instead of
+        // corrupting the config or crashing at startup.
+        if (parsed_size == 0 ||
+            parsed_size > std::numeric_limits<uint16_t>::max())
+        {
+            LOG(ERROR) << "Invalid data_page_size '" << value_str
+                       << "': must be non-zero and below 64KB (uint16)";
+            return -3;
+        }
+        data_page_size = static_cast<uint16_t>(parsed_size);
     }
     if (reader.HasValue(sec_permanent, "data_file_size"))
     {
