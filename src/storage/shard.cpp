@@ -705,6 +705,7 @@ void Shard::FailPendingRequestsOf(DsShardId ds_shard_id)
     // Reopen states whose driver is not running: fail the waiters and drop the
     // state. A running driver keeps its state until OnTaskFinished, which
     // fails the waiters then (the resubmission is refused by the gate).
+    std::unordered_set<TableIdent> reopen_tables;
     for (auto it = pending_reopens_.begin(); it != pending_reopens_.end();)
     {
         if (it->second.DriverRequest()->DsShard() != ds_shard_id)
@@ -712,6 +713,7 @@ void Shard::FailPendingRequestsOf(DsShardId ds_shard_id)
             ++it;
             continue;
         }
+        reopen_tables.insert(it->first);
         auto queue_it = pending_queues_.find(it->first);
         const bool driver_running =
             queue_it != pending_queues_.end() && queue_it->second.running_;
@@ -728,10 +730,14 @@ void Shard::FailPendingRequestsOf(DsShardId ds_shard_id)
     }
 
     // Delayed internal drivers of those partitions: their states are gone.
+    // Matched by table, never through the request pointer: a delayed entry
+    // can outlive its driver (an external reopen replaces the embedded one,
+    // and the erase above destroys it), as PromoteReadyDelayedReopenRequests
+    // allows for too.
     const size_t before = delayed_requests_.size();
     std::erase_if(delayed_requests_,
                   [&](const DelayedEntry &entry)
-                  { return entry.request->DsShard() == ds_shard_id; });
+                  { return reopen_tables.contains(entry.tbl_id); });
     if (delayed_requests_.size() != before)
     {
         std::make_heap(delayed_requests_.begin(),
@@ -797,6 +803,14 @@ KvError Shard::EvictDsShard(DsShardId ds_shard_id)
                 tbl_id.StorePath(store_->Options().store_path,
                                  store_->Options().store_path_lut),
                 ec);
+            if (ec)
+            {
+                // Not "no such directory", which clears ec: the manifest is
+                // left where it is, and the detach reports it.
+                LOG(WARNING) << "EvictDsShard: cannot stat the directory of "
+                             << tbl_id << ": " << ec.message();
+                note(ToKvError(ec.value()));
+            }
             if (store_->Mode() == StoreMode::Cloud && has_dir)
             {
                 // The manifest may be advanced by the next owner; the sealed

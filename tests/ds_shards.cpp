@@ -75,6 +75,28 @@ bool Contains(const std::vector<std::string> &names, const std::string &name)
     return std::find(names.begin(), names.end(), name) != names.end();
 }
 
+/**
+ * @brief Stops and joins a test's worker thread on every exit path, so that a
+ * failed REQUIRE unwinds past the thread instead of terminating the process
+ * on a joinable one. Declare it after the store, so it goes first.
+ */
+struct ThreadJoiner
+{
+    std::thread &thread_;
+    std::atomic<bool> *stop_;
+    ~ThreadJoiner()
+    {
+        if (stop_ != nullptr)
+        {
+            stop_->store(true);
+        }
+        if (thread_.joinable())
+        {
+            thread_.join();
+        }
+    }
+};
+
 /** @brief "k" followed by @p i zero-padded to three digits. */
 std::string PaddedKey(int i)
 {
@@ -231,11 +253,13 @@ TEST_CASE("detaching a data store shard drains its running requests",
     }
     REQUIRE(Write(&store, 2, kPartitionB, "b", "vb") == KvError::NoError);
 
-    // Reads of shard 1 keep arriving while it is detached. Every one of them
-    // completes, either served or refused; none hangs.
-    constexpr int kReads = 2000;
+    // Reads of shard 1 keep arriving until the gate refuses one, which the
+    // detach below makes it do. Every one of them completes, either served
+    // or refused; none hangs.
+    constexpr int kMaxReads = 20000;
     std::vector<std::unique_ptr<eloqstore::ReadRequest>> reads;
-    reads.reserve(kReads);
+    reads.reserve(kMaxReads);
+    std::atomic<int> submitted{0};
     std::atomic<int> completed{0};
     std::atomic<int> served{0};
     std::atomic<int> refused{0};
@@ -259,33 +283,39 @@ TEST_CASE("detaching a data store shard drains its running requests",
     std::thread reader(
         [&]
         {
-            for (int i = 0; i < kReads; ++i)
+            for (int i = 0; i < kMaxReads; ++i)
             {
                 auto req = std::make_unique<eloqstore::ReadRequest>();
                 req->SetDsShard(1);
                 req->SetArgs(kPartitionA, "k" + std::to_string(i % 200));
-                if (!store.ExecAsyn(req.get(), 0, on_done))
+                ++submitted;
+                const bool accepted = store.ExecAsyn(req.get(), 0, on_done);
+                reads.push_back(std::move(req));
+                if (!accepted)
                 {
-                    // Refused at the gate: nothing will call back.
+                    // Refused at the gate: nothing will call back, and the
+                    // detach has begun.
                     ++refused;
                     ++completed;
+                    break;
                 }
-                reads.push_back(std::move(req));
             }
         });
+    ThreadJoiner join_reader{reader, nullptr};
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
     REQUIRE(store.DetachShard(1) == KvError::NoError);
     reader.join();
+    const int total = submitted.load();
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(30);
-    while (completed.load() < kReads &&
+    while (completed.load() < total &&
            std::chrono::steady_clock::now() < deadline)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
-    REQUIRE(completed.load() == kReads);
+    REQUIRE(completed.load() == total);
     REQUIRE(other.load() == 0);
-    REQUIRE(served.load() + refused.load() == kReads);
+    REQUIRE(served.load() + refused.load() == total);
     REQUIRE(refused.load() > 0);
 
     // The other shard was never disturbed, and the detached one comes back.
@@ -359,6 +389,8 @@ TEST_CASE("detaching a data store shard waits for its background work",
                 }
             }
         });
+
+    ThreadJoiner join_writer{writer, &stop};
 
     // Detach and re-attach the shard under the storm, each time at a newer
     // term: each detach meets writes, compactions and file GC queued or in

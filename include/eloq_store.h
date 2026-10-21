@@ -1199,7 +1199,12 @@ private:
      * written by AttachShard, DetachShard and MarkShardExpired.
      */
     std::array<DsShardSlot, kMaxDsShards> ds_shards_;
-    /** Serializes AttachShard and DetachShard against each other and Stop. */
+    /**
+     * Serializes the table's transitions between AttachShard, DetachShard
+     * and Stop. Never held across their waits: a caller may be a bthread, and
+     * blocking its pthread on the mutex would stall the worker shard that
+     * pthread runs in module builds.
+     */
     std::mutex ds_shard_mux_;
     std::atomic<DsShardId> default_ds_shard_{kUnsetDsShard};
     std::string branch_{MainBranchName};

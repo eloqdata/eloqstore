@@ -924,41 +924,55 @@ KvError EloqStore::AttachShard(DsShardId ds_shard_id, uint64_t term)
                    << " is out of range";
         return KvError::InvalidArgs;
     }
-    std::lock_guard<std::mutex> lk(ds_shard_mux_);
-    if (status_.load(std::memory_order_acquire) != Status::Running)
-    {
-        return KvError::NotRunning;
-    }
     const StoreMode mode = Mode();
-    if (mode != StoreMode::Cloud)
-    {
-        // Data on a node's own disk has one owner: one shard at a time.
-        for (DsShardId hosted : HostedShards())
-        {
-            if (hosted != ds_shard_id)
-            {
-                LOG(ERROR) << "AttachShard: data store shard " << hosted
-                           << " is attached, and only cloud mode hosts "
-                              "several";
-                return KvError::InvalidArgs;
-            }
-        }
-    }
-    DsShardSlot &slot = ds_shards_[ds_shard_id];
-    DsShardState expected = DsShardState::Detached;
-    if (!slot.state_.compare_exchange_strong(
-            expected, DsShardState::Attaching, std::memory_order_acq_rel))
-    {
-        LOG(ERROR) << "AttachShard: data store shard " << ds_shard_id
-                   << " is not detached (state " << static_cast<int>(expected)
-                   << ")";
-        return KvError::InvalidArgs;
-    }
     // Local mode has no terms.
     const uint64_t shard_term = mode == StoreMode::Local ? 0 : term;
-    slot.term_.store(shard_term, std::memory_order_release);
+    DsShardSlot &slot = ds_shards_[ds_shard_id];
+    {
+        // The table changes under the mutex; the wait below does not hold it,
+        // since a caller may be a bthread whose pthread also runs a worker
+        // shard in module builds, and another caller must not block that
+        // pthread on the mutex meanwhile.
+        std::lock_guard<std::mutex> lk(ds_shard_mux_);
+        if (status_.load(std::memory_order_acquire) != Status::Running)
+        {
+            return KvError::NotRunning;
+        }
+        if (mode != StoreMode::Cloud)
+        {
+            // Data on a node's own disk has one owner: one shard at a time,
+            // counting one being attached or detached.
+            for (size_t i = 0; i < kMaxDsShards; ++i)
+            {
+                if (i != ds_shard_id &&
+                    ds_shards_[i].state_.load(std::memory_order_acquire) !=
+                        DsShardState::Detached)
+                {
+                    LOG(ERROR) << "AttachShard: data store shard " << i
+                               << " is attached, and only cloud mode hosts "
+                                  "several";
+                    return KvError::InvalidArgs;
+                }
+            }
+        }
+        DsShardState expected = DsShardState::Detached;
+        if (!slot.state_.compare_exchange_strong(
+                expected, DsShardState::Attaching, std::memory_order_acq_rel))
+        {
+            LOG(ERROR) << "AttachShard: data store shard " << ds_shard_id
+                       << " is not detached (state "
+                       << static_cast<int>(expected) << ")";
+            return KvError::InvalidArgs;
+        }
+        slot.term_.store(shard_term, std::memory_order_release);
+    }
     LOG(INFO) << "Attaching data store shard " << ds_shard_id << " at term "
               << shard_term;
+    auto give_up = [&slot]()
+    {
+        slot.term_.store(0, std::memory_order_release);
+        slot.state_.store(DsShardState::Detached, std::memory_order_release);
+    };
     if (cloud_service_ != nullptr)
     {
         // Raise the shard's term file, or learn that a newer term holds it.
@@ -972,16 +986,23 @@ KvError EloqStore::AttachShard(DsShardId ds_shard_id, uint64_t term)
             LOG(ERROR) << "AttachShard: data store shard " << ds_shard_id
                        << " could not take term " << shard_term << ": "
                        << ErrorString(err);
-            slot.term_.store(0, std::memory_order_release);
-            slot.state_.store(DsShardState::Detached,
-                              std::memory_order_release);
+            give_up();
             return err;
         }
     }
-    DsShardId unset = kUnsetDsShard;
-    default_ds_shard_.compare_exchange_strong(
-        unset, ds_shard_id, std::memory_order_acq_rel);
-    slot.state_.store(DsShardState::Attached, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lk(ds_shard_mux_);
+        if (status_.load(std::memory_order_acquire) != Status::Running)
+        {
+            // Stop ran during the wait and reset the table.
+            give_up();
+            return KvError::NotRunning;
+        }
+        DsShardId unset = kUnsetDsShard;
+        default_ds_shard_.compare_exchange_strong(
+            unset, ds_shard_id, std::memory_order_acq_rel);
+        slot.state_.store(DsShardState::Attached, std::memory_order_release);
+    }
     if (prewarm_service_ != nullptr)
     {
         prewarm_service_->PrewarmShard(ds_shard_id);
@@ -997,24 +1018,29 @@ KvError EloqStore::DetachShard(DsShardId ds_shard_id)
                    << " is out of range";
         return KvError::InvalidArgs;
     }
-    std::lock_guard<std::mutex> lk(ds_shard_mux_);
     DsShardSlot &slot = ds_shards_[ds_shard_id];
-    switch (slot.state_.load(std::memory_order_acquire))
+    bool running;
     {
-    case DsShardState::Detached:
-        return KvError::NoError;
-    case DsShardState::Attaching:
-    case DsShardState::Detaching:
-        LOG(ERROR) << "DetachShard: data store shard " << ds_shard_id
-                   << " is being attached or detached";
-        return KvError::InvalidArgs;
-    default:
-        break;
+        // As in AttachShard: the mutex covers the table, not the wait.
+        std::lock_guard<std::mutex> lk(ds_shard_mux_);
+        switch (slot.state_.load(std::memory_order_acquire))
+        {
+        case DsShardState::Detached:
+            return KvError::NoError;
+        case DsShardState::Attaching:
+        case DsShardState::Detaching:
+            LOG(ERROR) << "DetachShard: data store shard " << ds_shard_id
+                       << " is being attached or detached";
+            return KvError::InvalidArgs;
+        default:
+            break;
+        }
+        // From here on the worker shards refuse the shard's requests.
+        slot.state_.store(DsShardState::Detaching, std::memory_order_release);
+        running = status_.load(std::memory_order_acquire) == Status::Running;
     }
-    // From here on the worker shards refuse the shard's requests.
-    slot.state_.store(DsShardState::Detaching, std::memory_order_release);
     LOG(INFO) << "Detaching data store shard " << ds_shard_id;
-    if (status_.load(std::memory_order_acquire) == Status::Running)
+    if (running)
     {
         // One request per worker shard, each completing once its shard holds
         // nothing of this one. A refused request means the store is stopping,
@@ -1053,11 +1079,14 @@ KvError EloqStore::DetachShard(DsShardId ds_shard_id)
             }
         }
     }
-    DsShardId me = ds_shard_id;
-    default_ds_shard_.compare_exchange_strong(
-        me, kUnsetDsShard, std::memory_order_acq_rel);
-    slot.term_.store(0, std::memory_order_release);
-    slot.state_.store(DsShardState::Detached, std::memory_order_release);
+    {
+        std::lock_guard<std::mutex> lk(ds_shard_mux_);
+        DsShardId me = ds_shard_id;
+        default_ds_shard_.compare_exchange_strong(
+            me, kUnsetDsShard, std::memory_order_acq_rel);
+        slot.term_.store(0, std::memory_order_release);
+        slot.state_.store(DsShardState::Detached, std::memory_order_release);
+    }
     LOG(INFO) << "Detached data store shard " << ds_shard_id;
     return KvError::NoError;
 }
@@ -2404,19 +2433,13 @@ bool EloqStore::SendRequest(KvRequest *req)
     switch (ShardState(req->ds_shard_id_))
     {
     case DsShardState::Attached:
-        break;
     case DsShardState::Expired:
-        req->err_ = KvError::NoError;
-#ifdef ELOQ_MODULE_ENABLED
-        {
-            std::lock_guard<bthread::Mutex> lk(req->mutex_);
-            req->done_ = false;
-        }
-#else
-        req->done_.store(false, std::memory_order_relaxed);
-#endif
-        req->SetDone(KvError::ExpiredTerm);
-        return true;
+        // An expired shard's request still goes to its worker shard, which
+        // fails it with ExpiredTerm there (Shard::AdmitRequest). Completing
+        // it here would run the caller's callback inside this call, which
+        // the fan-out schedulers do not expect: each would recurse into the
+        // next partition's submission.
+        break;
     default:
         return false;
     }
