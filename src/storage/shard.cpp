@@ -777,7 +777,14 @@ KvError Shard::EvictDsShard(DsShardId ds_shard_id)
         if (has_files)
         {
             auto *io_mgr = static_cast<IouringMgr *>(io_mgr_.get());
-            if (store_->Mode() == StoreMode::Cloud)
+            // A partition served only from the cloud, or one that was never
+            // found, has no local directory: nothing to drop there.
+            std::error_code ec;
+            const bool has_dir = fs::is_directory(
+                tbl_id.StorePath(store_->Options().store_path,
+                                 store_->Options().store_path_lut),
+                ec);
+            if (store_->Mode() == StoreMode::Cloud && has_dir)
             {
                 // The manifest may be advanced by the next owner; the sealed
                 // data files never change and stay cached.
