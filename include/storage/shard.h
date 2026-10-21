@@ -118,6 +118,47 @@ private:
     void TryStartPendingWrite(const TableIdent &tbl_id);
     void TryDispatchPendingWrites();
 
+    /**
+     * @brief Decides whether a request may run: its data store shard must be
+     * attached. Completes the request with NotRunning (shard not attached) or
+     * ExpiredTerm (shard expired) otherwise. A request naming no shard, such
+     * as the internal listing requests, is always admitted.
+     *
+     * @param req The request, dequeued or taken from a pending queue.
+     * @return Whether the request may run.
+     */
+    bool AdmitRequest(KvRequest *req);
+    /**
+     * @brief Gives a request that names no data store shard the shard its
+     * partition is bound to, so that the internal requests a shard creates for
+     * a partition (compaction, GC, reopen drivers) are counted and gated like
+     * the external ones.
+     * @param req The request.
+     */
+    void ResolveDsShard(KvRequest *req);
+    /**
+     * @brief Fails every request queued for a data store shard's partitions
+     * that has not started: pending writes, parked reopen waiters and delayed
+     * reopen drivers. Running tasks are left to finish.
+     * @param ds_shard_id The shard.
+     */
+    void FailPendingRequestsOf(DsShardId ds_shard_id);
+    /**
+     * @brief Drops what this worker shard holds for a data store shard once
+     * no task runs on its partitions: in-memory root metas and cached pages,
+     * open files, local manifests, pending queues and the partition bindings.
+     * Runs in the detach task.
+     * @param ds_shard_id The shard.
+     * @return NoError, or the first error met; the state is dropped either way.
+     */
+    KvError EvictDsShard(DsShardId ds_shard_id);
+    /**
+     * @param ds_shard_id The shard.
+     * @return How many tasks run on the shard's partitions (the detach task
+     * itself not counted).
+     */
+    uint32_t ActiveTasksOf(DsShardId ds_shard_id) const;
+
 #ifdef ELOQ_MODULE_ENABLED
     void WorkOneRound();
     bool IsIdle() const
@@ -154,6 +195,11 @@ private:
         task->req_ = req;
         task->result_err_ = KvError::NoError;
         task->status_ = TaskStatus::Ongoing;
+        if (req->DsShard() != kUnsetDsShard &&
+            req->Type() != RequestType::DetachShard)
+        {
+            ++active_tasks_by_shard_[req->DsShard()];
+        }
         running_ = task;
         // Mark the resume start so a cooperative background loop measures this
         // first segment from now, not from the previously resumed task's
@@ -277,6 +323,17 @@ private:
     };
     std::vector<DelayedEntry> delayed_requests_;
 
+    /**
+     * Tasks running per data store shard, kept by StartTask and
+     * OnTaskFinished. A detach task waits for its shard's count to reach 0.
+     */
+    std::unordered_map<DsShardId, uint32_t> active_tasks_by_shard_;
+    /**
+     * Detach tasks blocked until their shard's running tasks finish; the task
+     * that brings a count to 0 resumes the matching one.
+     */
+    std::unordered_map<DsShardId, KvTask *> waiting_detaches_;
+
 #ifdef ELOQ_MODULE_ENABLED
     std::atomic<size_t> req_queue_size_{0};
 #endif
@@ -294,5 +351,6 @@ private:
     friend class EloqStoreModule;
     friend class EloqStore;
     friend class KvRequest;
+    friend class DetachShardTask;
 };
 }  // namespace eloqstore

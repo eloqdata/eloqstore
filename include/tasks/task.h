@@ -60,6 +60,7 @@ enum struct TaskType
     Prewarm,
     ListObject,
     ListStandbyPartition,
+    DetachShard,
     BatchWrite,
     Reopen,
     BackgroundWrite

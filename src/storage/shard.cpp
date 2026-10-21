@@ -21,6 +21,7 @@
 #include "error.h"
 #include "global_registered_memory.h"
 #include "standby_service.h"
+#include "tasks/detach_shard_task.h"
 #include "tasks/list_object_task.h"
 #include "tasks/list_standby_partition_task.h"
 #include "tasks/reopen_task.h"
@@ -81,27 +82,15 @@ Shard::Shard(EloqStore *store, size_t shard_id, uint32_t fd_limit)
 
 KvError Shard::Init()
 {
-    // Inject process term and active branch into IO manager before any file
-    // operations. All IouringMgr instances support SetActiveBranch; only
-    // CloudStoreMgr additionally needs SetProcessTerm (local mode uses term=0).
+    // Inject the active branch into the IO manager before any file operation.
+    // Terms are per data store shard: the manager reads them from the store's
+    // shard table for the partition at hand (AsyncIoManager::ProcessTerm).
     if (io_mgr_ != nullptr)
     {
-        uint64_t term = store_ != nullptr ? store_->Term() : 0;
         std::string_view branch =
             store_ != nullptr ? store_->Branch() : MainBranchName;
         assert(!branch.empty());
         io_mgr_->SetActiveBranch(branch);
-        if (store_->Mode() == StoreMode::Cloud)
-        {
-            auto *cloud_mgr = static_cast<CloudStoreMgr *>(io_mgr_.get());
-            cloud_mgr->SetProcessTerm(term);
-            cloud_mgr->SetPartitionGroupId(store_->PartitionGroupId());
-        }
-        else if (store_->Mode() == StoreMode::StandbyReplica ||
-                 store_->Mode() == StoreMode::StandbyMaster)
-        {
-            static_cast<StandbyStoreMgr *>(io_mgr_.get())->SetProcessTerm(term);
-        }
     }
     InitializeTscFrequency();
     KvError res = io_mgr_->Init(this);
@@ -563,6 +552,25 @@ GlobalRegisteredMemory *Shard::GlobalRegMem()
 
 void Shard::OnReceivedReq(KvRequest *req)
 {
+    if (req->Type() == RequestType::DetachShard)
+    {
+        // Internal, from EloqStore::DetachShard: it is for no partition, so
+        // it bypasses the pending write queues and the admission gate.
+        (void) ProcessReq(req);
+        return;
+    }
+    ResolveDsShard(req);
+    if (!AdmitRequest(req))
+    {
+        return;
+    }
+    if (req->DsShard() != kUnsetDsShard && req->TableId().IsValid())
+    {
+        // The partition's later work (background writes, GC, the term its
+        // files are named with) finds its data store shard through this.
+        io_mgr_->BindPartition(req->TableId(), req->DsShard());
+    }
+
     if (req->Reopen())
     {
         req->SetReopen(false);
@@ -601,19 +609,194 @@ void Shard::TryStartPendingWrite(const TableIdent &tbl_id)
         return;
     }
     PendingWriteQueue &pending_q = it->second;
-    if (pending_q.running_ || pending_q.Empty())
+    while (!pending_q.running_ && !pending_q.Empty())
     {
+        WriteRequest *req = pending_q.PopFront();
+        assert(req != nullptr);
+        // A request queued for a partition whose data store shard has been
+        // detached or has expired since is failed here, and the next one is
+        // tried. The embedded internal requests just become done again.
+        ResolveDsShard(req);
+        if (!AdmitRequest(req))
+        {
+            continue;
+        }
+        pending_q.running_ = true;
+        if (!ProcessReq(req))
+        {
+            pending_q.running_ = false;
+            pending_q.PushFront(req);
+        }
         return;
     }
-
-    WriteRequest *req = pending_q.PopFront();
-    assert(req != nullptr);
-    pending_q.running_ = true;
-    if (!ProcessReq(req))
+    if (!pending_q.running_ && pending_q.Empty())
     {
-        pending_q.running_ = false;
-        pending_q.PushFront(req);
+        // Every queued request was refused, so no task will finish on this
+        // queue and erase it in OnTaskFinished; drop it here.
+        pending_queues_.erase(it);
     }
+}
+
+bool Shard::AdmitRequest(KvRequest *req)
+{
+    const DsShardId ds_shard = req->DsShard();
+    if (ds_shard == kUnsetDsShard)
+    {
+        return true;
+    }
+    KvError err;
+    switch (store_->ShardState(ds_shard))
+    {
+    case EloqStore::DsShardState::Attached:
+        return true;
+    case EloqStore::DsShardState::Expired:
+        err = KvError::ExpiredTerm;
+        break;
+    default:
+        err = KvError::NotRunning;
+        break;
+    }
+    if (req->Type() == RequestType::Reopen)
+    {
+        // A reopen driver carries parked waiters: they fail with it. The
+        // internal driver is embedded in the state, so the state goes before
+        // the driver would be completed, as OnTaskFinished does it.
+        auto it = pending_reopens_.find(req->TableId());
+        if (it != pending_reopens_.end() && it->second.DriverRequest() == req)
+        {
+            const bool internal = it->second.IsCurrentInternalDriver(
+                static_cast<ReopenRequest *>(req));
+            std::vector<KvRequest *> waiters = std::move(it->second.waiters_);
+            pending_reopens_.erase(it);
+            CompleteReopenWaiters(std::move(waiters), err);
+            if (internal)
+            {
+                return false;
+            }
+        }
+    }
+    req->SetDone(err);
+    return false;
+}
+
+void Shard::ResolveDsShard(KvRequest *req)
+{
+    if (req->DsShard() == kUnsetDsShard && req->TableId().IsValid())
+    {
+        req->SetDsShard(io_mgr_->DsShardOf(req->TableId()));
+    }
+}
+
+void Shard::FailPendingRequestsOf(DsShardId ds_shard_id)
+{
+    // Pending writes, including the embedded internal requests.
+    std::vector<TableIdent> tables;
+    for (const auto &[tbl_id, _] : pending_queues_)
+    {
+        if (io_mgr_->DsShardOf(tbl_id) == ds_shard_id)
+        {
+            tables.push_back(tbl_id);
+        }
+    }
+    for (const TableIdent &tbl_id : tables)
+    {
+        // TryStartPendingWrite refuses every queued request (AdmitRequest)
+        // and erases the queue unless a task still runs on the partition.
+        TryStartPendingWrite(tbl_id);
+    }
+
+    // Reopen states whose driver is not running: fail the waiters and drop the
+    // state. A running driver keeps its state until OnTaskFinished, which
+    // fails the waiters then (the resubmission is refused by the gate).
+    for (auto it = pending_reopens_.begin(); it != pending_reopens_.end();)
+    {
+        if (io_mgr_->DsShardOf(it->first) != ds_shard_id)
+        {
+            ++it;
+            continue;
+        }
+        auto queue_it = pending_queues_.find(it->first);
+        const bool driver_running =
+            queue_it != pending_queues_.end() && queue_it->second.running_;
+        std::vector<KvRequest *> waiters = std::move(it->second.waiters_);
+        CompleteReopenWaiters(std::move(waiters), KvError::NotRunning);
+        if (driver_running)
+        {
+            ++it;
+        }
+        else
+        {
+            it = pending_reopens_.erase(it);
+        }
+    }
+
+    // Delayed internal drivers of those partitions: their states are gone.
+    const size_t before = delayed_requests_.size();
+    std::erase_if(delayed_requests_,
+                  [&](const DelayedEntry &entry)
+                  { return io_mgr_->DsShardOf(entry.tbl_id) == ds_shard_id; });
+    if (delayed_requests_.size() != before)
+    {
+        std::make_heap(delayed_requests_.begin(),
+                       delayed_requests_.end(),
+                       std::greater<DelayedEntry>());
+    }
+}
+
+KvError Shard::EvictDsShard(DsShardId ds_shard_id)
+{
+    // A task that finished after the first pass may have parked a waiter or
+    // queued an internal request: clear those too, now that nothing runs.
+    FailPendingRequestsOf(ds_shard_id);
+
+    KvError first_err = KvError::NoError;
+    auto note = [&first_err](KvError err)
+    {
+        if (err != KvError::NoError && first_err == KvError::NoError)
+        {
+            first_err = err;
+        }
+    };
+    const bool has_files = !store_->Options().store_path.empty();
+    for (const TableIdent &tbl_id : io_mgr_->PartitionsOf(ds_shard_id))
+    {
+        auto reopen_it = pending_reopens_.find(tbl_id);
+        if (reopen_it != pending_reopens_.end())
+        {
+            CompleteReopenWaiters(std::move(reopen_it->second.waiters_),
+                                  KvError::NotRunning);
+            pending_reopens_.erase(reopen_it);
+        }
+        auto queue_it = pending_queues_.find(tbl_id);
+        if (queue_it != pending_queues_.end())
+        {
+            CHECK(!queue_it->second.running_ && queue_it->second.Empty())
+                << "EvictDsShard with a pending write on " << tbl_id;
+            pending_queues_.erase(queue_it);
+        }
+        if (has_files)
+        {
+            auto *io_mgr = static_cast<IouringMgr *>(io_mgr_.get());
+            if (store_->Mode() == StoreMode::Cloud)
+            {
+                // The manifest may be advanced by the next owner; the sealed
+                // data files never change and stay cached.
+                note(static_cast<CloudStoreMgr *>(io_mgr)->DropLocalManifest(
+                    tbl_id));
+            }
+            note(io_mgr->CloseTableFiles(tbl_id));
+        }
+        // No task runs on the partition, so no root meta is pinned.
+        index_mgr_.RootMetaManager()->Erase(tbl_id);
+        io_mgr_->ForgetPartition(tbl_id);
+    }
+    return first_err;
+}
+
+uint32_t Shard::ActiveTasksOf(DsShardId ds_shard_id) const
+{
+    auto it = active_tasks_by_shard_.find(ds_shard_id);
+    return it == active_tasks_by_shard_.end() ? 0 : it->second;
 }
 
 void Shard::TryDispatchPendingWrites()
@@ -1015,6 +1198,15 @@ bool Shard::ProcessReq(KvRequest *req)
         req->SetDone(KvError::InvalidArgs);
         return true;
     }
+    case RequestType::DetachShard:
+    {
+        DetachShardTask *task = task_mgr_.GetDetachShardTask();
+        const DsShardId ds_shard = req->DsShard();
+        auto lbd = [task, ds_shard]() -> KvError
+        { return task->Detach(ds_shard); };
+        StartTask(task, req, lbd);
+        return true;
+    }
     }
     return true;
 }
@@ -1137,6 +1329,33 @@ void Shard::OnTaskFinished(KvTask *task)
             --req->reopen_retry_remaining_;
             auto_reopen = true;
             request_completed = false;
+        }
+    }
+
+    const DsShardId req_shard = req->DsShard();
+    if (req_shard != kUnsetDsShard && req->Type() != RequestType::DetachShard)
+    {
+        auto active_it = active_tasks_by_shard_.find(req_shard);
+        CHECK(active_it != active_tasks_by_shard_.end() &&
+              active_it->second > 0)
+            << "task finished for data store shard " << req_shard
+            << " that has no running task";
+        if (--active_it->second == 0)
+        {
+            active_tasks_by_shard_.erase(active_it);
+            auto waiting_it = waiting_detaches_.find(req_shard);
+            if (waiting_it != waiting_detaches_.end())
+            {
+                KvTask *detach_task = waiting_it->second;
+                waiting_detaches_.erase(waiting_it);
+                detach_task->Resume();
+            }
+        }
+        if (err == KvError::ExpiredTerm)
+        {
+            // A newer term owns one of the shard's partitions: the whole
+            // shard is stale (the term file is per shard).
+            store_->MarkShardExpired(req_shard);
         }
     }
 

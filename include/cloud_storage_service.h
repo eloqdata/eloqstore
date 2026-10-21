@@ -3,7 +3,9 @@
 #include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <shared_mutex>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -74,6 +76,20 @@ public:
 #endif
     };
 
+    /**
+     * @brief Raises a data store shard's term file to a term, or learns that
+     * a newer term holds it (ObjectStore::BootstrapUpsertTermFile). The
+     * compare-and-swap runs on the first request thread; the caller waits for
+     * it, a bthread-aware wait in module builds.
+     *
+     * @param term_file_name The file, CURRENT_TERM_<branch>_<id>.
+     * @param term The term to write.
+     * @return NoError; ExpiredTerm if the file holds a newer term; NotRunning
+     * if the service is not running; CloudErr if the first shard's object
+     * store is not registered yet.
+     */
+    KvError UpsertTermFile(std::string term_file_name, uint64_t term);
+
     bool HasPendingJobs() const
     {
         return pending_jobs_.load(std::memory_order_acquire) > 0;
@@ -90,8 +106,20 @@ private:
         ObjectStore::Task *task;
     };
 
+    /** @brief A term file compare-and-swap waiting for the first thread. */
+    struct TermFileJob
+    {
+        std::string name_;
+        uint64_t term_{0};
+        BootstrapTermSyncState state_;
+    };
+
     void RunWorker(size_t worker_index);
     bool ProcessHttpWork(size_t worker_index);
+    /** @brief Runs the queued term file jobs; first thread only. */
+    void RunTermFileJobs();
+    /** @brief Fails the queued term file jobs with NotRunning. */
+    void DropTermFileJobs();
 
     EloqStore *store_{nullptr};
     // One queue per request thread. Requests from a shard can only be processed
@@ -117,7 +145,9 @@ private:
     std::atomic<bool> stopping_{true};
     std::atomic<bool> accepting_jobs_{false};
     std::atomic<uint64_t> pending_jobs_{0};
-    BootstrapTermSyncState bootstrap_state_;
+    /** Orders a job's enqueue against Stop, so none is left waiting. */
+    std::mutex term_file_mux_;
+    moodycamel::ConcurrentQueue<TermFileJob *> term_file_jobs_;
 
     friend class EloqStore;
 };

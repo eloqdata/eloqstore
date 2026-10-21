@@ -8,6 +8,7 @@
 
 #include "tasks/background_write.h"
 #include "tasks/batch_write_task.h"
+#include "tasks/detach_shard_task.h"
 #include "tasks/list_object_task.h"
 #include "tasks/list_standby_partition_task.h"
 #include "tasks/read_task.h"
@@ -38,6 +39,8 @@ public:
     ListObjectTask *GetListObjectTask();
     ListStandbyPartitionTask *GetListStandbyPartitionTask();
     ReopenTask *GetReopenTask(const TableIdent &tbl_id);
+    /** @return An idle detach task (the pool grows; never null). */
+    DetachShardTask *GetDetachShardTask();
     void FreeTask(KvTask *task);
 
     void AddExternalTask();
@@ -126,6 +129,7 @@ private:
     TaskPool<ListObjectTask> list_object_pool_;
     TaskPool<ListStandbyPartitionTask> list_standby_partition_pool_;
     TaskPool<ReopenTask> reopen_pool_;
+    TaskPool<DetachShardTask> detach_shard_pool_;
     size_t num_active_{0};
     size_t num_active_write_{0};
     size_t max_write_concurrency_{std::numeric_limits<size_t>::max()};

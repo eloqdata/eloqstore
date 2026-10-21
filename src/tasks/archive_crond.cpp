@@ -99,18 +99,27 @@ void ArchiveCrond::Crond()
 
 void ArchiveCrond::StartArchiving()
 {
-    LOG(INFO) << "Start scheduled archiving";
+    // One archive per hosted data store shard: each names its own term and
+    // covers its own partitions.
+    for (DsShardId ds_shard_id : store_->HostedShards())
+    {
+        LOG(INFO) << "Start scheduled archiving of data store shard "
+                  << ds_shard_id;
 
-    GlobalArchiveRequest global_req;
-    store_->ExecSync(&global_req);
-    if (global_req.Error() != KvError::NoError)
-    {
-        LOG(ERROR) << "Scheduled archiving failed: "
-                   << static_cast<int>(global_req.Error());
-    }
-    else
-    {
-        LOG(INFO) << "Scheduled archiving completed successfully";
+        GlobalArchiveRequest global_req;
+        global_req.SetDsShard(ds_shard_id);
+        store_->ExecSync(&global_req);
+        if (global_req.Error() != KvError::NoError)
+        {
+            LOG(ERROR) << "Scheduled archiving of data store shard "
+                       << ds_shard_id
+                       << " failed: " << static_cast<int>(global_req.Error());
+        }
+        else
+        {
+            LOG(INFO) << "Scheduled archiving of data store shard "
+                      << ds_shard_id << " completed successfully";
+        }
     }
 }
 }  // namespace eloqstore

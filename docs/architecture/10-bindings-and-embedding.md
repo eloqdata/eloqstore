@@ -65,6 +65,14 @@ only when the embedding runtime (EloqKV's tx service, with bthread) defines
 - Shutdown is cooperative: shards are flagged `Stopping` and the host's
   workers run rounds until each reports `Stopped` (see
   `EloqStore::CleanupRuntime`).
+- A host that leads several node groups hosts their data store shards on the
+  one store: `StartInstance` once, then `AttachShard`/`DetachShard` as
+  leadership comes and goes, each request stamped with its shard
+  (`KvRequest::SetDsShard`) and `partition_filter(ds_shard_id, tbl_id)`
+  answering from the host's bucket map (doc 02). `AttachShard` and
+  `DetachShard` wait with bthread-aware waits, so an RPC handler's bthread
+  may call them; a module hook (`Process`) must not, since `DetachShard`
+  waits for every worker shard, its own included.
 
 When changing `Shard::WorkLoop`, mirror the change in `WorkOneRound` — they
 are the same scheduler in two drive modes.

@@ -512,9 +512,62 @@ public:
         (void) pre_max_segment_file_id;
     }
 
-    virtual uint64_t ProcessTerm() const
+    /**
+     * @brief The term a partition's files are written in: the term of the
+     * data store shard the partition is bound to (BindPartition), read from
+     * the store's shard table. 0 in local mode and for an unbound partition
+     * when no shard is attached.
+     *
+     * @param tbl_id The partition.
+     * @return The term.
+     */
+    uint64_t ProcessTerm(const TableIdent &tbl_id) const;
+
+    /**
+     * @brief Records which data store shard a partition is served for. Set by
+     * the worker shard for every request's partition before the request runs,
+     * so the partition's later work (background writes, GC) finds its term.
+     *
+     * @param tbl_id The partition.
+     * @param ds_shard_id The data store shard.
+     */
+    void BindPartition(const TableIdent &tbl_id, DsShardId ds_shard_id)
     {
-        return 0;
+        // On every request: a lookup, and a write only when the binding
+        // changes (first request, or the partition's shard changed).
+        auto [it, inserted] =
+            partition_shards_.try_emplace(tbl_id, ds_shard_id);
+        if (!inserted && it->second != ds_shard_id)
+        {
+            it->second = ds_shard_id;
+        }
+    }
+    /**
+     * @param tbl_id The partition.
+     * @return The data store shard the partition is bound to, or the store's
+     * default shard (kUnsetDsShard if none) when it is unbound.
+     */
+    DsShardId DsShardOf(const TableIdent &tbl_id) const;
+    /**
+     * @brief Forgets what the manager keeps in memory for a partition its
+     * data store shard let go: the shard binding, and in managers that keep
+     * one, the partition's branch file mapping. Files are closed separately
+     * (CloseTableFiles).
+     * @param tbl_id The partition.
+     */
+    virtual void ForgetPartition(const TableIdent &tbl_id)
+    {
+        partition_shards_.erase(tbl_id);
+    }
+    /**
+     * @param ds_shard_id The data store shard.
+     * @return The partitions bound to it on this worker shard.
+     */
+    std::vector<TableIdent> PartitionsOf(DsShardId ds_shard_id) const;
+    /** @brief Lets the manager read the store's shard table. */
+    void SetStore(const EloqStore *store)
+    {
+        store_ = store;
     }
 
     virtual std::string_view GetActiveBranch() const
@@ -523,6 +576,13 @@ public:
     }
 
     std::atomic<bool> store_stopping_{false};
+    /** The store this manager serves; set by Instance. */
+    const EloqStore *store_{nullptr};
+    /**
+     * Which data store shard each partition this worker shard has served is
+     * bound to. Read on the worker shard only.
+     */
+    absl::flat_hash_map<TableIdent, DsShardId> partition_shards_;
 
     virtual void SetActiveBranch(std::string_view branch)
     {
@@ -647,13 +707,6 @@ public:
                                 FileId pre_max_file_id,
                                 FileId pre_max_segment_file_id) override;
 
-    // Process term management for term-aware file naming.
-    // Local mode always returns 0.
-    uint64_t ProcessTerm() const override
-    {
-        return 0;
-    }
-
     void SetActiveBranch(std::string_view branch) override
     {
         active_branch_ = std::string(branch);
@@ -670,6 +723,20 @@ public:
     KvError DeleteFiles(const std::vector<std::string> &file_paths);
     KvError CloseFiles(const TableIdent &tbl_id,
                        const std::span<TypedFileId> file_ids);
+    /**
+     * @brief Closes every file this worker shard has open for a partition,
+     * flushing dirty ones. Run from a task: the closes are io_uring operations
+     * the task waits on.
+     *
+     * @param tbl_id The partition.
+     * @return NoError, or the first close error.
+     */
+    KvError CloseTableFiles(const TableIdent &tbl_id);
+    void ForgetPartition(const TableIdent &tbl_id) override
+    {
+        branch_file_mapping_.erase(tbl_id);
+        AsyncIoManager::ForgetPartition(tbl_id);
+    }
 
     /**
      * @brief Get the number of currently open file descriptors.
@@ -1286,22 +1353,6 @@ public:
         return !prewarmers_.empty();
     }
 
-    void SetProcessTerm(uint64_t term)
-    {
-        process_term_ = term;
-    }
-    void SetPartitionGroupId(PartitonGroupId partition_group_id)
-    {
-        partition_group_id_ = partition_group_id;
-    }
-    PartitonGroupId PartitionGroupId() const
-    {
-        return partition_group_id_;
-    }
-    uint64_t ProcessTerm() const override
-    {
-        return process_term_;
-    }
     void OnFileRangeWritePrepared(const TableIdent &tbl_id,
                                   TypedFileId file_id,
                                   std::string_view branch_name,
@@ -1336,11 +1387,17 @@ public:
                          uint64_t offset = 0);
     KvError CloseFile(LruFD::Ref fd) override;
 
-    // Read partition-group CURRENT_TERM file from cloud, returns
-    // {term_value, etag, error}. If file doesn't exist (404), returns
-    // {0, "", NotFound}.
+    /**
+     * @brief Reads a data store shard's term file, CURRENT_TERM_<branch>_<id>,
+     * from the cloud. Run from a task.
+     *
+     * @param branch_name The branch.
+     * @param ds_shard_id The data store shard.
+     * @return {term, etag, error}; {0, "", NotFound} when the file does not
+     * exist.
+     */
     std::tuple<uint64_t, std::string, KvError> ReadTermFile(
-        std::string_view branch_name);
+        std::string_view branch_name, DsShardId ds_shard_id);
 
 private:
     void WaitForCloudTasksToDrain();
@@ -1549,12 +1606,6 @@ private:
     ObjectStore obj_store_;
     CloudStorageService *cloud_service_{nullptr};
 
-    // Expected process term for this shard in cloud mode.
-    // 0 means unspecified/legacy; in that case term validation in GetManifest
-    // will be skipped and the latest manifest term will be used.
-    uint64_t process_term_{0};
-    PartitonGroupId partition_group_id_{0};
-
     size_t inflight_cloud_slots_{0};
     WaitingZone cloud_slot_waiting_;
     size_t inflight_cloud_buffers_{0};
@@ -1569,14 +1620,6 @@ class StandbyStoreMgr final : public IouringMgr
 public:
     StandbyStoreMgr(const KvOptions *opts, uint32_t fd_limit);
     void Stop() override;
-    void SetProcessTerm(uint64_t term)
-    {
-        process_term_ = term;
-    }
-    uint64_t ProcessTerm() const override
-    {
-        return process_term_;
-    }
 
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
@@ -1590,7 +1633,6 @@ private:
                                     std::string_view filename) const;
     int RunRsync(const std::string &remote, const std::string &dst);
     std::atomic<size_t> inflight_standby_tasks_{0};
-    uint64_t process_term_{0};
 
     std::string remote_addr_;
 };

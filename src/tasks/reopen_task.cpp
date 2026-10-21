@@ -118,7 +118,7 @@ KvError ReopenTask::Reopen(const TableIdent &tbl_id)
         CHECK(shard->store_ != nullptr);
         PrewarmService *prewarm_service = shard->store_->GetPrewarmService();
         CHECK(prewarm_service != nullptr);
-        prewarm_service->Prewarm(tbl_id);
+        prewarm_service->Prewarm(shard->IoManager()->DsShardOf(tbl_id), tbl_id);
     }
 
     // TODO(standby): for a non-cloud standby replica, nothing else removes

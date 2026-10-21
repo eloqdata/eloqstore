@@ -663,8 +663,9 @@ TEST_CASE("cloud prewarm honors partition filter", "[cloud][prewarm]")
         partitions[0],
         partitions[1],
     };
-    options.partition_filter =
-        [included](const eloqstore::TableIdent &tbl) -> bool
+    options.partition_filter = [included](
+                                   eloqstore::DsShardId,
+                                   const eloqstore::TableIdent &tbl) -> bool
     { return included.count(tbl) != 0; };
 
     eloqstore::EloqStore *store = InitStore(options);
@@ -1178,8 +1179,9 @@ TEST_CASE("cloud global archive shares timestamp and filters partitions",
         first_partition_id,
         second_page_partition_id,
     };
-    options.partition_filter =
-        [included_ids](const eloqstore::TableIdent &tbl) -> bool
+    options.partition_filter = [included_ids](
+                                   eloqstore::DsShardId,
+                                   const eloqstore::TableIdent &tbl) -> bool
     { return included_ids.count(tbl.partition_id_) != 0; };
 
     eloqstore::EloqStore *store = InitStore(options);
@@ -1580,7 +1582,7 @@ TEST_CASE("cloud reopen triggers prewarm to download newer remote data files",
     options.prewarm_cloud_cache = true;
     options.prewarm_task_count = 1;
     options.allow_reuse_local_caches = true;
-    options.partition_filter = [&enable_partition_filter](const auto &)
+    options.partition_filter = [&enable_partition_filter](auto, const auto &)
     { return enable_partition_filter.load(std::memory_order_relaxed); };
 
     CleanupStore(options);

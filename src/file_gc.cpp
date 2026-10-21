@@ -286,7 +286,7 @@ KvError ExecuteLocalGC(const TableIdent &tbl_id,
     BranchGuardMap branch_guards;
     SeedActiveBranchGuardFromInMemory(tbl_id,
                                       io_mgr->GetActiveBranch(),
-                                      io_mgr->ProcessTerm(),
+                                      io_mgr->ProcessTerm(tbl_id),
                                       io_mgr->options_->pages_per_file_shift,
                                       io_mgr->options_->segments_per_file_shift,
                                       branch_guards);
@@ -694,7 +694,7 @@ KvError AugmentRetainedFilesFromBranchManifests(
     // and archives still go through disk: they may be updated by other
     // instances and have no trustworthy in-memory mapping here.
     const std::string_view active_branch = io_mgr->GetActiveBranch();
-    const uint64_t active_term = io_mgr->ProcessTerm();
+    const uint64_t active_term = io_mgr->ProcessTerm(tbl_id);
     // Pure in-memory, no load/yield: mirror FindRoot's stub detection
     // (mapper_ == nullptr -> NotFound) without its side effects. No yields
     // between Find() and the mapper_ read, so the entry cannot be evicted.
@@ -946,7 +946,7 @@ KvError DeleteUnreferencedCloudFiles(
 {
     std::vector<std::string> files_to_delete;
     std::vector<std::string> basenames_to_delete;
-    const uint64_t process_term = cloud_mgr->ProcessTerm();
+    const uint64_t process_term = cloud_mgr->ProcessTerm(tbl_id);
     const std::string_view active_branch = cloud_mgr->GetActiveBranch();
     const std::string current_manifest =
         BranchManifestFileName(active_branch, process_term);
@@ -1396,7 +1396,7 @@ KvError DeleteUnreferencedCloudSegmentFiles(
     CloudStoreMgr *cloud_mgr)
 {
     std::vector<std::string> files_to_delete;
-    const uint64_t process_term = cloud_mgr->ProcessTerm();
+    const uint64_t process_term = cloud_mgr->ProcessTerm(tbl_id);
 
     uint64_t poll_i = 0;
     for (const std::string &file_name : segment_files)
@@ -1494,20 +1494,20 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
                        CloudStoreMgr *cloud_mgr)
 {
     // Check term file before proceeding
-    uint64_t process_term = cloud_mgr->ProcessTerm();
-    auto [term_file_term, etag, err] =
-        cloud_mgr->ReadTermFile(cloud_mgr->GetActiveBranch());
+    uint64_t process_term = cloud_mgr->ProcessTerm(tbl_id);
+    auto [term_file_term, etag, err] = cloud_mgr->ReadTermFile(
+        cloud_mgr->GetActiveBranch(), cloud_mgr->DsShardOf(tbl_id));
 
     if (err == KvError::NotFound)
     {
         LOG(INFO) << "ExecuteCloudGC: term file not found for partition_group "
-                  << cloud_mgr->PartitionGroupId();
+                  << cloud_mgr->DsShardOf(tbl_id);
         return KvError::NoError;
     }
     else if (err != KvError::NoError)
     {
         LOG(ERROR) << "ExecuteCloudGC: failed to read term file for "
-                   << "partition_group " << cloud_mgr->PartitionGroupId()
+                   << "partition_group " << cloud_mgr->DsShardOf(tbl_id)
                    << " : " << ErrorString(err);
         return err;
     }
@@ -1518,7 +1518,7 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
             LOG(WARNING) << "ExecuteCloudGC: term file term " << term_file_term
                          << " != process_term " << process_term << " for table "
                          << tbl_id << ", partition_group "
-                         << cloud_mgr->PartitionGroupId() << ", skipping GC";
+                         << cloud_mgr->DsShardOf(tbl_id) << ", skipping GC";
             return KvError::ExpiredTerm;
         }
     }

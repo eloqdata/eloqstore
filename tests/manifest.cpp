@@ -197,8 +197,9 @@ TEST_CASE("global archive shares timestamp and filters partitions",
         partitions[0].partition_id_,
         partitions[2].partition_id_,
     };
-    opts.partition_filter =
-        [included_ids](const eloqstore::TableIdent &tbl) -> bool
+    opts.partition_filter = [included_ids](
+                                eloqstore::DsShardId,
+                                const eloqstore::TableIdent &tbl) -> bool
     { return included_ids.count(tbl.partition_id_) != 0; };
 
     eloqstore::EloqStore *store = InitStore(opts);

@@ -606,14 +606,14 @@ std::pair<PageId, FilePageId> WriteTask::AllocatePage(PageId page_id)
         IoMgr()->SetBranchFileIdTerm(tbl_ident_,
                                      DataFileKey(file_id_before_allocate),
                                      IoMgr()->GetActiveBranch(),
-                                     IoMgr()->ProcessTerm());
+                                     IoMgr()->ProcessTerm(tbl_ident_));
     }
     if (file_id_before_allocate != file_id_after_allocate)
     {
         IoMgr()->SetBranchFileIdTerm(tbl_ident_,
                                      DataFileKey(file_id_after_allocate),
                                      IoMgr()->GetActiveBranch(),
-                                     IoMgr()->ProcessTerm());
+                                     IoMgr()->ProcessTerm(tbl_ident_));
     }
 
     cow_meta_.mapper_->UpdateMapping(page_id, file_page_id);
@@ -653,7 +653,7 @@ std::pair<PageId, FilePageId> WriteTask::AllocateSegment(PageId page_id)
             IoMgr()->SetBranchFileIdTerm(tbl_ident_,
                                          SegmentFileKey(file_id_before),
                                          IoMgr()->GetActiveBranch(),
-                                         IoMgr()->ProcessTerm());
+                                         IoMgr()->ProcessTerm(tbl_ident_));
         }
         last_seen_segment_file_id_ = file_id_before;
     }
@@ -662,7 +662,7 @@ std::pair<PageId, FilePageId> WriteTask::AllocateSegment(PageId page_id)
         IoMgr()->SetBranchFileIdTerm(tbl_ident_,
                                      SegmentFileKey(file_id_after),
                                      IoMgr()->GetActiveBranch(),
-                                     IoMgr()->ProcessTerm());
+                                     IoMgr()->ProcessTerm(tbl_ident_));
         last_seen_segment_file_id_ = file_id_after;
     }
 
@@ -747,7 +747,7 @@ KvError WriteTask::FlushManifest()
     // Create BranchManifestMetadata for this table
     BranchManifestMetadata branch_metadata;
     branch_metadata.branch_name = IoMgr()->GetActiveBranch();
-    branch_metadata.term = IoMgr()->ProcessTerm();
+    branch_metadata.term = IoMgr()->ProcessTerm(tbl_ident_);
     branch_metadata.file_ranges = IoMgr()->GetBranchFileMapping(tbl_ident_);
     YieldToLowPQ();
 
