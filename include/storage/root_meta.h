@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_set.h"
 #include "common.h"
@@ -129,6 +130,11 @@ public:
         TableIdent tbl_id_{};
         RootMeta meta_{};
         size_t bytes_{0};
+        /**
+         * The data store shard of the task that created the entry
+         * (thd_ds_shard_id then). A detach of that shard erases the entry.
+         */
+        DsShardId ds_shard_id_{kUnsetDsShard};
     };
 
     class Handle
@@ -193,6 +199,14 @@ public:
     // (it can run inside Erase() and would re-enter the erase logic).
     Entry *FindNoErase(const TableIdent &tbl_id);
     void Erase(const TableIdent &tbl_id);
+    /**
+     * @brief Appends the partitions whose entries a data store shard's tasks
+     * created (Entry::ds_shard_id_), for the shard's detach.
+     * @param ds_shard_id The data store shard.
+     * @param[out] tables Receives the partitions.
+     */
+    void CollectTablesOf(DsShardId ds_shard_id,
+                         std::vector<TableIdent> &tables) const;
 
     void Pin(Entry *entry);
     void Unpin(Entry *entry);

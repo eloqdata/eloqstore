@@ -1385,6 +1385,35 @@ KvError IouringMgr::CloseFiles(const TableIdent &tbl_id,
     return CloseFiles(std::span<LruFD::Ref>(fd_refs.data(), fd_refs.size()));
 }
 
+KvError IouringMgr::CloseTableFiles(const TableIdent &tbl_id)
+{
+    auto it_tbl = tables_.find(tbl_id);
+    if (it_tbl == tables_.end())
+    {
+        return KvError::NoError;
+    }
+    // Collect the ids first: taking a Ref and closing mutate fds_.
+    std::vector<TypedFileId> file_ids;
+    file_ids.reserve(it_tbl->second.fds_.size());
+    for (const auto &[file_id, _] : it_tbl->second.fds_)
+    {
+        file_ids.push_back(file_id);
+    }
+    return CloseFiles(tbl_id, std::span<TypedFileId>(file_ids));
+}
+
+void IouringMgr::CollectTablesOf(DsShardId ds_shard_id,
+                                 std::vector<TableIdent> &tables) const
+{
+    for (const auto &[tbl_id, files] : tables_)
+    {
+        if (files.ds_shard_id_ == ds_shard_id)
+        {
+            tables.push_back(tbl_id);
+        }
+    }
+}
+
 size_t IouringMgr::GetOpenFileCount() const
 {
     return lru_fd_count_;
@@ -1622,6 +1651,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
         auto it_tbl = tables_.find(tbl_id);
         if (it_tbl != tables_.end())
         {
+            ClaimTable(it_tbl->second);
             auto it_fd = it_tbl->second.fds_.find(file_id);
             if (it_fd != it_tbl->second.fds_.end())
             {
@@ -1655,6 +1685,7 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     {
         it_tbl->second.tbl_id_ = &it_tbl->first;
     }
+    ClaimTable(it_tbl->second);
     PartitionFiles *tbl = &it_tbl->second;
     auto [it_fd, _] = tbl->fds_.try_emplace(file_id, tbl, file_id, term);
     LruFD::Ref lru_fd(&it_fd->second, this);
@@ -3038,8 +3069,8 @@ KvError IouringMgr::DeleteBranchFiles(
     FdIdx root_fd_idx{root_fd, false};
 
     std::string current_term_filename =
-        CurrentTermFileNameForBranchAndPartitionGroup(
-            branch_name, eloq_store->PartitionGroupId());
+        CurrentTermFileNameForBranchAndPartitionGroup(branch_name,
+                                                      ThdDsShard());
 
     // Read CURRENT_TERM_<branch>_<pg_id> from store root to find the highest
     // term written for this branch. If the file is missing, fall back to term
@@ -4623,7 +4654,7 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
         return {nullptr, dl_err};
     }
 
-    // If ProcessTerm() is set and the selected term is older than
+    // If the shard's term is set and the selected term is older than
     // process_term, "promote" the manifest: copy its content into a new
     // manifest_<branch>_<process_term> object (both locally and in cloud), so
     // subsequent readers can consistently use manifest_<branch>_<process_term>.
@@ -5029,13 +5060,13 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::RefreshManifest(
 }
 
 std::tuple<uint64_t, std::string, KvError> CloudStoreMgr::ReadTermFile(
-    std::string_view branch_name)
+    std::string_view branch_name, DsShardId ds_shard_id)
 {
     KvTask *current_task = ThdTask();
 
-    // Download CURRENT_TERM_<branch>_<pg_id> file from store root
-    std::string term_filename = CurrentTermFileNameForBranchAndPartitionGroup(
-        branch_name, partition_group_id_);
+    // Download CURRENT_TERM_<branch>_<id> file from store root
+    std::string term_filename =
+        CurrentTermFileNameForBranchAndPartitionGroup(branch_name, ds_shard_id);
     ObjectStore::DownloadTask download_task(term_filename);
     download_task.SetKvTask(current_task);
     AcquireCloudSlot(current_task);
@@ -5415,7 +5446,7 @@ KvError CloudStoreMgr::DeleteBranchFiles(const TableIdent &tbl_id,
     std::string normalized_branch = NormalizeBranchName(branch_name);
     std::string current_term_filename =
         CurrentTermFileNameForBranchAndPartitionGroup(branch_name,
-                                                      partition_group_id_);
+                                                      ThdDsShard());
 
     // Helper lambda: list all cloud objects under a given prefix and append
     // matching paths to paths_to_delete.  The full object path stored in
@@ -5662,8 +5693,11 @@ KvError CloudStoreMgr::SyncFile(LruFD::Ref fd)
         if (file_id == LruFD::kManifest)
         {
             // Use branch-aware manifest filename for both local read and cloud
-            // upload key, consistent with SwitchManifest.
-            filename = BranchManifestFileName(GetActiveBranch(), ProcessTerm());
+            // upload key, consistent with SwitchManifest. The term is the
+            // fd's, as for data files: an fd eviction syncs here from a task
+            // that may work for another data store shard, whose term
+            // ProcessTerm() would give.
+            filename = BranchManifestFileName(GetActiveBranch(), term);
         }
         else
         {
@@ -5766,8 +5800,8 @@ KvError CloudStoreMgr::SyncFiles(const TableIdent &tbl_id,
             std::string filename;
             if (file_id == LruFD::kManifest)
             {
-                filename =
-                    BranchManifestFileName(GetActiveBranch(), ProcessTerm());
+                // The fd's term, as in SyncFile.
+                filename = BranchManifestFileName(GetActiveBranch(), term);
             }
             else
             {

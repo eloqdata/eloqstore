@@ -268,8 +268,7 @@ void PrewarmService::Start()
     thread_ = std::thread(
         [this]
         {
-            std::string prewarm_all("");
-            PrewarmCloudCache(prewarm_all);
+            // Nothing to warm yet: AttachShard queues each shard's round.
             PrewarmLoop();
             stopped_.store(true, std::memory_order_release);
         });
@@ -279,21 +278,20 @@ void PrewarmService::PrewarmLoop()
 {
     while (!stop_requested_.load(std::memory_order_acquire))
     {
-        std::array<TableIdent, 100> prewarm_tables;
+        std::array<PrewarmJob, 100> jobs;
         size_t sz;
         do
         {
-            sz = prewarm_tables_.wait_dequeue_bulk_timed(
-                prewarm_tables.data(),
-                prewarm_tables.size(),
-                std::chrono::seconds(1));
+            sz = prewarm_jobs_.wait_dequeue_bulk_timed(
+                jobs.data(), jobs.size(), std::chrono::seconds(1));
             for (size_t i = 0; i < sz; ++i)
             {
-                const TableIdent &table = prewarm_tables[i];
-                std::string remote_path = table.ToString();
-                PrewarmCloudCache(remote_path);
+                const PrewarmJob &job = jobs[i];
+                PrewarmCloudCache(
+                    job.table_.IsValid() ? job.table_.ToString() : "",
+                    job.ds_shard_id_);
             }
-        } while (sz == prewarm_tables.size());
+        } while (sz == jobs.size());
     }
 }
 
@@ -314,9 +312,14 @@ void PrewarmService::Stop()
     }
 }
 
-void PrewarmService::Prewarm(const TableIdent &table)
+void PrewarmService::Prewarm(DsShardId ds_shard_id, const TableIdent &table)
 {
-    prewarm_tables_.enqueue(table);
+    prewarm_jobs_.enqueue(PrewarmJob{ds_shard_id, table});
+}
+
+void PrewarmService::PrewarmShard(DsShardId ds_shard_id)
+{
+    prewarm_jobs_.enqueue(PrewarmJob{ds_shard_id, TableIdent{}});
 }
 
 bool PrewarmService::ListCloudObjects(
@@ -364,7 +367,8 @@ bool PrewarmService::ListCloudObjects(
     return request.Error() == KvError::NoError;
 }
 
-void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
+void PrewarmService::PrewarmCloudCache(const std::string &remote_path,
+                                       DsShardId ds_shard_id)
 {
     const uint16_t num_threads =
         std::max<uint16_t>(uint16_t{1}, store_->options_.num_threads);
@@ -510,7 +514,7 @@ void PrewarmService::PrewarmCloudCache(const std::string &remote_path)
                 continue;
             }
             if (store_->options_.partition_filter &&
-                !store_->options_.partition_filter(tbl_id))
+                !store_->options_.partition_filter(ds_shard_id, tbl_id))
             {
                 total_files_skipped++;
                 continue;

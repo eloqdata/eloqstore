@@ -39,7 +39,10 @@ TaskManager::TaskManager(const KvOptions *opts)
       scan_pool_(scan_pool_size_default),
       list_object_pool_(list_object_pool_size_default),
       list_standby_partition_pool_(list_standby_partition_pool_size_default),
-      reopen_pool_(reopen_pool_size_default)
+      reopen_pool_(reopen_pool_size_default),
+      // One detach runs per data store shard at a time; the pool grows if
+      // several shards detach at once.
+      detach_shard_pool_(1)
 {
     if (opts != nullptr && opts->max_write_concurrency > 0)
     {
@@ -76,6 +79,7 @@ void TaskManager::Shutdown()
     list_object_pool_.ForEachTask(check_finished);
     list_standby_partition_pool_.ForEachTask(check_finished);
     reopen_pool_.ForEachTask(check_finished);
+    detach_shard_pool_.ForEachTask(check_finished);
     CHECK_EQ(unfinished_tasks, 0)
         << "TaskManager::Shutdown requires a quiesced shard, unfinished_tasks="
         << unfinished_tasks << ", unfinished_reqs=" << unfinished_reqs;
@@ -93,6 +97,7 @@ void TaskManager::Shutdown()
     list_object_pool_.Clear();
     list_standby_partition_pool_.Clear();
     reopen_pool_.Clear();
+    detach_shard_pool_.Clear();
 }
 
 void TaskManager::SetPoolSizesForTest(uint32_t batch_write_pool_size,
@@ -176,6 +181,12 @@ ReopenTask *TaskManager::GetReopenTask(const TableIdent &tbl_id)
     return task;
 }
 
+DetachShardTask *TaskManager::GetDetachShardTask()
+{
+    num_active_++;
+    return detach_shard_pool_.GetTask();
+}
+
 void TaskManager::FreeTask(KvTask *task)
 {
     CHECK(task->status_ == TaskStatus::Finished);
@@ -211,6 +222,9 @@ void TaskManager::FreeTask(KvTask *task)
     case TaskType::Reopen:
         static_cast<ReopenTask *>(task)->ReleaseDirBusy();
         reopen_pool_.FreeTask(static_cast<ReopenTask *>(task));
+        break;
+    case TaskType::DetachShard:
+        detach_shard_pool_.FreeTask(static_cast<DetachShardTask *>(task));
         break;
     case TaskType::EvictFile:
         assert(false && "EvictFile task should not be freed here");

@@ -512,9 +512,16 @@ public:
         (void) pre_max_segment_file_id;
     }
 
-    virtual uint64_t ProcessTerm() const
+    /**
+     * @brief The term new files and manifests are named with and manifests
+     * are fenced against: the term of the running task's data store shard,
+     * read from the thread (thd_term), which the worker shard sets at every
+     * switch to a task. 0 in local mode and outside a task.
+     * @return The term.
+     */
+    uint64_t ProcessTerm() const
     {
-        return 0;
+        return ThdTerm();
     }
 
     virtual std::string_view GetActiveBranch() const
@@ -647,13 +654,6 @@ public:
                                 FileId pre_max_file_id,
                                 FileId pre_max_segment_file_id) override;
 
-    // Process term management for term-aware file naming.
-    // Local mode always returns 0.
-    uint64_t ProcessTerm() const override
-    {
-        return 0;
-    }
-
     void SetActiveBranch(std::string_view branch) override
     {
         active_branch_ = std::string(branch);
@@ -670,6 +670,23 @@ public:
     KvError DeleteFiles(const std::vector<std::string> &file_paths);
     KvError CloseFiles(const TableIdent &tbl_id,
                        const std::span<TypedFileId> file_ids);
+    /**
+     * @brief Closes every file this worker shard has open for a partition,
+     * flushing dirty ones. Run from a task: the closes are io_uring operations
+     * the task waits on.
+     *
+     * @param tbl_id The partition.
+     * @return NoError, or the first close error.
+     */
+    KvError CloseTableFiles(const TableIdent &tbl_id);
+    /**
+     * @brief Appends the partitions with a file open for a data store shard
+     * (PartitionFiles::ds_shard_id_), for the shard's detach.
+     * @param ds_shard_id The data store shard.
+     * @param[out] tables Receives the partitions.
+     */
+    void CollectTablesOf(DsShardId ds_shard_id,
+                         std::vector<TableIdent> &tables) const;
 
     /**
      * @brief Get the number of currently open file descriptors.
@@ -809,6 +826,13 @@ public:
     public:
         const TableIdent *tbl_id_ = nullptr;
         std::unordered_map<TypedFileId, LruFD> fds_;
+        /**
+         * The data store shard the files are open for: taken from the first
+         * task with a shard that opens one of them (a prewarm opens files for
+         * no shard). A detach of that shard closes them. The entry goes with
+         * its last file, so a later owner of the partition starts afresh.
+         */
+        DsShardId ds_shard_id_{kUnsetDsShard};
     };
 
     class Manifest : public ManifestFile
@@ -955,6 +979,18 @@ public:
         uint64_t term,
         bool skip_cloud_lookup = false);
     bool EvictFD();
+    /**
+     * @brief Gives a partition's open files to the running task's data store
+     * shard if they belong to none yet (see PartitionFiles::ds_shard_id_).
+     * @param tbl The partition's files.
+     */
+    static void ClaimTable(PartitionFiles &tbl)
+    {
+        if (tbl.ds_shard_id_ == kUnsetDsShard)
+        {
+            tbl.ds_shard_id_ = ThdDsShard();
+        }
+    }
 
     class WriteReqPool
     {
@@ -1286,22 +1322,6 @@ public:
         return !prewarmers_.empty();
     }
 
-    void SetProcessTerm(uint64_t term)
-    {
-        process_term_ = term;
-    }
-    void SetPartitionGroupId(PartitonGroupId partition_group_id)
-    {
-        partition_group_id_ = partition_group_id;
-    }
-    PartitonGroupId PartitionGroupId() const
-    {
-        return partition_group_id_;
-    }
-    uint64_t ProcessTerm() const override
-    {
-        return process_term_;
-    }
     void OnFileRangeWritePrepared(const TableIdent &tbl_id,
                                   TypedFileId file_id,
                                   std::string_view branch_name,
@@ -1336,11 +1356,17 @@ public:
                          uint64_t offset = 0);
     KvError CloseFile(LruFD::Ref fd) override;
 
-    // Read partition-group CURRENT_TERM file from cloud, returns
-    // {term_value, etag, error}. If file doesn't exist (404), returns
-    // {0, "", NotFound}.
+    /**
+     * @brief Reads a data store shard's term file, CURRENT_TERM_<branch>_<id>,
+     * from the cloud. Run from a task.
+     *
+     * @param branch_name The branch.
+     * @param ds_shard_id The data store shard.
+     * @return {term, etag, error}; {0, "", NotFound} when the file does not
+     * exist.
+     */
     std::tuple<uint64_t, std::string, KvError> ReadTermFile(
-        std::string_view branch_name);
+        std::string_view branch_name, DsShardId ds_shard_id);
 
 private:
     void WaitForCloudTasksToDrain();
@@ -1549,12 +1575,6 @@ private:
     ObjectStore obj_store_;
     CloudStorageService *cloud_service_{nullptr};
 
-    // Expected process term for this shard in cloud mode.
-    // 0 means unspecified/legacy; in that case term validation in GetManifest
-    // will be skipped and the latest manifest term will be used.
-    uint64_t process_term_{0};
-    PartitonGroupId partition_group_id_{0};
-
     size_t inflight_cloud_slots_{0};
     WaitingZone cloud_slot_waiting_;
     size_t inflight_cloud_buffers_{0};
@@ -1569,14 +1589,6 @@ class StandbyStoreMgr final : public IouringMgr
 public:
     StandbyStoreMgr(const KvOptions *opts, uint32_t fd_limit);
     void Stop() override;
-    void SetProcessTerm(uint64_t term)
-    {
-        process_term_ = term;
-    }
-    uint64_t ProcessTerm() const override
-    {
-        return process_term_;
-    }
 
     std::pair<ManifestFilePtr, KvError> GetManifest(
         const TableIdent &tbl_id) override;
@@ -1590,7 +1602,6 @@ private:
                                     std::string_view filename) const;
     int RunRsync(const std::string &remote, const std::string &dst);
     std::atomic<size_t> inflight_standby_tasks_{0};
-    uint64_t process_term_{0};
 
     std::string remote_addr_;
 };

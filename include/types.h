@@ -35,7 +35,19 @@ constexpr FilePageId MaxFilePageId = UINT64_MAX;
 
 using FileId = uint64_t;
 static constexpr FileId MaxFileId = UINT64_MAX;
-using PartitonGroupId = uint32_t;
+/**
+ * @brief Identifies a data store shard: a set of partitions an embedder hosts
+ * on this store as one unit, with its own term (in EloqDB, node group g's data
+ * is data store shard g).
+ *
+ * One store hosts several of them at once (EloqStore::AttachShard). The id
+ * names the shard's cloud term file, CURRENT_TERM_<branch>_<id>.
+ */
+using DsShardId = uint32_t;
+/** @brief The data store shard id's former name, kept for embedders. */
+using PartitonGroupId = DsShardId;
+/** @brief A request that names no data store shard (see KvRequest). */
+constexpr DsShardId kUnsetDsShard = UINT32_MAX;
 
 constexpr char FileNameSeparator = '_';
 static constexpr char FileNameData[] = "data";
