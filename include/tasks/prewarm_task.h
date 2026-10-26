@@ -1,6 +1,7 @@
 #pragma once
 #include <atomic>
 #include <chrono>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -110,10 +111,17 @@ public:
     void Stop();
 
     /**
-     * @brief Signal prewarm service to do a new round of prewarm for those
-     * specified table partition.
+     * @brief Queues a round of prewarm for one partition.
+     * @param ds_shard_id The data store shard the partition is served for.
+     * @param table The partition.
      */
-    void Prewarm(const TableIdent &table);
+    void Prewarm(DsShardId ds_shard_id, const TableIdent &table);
+    /**
+     * @brief Queues a round of prewarm for every partition of a data store
+     * shard (those the partition filter keeps for it); AttachShard calls it.
+     * @param ds_shard_id The data store shard.
+     */
+    void PrewarmShard(DsShardId ds_shard_id);
 
     /**
      * @brief Wait for prewarm operation to complete
@@ -131,7 +139,14 @@ private:
     friend class EloqStore;
     friend class CloudStoreMgr;
     void AbortPrewarmWorkers();
-    void PrewarmCloudCache(const std::string &remote_path);
+    /**
+     * @brief Lists and downloads the files under a cloud path for a data
+     * store shard, skipping partitions the filter does not give it.
+     * @param remote_path A partition's path, or empty for the whole bucket.
+     * @param ds_shard_id The data store shard.
+     */
+    void PrewarmCloudCache(const std::string &remote_path,
+                           DsShardId ds_shard_id);
     bool ListCloudObjects(const std::string &remote_path,
                           std::vector<utils::CloudObjectInfo> &details,
                           const std::string &continuation_token = std::string{},
@@ -148,7 +163,14 @@ private:
     std::atomic<bool> stop_requested_{false};
     std::atomic<bool> stopped_{true};
 
-    // Standby node do prewarm when received ckpt signal from master node.
-    moodycamel::BlockingConcurrentQueue<TableIdent> prewarm_tables_;
+    /** @brief One queued round: a partition, or a whole data store shard. */
+    struct PrewarmJob
+    {
+        DsShardId ds_shard_id_{kUnsetDsShard};
+        /** The partition to prewarm; no value means the whole shard. */
+        std::optional<TableIdent> table_;
+    };
+    // Rounds queued by AttachShard (a shard) and by a partition's reopen.
+    moodycamel::BlockingConcurrentQueue<PrewarmJob> prewarm_jobs_;
 };
 }  // namespace eloqstore

@@ -229,6 +229,15 @@ std::pair<RootMetaMgr::Entry *, bool> RootMetaMgr::GetOrCreate(
     return {entry, inserted};
 }
 
+void RootMetaMgr::CollectPartitions(
+    std::unordered_set<TableIdent> &partitions) const
+{
+    for (const auto &[tbl_id, entry] : entries_)
+    {
+        partitions.insert(tbl_id);
+    }
+}
+
 RootMetaMgr::Entry *RootMetaMgr::FindNoErase(const TableIdent &tbl_id)
 {
     auto it = entries_.find(tbl_id);

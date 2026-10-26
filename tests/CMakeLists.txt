@@ -27,6 +27,7 @@ set(UTEST_SOURCES
     concurrency.cpp
     cloud.cpp
     cloud_term.cpp
+    ds_shards.cpp
     gc.cpp
     chore.cpp
     eloq_store_test.cpp

@@ -51,8 +51,6 @@ public:
     ~ObjectStore();
 
     KvError EnsureBucketExists();
-    KvError BootstrapUpsertTermFile(std::string_view remote_path,
-                                    uint64_t process_term);
 
     bool ParseListObjectsResponse(
         std::string_view payload,
@@ -257,8 +255,6 @@ public:
     void Shutdown();
 
     KvError EnsureBucketExists();
-    KvError BootstrapUpsertTermFile(std::string_view remote_path,
-                                    uint64_t process_term);
 
     bool IsIdle() const
     {

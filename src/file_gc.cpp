@@ -1496,19 +1496,20 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
     // Check term file before proceeding
     uint64_t process_term = cloud_mgr->ProcessTerm();
     auto [term_file_term, etag, err] =
-        cloud_mgr->ReadTermFile(cloud_mgr->GetActiveBranch());
+        cloud_mgr->ReadTermFile(cloud_mgr->GetActiveBranch(), ThdDsShard());
 
     if (err == KvError::NotFound)
     {
-        LOG(INFO) << "ExecuteCloudGC: term file not found for partition_group "
-                  << cloud_mgr->PartitionGroupId();
+        LOG(INFO) << "ExecuteCloudGC: term file not found for data store "
+                     "shard "
+                  << ThdDsShard();
         return KvError::NoError;
     }
     else if (err != KvError::NoError)
     {
         LOG(ERROR) << "ExecuteCloudGC: failed to read term file for "
-                   << "partition_group " << cloud_mgr->PartitionGroupId()
-                   << " : " << ErrorString(err);
+                   << "data store shard " << ThdDsShard() << " : "
+                   << ErrorString(err);
         return err;
     }
     else
@@ -1517,8 +1518,8 @@ KvError ExecuteCloudGC(const TableIdent &tbl_id,
         {
             LOG(WARNING) << "ExecuteCloudGC: term file term " << term_file_term
                          << " != process_term " << process_term << " for table "
-                         << tbl_id << ", partition_group "
-                         << cloud_mgr->PartitionGroupId() << ", skipping GC";
+                         << tbl_id << ", data store shard " << ThdDsShard()
+                         << ", skipping GC";
             return KvError::ExpiredTerm;
         }
     }

@@ -91,6 +91,22 @@ public:
     // Drives CurResumeElapsedUs() for cooperative time-budgeted yielding.
     uint64_t cur_resume_start_us_{};
     KvTask *running_{};
+    /**
+     * The data store shard the running task works for, copied from the task
+     * at every switch to it (SwitchToTask) and cleared with running_
+     * (LeaveTask), so that running_, this and running_term_ always describe
+     * the same task. The code a task runs reads it through ThdDsShard()
+     * instead of looking anything up: the request named the shard.
+     * kUnsetDsShard between tasks.
+     */
+    DsShardId running_ds_shard_id_{kUnsetDsShard};
+    /**
+     * The term of the running task's data store shard, kept like
+     * running_ds_shard_id_; the task took it once when it started. Read
+     * through ThdTerm(), down to the file naming in the IO manager
+     * (AsyncIoManager::ProcessTerm). 0 in local mode and between tasks.
+     */
+    uint64_t running_term_{0};
     CircularQueue<KvTask *> ready_tasks_;
     CircularQueue<KvTask *> low_priority_ready_tasks_;
 
@@ -117,6 +133,41 @@ private:
     }
     void TryStartPendingWrite(const TableIdent &tbl_id);
     void TryDispatchPendingWrites();
+
+    /**
+     * @brief Decides whether a request may run: its data store shard must be
+     * attached. Completes the request with NotRunning (shard not attached) or
+     * ExpiredTerm (shard expired) otherwise. A request naming no shard, such
+     * as the internal listing requests, is always admitted.
+     *
+     * @param req The request, dequeued or taken from a pending queue.
+     * @return Whether the request may run.
+     */
+    bool AdmitRequest(KvRequest *req);
+    /**
+     * @brief Fails every request queued for a data store shard that has not
+     * started: pending writes, parked reopen waiters and delayed reopen
+     * drivers. Each request names its shard. Running tasks are left to finish.
+     * @param ds_shard_id The shard.
+     */
+    void FailPendingRequestsOf(DsShardId ds_shard_id);
+    /**
+     * @brief Drops what this worker shard holds for a data store shard once
+     * no task runs for it: the root metas (with their index pages and
+     * mappers) and open files of its partitions, their local manifests in
+     * cloud mode, and their pending queues. Its partitions are those with a
+     * root meta or an open file here that KvOptions::partition_filter gives
+     * it. Runs in the detach task.
+     * @param ds_shard_id The shard.
+     * @return NoError, or the first error met; the state is dropped either way.
+     */
+    KvError EvictDsShard(DsShardId ds_shard_id);
+    /**
+     * @param ds_shard_id The shard.
+     * @return How many tasks run on the shard's partitions (the detach task
+     * itself not counted).
+     */
+    uint32_t ActiveTasksOf(DsShardId ds_shard_id) const;
 
 #ifdef ELOQ_MODULE_ENABLED
     void WorkOneRound();
@@ -148,17 +199,48 @@ private:
 
     uint64_t DurationMicroseconds(uint64_t start_us);
 
+    /**
+     * @brief Makes a task the running one: records it with its data store
+     * shard and term (running_, running_ds_shard_id_, running_term_) and
+     * marks the resume start for CurResumeElapsedUs. Every switch to a task
+     * goes through here, so the code the task runs reads the shard and term
+     * from the worker shard (ThdDsShard, ThdTerm) instead of looking them up.
+     * @param task The task about to run.
+     */
+    void SwitchToTask(KvTask *task)
+    {
+        running_ = task;
+        running_ds_shard_id_ = task->ds_shard_id_;
+        running_term_ = task->term_;
+        // Mark the resume start so a cooperative background loop measures this
+        // segment from now, not from the previously resumed task's timestamp
+        // (see CurResumeElapsedUs / MaybeYield).
+        cur_resume_start_us_ = ReadTimeMicroseconds();
+    }
+    /** @brief No task runs: clears what SwitchToTask recorded. */
+    void LeaveTask()
+    {
+        running_ = nullptr;
+        running_ds_shard_id_ = kUnsetDsShard;
+        running_term_ = 0;
+    }
+
     template <typename F>
     void StartTask(KvTask *task, KvRequest *req, F lbd)
     {
         task->req_ = req;
         task->result_err_ = KvError::NoError;
         task->status_ = TaskStatus::Ongoing;
-        running_ = task;
-        // Mark the resume start so a cooperative background loop measures this
-        // first segment from now, not from the previously resumed task's
-        // timestamp (see CurResumeElapsedUs / MaybeYield).
-        cur_resume_start_us_ = ReadTimeMicroseconds();
+        // The request named its data store shard; the task takes the shard's
+        // term now, once, and carries both from here on.
+        task->ds_shard_id_ = req->DsShard();
+        task->term_ = store_->ShardTerm(task->ds_shard_id_);
+        if (task->ds_shard_id_ != kUnsetDsShard &&
+            task->Type() != TaskType::DetachShard)
+        {
+            ++active_tasks_by_shard_[task->ds_shard_id_];
+        }
+        SwitchToTask(task);
         task->coro_ = boost::context::callcc(
             std::allocator_arg,
             stack_allocator_,
@@ -188,7 +270,7 @@ private:
                 task->status_ = TaskStatus::Finished;
                 return std::move(shard->main_);
             });
-        running_ = nullptr;
+        LeaveTask();
         if (task->status_ == TaskStatus::Finished)
         {
             OnTaskFinished(task);
@@ -213,6 +295,12 @@ private:
     metrics::TimePoint finished_request_start_{};
 #endif
 
+    /**
+     * The write requests of one partition waiting for their turn. Writes to a
+     * partition run one at a time: TryStartPendingWrite starts the front
+     * request only while no write task of the partition is in flight, and
+     * OnTaskFinished starts the next one when that task ends.
+     */
     class PendingWriteQueue
     {
     public:
@@ -227,6 +315,15 @@ private:
         FileGcRequest file_gc_req_;
         LocalGcRequest local_gc_req_;
         CleanExpiredRequest expire_req_;
+        /**
+         * True while a write task of this partition is in flight: set by
+         * TryStartPendingWrite when it hands the front request to ProcessReq
+         * (reset at once if the task manager could not start a task) and
+         * cleared by OnTaskFinished. The running request is no longer in the
+         * queue, so an empty queue does not mean the partition is idle; this
+         * flag does. The shard detach relies on it too (FailPendingRequestsOf,
+         * EvictDsShard).
+         */
         bool running_{false};
 
     private:
@@ -277,6 +374,18 @@ private:
     };
     std::vector<DelayedEntry> delayed_requests_;
 
+    /**
+     * Tasks running per data store shard (KvTask::ds_shard_id_), kept by
+     * StartTask and OnTaskFinished. A detach task waits for its shard's count
+     * to reach 0.
+     */
+    std::unordered_map<DsShardId, uint32_t> active_tasks_by_shard_;
+    /**
+     * Detach tasks blocked until their shard's running tasks finish; the task
+     * that brings a count to 0 resumes the matching one.
+     */
+    std::unordered_map<DsShardId, KvTask *> waiting_detaches_;
+
 #ifdef ELOQ_MODULE_ENABLED
     std::atomic<size_t> req_queue_size_{0};
 #endif
@@ -294,5 +403,6 @@ private:
     friend class EloqStoreModule;
     friend class EloqStore;
     friend class KvRequest;
+    friend class DetachShardTask;
 };
 }  // namespace eloqstore

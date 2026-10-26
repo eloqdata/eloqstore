@@ -173,16 +173,6 @@ KvError ObjectStore::EnsureBucketExists()
     return async_http_mgr_->EnsureBucketExists();
 }
 
-KvError ObjectStore::BootstrapUpsertTermFile(std::string_view remote_path,
-                                             uint64_t process_term)
-{
-    if (!async_http_mgr_)
-    {
-        return KvError::CloudErr;
-    }
-    return async_http_mgr_->BootstrapUpsertTermFile(remote_path, process_term);
-}
-
 void ObjectStore::SubmitTask(ObjectStore::Task *task, Shard *owner_shard)
 {
     CHECK(task != nullptr);
@@ -380,194 +370,6 @@ KvError AsyncHttpManager::EnsureBucketExists()
     curl_slist_free_all(headers);
     curl_easy_cleanup(easy);
     return result;
-}
-
-KvError AsyncHttpManager::BootstrapUpsertTermFile(std::string_view remote_path,
-                                                  uint64_t process_term)
-{
-    auto perform_download =
-        [this,
-         remote_path]() mutable -> std::tuple<std::string, std::string, KvError>
-    {
-        ObjectStore::DownloadTask task{std::string(remote_path)};
-        CURL *easy = curl_easy_init();
-        if (!easy)
-        {
-            return {"", "", KvError::CloudErr};
-        }
-
-        curl_easy_setopt(easy, CURLOPT_PROXY, "");
-        curl_easy_setopt(easy, CURLOPT_NOPROXY, "*");
-        curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, WriteCallback);
-        curl_easy_setopt(easy, CURLOPT_WRITEDATA, &task);
-        curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, HeaderCallback);
-        curl_easy_setopt(easy, CURLOPT_HEADERDATA, &task);
-        curl_easy_setopt(easy, CURLOPT_TIMEOUT, 300L);
-
-        if (!SetupDownloadRequest(&task, easy))
-        {
-            CleanupTaskResources(&task);
-            curl_easy_cleanup(easy);
-            return {"", "", task.error_};
-        }
-
-        CURLcode res = curl_easy_perform(easy);
-        int64_t response_code = 0;
-        if (res == CURLE_OK)
-        {
-            curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &response_code);
-        }
-        curl_easy_cleanup(easy);
-        CleanupTaskResources(&task);
-
-        if (res != CURLE_OK)
-        {
-            return {"", "", ClassifyCurlError(res)};
-        }
-        if (response_code >= 200 && response_code < 300)
-        {
-            return {std::string(task.response_data_.view()),
-                    std::move(task.etag_),
-                    KvError::NoError};
-        }
-        if (response_code == 404)
-        {
-            return {"", "", KvError::NotFound};
-        }
-        return {"", "", ClassifyHttpError(response_code)};
-    };
-
-    auto perform_upload =
-        [this, remote_path](
-            std::string_view data,
-            std::string_view if_match,
-            std::string_view if_none_match) -> std::pair<KvError, int64_t>
-    {
-        ObjectStore::UploadTask task{std::string(remote_path), true};
-        task.data_buffer_.append(data);
-        task.file_size_ = data.size();
-        task.if_match_ = std::string(if_match);
-        task.if_none_match_ = std::string(if_none_match);
-
-        CURL *easy = curl_easy_init();
-        if (!easy)
-        {
-            return {KvError::CloudErr, 0};
-        }
-
-        curl_easy_setopt(easy, CURLOPT_PROXY, "");
-        curl_easy_setopt(easy, CURLOPT_NOPROXY, "*");
-        curl_easy_setopt(easy, CURLOPT_WRITEFUNCTION, WriteCallback);
-        curl_easy_setopt(easy, CURLOPT_WRITEDATA, &task);
-        curl_easy_setopt(easy, CURLOPT_HEADERFUNCTION, HeaderCallback);
-        curl_easy_setopt(easy, CURLOPT_HEADERDATA, &task);
-        curl_easy_setopt(easy, CURLOPT_TIMEOUT, 300L);
-
-        if (!SetupUploadRequest(&task, easy))
-        {
-            CleanupTaskResources(&task);
-            curl_easy_cleanup(easy);
-            return {task.error_, 0};
-        }
-
-        CURLcode res = curl_easy_perform(easy);
-        int64_t response_code = 0;
-        if (res == CURLE_OK)
-        {
-            curl_easy_getinfo(easy, CURLINFO_RESPONSE_CODE, &response_code);
-        }
-        curl_easy_cleanup(easy);
-        CleanupTaskResources(&task);
-
-        if (res != CURLE_OK)
-        {
-            return {ClassifyCurlError(res), response_code};
-        }
-        if (response_code >= 200 && response_code < 300)
-        {
-            return {KvError::NoError, response_code};
-        }
-        if (response_code == 404)
-        {
-            return {KvError::NotFound, response_code};
-        }
-        return {ClassifyHttpError(response_code), response_code};
-    };
-
-    constexpr uint64_t kMaxAttempts = 10;
-    for (uint64_t attempt = 0; attempt < kMaxAttempts; ++attempt)
-    {
-        auto [body, etag, read_err] = perform_download();
-        if (read_err == KvError::NotFound)
-        {
-            auto [create_err, response_code] =
-                perform_upload(std::to_string(process_term), "", "*");
-            if (create_err == KvError::NoError)
-            {
-                return KvError::NoError;
-            }
-            if (create_err == KvError::CloudErr &&
-                (response_code == 409 || response_code == 412))
-            {
-                continue;
-            }
-            return create_err;
-        }
-        if (read_err != KvError::NoError)
-        {
-            return read_err;
-        }
-
-        std::string_view term_str = body;
-        while (!term_str.empty() &&
-               (term_str.front() == ' ' || term_str.front() == '\t' ||
-                term_str.front() == '\r' || term_str.front() == '\n'))
-        {
-            term_str.remove_prefix(1);
-        }
-        while (!term_str.empty() &&
-               (term_str.back() == ' ' || term_str.back() == '\t' ||
-                term_str.back() == '\r' || term_str.back() == '\n'))
-        {
-            term_str.remove_suffix(1);
-        }
-
-        uint64_t current_term = 0;
-        try
-        {
-            current_term = std::stoull(std::string(term_str));
-        }
-        catch (const std::exception &)
-        {
-            return KvError::Corrupted;
-        }
-
-        if (current_term > process_term)
-        {
-            return KvError::ExpiredTerm;
-        }
-        if (current_term == process_term)
-        {
-            return KvError::NoError;
-        }
-
-        auto [update_err, response_code] =
-            perform_upload(std::to_string(process_term), etag, "");
-        if (update_err == KvError::NoError)
-        {
-            return KvError::NoError;
-        }
-        if (update_err == KvError::NotFound ||
-            (update_err == KvError::CloudErr &&
-             (response_code == 404 || response_code == 409 ||
-              response_code == 412)))
-        {
-            continue;
-        }
-        return update_err;
-    }
-
-    return KvError::CloudErr;
 }
 
 void AsyncHttpManager::PerformRequests()
@@ -793,6 +595,12 @@ bool AsyncHttpManager::SetupUploadRequest(ObjectStore::UploadTask *task,
         "Content-Length: " + std::to_string(task->file_size_);
     task->headers_ = curl_slist_append(task->headers_, content_length.c_str());
     task->headers_ = curl_slist_append(task->headers_, "Expect:");
+    // The URL is presigned over the host header only. Left alone, curl adds
+    // "Content-Type: application/x-www-form-urlencoded" to a POSTFIELDS body,
+    // a header nothing signed, and an S3 front end that folds it into its
+    // signature check (s3proxy) rejects every upload. An empty value makes
+    // curl send no Content-Type at all.
+    task->headers_ = curl_slist_append(task->headers_, "Content-Type:");
 
     // Add conditional headers if provided
     if (!task->if_match_.empty())

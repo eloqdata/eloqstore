@@ -9,6 +9,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
+#include <vector>
 
 #include "absl/container/flat_hash_set.h"
 #include "common.h"
@@ -193,6 +194,18 @@ public:
     // (it can run inside Erase() and would re-enter the erase logic).
     Entry *FindNoErase(const TableIdent &tbl_id);
     void Erase(const TableIdent &tbl_id);
+    /**
+     * @brief Lists the partitions that have a cached root meta.
+     *
+     * This manager holds the cached RootMeta of every open partition, one
+     * Entry each. This inserts the TableIdent of every entry, including those
+     * awaiting a deferred erase, so that a data store shard's detach can pick
+     * out the partitions whose root metas it drops.
+     *
+     * @param[in,out] partitions Receives the partitions; what it already
+     * holds is kept, so several sources can collect into one set.
+     */
+    void CollectPartitions(std::unordered_set<TableIdent> &partitions) const;
 
     void Pin(Entry *entry);
     void Unpin(Entry *entry);

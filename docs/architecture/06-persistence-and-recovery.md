@@ -96,10 +96,12 @@ the manifest and directory FDs.
 
 ## Terms
 
-The embedding system passes a `term` to `Start()` (0 in Local mode). Files and
-manifests are stamped with the writer's term. In cloud mode,
-`CloudStorageService` bootstrap CAS-updates `CURRENT_TERM_<branch>_<pg_id>`
-(ETag-guarded); a writer that discovers a newer published term gets
+The embedding system passes a `term` with each data store shard it attaches
+(`AttachShard`; `Start()` attaches one), 0 in Local mode. Files and
+manifests are stamped with the writer's term. In cloud mode the attach
+CAS-updates that shard's `CURRENT_TERM_<branch>_<pg_id>` (ETag-guarded), from
+a task on a worker shard (`AttachShardTask` → `CloudStoreMgr::UpsertTermFile`,
+doc 02); a writer that discovers a newer published term gets
 `KvError::ExpiredTerm` and must stop — this fences zombie writers after
 failover. Readers/GC treat *newer-term* files conservatively (see BranchGuard
 below). `ManifestTermFromFilename` etc. parse terms back out of names.

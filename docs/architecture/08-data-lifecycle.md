@@ -86,8 +86,12 @@ requests in each `PendingWriteQueue`.
 - **CreateArchive / CreateBranch / DeleteBranch** — manifest-level operations
   (doc 06) executed under the write lock for the partition.
 
-`ArchiveCrond` (its own thread) periodically submits archive requests for all
-owned partitions at `archive_interval_secs`, bounded by `max_archive_tasks`.
+`ArchiveCrond` (its own thread) archives each attached data store shard on
+that shard's own schedule: every `archive_interval_secs`, measured from the
+end of its previous archive, starting one interval after the attach and
+ending at its detach (doc 02, "Data store shards"). Each archive is one
+`GlobalArchiveRequest` for the shard's partitions, bounded by
+`max_archive_tasks`.
 
 ## File garbage collection (`include/file_gc.h`, `src/file_gc.cpp`)
 

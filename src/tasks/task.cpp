@@ -603,6 +603,16 @@ KvTask *ThdTask()
     return shard->running_;
 }
 
+DsShardId ThdDsShard()
+{
+    return shard->running_ds_shard_id_;
+}
+
+uint64_t ThdTerm()
+{
+    return shard->running_term_;
+}
+
 void MaybeYield()
 {
     // Null-safe defensive guard: only yield when a task is actually running on

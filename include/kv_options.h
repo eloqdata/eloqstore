@@ -429,15 +429,20 @@ struct KvOptions
     uint64_t auto_reopen_pending_time_us = 10'000'000;
 
     /**
-     * @brief Filter function to determine which partitions belong to this
-     * instance.
-     * The filter returning true means that this table partition belongs to the
-     * current instance and should be included in operations like prewarming,
-     * snapshotting, etc.
-     * If not set (empty), all partitions are considered to belong to this
-     * instance.
+     * @brief Tells which partitions belong to a data store shard this store
+     * hosts.
+     *
+     * The operations that sweep the storage (prewarm, global archive, reopen
+     * and create-branch) list every partition and keep those for which the
+     * filter returns true for the shard they run for. DetachShard drops the
+     * state of the partitions the filter gives the detaching shard, so it
+     * must still give them when the detach runs, and hosting more than one
+     * shard requires the filter: AttachShard refuses a second shard without
+     * it. The filter is called from the store's threads with the
+     * shard id a request was sent with (KvRequest::SetDsShard). If not set,
+     * every partition is taken to belong to every shard.
      */
-    std::function<bool(const TableIdent &)> partition_filter;
+    std::function<bool(DsShardId, const TableIdent &)> partition_filter;
 };
 
 }  // namespace eloqstore

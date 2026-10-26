@@ -151,6 +151,8 @@ set(ELOQ_STORE_SOURCES
         src/tasks/write_buffer_aggregator.cpp
         src/tasks/prewarm_task.cpp
         src/tasks/read_task.cpp
+        src/tasks/attach_shard_task.cpp
+        src/tasks/detach_shard_task.cpp
         src/tasks/reopen_task.cpp
         src/tasks/scan_task.cpp
         src/tasks/task.cpp

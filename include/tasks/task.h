@@ -28,7 +28,18 @@ class EloqStore;
 
 inline EloqStore *eloq_store;
 inline thread_local Shard *shard;
+/** @return The task running on this thread's worker shard (Shard::running_). */
 KvTask *ThdTask();
+/**
+ * @return The data store shard the running task works for
+ * (Shard::running_ds_shard_id_); kUnsetDsShard outside a task.
+ */
+DsShardId ThdDsShard();
+/**
+ * @return The term of the running task's data store shard
+ * (Shard::running_term_); 0 in local mode and outside a task.
+ */
+uint64_t ThdTerm();
 AsyncIoManager *IoMgr();
 const KvOptions *Options();
 const Comparator *Comp();
@@ -60,6 +71,8 @@ enum struct TaskType
     Prewarm,
     ListObject,
     ListStandbyPartition,
+    AttachShard,
+    DetachShard,
     BatchWrite,
     Reopen,
     BackgroundWrite
@@ -216,6 +229,18 @@ public:
     KvRequest *req_{nullptr};
     continuation coro_;
     KvTask *next_{nullptr};
+    /**
+     * The data store shard this task works for: the one its request named.
+     * Set when the task starts (Shard::StartTask) and recorded on the worker
+     * shard at every switch to the task (Shard::running_ds_shard_id_).
+     */
+    DsShardId ds_shard_id_{kUnsetDsShard};
+    /**
+     * The term of that shard, read once from the store's shard table when the
+     * task starts; fixed while the shard stays attached. Recorded as
+     * Shard::running_term_, which AsyncIoManager::ProcessTerm returns.
+     */
+    uint64_t term_{0};
 };
 
 class WaitingZone

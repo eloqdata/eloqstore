@@ -5,12 +5,14 @@
 #include <bthread/mutex.h>
 #endif
 
+#include <array>
 #include <atomic>
 #include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "error.h"
@@ -57,7 +59,9 @@ enum class RequestType : uint8_t
     GlobalListArchiveTags,
     CreateBranch,
     DeleteBranch,
-    GlobalCreateBranch
+    GlobalCreateBranch,
+    AttachShard,
+    DetachShard
 };
 
 inline const char *RequestTypeToString(RequestType type)
@@ -106,6 +110,10 @@ inline const char *RequestTypeToString(RequestType type)
         return "delete_branch";
     case RequestType::GlobalCreateBranch:
         return "global_create_branch";
+    case RequestType::AttachShard:
+        return "attach_shard";
+    case RequestType::DetachShard:
+        return "detach_shard";
     default:
         return "unknown";
     }
@@ -141,6 +149,23 @@ public:
     void SetTableId(TableIdent tbl_id);
     const TableIdent &TableId() const;
     uint64_t UserData() const;
+    /**
+     * @brief Names the data store shard this request works for.
+     *
+     * The store runs the request's partition in that shard's term and admits
+     * the request only while the shard is attached (EloqStore::AttachShard).
+     * A request left unset works for the shard EloqStore::Start attached.
+     * @param ds_shard_id The shard's id.
+     */
+    void SetDsShard(DsShardId ds_shard_id)
+    {
+        ds_shard_id_ = ds_shard_id;
+    }
+    /** @return The data store shard the request works for, or kUnsetDsShard. */
+    DsShardId DsShard() const
+    {
+        return ds_shard_id_;
+    }
 
     /**
      * @brief Test if this request is done.
@@ -163,6 +188,7 @@ protected:
     void SetDone(KvError err);
 
     TableIdent tbl_id_;
+    DsShardId ds_shard_id_{kUnsetDsShard};
     uint64_t user_data_{0};
     std::function<void(KvRequest *)> callback_{nullptr};
     uint8_t reopen_retry_remaining_{0};
@@ -877,6 +903,33 @@ private:
     friend class EloqStore;
 };
 
+/**
+ * @brief Internal: tells one worker shard to raise a data store shard's term
+ * file to the shard's attach term (EloqStore::AttachShard sends one, in cloud
+ * mode only).
+ */
+class AttachShardRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::AttachShard;
+    }
+};
+
+/**
+ * @brief Internal: tells one worker shard to let go of a data store shard's
+ * partitions (EloqStore::DetachShard sends one to every worker shard).
+ */
+class DetachShardRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::DetachShard;
+    }
+};
+
 class ArchiveCrond;
 class ObjectStore;
 class EloqStoreModule;
@@ -895,13 +948,139 @@ public:
         Stopped = 3,
     };
 
+    /** @brief What a data store shard is to this store. */
+    enum class DsShardState : uint8_t
+    {
+        Detached = 0,  ///< Not hosted; its requests are refused (NotRunning).
+        Attaching,     ///< AttachShard is checking its term; requests refused.
+        Attached,      ///< Hosted: its requests run in its term.
+        Expired,       ///< A newer term exists; requests fail (ExpiredTerm).
+        Detaching,     ///< DetachShard is draining it; requests refused.
+    };
+
+    /** @brief The highest data store shard id plus one (ids index a table). */
+    static constexpr size_t kMaxDsShards = 1024;
+
     EloqStore(const KvOptions &opts);
     EloqStore(const EloqStore &) = delete;
     EloqStore(EloqStore &&) = delete;
     ~EloqStore();
+    /**
+     * @brief Starts the store and attaches one data store shard: StartInstance
+     * followed by AttachShard. Kept for embedders that host one shard.
+     *
+     * @param branch The active branch.
+     * @param term The shard's term (0 in local mode).
+     * @param ds_shard_id The shard's id. Requests that name no shard
+     * (KvRequest::SetDsShard) work for this one.
+     * @return NoError, or the error of either step; after a failed attach the
+     * store is stopped again.
+     */
     KvError Start(std::string_view branch = MainBranchName,
                   uint64_t term = 0,
-                  PartitonGroupId partition_group_id = 0);
+                  DsShardId ds_shard_id = 0);
+    /**
+     * @brief Starts the store with no data store shard attached: opens the
+     * store paths, builds the worker shards and starts the services. Requests
+     * are admitted once a shard is attached.
+     *
+     * @param branch The active branch, which every hosted shard shares.
+     * @return NoError, or why the store could not start.
+     */
+    KvError StartInstance(std::string_view branch = MainBranchName);
+    /**
+     * @brief Hosts a data store shard: its partitions are served in @p term
+     * from now on. In cloud mode the shard's term file,
+     * CURRENT_TERM_<branch>_<id>, is first raised to @p term with a
+     * compare-and-swap, and the attach fails with ExpiredTerm if the file
+     * holds a newer term. Each partition then takes over lazily, on its first
+     * open: its manifest is promoted to @p term, and a manifest of a newer
+     * term makes that partition's requests fail with ExpiredTerm and marks the
+     * shard Expired.
+     *
+     * Only cloud mode hosts more than one shard at a time: data on a node's
+     * own disk has one owner. Hosting more than one also needs
+     * KvOptions::partition_filter, which tells a detach which partitions the
+     * other shards keep.
+     *
+     * When scheduled archiving is on (KvOptions::archive_interval_secs), the
+     * shard is archived on its own schedule from the attach until its detach,
+     * every interval, the first time one interval after the attach.
+     *
+     * @note In cloud mode this waits for the term file's compare-and-swap,
+     * which a task on one worker shard runs (AttachShardRequest); in module
+     * builds the wait is a bthread condition variable. Call it from a
+     * bthread, such as an RPC handler's, or from a pthread that is not a brpc
+     * worker. Never call it from a brpc worker outside a bthread, such as a
+     * module hook (Process) or other work the embedder runs on the workers'
+     * own loop: the wait would block that worker's pthread, and with it the
+     * worker shard the pthread drives, which may be the one running the swap.
+     *
+     * @param ds_shard_id The shard's id, below kMaxDsShards.
+     * @param term The shard's term; ignored (0) in local mode.
+     * @return NoError; InvalidArgs if the id is out of range, the shard is not
+     * detached, or a second shard is attached outside cloud mode or without a
+     * partition filter; NotRunning if the store is not running; ExpiredTerm
+     * as described.
+     */
+    KvError AttachShard(DsShardId ds_shard_id, uint64_t term);
+    /**
+     * @brief Stops hosting a data store shard. New requests for it are refused
+     * at once; the call returns after every worker shard has finished the
+     * tasks running on its partitions, failed the requests queued for them,
+     * and dropped the in-memory state, open files and local manifests of its
+     * partitions, those KvOptions::partition_filter gives it. The filter must
+     * still give the shard those partitions when this runs: detach a shard
+     * before reassigning them. The cached copies of sealed data files stay,
+     * since those never change. The shard's archive schedule ends first: no
+     * new scheduled archive of it starts.
+     *
+     * A request still on its way to a worker shard when the detach runs, one
+     * whose submission has not returned or that its worker shard has not
+     * dequeued yet, is refused if the shard is still detached when the worker
+     * shard gets to it, and runs in the new term if the shard has been
+     * attached again by then. Either way each task runs entirely in one term.
+     *
+     * Waits on the worker shards' completions (a bthread-aware wait in module
+     * builds), so it may be called from an RPC handler's bthread.
+     *
+     * @param ds_shard_id The shard's id.
+     * @return NoError, also when the shard is not attached; InvalidArgs if the
+     * id is out of range or the shard is being attached or detached by another
+     * caller.
+     */
+    KvError DetachShard(DsShardId ds_shard_id);
+    /**
+     * @param ds_shard_id The shard's id.
+     * @return The shard's state; Detached for an id out of range.
+     */
+    DsShardState ShardState(DsShardId ds_shard_id) const
+    {
+        return ds_shard_id < kMaxDsShards ? ds_shards_[ds_shard_id].state_.load(
+                                                std::memory_order_acquire)
+                                          : DsShardState::Detached;
+    }
+    /**
+     * @param ds_shard_id The shard's id.
+     * @return The term the shard was attached with; 0 if not attached or out
+     * of range.
+     */
+    uint64_t ShardTerm(DsShardId ds_shard_id) const
+    {
+        return ds_shard_id < kMaxDsShards ? ds_shards_[ds_shard_id].term_.load(
+                                                std::memory_order_acquire)
+                                          : 0;
+    }
+    /** @return The ids of the shards that are attached or expired. */
+    std::vector<DsShardId> HostedShards() const;
+    /**
+     * @return The shard that requests naming none work for: the one Start
+     * attached, or the first one attached; kUnsetDsShard if none.
+     */
+    DsShardId DefaultDsShard() const
+    {
+        return default_ds_shard_.load(std::memory_order_acquire);
+    }
     void Stop();
     bool IsStopped() const;
     bool Inited() const;
@@ -947,13 +1126,15 @@ public:
     size_t DataCacheMisses() const;
     void ResetDataCacheCounters();
 
+    /** @return The default data store shard's term (see DefaultDsShard). */
     uint64_t Term() const
     {
-        return term_;
+        return ShardTerm(DefaultDsShard());
     }
+    /** @return The default data store shard's id (see DefaultDsShard). */
     PartitonGroupId PartitionGroupId() const
     {
-        return partition_group_id_;
+        return DefaultDsShard();
     }
 
     KvError UpdateStandbyMasterStorePaths(std::vector<std::string> paths,
@@ -1015,7 +1196,20 @@ public:
     }
 
 private:
+    /** @brief One data store shard's slot in the table indexed by id. */
+    struct DsShardSlot
+    {
+        std::atomic<DsShardState> state_{DsShardState::Detached};
+        std::atomic<uint64_t> term_{0};
+    };
+
     bool SendRequest(KvRequest *req);
+    /**
+     * @brief Marks a data store shard Expired: a partition of it met a newer
+     * term. Called by a worker shard; a no-op unless the shard is Attached.
+     * @param ds_shard_id The shard's id.
+     */
+    void MarkShardExpired(DsShardId ds_shard_id);
     // Submit @p req to an arbitrary shard and block until it completes. Used by
     // the global cloud-listing handlers, which are not tied to a partition, so
     // any shard can serve them. If the store is stopping the shard refuses the
@@ -1043,8 +1237,42 @@ private:
     std::vector<std::unique_ptr<metrics::Meter>> metrics_meters_;
 #endif
     std::atomic<Status> status_{Status::Stopped};
-    uint64_t term_{0};
-    PartitonGroupId partition_group_id_{0};
+    /**
+     * The data store shard table: one slot per shard id, holding the shard's
+     * state and term. Read without a lock on every request (SendRequest,
+     * Shard::AdmitRequest, Shard::StartTask). Changed by AttachShard,
+     * DetachShard and Stop under ds_shard_mux_, and by MarkShardExpired with
+     * a compare-and-swap on one slot's state.
+     */
+    std::array<DsShardSlot, kMaxDsShards> ds_shards_;
+    /**
+     * Serializes the changes AttachShard, DetachShard and Stop make to the
+     * shard table (ds_shards_) and to default_ds_shard_.
+     *
+     * The embedder may call these concurrently from different threads or
+     * bthreads: two RPC handlers attaching or detaching different data store
+     * shards, or Stop while an attach is in flight. Each change spans more
+     * than one atomic, so the atomics alone do not keep it consistent:
+     * - AttachShard checks that no other slot is hosted (outside cloud mode,
+     *   or without a partition filter) and then claims its own slot. Two
+     *   concurrent attaches could otherwise both pass the check.
+     * - AttachShard and DetachShard check that the store is running and then
+     *   publish a slot's state together with default_ds_shard_, while Stop
+     *   resets every slot. An attach finishing late must not overwrite that
+     *   reset.
+     *
+     * Never held across the long waits: AttachShard's wait for a worker
+     * shard to swap the term file, a cloud round trip, and DetachShard's wait
+     * for the worker shards to finish the shard's tasks. In module builds a
+     * caller is a bthread on one of the host's worker pthreads, and those
+     * pthreads also drive the worker shards. The waits park only the waiting
+     * bthread, but another caller that blocks on this std::mutex blocks its
+     * whole pthread, and so stops the worker shard that pthread drives. If the
+     * holder were a DetachShard waiting for that very worker shard, neither
+     * could proceed.
+     */
+    std::mutex ds_shard_mux_;
+    std::atomic<DsShardId> default_ds_shard_{kUnsetDsShard};
     std::string branch_{MainBranchName};
     std::unique_ptr<ArchiveCrond> archive_crond_{nullptr};
     std::unique_ptr<PrewarmService> prewarm_service_{nullptr};

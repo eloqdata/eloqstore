@@ -372,8 +372,9 @@ TEST_CASE("delete branch removes all term manifests", "[branch]")
     // Simulate the branch having been written to at higher terms (e.g. after a
     // failover).  Write placeholder manifests for terms 1–3 and create
     // CURRENT_TERM_feature_0 with value "3" (branch creation does not write
-    // the term file; it is normally created at store startup via
-    // BootstrapUpsertTermFile, so we create it manually here).
+    // the term file; it is normally created when a data store shard is
+    // attached, via CloudStoreMgr::UpsertTermFile, so we create it manually
+    // here).
     // DeleteBranchFiles reads CURRENT_TERM to discover max_term, then unlinks
     // manifests 0..max_term; it never reads the manifest contents, so
     // placeholder content is fine.
