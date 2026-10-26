@@ -69,7 +69,10 @@ only when the embedding runtime (EloqKV's tx service, with bthread) defines
   one store: `StartInstance` once, then `AttachShard`/`DetachShard` as
   leadership comes and goes, each request stamped with its shard
   (`KvRequest::SetDsShard`) and `partition_filter(ds_shard_id, tbl_id)`
-  answering from the host's bucket map (doc 02). `AttachShard` and
+  answering from the host's bucket map (doc 02); the filter is required to
+  host more than one shard, since a detach drops the state of the
+  partitions it gives the detaching shard, and `DetachShard` must run before
+  the bucket map moves those partitions elsewhere. `AttachShard` and
   `DetachShard` wait with bthread-aware waits, so an RPC handler's bthread
   may call them; a module hook (`Process`) must not, since `DetachShard`
   waits for every worker shard, its own included.

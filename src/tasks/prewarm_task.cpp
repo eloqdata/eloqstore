@@ -287,9 +287,8 @@ void PrewarmService::PrewarmLoop()
             for (size_t i = 0; i < sz; ++i)
             {
                 const PrewarmJob &job = jobs[i];
-                PrewarmCloudCache(
-                    job.table_.IsValid() ? job.table_.ToString() : "",
-                    job.ds_shard_id_);
+                PrewarmCloudCache(job.table_ ? job.table_->ToString() : "",
+                                  job.ds_shard_id_);
             }
         } while (sz == jobs.size());
     }
@@ -319,7 +318,7 @@ void PrewarmService::Prewarm(DsShardId ds_shard_id, const TableIdent &table)
 
 void PrewarmService::PrewarmShard(DsShardId ds_shard_id)
 {
-    prewarm_jobs_.enqueue(PrewarmJob{ds_shard_id, TableIdent{}});
+    prewarm_jobs_.enqueue(PrewarmJob{ds_shard_id, std::nullopt});
 }
 
 bool PrewarmService::ListCloudObjects(

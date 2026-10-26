@@ -434,10 +434,13 @@ struct KvOptions
      *
      * The operations that sweep the storage (prewarm, global archive, reopen
      * and create-branch) list every partition and keep those for which the
-     * filter returns true for the shard they run for. The filter is called
-     * from the store's threads with the shard id a request was sent with
-     * (KvRequest::SetDsShard). If not set, every partition is taken to belong
-     * to every shard.
+     * filter returns true for the shard they run for. DetachShard drops the
+     * state of the partitions the filter gives the detaching shard, so it
+     * must still give them when the detach runs, and hosting more than one
+     * shard requires the filter: AttachShard refuses a second shard without
+     * it. The filter is called from the store's threads with the
+     * shard id a request was sent with (KvRequest::SetDsShard). If not set,
+     * every partition is taken to belong to every shard.
      */
     std::function<bool(DsShardId, const TableIdent &)> partition_filter;
 };

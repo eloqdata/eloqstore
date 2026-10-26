@@ -22,6 +22,7 @@
 #include "error.h"
 #include "global_registered_memory.h"
 #include "standby_service.h"
+#include "tasks/attach_shard_task.h"
 #include "tasks/detach_shard_task.h"
 #include "tasks/list_object_task.h"
 #include "tasks/list_standby_partition_task.h"
@@ -408,7 +409,11 @@ void Shard::AddPendingCompact(const TableIdent &tbl_id)
     PendingWriteQueue &pending_q = it->second;
     CompactRequest &req = pending_q.compact_req_;
     req.SetTableId(tbl_id);
-    // Queued by a task of the partition's data store shard: work for it too.
+    // A write task of this partition calls this (WriteTask::CompactIfNeeded)
+    // to queue a compaction for the data store shard it runs for. Stamped
+    // with that shard, the compaction runs in the shard's term and, like the
+    // shard's other requests, is admitted only while the shard is attached
+    // and is failed when the shard is detached.
     req.SetDsShard(ThdDsShard());
 #ifdef ELOQ_MODULE_ENABLED
     {
@@ -458,6 +463,9 @@ bool Shard::TryAddFileGc(const TableIdent &tbl_id)
     }
 #endif
     req.SetTableId(tbl_id);
+    // A write task of this partition calls this (BatchWriteTask::Drop) to
+    // queue a file GC for the data store shard it runs for; stamped with that
+    // shard as in AddPendingCompact.
     req.SetDsShard(ThdDsShard());
     pending_q.PushBack(&req);
     return true;
@@ -472,6 +480,9 @@ void Shard::AddPendingTTL(const TableIdent &tbl_id)
     PendingWriteQueue &pending_q = it->second;
     CleanExpiredRequest &req = pending_q.expire_req_;
     req.SetTableId(tbl_id);
+    // A write task of this partition calls this (WriteTask::TriggerTTL) to
+    // queue a TTL cleanup for the data store shard it runs for; stamped with
+    // that shard as in AddPendingCompact.
     req.SetDsShard(ThdDsShard());
 #ifdef ELOQ_MODULE_ENABLED
     {
@@ -521,6 +532,9 @@ bool Shard::TryAddLocalGc(const TableIdent &tbl_id)
     }
 #endif
     req.SetTableId(tbl_id);
+    // A reopen task of this partition calls this (ReopenTask::Reopen) to
+    // queue a local file GC for the data store shard it runs for; stamped
+    // with that shard as in AddPendingCompact.
     req.SetDsShard(ThdDsShard());
     pending_q.PushBack(&req);
     return true;
@@ -561,10 +575,13 @@ GlobalRegisteredMemory *Shard::GlobalRegMem()
 
 void Shard::OnReceivedReq(KvRequest *req)
 {
-    if (req->Type() == RequestType::DetachShard)
+    if (req->Type() == RequestType::AttachShard ||
+        req->Type() == RequestType::DetachShard)
     {
-        // Internal, from EloqStore::DetachShard: it is for no partition, so
-        // it bypasses the pending write queues and the admission gate.
+        // Internal, from EloqStore::AttachShard or DetachShard: it is for no
+        // partition, so it bypasses the pending write queues and the
+        // admission gate, which refuses a shard that is being attached or
+        // detached.
         (void) ProcessReq(req);
         return;
     }
@@ -659,9 +676,16 @@ bool Shard::AdmitRequest(KvRequest *req)
     }
     if (req->Type() == RequestType::Reopen)
     {
-        // A reopen driver carries parked waiters: they fail with it. The
-        // internal driver is embedded in the state, so the state goes before
-        // the driver would be completed, as OnTaskFinished does it.
+        // The refused request may be the driver of its partition's pending
+        // reopen, the request that parked requests wait on. Then the waiters
+        // cannot be served either: take them out, drop the pending-reopen
+        // state and fail each of them with the same error.
+        //
+        // If the driver is the internal one, it is an object embedded in the
+        // state just dropped and no longer exists, so return without
+        // completing it. An external driver is the caller's object and is
+        // completed below like any other refused request. OnTaskFinished
+        // treats a finished reopen driver the same way.
         auto it = pending_reopens_.find(req->TableId());
         if (it != pending_reopens_.end() && it->second.DriverRequest() == req)
         {
@@ -761,21 +785,22 @@ KvError Shard::EvictDsShard(DsShardId ds_shard_id)
         }
     };
     // The partitions this worker shard holds state for: those with a root
-    // meta or an open file created by one of the shard's tasks (each records
-    // the shard at creation). The root meta may have been evicted while files
-    // stayed open, or the other way round, so both are walked.
-    std::vector<TableIdent> partitions;
-    index_mgr_.RootMetaManager()->CollectTablesOf(ds_shard_id, partitions);
+    // meta or an open file. The root meta may have been evicted while files
+    // stayed open, or the other way round, so both are collected into one set.
+    std::unordered_set<TableIdent> partitions;
+    index_mgr_.RootMetaManager()->CollectPartitions(partitions);
     const bool has_files = !store_->Options().store_path.empty();
     if (has_files)
     {
-        static_cast<IouringMgr *>(io_mgr_.get())
-            ->CollectTablesOf(ds_shard_id, partitions);
+        static_cast<IouringMgr *>(io_mgr_.get())->CollectPartitions(partitions);
     }
-    std::unordered_set<TableIdent> seen;
+    // Of those, drop the ones the partition filter gives the detaching shard.
+    // Without a filter every partition belongs to every shard; AttachShard
+    // then hosts only one shard, so all of them are its own.
+    const auto &filter = store_->Options().partition_filter;
     for (const TableIdent &tbl_id : partitions)
     {
-        if (!seen.insert(tbl_id).second)
+        if (filter && !filter(ds_shard_id, tbl_id))
         {
             continue;
         }
@@ -1229,6 +1254,14 @@ bool Shard::ProcessReq(KvRequest *req)
     {
         LOG(ERROR) << "GlobalCreateBranch request routed to shard unexpectedly";
         req->SetDone(KvError::InvalidArgs);
+        return true;
+    }
+    case RequestType::AttachShard:
+    {
+        AttachShardTask *task = task_mgr_.GetAttachShardTask();
+        // StartTask gives the task the request's shard and that shard's term.
+        auto lbd = [task]() -> KvError { return task->Attach(); };
+        StartTask(task, req, lbd);
         return true;
     }
     case RequestType::DetachShard:

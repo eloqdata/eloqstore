@@ -28,26 +28,18 @@ class EloqStore;
 
 inline EloqStore *eloq_store;
 inline thread_local Shard *shard;
-/**
- * The data store shard the running task works for, and that shard's term.
- * Copied from the task at every switch to it (Shard::SwitchToTask), so that
- * the code a task runs, down to the file naming in the IO manager, reads them
- * without looking anything up: the request named the shard, the task took the
- * term when it started. kUnsetDsShard and 0 between tasks.
- */
-inline thread_local DsShardId thd_ds_shard_id{kUnsetDsShard};
-inline thread_local uint64_t thd_term{0};
+/** @return The task running on this thread's worker shard (Shard::running_). */
 KvTask *ThdTask();
-/** @return The data store shard the running task works for. */
-inline DsShardId ThdDsShard()
-{
-    return thd_ds_shard_id;
-}
-/** @return The term of the running task's data store shard; 0 in local mode. */
-inline uint64_t ThdTerm()
-{
-    return thd_term;
-}
+/**
+ * @return The data store shard the running task works for
+ * (Shard::running_ds_shard_id_); kUnsetDsShard outside a task.
+ */
+DsShardId ThdDsShard();
+/**
+ * @return The term of the running task's data store shard
+ * (Shard::running_term_); 0 in local mode and outside a task.
+ */
+uint64_t ThdTerm();
 AsyncIoManager *IoMgr();
 const KvOptions *Options();
 const Comparator *Comp();
@@ -79,6 +71,7 @@ enum struct TaskType
     Prewarm,
     ListObject,
     ListStandbyPartition,
+    AttachShard,
     DetachShard,
     BatchWrite,
     Reopen,
@@ -238,14 +231,14 @@ public:
     KvTask *next_{nullptr};
     /**
      * The data store shard this task works for: the one its request named.
-     * Set when the task starts (Shard::StartTask) and published to the thread
-     * at every switch to the task (thd_ds_shard_id).
+     * Set when the task starts (Shard::StartTask) and recorded on the worker
+     * shard at every switch to the task (Shard::running_ds_shard_id_).
      */
     DsShardId ds_shard_id_{kUnsetDsShard};
     /**
      * The term of that shard, read once from the store's shard table when the
-     * task starts; fixed while the shard stays attached. Published as
-     * thd_term, which AsyncIoManager::ProcessTerm returns.
+     * task starts; fixed while the shard stays attached. Recorded as
+     * Shard::running_term_, which AsyncIoManager::ProcessTerm returns.
      */
     uint64_t term_{0};
 };

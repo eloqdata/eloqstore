@@ -17,6 +17,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -868,7 +869,9 @@ KvError EloqStore::StartInstance(std::string_view branch)
 
     if (cloud_service_)
     {
-        // The term files are per data store shard: AttachShard raises them.
+        // Nothing to wait for here, unlike with one store-wide term: each data
+        // store shard's term file is raised by its AttachShard, which admits
+        // none of the shard's requests until the raise succeeds.
         cloud_service_->Start();
     }
     else if (standby_service_)
@@ -929,30 +932,51 @@ KvError EloqStore::AttachShard(DsShardId ds_shard_id, uint64_t term)
     const uint64_t shard_term = mode == StoreMode::Local ? 0 : term;
     DsShardSlot &slot = ds_shards_[ds_shard_id];
     {
-        // The table changes under the mutex; the wait below does not hold it,
-        // since a caller may be a bthread whose pthread also runs a worker
-        // shard in module builds, and another caller must not block that
-        // pthread on the mutex meanwhile.
+        // Concurrent AttachShard, DetachShard and Stop calls are serialized
+        // by ds_shard_mux_ (see its declaration). Here it makes the check
+        // that no other shard is hosted atomic with claiming this slot. It is
+        // released before the term-file wait below.
         std::lock_guard<std::mutex> lk(ds_shard_mux_);
         if (status_.load(std::memory_order_acquire) != Status::Running)
         {
             return KvError::NotRunning;
         }
-        if (mode != StoreMode::Cloud)
+        // Would this attach leave the store hosting more than one data store
+        // shard? Find another shard whose slot is not Detached. Every other
+        // state counts: an Attached or Expired shard holds state until it is
+        // detached; an Attaching one is another AttachShard between its two
+        // critical sections; a Detaching one is still dropping its state on
+        // the worker shards, and without a partition filter that detach drops
+        // every partition, this shard's included.
+        std::optional<DsShardId> other_shard;
+        for (size_t i = 0; i < kMaxDsShards; ++i)
         {
-            // Data on a node's own disk has one owner: one shard at a time,
-            // counting one being attached or detached.
-            for (size_t i = 0; i < kMaxDsShards; ++i)
+            if (i != ds_shard_id &&
+                ds_shards_[i].state_.load(std::memory_order_acquire) !=
+                    DsShardState::Detached)
             {
-                if (i != ds_shard_id &&
-                    ds_shards_[i].state_.load(std::memory_order_acquire) !=
-                        DsShardState::Detached)
-                {
-                    LOG(ERROR) << "AttachShard: data store shard " << i
-                               << " is attached, and only cloud mode hosts "
-                                  "several";
-                    return KvError::InvalidArgs;
-                }
+                other_shard = static_cast<DsShardId>(i);
+                break;
+            }
+        }
+        if (other_shard.has_value())
+        {
+            if (mode != StoreMode::Cloud)
+            {
+                // Data on a node's own disk has one owner: one shard at a
+                // time.
+                LOG(ERROR) << "AttachShard: data store shard " << *other_shard
+                           << " is hosted, and only cloud mode hosts several";
+                return KvError::InvalidArgs;
+            }
+            if (!options_.partition_filter)
+            {
+                // Without the filter every partition belongs to every shard,
+                // and a detach could not tell the shards' state apart.
+                LOG(ERROR) << "AttachShard: data store shard " << *other_shard
+                           << " is hosted, and hosting several needs "
+                              "KvOptions::partition_filter";
+                return KvError::InvalidArgs;
             }
         }
         DsShardState expected = DsShardState::Detached;
@@ -973,14 +997,31 @@ KvError EloqStore::AttachShard(DsShardId ds_shard_id, uint64_t term)
         slot.term_.store(0, std::memory_order_release);
         slot.state_.store(DsShardState::Detached, std::memory_order_release);
     };
-    if (cloud_service_ != nullptr)
+    if (mode == StoreMode::Cloud)
     {
         // Raise the shard's term file, or learn that a newer term holds it.
-        // The compare-and-swap runs on the cloud service's thread; the wait
-        // parks a bthread caller.
-        KvError err = cloud_service_->UpsertTermFile(
-            CurrentTermFileNameForBranchAndPartitionGroup(branch_, ds_shard_id),
-            shard_term);
+        // A task on one worker shard runs the compare-and-swap with the
+        // shard's term set above (AttachShardTask); the id picks the worker
+        // shard, so attaches of different shards spread over them. The wait
+        // parks a bthread caller. A refused request means the store is
+        // stopping.
+        AttachShardRequest req;
+        req.SetDsShard(ds_shard_id);
+        req.err_ = KvError::NoError;
+#ifdef ELOQ_MODULE_ENABLED
+        {
+            std::lock_guard<bthread::Mutex> req_lk(req.mutex_);
+            req.done_ = false;
+        }
+#else
+        req.done_.store(false, std::memory_order_relaxed);
+#endif
+        KvError err = KvError::NotRunning;
+        if (shards_[ds_shard_id % shards_.size()]->AddKvRequest(&req))
+        {
+            req.Wait();
+            err = req.Error();
+        }
         if (err != KvError::NoError)
         {
             LOG(ERROR) << "AttachShard: data store shard " << ds_shard_id
@@ -994,7 +1035,7 @@ KvError EloqStore::AttachShard(DsShardId ds_shard_id, uint64_t term)
         std::lock_guard<std::mutex> lk(ds_shard_mux_);
         if (status_.load(std::memory_order_acquire) != Status::Running)
         {
-            // Stop ran during the wait and reset the table.
+            // Stop ran during the wait and reset the shard table.
             give_up();
             return KvError::NotRunning;
         }
@@ -1002,6 +1043,12 @@ KvError EloqStore::AttachShard(DsShardId ds_shard_id, uint64_t term)
         default_ds_shard_.compare_exchange_strong(
             unset, ds_shard_id, std::memory_order_acq_rel);
         slot.state_.store(DsShardState::Attached, std::memory_order_release);
+    }
+    if (archive_crond_ != nullptr)
+    {
+        // The shard is archived on its own schedule from now until its
+        // detach, the first time one interval from now.
+        archive_crond_->AddShard(ds_shard_id);
     }
     if (prewarm_service_ != nullptr)
     {
@@ -1021,7 +1068,8 @@ KvError EloqStore::DetachShard(DsShardId ds_shard_id)
     DsShardSlot &slot = ds_shards_[ds_shard_id];
     bool running;
     {
-        // As in AttachShard: the mutex covers the table, not the wait.
+        // Under ds_shard_mux_, as in AttachShard; released before waiting for
+        // the worker shards below.
         std::lock_guard<std::mutex> lk(ds_shard_mux_);
         switch (slot.state_.load(std::memory_order_acquire))
         {
@@ -1039,41 +1087,46 @@ KvError EloqStore::DetachShard(DsShardId ds_shard_id)
         slot.state_.store(DsShardState::Detaching, std::memory_order_release);
         running = status_.load(std::memory_order_acquire) == Status::Running;
     }
+    if (archive_crond_ != nullptr)
+    {
+        // No new archive of the shard starts. One in flight is refused or
+        // finished by the drain below, like any other request of the shard.
+        archive_crond_->RemoveShard(ds_shard_id);
+    }
     LOG(INFO) << "Detaching data store shard " << ds_shard_id;
     if (running)
     {
         // One request per worker shard, each completing once its shard holds
         // nothing of this one. A refused request means the store is stopping,
-        // and its shards drain everything then.
-        std::vector<std::unique_ptr<DetachShardRequest>> reqs;
-        reqs.reserve(shards_.size());
+        // and its shards drain everything then. The vector is sized once and
+        // never grows, so the requests the worker shards hold stay in place.
+        std::vector<DetachShardRequest> reqs(shards_.size());
         std::vector<bool> sent(shards_.size(), false);
         for (size_t i = 0; i < shards_.size(); ++i)
         {
-            auto req = std::make_unique<DetachShardRequest>();
-            req->SetDsShard(ds_shard_id);
-            req->err_ = KvError::NoError;
+            DetachShardRequest &req = reqs[i];
+            req.SetDsShard(ds_shard_id);
+            req.err_ = KvError::NoError;
 #ifdef ELOQ_MODULE_ENABLED
             {
-                std::lock_guard<bthread::Mutex> req_lk(req->mutex_);
-                req->done_ = false;
+                std::lock_guard<bthread::Mutex> req_lk(req.mutex_);
+                req.done_ = false;
             }
 #else
-            req->done_.store(false, std::memory_order_relaxed);
+            req.done_.store(false, std::memory_order_relaxed);
 #endif
-            sent[i] = shards_[i]->AddKvRequest(req.get());
-            reqs.push_back(std::move(req));
+            sent[i] = shards_[i]->AddKvRequest(&req);
         }
         for (size_t i = 0; i < shards_.size(); ++i)
         {
             if (sent[i])
             {
-                reqs[i]->Wait();
-                if (reqs[i]->Error() != KvError::NoError)
+                reqs[i].Wait();
+                if (reqs[i].Error() != KvError::NoError)
                 {
                     LOG(WARNING)
                         << "DetachShard: worker shard " << i << " reported "
-                        << reqs[i]->ErrMessage()
+                        << reqs[i].ErrMessage()
                         << " while dropping data store shard " << ds_shard_id;
                 }
             }
@@ -1484,6 +1537,17 @@ void EloqStore::HandleDropTableRequest(DropTableRequest *req)
     {
         req->SetDone(err);
         return;
+    }
+    if (options_.partition_filter)
+    {
+        // The table's partitions are spread over the data store shards: drop
+        // only those of the shard the request works for, as the other
+        // fan-outs do. Without a filter the store hosts one shard, which has
+        // them all.
+        std::erase_if(
+            partitions,
+            [this, req](const TableIdent &tbl_id)
+            { return !options_.partition_filter(req->DsShard(), tbl_id); });
     }
 
     if (partitions.empty())
@@ -2425,7 +2489,17 @@ bool EloqStore::SendRequest(KvRequest *req)
         return false;
     }
 
-    // The request runs for a hosted data store shard, or not at all.
+    // Admission at submission; the request runs for a hosted data store shard,
+    // or not at all.
+    // - A request naming no shard is given the default one here.
+    // - For the store-level requests (DropTable and the Global* requests,
+    //   handled below on this thread), this is the only check: they never
+    //   reach a worker shard themselves, only the per-partition requests they
+    //   fan out do.
+    // - A per-partition request is checked again when its worker shard
+    //   dequeues it (Shard::AdmitRequest), which catches a detach that begins
+    //   after this check. Refusing it here as well makes ExecAsyn return false
+    //   at once rather than complete it through the worker.
     if (req->ds_shard_id_ == kUnsetDsShard)
     {
         req->ds_shard_id_ = default_ds_shard_.load(std::memory_order_acquire);
@@ -2598,6 +2672,7 @@ void EloqStore::InitializeMetrics(metrics::MetricsRegistry *metrics_registry,
                                         "clean_expired",
                                         "create_branch",
                                         "delete_branch",
+                                        "attach_shard",
                                         "detach_shard"}}});
         metrics_meters_[i]->Register(metrics::NAME_ELOQSTORE_REQUESTS_COMPLETED,
                                      metrics::Type::Counter,
@@ -2619,6 +2694,7 @@ void EloqStore::InitializeMetrics(metrics::MetricsRegistry *metrics_registry,
                                         "clean_expired",
                                         "create_branch",
                                         "delete_branch",
+                                        "attach_shard",
                                         "detach_shard"}}});
         metrics_meters_[i]->Register(
             metrics::NAME_ELOQSTORE_INDEX_BUFFER_POOL_USED,

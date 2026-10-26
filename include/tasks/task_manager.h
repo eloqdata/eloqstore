@@ -6,6 +6,7 @@
 #include <memory>
 #include <vector>
 
+#include "tasks/attach_shard_task.h"
 #include "tasks/background_write.h"
 #include "tasks/batch_write_task.h"
 #include "tasks/detach_shard_task.h"
@@ -39,6 +40,8 @@ public:
     ListObjectTask *GetListObjectTask();
     ListStandbyPartitionTask *GetListStandbyPartitionTask();
     ReopenTask *GetReopenTask(const TableIdent &tbl_id);
+    /** @return An idle attach task (the pool grows; never null). */
+    AttachShardTask *GetAttachShardTask();
     /** @return An idle detach task (the pool grows; never null). */
     DetachShardTask *GetDetachShardTask();
     void FreeTask(KvTask *task);
@@ -129,6 +132,7 @@ private:
     TaskPool<ListObjectTask> list_object_pool_;
     TaskPool<ListStandbyPartitionTask> list_standby_partition_pool_;
     TaskPool<ReopenTask> reopen_pool_;
+    TaskPool<AttachShardTask> attach_shard_pool_;
     TaskPool<DetachShardTask> detach_shard_pool_;
     size_t num_active_{0};
     size_t num_active_write_{0};

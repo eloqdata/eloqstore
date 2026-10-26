@@ -60,6 +60,7 @@ enum class RequestType : uint8_t
     CreateBranch,
     DeleteBranch,
     GlobalCreateBranch,
+    AttachShard,
     DetachShard
 };
 
@@ -109,6 +110,8 @@ inline const char *RequestTypeToString(RequestType type)
         return "delete_branch";
     case RequestType::GlobalCreateBranch:
         return "global_create_branch";
+    case RequestType::AttachShard:
+        return "attach_shard";
     case RequestType::DetachShard:
         return "detach_shard";
     default:
@@ -901,6 +904,20 @@ private:
 };
 
 /**
+ * @brief Internal: tells one worker shard to raise a data store shard's term
+ * file to the shard's attach term (EloqStore::AttachShard sends one, in cloud
+ * mode only).
+ */
+class AttachShardRequest : public KvRequest
+{
+public:
+    RequestType Type() const override
+    {
+        return RequestType::AttachShard;
+    }
+};
+
+/**
  * @brief Internal: tells one worker shard to let go of a data store shard's
  * partitions (EloqStore::DetachShard sends one to every worker shard).
  */
@@ -982,21 +999,47 @@ public:
      * shard Expired.
      *
      * Only cloud mode hosts more than one shard at a time: data on a node's
-     * own disk has one owner.
+     * own disk has one owner. Hosting more than one also needs
+     * KvOptions::partition_filter, which tells a detach which partitions the
+     * other shards keep.
+     *
+     * When scheduled archiving is on (KvOptions::archive_interval_secs), the
+     * shard is archived on its own schedule from the attach until its detach,
+     * every interval, the first time one interval after the attach.
+     *
+     * @note In cloud mode this waits for the term file's compare-and-swap,
+     * which a task on one worker shard runs (AttachShardRequest); in module
+     * builds the wait is a bthread condition variable. Call it from a
+     * bthread, such as an RPC handler's, or from a pthread that is not a brpc
+     * worker. Never call it from a brpc worker outside a bthread, such as a
+     * module hook (Process) or other work the embedder runs on the workers'
+     * own loop: the wait would block that worker's pthread, and with it the
+     * worker shard the pthread drives, which may be the one running the swap.
      *
      * @param ds_shard_id The shard's id, below kMaxDsShards.
      * @param term The shard's term; ignored (0) in local mode.
      * @return NoError; InvalidArgs if the id is out of range, the shard is not
-     * detached, or a second shard is attached outside cloud mode; NotRunning
-     * if the store is not running; ExpiredTerm as described.
+     * detached, or a second shard is attached outside cloud mode or without a
+     * partition filter; NotRunning if the store is not running; ExpiredTerm
+     * as described.
      */
     KvError AttachShard(DsShardId ds_shard_id, uint64_t term);
     /**
      * @brief Stops hosting a data store shard. New requests for it are refused
      * at once; the call returns after every worker shard has finished the
      * tasks running on its partitions, failed the requests queued for them,
-     * and dropped their in-memory state, open files and local manifests. The
-     * cached copies of sealed data files stay, since those never change.
+     * and dropped the in-memory state, open files and local manifests of its
+     * partitions, those KvOptions::partition_filter gives it. The filter must
+     * still give the shard those partitions when this runs: detach a shard
+     * before reassigning them. The cached copies of sealed data files stay,
+     * since those never change. The shard's archive schedule ends first: no
+     * new scheduled archive of it starts.
+     *
+     * A request still on its way to a worker shard when the detach runs, one
+     * whose submission has not returned or that its worker shard has not
+     * dequeued yet, is refused if the shard is still detached when the worker
+     * shard gets to it, and runs in the new term if the shard has been
+     * attached again by then. Either way each task runs entirely in one term.
      *
      * Waits on the worker shards' completions (a bthread-aware wait in module
      * builds), so it may be called from an RPC handler's bthread.
@@ -1195,15 +1238,38 @@ private:
 #endif
     std::atomic<Status> status_{Status::Stopped};
     /**
-     * The hosted data store shards, indexed by id. Read on every request;
-     * written by AttachShard, DetachShard and MarkShardExpired.
+     * The data store shard table: one slot per shard id, holding the shard's
+     * state and term. Read without a lock on every request (SendRequest,
+     * Shard::AdmitRequest, Shard::StartTask). Changed by AttachShard,
+     * DetachShard and Stop under ds_shard_mux_, and by MarkShardExpired with
+     * a compare-and-swap on one slot's state.
      */
     std::array<DsShardSlot, kMaxDsShards> ds_shards_;
     /**
-     * Serializes the table's transitions between AttachShard, DetachShard
-     * and Stop. Never held across their waits: a caller may be a bthread, and
-     * blocking its pthread on the mutex would stall the worker shard that
-     * pthread runs in module builds.
+     * Serializes the changes AttachShard, DetachShard and Stop make to the
+     * shard table (ds_shards_) and to default_ds_shard_.
+     *
+     * The embedder may call these concurrently from different threads or
+     * bthreads: two RPC handlers attaching or detaching different data store
+     * shards, or Stop while an attach is in flight. Each change spans more
+     * than one atomic, so the atomics alone do not keep it consistent:
+     * - AttachShard checks that no other slot is hosted (outside cloud mode,
+     *   or without a partition filter) and then claims its own slot. Two
+     *   concurrent attaches could otherwise both pass the check.
+     * - AttachShard and DetachShard check that the store is running and then
+     *   publish a slot's state together with default_ds_shard_, while Stop
+     *   resets every slot. An attach finishing late must not overwrite that
+     *   reset.
+     *
+     * Never held across the long waits: AttachShard's wait for a worker
+     * shard to swap the term file, a cloud round trip, and DetachShard's wait
+     * for the worker shards to finish the shard's tasks. In module builds a
+     * caller is a bthread on one of the host's worker pthreads, and those
+     * pthreads also drive the worker shards. The waits park only the waiting
+     * bthread, but another caller that blocks on this std::mutex blocks its
+     * whole pthread, and so stops the worker shard that pthread drives. If the
+     * holder were a DetachShard waiting for that very worker shard, neither
+     * could proceed.
      */
     std::mutex ds_shard_mux_;
     std::atomic<DsShardId> default_ds_shard_{kUnsetDsShard};

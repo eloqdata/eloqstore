@@ -130,11 +130,6 @@ public:
         TableIdent tbl_id_{};
         RootMeta meta_{};
         size_t bytes_{0};
-        /**
-         * The data store shard of the task that created the entry
-         * (thd_ds_shard_id then). A detach of that shard erases the entry.
-         */
-        DsShardId ds_shard_id_{kUnsetDsShard};
     };
 
     class Handle
@@ -200,13 +195,17 @@ public:
     Entry *FindNoErase(const TableIdent &tbl_id);
     void Erase(const TableIdent &tbl_id);
     /**
-     * @brief Appends the partitions whose entries a data store shard's tasks
-     * created (Entry::ds_shard_id_), for the shard's detach.
-     * @param ds_shard_id The data store shard.
-     * @param[out] tables Receives the partitions.
+     * @brief Lists the partitions that have a cached root meta.
+     *
+     * This manager holds the cached RootMeta of every open partition, one
+     * Entry each. This inserts the TableIdent of every entry, including those
+     * awaiting a deferred erase, so that a data store shard's detach can pick
+     * out the partitions whose root metas it drops.
+     *
+     * @param[in,out] partitions Receives the partitions; what it already
+     * holds is kept, so several sources can collect into one set.
      */
-    void CollectTablesOf(DsShardId ds_shard_id,
-                         std::vector<TableIdent> &tables) const;
+    void CollectPartitions(std::unordered_set<TableIdent> &partitions) const;
 
     void Pin(Entry *entry);
     void Unpin(Entry *entry);

@@ -89,7 +89,8 @@ Local disk = bounded LRU cache of cloud objects; object store = durable copy.
 - **Concurrency limits**: cloud ops take a slot (`AcquireCloudSlot`,
   `max_cloud_concurrency`) and a pooled `DirectIoBuffer`
   (`AcquireCloudBuffer`); both park the coroutine when exhausted.
-- **Terms**: `ReadTermFile`/bootstrap CAS on `CURRENT_TERM_*` (doc 06);
+- **Terms**: `ReadTermFile`, and `UpsertTermFile`, the attach-time CAS on
+  `CURRENT_TERM_*` run from a task (docs 02, 06);
   `process_term_`/`partition_group_id_` stamp uploads and validate manifests.
 
 ## Cloud transport
@@ -101,8 +102,7 @@ Three layers, crossing the thread boundary exactly once each way:
    `KvTask` and shard.
 2. **`CloudStorageService`** (per store) — `cloud_request_threads` worker
    threads, each running a curl multi loop; jobs from a given shard always go
-   to the same worker (curl handles are not thread-safe). Also runs the
-   bootstrap term-file CAS at Start.
+   to the same worker (curl handles are not thread-safe).
 3. **`AsyncHttpManager`** (per shard, driven by the service worker) — builds
    signed HTTP requests via the pluggable `CloudBackend`
    (`include/storage/cloud_backend.h`; AWS S3 / GCS variants selected by

@@ -1,6 +1,7 @@
 #pragma once
 #include <atomic>
 #include <chrono>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -166,7 +167,8 @@ private:
     struct PrewarmJob
     {
         DsShardId ds_shard_id_{kUnsetDsShard};
-        TableIdent table_;  ///< Invalid (default) for the whole shard.
+        /** The partition to prewarm; no value means the whole shard. */
+        std::optional<TableIdent> table_;
     };
     // Rounds queued by AttachShard (a shard) and by a partition's reopen.
     moodycamel::BlockingConcurrentQueue<PrewarmJob> prewarm_jobs_;

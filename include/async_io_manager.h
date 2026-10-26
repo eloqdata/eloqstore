@@ -515,8 +515,8 @@ public:
     /**
      * @brief The term new files and manifests are named with and manifests
      * are fenced against: the term of the running task's data store shard,
-     * read from the thread (thd_term), which the worker shard sets at every
-     * switch to a task. 0 in local mode and outside a task.
+     * read from the worker shard (ThdTerm), which records it at every switch
+     * to a task. 0 in local mode and outside a task.
      * @return The term.
      */
     uint64_t ProcessTerm() const
@@ -680,13 +680,13 @@ public:
      */
     KvError CloseTableFiles(const TableIdent &tbl_id);
     /**
-     * @brief Appends the partitions with a file open for a data store shard
-     * (PartitionFiles::ds_shard_id_), for the shard's detach.
-     * @param ds_shard_id The data store shard.
-     * @param[out] tables Receives the partitions.
+     * @brief Collects the partitions that have a file open on this worker
+     * shard, so that a data store shard's detach can pick out the ones whose
+     * files it closes.
+     * @param[in,out] partitions Receives the partitions; what it already
+     * holds is kept, so several sources can collect into one set.
      */
-    void CollectTablesOf(DsShardId ds_shard_id,
-                         std::vector<TableIdent> &tables) const;
+    void CollectPartitions(std::unordered_set<TableIdent> &partitions) const;
 
     /**
      * @brief Get the number of currently open file descriptors.
@@ -826,13 +826,6 @@ public:
     public:
         const TableIdent *tbl_id_ = nullptr;
         std::unordered_map<TypedFileId, LruFD> fds_;
-        /**
-         * The data store shard the files are open for: taken from the first
-         * task with a shard that opens one of them (a prewarm opens files for
-         * no shard). A detach of that shard closes them. The entry goes with
-         * its last file, so a later owner of the partition starts afresh.
-         */
-        DsShardId ds_shard_id_{kUnsetDsShard};
     };
 
     class Manifest : public ManifestFile
@@ -979,18 +972,6 @@ public:
         uint64_t term,
         bool skip_cloud_lookup = false);
     bool EvictFD();
-    /**
-     * @brief Gives a partition's open files to the running task's data store
-     * shard if they belong to none yet (see PartitionFiles::ds_shard_id_).
-     * @param tbl The partition's files.
-     */
-    static void ClaimTable(PartitionFiles &tbl)
-    {
-        if (tbl.ds_shard_id_ == kUnsetDsShard)
-        {
-            tbl.ds_shard_id_ = ThdDsShard();
-        }
-    }
 
     class WriteReqPool
     {
@@ -1367,6 +1348,26 @@ public:
      */
     std::tuple<uint64_t, std::string, KvError> ReadTermFile(
         std::string_view branch_name, DsShardId ds_shard_id);
+    /**
+     * @brief Raises a data store shard's term file, CURRENT_TERM_<branch>_<id>,
+     * to a term with a compare-and-swap, or learns that a newer term holds
+     * it. Run from a task.
+     *
+     * Reads the file, then uploads the term only if the file is still the
+     * version read: with If-Match on its etag, or with If-None-Match "*" when
+     * it did not exist. A concurrent writer makes the upload fail, and the
+     * swap reads the file again, up to 10 attempts in all.
+     *
+     * @param branch_name The branch.
+     * @param ds_shard_id The data store shard.
+     * @param term The term to write.
+     * @return NoError, also when the file already holds @p term; ExpiredTerm
+     * if it holds a newer term; CloudErr when every attempt lost a race; else
+     * the read's or the upload's error.
+     */
+    KvError UpsertTermFile(std::string_view branch_name,
+                           DsShardId ds_shard_id,
+                           uint64_t term);
 
 private:
     void WaitForCloudTasksToDrain();

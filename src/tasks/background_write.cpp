@@ -682,9 +682,10 @@ KvError BackgroundWrite::CreateBranch(std::string_view branch_name)
         root, ttl_root, mapping, new_max_fp_id, dict_bytes, branch_metadata);
 
     // The CURRENT_TERM file is NOT created here.  It will be created
-    // when a store instance starts with this branch as its active branch
-    // (via BootstrapUpsertTermFile in cloud mode).  Branch deletion and
-    // GC already handle missing term files gracefully.
+    // when a data store shard is attached to a store instance with this
+    // branch as its active branch (CloudStoreMgr::UpsertTermFile in cloud
+    // mode).  Branch deletion and GC already handle missing term files
+    // gracefully.
     return IoMgr()->WriteBranchManifest(
         tbl_ident_, normalized_branch, 0, snapshot);
 }

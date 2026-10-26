@@ -1402,15 +1402,12 @@ KvError IouringMgr::CloseTableFiles(const TableIdent &tbl_id)
     return CloseFiles(tbl_id, std::span<TypedFileId>(file_ids));
 }
 
-void IouringMgr::CollectTablesOf(DsShardId ds_shard_id,
-                                 std::vector<TableIdent> &tables) const
+void IouringMgr::CollectPartitions(
+    std::unordered_set<TableIdent> &partitions) const
 {
     for (const auto &[tbl_id, files] : tables_)
     {
-        if (files.ds_shard_id_ == ds_shard_id)
-        {
-            tables.push_back(tbl_id);
-        }
+        partitions.insert(tbl_id);
     }
 }
 
@@ -1651,7 +1648,6 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
         auto it_tbl = tables_.find(tbl_id);
         if (it_tbl != tables_.end())
         {
-            ClaimTable(it_tbl->second);
             auto it_fd = it_tbl->second.fds_.find(file_id);
             if (it_fd != it_tbl->second.fds_.end())
             {
@@ -1685,7 +1681,6 @@ std::pair<IouringMgr::LruFD::Ref, KvError> IouringMgr::OpenOrCreateFD(
     {
         it_tbl->second.tbl_id_ = &it_tbl->first;
     }
-    ClaimTable(it_tbl->second);
     PartitionFiles *tbl = &it_tbl->second;
     auto [it_fd, _] = tbl->fds_.try_emplace(file_id, tbl, file_id, term);
     LruFD::Ref lru_fd(&it_fd->second, this);
@@ -4500,7 +4495,8 @@ std::pair<ManifestFilePtr, KvError> CloudStoreMgr::GetManifest(
     // Use active branch for all local manifest filenames in this function.
     std::string active_br = std::string(GetActiveBranch());
 
-    // Term file is updated at startup only (BootstrapUpsertTermFile).
+    // The term file is raised when the data store shard is attached
+    // (UpsertTermFile, from AttachShardTask), not here.
 
     KvError dl_err =
         DownloadFile(tbl_id, LruFD::kManifest, active_br, process_term, false);
@@ -5108,6 +5104,69 @@ std::tuple<uint64_t, std::string, KvError> CloudStoreMgr::ReadTermFile(
     }
 
     return {term, download_task.etag_, KvError::NoError};
+}
+
+KvError CloudStoreMgr::UpsertTermFile(std::string_view branch_name,
+                                      DsShardId ds_shard_id,
+                                      uint64_t term)
+{
+    KvTask *current_task = ThdTask();
+    const std::string term_filename =
+        CurrentTermFileNameForBranchAndPartitionGroup(branch_name, ds_shard_id);
+    const std::string term_str = std::to_string(term);
+    constexpr int kMaxAttempts = 10;
+    for (int attempt = 0; attempt < kMaxAttempts; ++attempt)
+    {
+        auto [current_term, etag, read_err] =
+            ReadTermFile(branch_name, ds_shard_id);
+        const bool missing = read_err == KvError::NotFound;
+        if (!missing)
+        {
+            if (read_err != KvError::NoError)
+            {
+                return read_err;
+            }
+            if (current_term > term)
+            {
+                return KvError::ExpiredTerm;
+            }
+            if (current_term == term)
+            {
+                return KvError::NoError;
+            }
+        }
+
+        ObjectStore::UploadTask upload_task(term_filename, true);
+        upload_task.data_buffer_.append(term_str);
+        upload_task.file_size_ = term_str.size();
+        if (missing)
+        {
+            upload_task.if_none_match_ = "*";
+        }
+        else
+        {
+            upload_task.if_match_ = etag;
+        }
+        upload_task.SetKvTask(current_task);
+        AcquireCloudSlot(current_task);
+        obj_store_.SubmitTask(&upload_task, shard);
+        current_task->WaitIo();
+        if (upload_task.error_ == KvError::NoError)
+        {
+            return KvError::NoError;
+        }
+
+        // Another writer changed the file since the read: 412 when the
+        // condition failed, 409 when a concurrent upload of the key is in
+        // progress, and 404 when the file read was deleted before the
+        // If-Match upload. Read it again.
+        const int64_t code = upload_task.response_code_;
+        if (code != 409 && code != 412 && (missing || code != 404))
+        {
+            return upload_task.error_;
+        }
+    }
+    return KvError::CloudErr;
 }
 
 void CloudStoreMgr::ScheduleLocalFileCleanup(

@@ -101,7 +101,7 @@ Two retry loops live *inside* the engine (`Shard::StartTask` epilogue +
 `ExpiredTerm` is terminal by design: it means another process owns a newer
 term and this writer must stop (doc 06). It is scoped to a data store shard:
 the shard whose partition met the newer term is marked Expired, every later
-request for it fails with `ExpiredTerm` at `SendRequest`, and the other
+request for it fails with `ExpiredTerm` on its worker shard, and the other
 shards the store hosts keep serving (doc 02).
 
 ## Data store shard of a request
@@ -113,5 +113,5 @@ named with. A request naming no shard works for the store's default one: the
 shard `Start` attached, so embedders hosting one shard never set it. The
 global sweeps (`GlobalArchiveRequest`, `GlobalReopenRequest`,
 `GlobalCreateBranchRequest`, `DropTableRequest`) hand their shard to the
-per-partition requests they fan out, and the archive, reopen and branch
-sweeps keep only the partitions `partition_filter` gives that shard.
+per-partition requests they fan out, and keep only the partitions
+`partition_filter` gives that shard.

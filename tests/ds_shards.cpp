@@ -1,8 +1,9 @@
 /**
  * @file ds_shards.cpp
  * @brief One store hosting several data store shards: AttachShard,
- * DetachShard, per-shard terms and term files, the admission gate and the
- * detach drain.
+ * DetachShard, per-shard terms and term files, the admission gate, the
+ * detach drain, and store-level requests confined to their shard's
+ * partitions.
  */
 #include <algorithm>
 #include <atomic>
@@ -34,6 +35,11 @@ eloqstore::KvOptions ShardTestOptions(const std::string &local_path)
     options.store_path = {local_path};
     options.cloud_store_path += "/ds-shards";
     options.allow_reuse_local_caches = true;
+    // Partition N belongs to data store shard N: kPartitionA to shard 1,
+    // kPartitionB to shard 2.
+    options.partition_filter =
+        [](DsShardId ds_shard_id, const TableIdent &tbl_id)
+    { return static_cast<DsShardId>(tbl_id.partition_id_) == ds_shard_id; };
     return options;
 }
 
@@ -103,6 +109,53 @@ std::string PaddedKey(int i)
     std::string digits = std::to_string(i);
     return "k" + std::string(3 - digits.size(), '0') + digits;
 }
+
+/**
+ * @brief Counts a partition's archives of one term in the cloud: the files
+ * named manifest_main_<term>_<tag>, which the manifest itself,
+ * manifest_main_<term>, does not match.
+ * @param options The store's options, for the cloud path.
+ * @param tbl_id The partition.
+ * @param term The term the archives are named with.
+ * @return How many there are.
+ */
+size_t CountArchives(const eloqstore::KvOptions &options,
+                     const TableIdent &tbl_id,
+                     uint64_t term)
+{
+    const std::string prefix = "manifest_main_" + std::to_string(term) + "_";
+    size_t count = 0;
+    for (const std::string &name :
+         ListCloudFiles(options, options.cloud_store_path, tbl_id.ToString()))
+    {
+        if (name.rfind(prefix, 0) == 0)
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
+/**
+ * @brief Polls a condition every 200 ms until it holds or a timeout passes.
+ * @param timeout How long to wait at most.
+ * @param pred The condition.
+ * @return Whether it held.
+ */
+template <typename Pred>
+bool WaitUntil(std::chrono::milliseconds timeout, Pred &&pred)
+{
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline)
+    {
+        if (pred())
+        {
+            return true;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    }
+    return pred();
+}
 }  // namespace
 
 TEST_CASE("two data store shards are served in their own terms",
@@ -110,6 +163,18 @@ TEST_CASE("two data store shards are served in their own terms",
 {
     eloqstore::KvOptions options = ShardTestOptions("/tmp/test-ds-shards");
     CleanupStore(options);
+
+    {
+        // Hosting a second shard needs the partition filter.
+        eloqstore::KvOptions unfiltered = options;
+        unfiltered.partition_filter = nullptr;
+        EloqStore store(unfiltered);
+        REQUIRE(store.StartInstance() == KvError::NoError);
+        REQUIRE(store.AttachShard(1, 5) == KvError::NoError);
+        REQUIRE(store.AttachShard(2, 9) == KvError::InvalidArgs);
+        REQUIRE(store.HostedShards() == std::vector<DsShardId>{1});
+        store.Stop();
+    }
 
     EloqStore store(options);
     REQUIRE(store.StartInstance() == KvError::NoError);
@@ -439,6 +504,86 @@ TEST_CASE("detaching a data store shard waits for its background work",
         REQUIRE(file_term >= 5);
         REQUIRE(file_term <= term);
     }
+
+    store.Stop();
+    CleanupStore(options);
+}
+
+TEST_CASE("each data store shard is archived on its own schedule",
+          "[cloud][ds_shard][archive]")
+{
+    eloqstore::KvOptions options =
+        ShardTestOptions("/tmp/test-ds-shards-archive");
+    options.num_retained_archives = 100;
+    options.archive_interval_secs = 1;
+    CleanupStore(options);
+    const std::chrono::seconds timeout(20);
+
+    EloqStore store(options);
+    REQUIRE(store.StartInstance() == KvError::NoError);
+    REQUIRE(store.AttachShard(1, 5) == KvError::NoError);
+    REQUIRE(store.AttachShard(2, 9) == KvError::NoError);
+    REQUIRE(Write(&store, 1, kPartitionA, "a", "va") == KvError::NoError);
+    REQUIRE(Write(&store, 2, kPartitionB, "b", "vb") == KvError::NoError);
+
+    // Each shard's archives are named with its own term and cover only its
+    // own partitions.
+    REQUIRE(WaitUntil(timeout,
+                      [&]
+                      {
+                          return CountArchives(options, kPartitionA, 5) > 0 &&
+                                 CountArchives(options, kPartitionB, 9) > 0;
+                      }));
+    REQUIRE(CountArchives(options, kPartitionA, 9) == 0);
+    REQUIRE(CountArchives(options, kPartitionB, 5) == 0);
+
+    // A detach ends the shard's schedule; the other shard's goes on. The
+    // detach drains an archive of the shard in flight, so nothing of shard 1
+    // lands after it returns.
+    REQUIRE(store.DetachShard(1) == KvError::NoError);
+    const size_t a_archives = CountArchives(options, kPartitionA, 5);
+    const size_t b_archives = CountArchives(options, kPartitionB, 9);
+    REQUIRE(WaitUntil(
+        timeout,
+        [&]
+        { return CountArchives(options, kPartitionB, 9) >= b_archives + 2; }));
+    REQUIRE(CountArchives(options, kPartitionA, 5) == a_archives);
+
+    // Attached again at a newer term, the shard starts a fresh schedule, and
+    // its archives carry the new term.
+    REQUIRE(store.AttachShard(1, 6) == KvError::NoError);
+    REQUIRE(Write(&store, 1, kPartitionA, "a6", "va6") == KvError::NoError);
+    REQUIRE(WaitUntil(
+        timeout, [&] { return CountArchives(options, kPartitionA, 6) > 0; }));
+
+    store.Stop();
+    CleanupStore(options);
+}
+
+TEST_CASE("dropping a table drops its data store shard's partitions only",
+          "[cloud][ds_shard]")
+{
+    eloqstore::KvOptions options = ShardTestOptions("/tmp/test-ds-shards-drop");
+    CleanupStore(options);
+
+    EloqStore store(options);
+    REQUIRE(store.StartInstance() == KvError::NoError);
+    REQUIRE(store.AttachShard(1, 5) == KvError::NoError);
+    REQUIRE(store.AttachShard(2, 5) == KvError::NoError);
+    REQUIRE(Write(&store, 1, kPartitionA, "a", "va") == KvError::NoError);
+    REQUIRE(Write(&store, 2, kPartitionB, "b", "vb") == KvError::NoError);
+
+    // The table has a partition in each shard. Dropped for shard 1, it loses
+    // shard 1's partition only.
+    eloqstore::DropTableRequest drop;
+    drop.SetDsShard(1);
+    drop.SetArgs(kPartitionA.tbl_name_);
+    store.ExecSync(&drop);
+    REQUIRE(drop.Error() == KvError::NoError);
+    REQUIRE(Read(&store, 1, kPartitionA, "a") == KvError::NotFound);
+    std::string value;
+    REQUIRE(Read(&store, 2, kPartitionB, "b", &value) == KvError::NoError);
+    REQUIRE(value == "vb");
 
     store.Stop();
     CleanupStore(options);

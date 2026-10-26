@@ -40,8 +40,9 @@ TaskManager::TaskManager(const KvOptions *opts)
       list_object_pool_(list_object_pool_size_default),
       list_standby_partition_pool_(list_standby_partition_pool_size_default),
       reopen_pool_(reopen_pool_size_default),
-      // One detach runs per data store shard at a time; the pool grows if
-      // several shards detach at once.
+      // One attach or detach runs per data store shard at a time; the pools
+      // grow if several shards attach or detach at once.
+      attach_shard_pool_(1),
       detach_shard_pool_(1)
 {
     if (opts != nullptr && opts->max_write_concurrency > 0)
@@ -79,6 +80,7 @@ void TaskManager::Shutdown()
     list_object_pool_.ForEachTask(check_finished);
     list_standby_partition_pool_.ForEachTask(check_finished);
     reopen_pool_.ForEachTask(check_finished);
+    attach_shard_pool_.ForEachTask(check_finished);
     detach_shard_pool_.ForEachTask(check_finished);
     CHECK_EQ(unfinished_tasks, 0)
         << "TaskManager::Shutdown requires a quiesced shard, unfinished_tasks="
@@ -97,6 +99,7 @@ void TaskManager::Shutdown()
     list_object_pool_.Clear();
     list_standby_partition_pool_.Clear();
     reopen_pool_.Clear();
+    attach_shard_pool_.Clear();
     detach_shard_pool_.Clear();
 }
 
@@ -181,6 +184,12 @@ ReopenTask *TaskManager::GetReopenTask(const TableIdent &tbl_id)
     return task;
 }
 
+AttachShardTask *TaskManager::GetAttachShardTask()
+{
+    num_active_++;
+    return attach_shard_pool_.GetTask();
+}
+
 DetachShardTask *TaskManager::GetDetachShardTask()
 {
     num_active_++;
@@ -222,6 +231,9 @@ void TaskManager::FreeTask(KvTask *task)
     case TaskType::Reopen:
         static_cast<ReopenTask *>(task)->ReleaseDirBusy();
         reopen_pool_.FreeTask(static_cast<ReopenTask *>(task));
+        break;
+    case TaskType::AttachShard:
+        attach_shard_pool_.FreeTask(static_cast<AttachShardTask *>(task));
         break;
     case TaskType::DetachShard:
         detach_shard_pool_.FreeTask(static_cast<DetachShardTask *>(task));

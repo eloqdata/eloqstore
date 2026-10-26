@@ -4,8 +4,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <string>
-#include <utility>
 
 #ifdef ELOQ_MODULE_ENABLED
 #include <bthread/eloq_module.h>
@@ -57,20 +55,13 @@ void CloudStorageService::Start()
 void CloudStorageService::Stop()
 {
     accepting_jobs_.store(false, std::memory_order_release);
-    bool was_running;
-    {
-        // Under the mutex, so a job enqueued after this sees stopping_ set
-        // and is failed by its own caller.
-        std::lock_guard<std::mutex> lk(term_file_mux_);
-        was_running = !stopping_.exchange(true, std::memory_order_acq_rel);
-    }
+    bool was_running = !stopping_.exchange(true, std::memory_order_acq_rel);
     for (auto &queue : job_queues_)
     {
         queue.enqueue({nullptr, nullptr});
     }
     if (!was_running && workers_.empty())
     {
-        DropTermFileJobs();
         return;
     }
     for (auto &worker : workers_)
@@ -81,62 +72,6 @@ void CloudStorageService::Stop()
         }
     }
     workers_.clear();
-    DropTermFileJobs();
-}
-
-KvError CloudStorageService::UpsertTermFile(std::string term_file_name,
-                                            uint64_t term)
-{
-    TermFileJob job;
-    job.name_ = std::move(term_file_name);
-    job.term_ = term;
-    {
-        std::lock_guard<std::mutex> lk(term_file_mux_);
-        if (stopping_.load(std::memory_order_acquire))
-        {
-            return KvError::NotRunning;
-        }
-        term_file_jobs_.enqueue(&job);
-    }
-    job.state_.Wait();
-    return job.state_.err_;
-}
-
-void CloudStorageService::RunTermFileJobs()
-{
-    TermFileJob *job = nullptr;
-    while (term_file_jobs_.try_dequeue(job))
-    {
-        KvError err;
-        if (stopping_.load(std::memory_order_acquire))
-        {
-            err = KvError::NotRunning;
-        }
-        else
-        {
-            // Every shard's object store reaches the same bucket; the first
-            // one does the term files.
-            ObjectStore *object_store = nullptr;
-            {
-                std::shared_lock lk(shard_locks_.front().mutex);
-                object_store = shard_stores_.front();
-            }
-            err = object_store == nullptr
-                      ? KvError::CloudErr
-                      : object_store->BootstrapUpsertTermFile(job->name_,
-                                                              job->term_);
-        }
-        job->state_.SetDone(err);
-    }
-}
-
-void CloudStorageService::DropTermFileJobs()
-{
-    TermFileJob *job = nullptr;
-    while (term_file_jobs_.try_dequeue(job))
-    {
-        job->state_.SetDone(KvError::NotRunning);
-    }
 }
 
 void CloudStorageService::RegisterObjectStore(ObjectStore *store,
@@ -207,10 +142,6 @@ void CloudStorageService::RunWorker(size_t worker_index)
 
     while (true)
     {
-        if (worker_index == 0)
-        {
-            RunTermFileJobs();
-        }
         bool http_active = ProcessHttpWork(worker_index);
         const bool stopping = stopping_.load(std::memory_order_acquire);
 
@@ -240,10 +171,6 @@ void CloudStorageService::RunWorker(size_t worker_index)
         {
             if (!http_active)
             {
-                if (worker_index == 0)
-                {
-                    DropTermFileJobs();
-                }
                 break;
             }
             continue;
@@ -255,8 +182,6 @@ void CloudStorageService::RunWorker(size_t worker_index)
         }
 
         PendingJob job;
-        // The first thread wakes every kIdleWait at the latest, so a term
-        // file job waits that long at most.
         bool has_job =
             job_queues_[worker_index].wait_dequeue_timed(job, wait_timeout_us);
         if (has_job && job.store != nullptr && job.task != nullptr)
