@@ -714,6 +714,28 @@ TEST_CASE("EloqStore pinned write + read round-trips with metadata",
     CleanupStore(opts);
 }
 
+// Floor has only an IoStringBuffer destination, which draws from the
+// unrecyclable shard-private GC pool in pinned mode, so it is rejected.
+TEST_CASE("EloqStore rejects Floor in pinned mode", "[large-value-e2e][pinned]")
+{
+    PinnedHarness harness;
+    auto opts = MakePinnedOpts(harness);
+    auto *store = InitStore(opts);
+
+    eloqstore::TableIdent tbl{"pinned-floor", 0};
+    const size_t value_size = harness.SegmentSize() * 3;
+    auto write_buf = harness.AllocateSegmentAligned(value_size);
+    WritePinned(store, harness, tbl, "k", write_buf, 0xf0u);
+
+    eloqstore::FloorRequest r;
+    r.SetArgs(tbl, "k");
+    store->ExecSync(&r);
+    REQUIRE(r.Error() == eloqstore::KvError::InvalidArgs);
+
+    store->Stop();
+    CleanupStore(opts);
+}
+
 TEST_CASE("EloqStore mixed metadata / no-metadata large values via overload A",
           "[large-value-e2e][pinned]")
 {
